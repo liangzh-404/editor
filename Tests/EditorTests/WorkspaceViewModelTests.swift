@@ -211,6 +211,39 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectSearchResultNavigatesToDestinationPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let secondPageID = "page-second"
+        try insertPage(
+            database: database,
+            id: secondPageID,
+            workspaceID: workspaceID,
+            title: "Second"
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        viewModel.selectSearchResult(
+            SearchResult(
+                entityType: "page",
+                entityID: secondPageID,
+                title: "Second",
+                snippet: "Second",
+                destinationPageID: secondPageID
+            )
+        )
+
+        XCTAssertEqual(viewModel.selectedPageID, secondPageID)
+        XCTAssertEqual(viewModel.selectedPage?.title, "Second")
+    }
+
+    @MainActor
     func testSelectedPageBacklinksRefreshAfterBlockEdit() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -233,6 +266,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             [
                 Backlink(
                     sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
                     sourceBlockID: blockID,
                     targetPageID: pageID,
                     targetBlockID: nil,
@@ -240,6 +274,40 @@ final class WorkspaceViewModelTests: XCTestCase {
                 )
             ]
         )
+    }
+
+    @MainActor
+    func testSelectBacklinkNavigatesToSourcePage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let secondPageID = "page-second"
+        try insertPage(
+            database: database,
+            id: secondPageID,
+            workspaceID: workspaceID,
+            title: "Second"
+        )
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        viewModel.selectPage(id: secondPageID)
+
+        viewModel.selectBacklink(
+            Backlink(
+                sourcePageID: snapshot.selectedPageID ?? "",
+                sourcePageTitle: "Welcome",
+                sourceBlockID: snapshot.blocks.first?.id,
+                targetPageID: secondPageID,
+                targetBlockID: nil,
+                linkText: "Second"
+            )
+        )
+
+        XCTAssertEqual(viewModel.selectedPageID, snapshot.selectedPageID)
+        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
     }
 
     @MainActor
@@ -310,6 +378,29 @@ final class WorkspaceViewModelTests: XCTestCase {
         let fileURL = directory.appendingPathComponent(name)
         try contents.data(using: .utf8)?.write(to: fileURL)
         return fileURL
+    }
+
+    private func insertPage(
+        database: SQLiteDatabase,
+        id: String,
+        workspaceID: String,
+        title: String
+    ) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            INSERT INTO pages (id, workspace_id, title, order_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(id),
+                .text(workspaceID),
+                .text(title),
+                .text("000002"),
+                .text(now),
+                .text(now)
+            ]
+        )
     }
 
     private func makeTemporaryDirectory() -> URL {

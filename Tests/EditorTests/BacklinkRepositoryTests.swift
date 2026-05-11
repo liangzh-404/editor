@@ -28,6 +28,7 @@ final class BacklinkRepositoryTests: XCTestCase {
             [
                 Backlink(
                     sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
                     sourceBlockID: blockID,
                     targetPageID: pageID,
                     targetBlockID: nil,

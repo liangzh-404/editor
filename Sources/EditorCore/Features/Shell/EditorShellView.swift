@@ -56,6 +56,9 @@ private struct ThreeColumnEditorShell: View {
                 onMoveBlock: { blockID, targetIndex in
                     viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                 },
+                onSelectBacklink: { backlink in
+                    viewModel.selectBacklink(backlink)
+                },
                 onPageTitleChange: { title in
                     viewModel.editSelectedPageTitle(title)
                 },
@@ -226,6 +229,9 @@ private struct CompactPageListView: View {
                             onMoveBlock: { blockID, targetIndex in
                                 viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                             },
+                            onSelectBacklink: { backlink in
+                                viewModel.selectBacklink(backlink)
+                            },
                             onPageTitleChange: { title in
                                 viewModel.editSelectedPageTitle(title)
                             },
@@ -267,7 +273,13 @@ private struct SearchSectionView: View {
                 .accessibilityIdentifier("editor.search-field")
 
             ForEach(viewModel.searchResults) { result in
-                SearchResultRow(result: result)
+                Button {
+                    viewModel.selectSearchResult(result)
+                } label: {
+                    SearchResultRow(result: result)
+                }
+                .buttonStyle(.plain)
+                .disabled(result.destinationPageID == nil)
             }
         }
     }
@@ -337,6 +349,7 @@ private struct EditorCanvasView: View {
     let backlinks: [Backlink]
     let onAddParagraphBlock: () -> String?
     let onMoveBlock: (String, Int) -> Void
+    let onSelectBacklink: (Backlink) -> Void
     let onPageTitleChange: (String) -> Void
     let onImportMarkdown: (URL) -> Void
     let onExportMarkdown: () -> String
@@ -428,7 +441,7 @@ private struct EditorCanvasView: View {
                 }
 
                 if !backlinks.isEmpty {
-                    BacklinksPanel(backlinks: backlinks)
+                    BacklinksPanel(backlinks: backlinks, onSelectBacklink: onSelectBacklink)
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -492,6 +505,7 @@ private struct EditorCanvasView: View {
 
 private struct BacklinksPanel: View {
     let backlinks: [Backlink]
+    let onSelectBacklink: (Backlink) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -500,21 +514,26 @@ private struct BacklinksPanel: View {
                 .foregroundStyle(.secondary)
 
             ForEach(backlinks) { backlink in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "link")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 16)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("[[\(backlink.linkText)]]")
-                            .font(.callout)
-                        Text(backlink.sourceBlockID ?? backlink.sourcePageID)
+                Button {
+                    onSelectBacklink(backlink)
+                } label: {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "link")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .frame(width: 16)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(backlink.sourcePageTitle)
+                                .font(.callout)
+                            Text("[[\(backlink.linkText)]]")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
+                .buttonStyle(.plain)
                 .padding(.vertical, 3)
                 .accessibilityIdentifier("editor.backlink.\(backlink.id)")
             }

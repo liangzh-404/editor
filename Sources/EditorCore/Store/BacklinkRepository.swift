@@ -2,6 +2,7 @@ import Foundation
 
 struct Backlink: Identifiable, Equatable, Sendable {
     let sourcePageID: String
+    let sourcePageTitle: String
     let sourceBlockID: String?
     let targetPageID: String?
     let targetBlockID: String?
@@ -79,18 +80,21 @@ final class BacklinkRepository {
         try database.query(
             """
             SELECT source_page_id,
+                   source_pages.title AS source_page_title,
                    source_block_id,
                    target_page_id,
                    target_block_id,
                    link_text
             FROM links
+            INNER JOIN pages AS source_pages ON source_pages.id = links.source_page_id
             WHERE target_page_id = ?
-            ORDER BY created_at ASC
+            ORDER BY links.created_at ASC
             """,
             bindings: [.text(targetPageID)]
         ).map { row in
             Backlink(
                 sourcePageID: row["source_page_id"] ?? "",
+                sourcePageTitle: row["source_page_title"] ?? "",
                 sourceBlockID: row["source_block_id"] ?? nil,
                 targetPageID: row["target_page_id"] ?? nil,
                 targetBlockID: row["target_block_id"] ?? nil,

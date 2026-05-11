@@ -109,6 +109,27 @@ final class WorkspaceViewModel: ObservableObject {
         refreshBacklinksForSelectedPage()
     }
 
+    func selectSearchResult(_ result: SearchResult) {
+        guard let destinationPageID = result.destinationPageID else {
+            EditorLog.render.debug(
+                "search_result_selection_ignored entity_type=\(result.entityType, privacy: .public) entity_id=\(result.entityID, privacy: .public)"
+            )
+            return
+        }
+
+        selectPage(id: destinationPageID)
+        EditorLog.render.debug(
+            "search_result_selected page_id=\(destinationPageID, privacy: .public) entity_type=\(result.entityType, privacy: .public)"
+        )
+    }
+
+    func selectBacklink(_ backlink: Backlink) {
+        selectPage(id: backlink.sourcePageID)
+        EditorLog.render.debug(
+            "backlink_selected source_page_id=\(backlink.sourcePageID, privacy: .public)"
+        )
+    }
+
     func updateBlockText(blockID: String, text: String) throws {
         let currentType = snapshot.blocks.first { $0.id == blockID }?.type ?? .paragraph
         let nextBlock = nextBlockState(currentType: currentType, text: text)

@@ -5,6 +5,21 @@ struct SearchResult: Identifiable, Equatable, Sendable {
     let entityID: String
     let title: String
     let snippet: String
+    let destinationPageID: String?
+
+    init(
+        entityType: String,
+        entityID: String,
+        title: String,
+        snippet: String,
+        destinationPageID: String? = nil
+    ) {
+        self.entityType = entityType
+        self.entityID = entityID
+        self.title = title
+        self.snippet = snippet
+        self.destinationPageID = destinationPageID
+    }
 
     var id: String {
         "\(entityType):\(entityID)"
@@ -31,7 +46,7 @@ final class SearchRepository {
             return []
         }
 
-        return try database.query(
+        let rows = try database.query(
             """
             SELECT entity_type, entity_id, title, body
             FROM search_index
@@ -43,13 +58,42 @@ final class SearchRepository {
                 .text(ftsQuery),
                 .integer(limit)
             ]
-        ).map { row in
-            SearchResult(
-                entityType: row["entity_type"] ?? "",
-                entityID: row["entity_id"] ?? "",
-                title: row["title"] ?? "",
-                snippet: row["body"] ?? ""
+        )
+
+        var results: [SearchResult] = []
+        for row in rows {
+            let entityType = row["entity_type"] ?? ""
+            let entityID = row["entity_id"] ?? ""
+            results.append(
+                SearchResult(
+                    entityType: entityType,
+                    entityID: entityID,
+                    title: row["title"] ?? "",
+                    snippet: row["body"] ?? "",
+                    destinationPageID: try destinationPageID(entityType: entityType, entityID: entityID)
+                )
             )
+        }
+
+        return results
+    }
+
+    private func destinationPageID(entityType: String, entityID: String) throws -> String? {
+        switch entityType {
+        case "page":
+            return entityID
+        case "block":
+            return try database.query(
+                """
+                SELECT page_id
+                FROM blocks
+                WHERE id = ? AND is_deleted = 0
+                LIMIT 1
+                """,
+                bindings: [.text(entityID)]
+            ).first?["page_id"] ?? nil
+        default:
+            return nil
         }
     }
 
