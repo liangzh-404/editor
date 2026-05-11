@@ -50,6 +50,35 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownIntoBlockDrafts() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    # Title
+
+                    Body paragraph
+
+                    - Item
+
+                    - [ ] Task
+
+                    > Quote
+
+                    ---
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .heading1, textPlain: "Title"),
+                MarkdownBlockDraft(type: .paragraph, textPlain: "Body paragraph"),
+                MarkdownBlockDraft(type: .unorderedListItem, textPlain: "Item"),
+                MarkdownBlockDraft(type: .taskItem, textPlain: "Task"),
+                MarkdownBlockDraft(type: .quote, textPlain: "Quote"),
+                MarkdownBlockDraft(type: .divider, textPlain: "")
+            ]
+        )
+    }
+
     private func block(type: BlockType, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: UUID().uuidString,

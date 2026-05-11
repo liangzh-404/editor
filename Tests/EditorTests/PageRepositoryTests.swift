@@ -56,6 +56,32 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "Edited locally")
     }
 
+    func testImportMarkdownReplacesPageBlocksWithTypedBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                # Imported
+
+                Body
+
+                - Item
+                """
+        )
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.blocks.map(\.type), [.heading1, .paragraph, .unorderedListItem])
+        XCTAssertEqual(reloadedSnapshot.blocks.map(\.textPlain), ["Imported", "Body", "Item"])
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().map(\.entityType), ["block", "block", "block"])
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)

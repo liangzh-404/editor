@@ -166,6 +166,56 @@ final class PageRepository {
         )
     }
 
+    func importMarkdown(pageID: String, markdown: String) throws {
+        let drafts = MarkdownTransformer.importBlocks(markdown: markdown)
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        try database.execute(
+            """
+            UPDATE blocks
+            SET is_deleted = 1,
+                updated_at = ?
+            WHERE page_id = ? AND is_deleted = 0
+            """,
+            bindings: [
+                .text(now),
+                .text(pageID)
+            ]
+        )
+        try database.execute(
+            """
+            DELETE FROM links
+            WHERE source_page_id = ?
+            """,
+            bindings: [.text(pageID)]
+        )
+
+        for (index, draft) in drafts.enumerated() {
+            let blockID = "block-\(UUID().uuidString.lowercased())"
+            try insertBlock(
+                id: blockID,
+                pageID: pageID,
+                orderKey: String(format: "%06d", index + 1),
+                type: draft.type,
+                text: draft.textPlain,
+                createdAt: now
+            )
+            try SyncRepository(database: database).enqueue(
+                entityType: "block",
+                entityID: blockID,
+                changeType: "create"
+            )
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: blockID,
+                text: draft.textPlain
+            )
+        }
+
+        EditorLog.markdown.debug(
+            "markdown_imported page_id=\(pageID, privacy: .public) blocks=\(drafts.count, privacy: .public)"
+        )
+    }
+
     private func insertDefaultContent() throws {
         let now = ISO8601DateFormatter().string(from: Date())
 
@@ -228,6 +278,49 @@ final class PageRepository {
                 .integer(0),
                 .text(now),
                 .text(now)
+            ]
+        )
+    }
+
+    private func insertBlock(
+        id: String,
+        pageID: String,
+        orderKey: String,
+        type: BlockType,
+        text: String,
+        createdAt: String
+    ) throws {
+        try database.execute(
+            """
+            INSERT INTO blocks (
+                id,
+                page_id,
+                parent_block_id,
+                order_key,
+                type,
+                payload_json,
+                text_plain,
+                revision,
+                sync_state,
+                is_deleted,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(id),
+                .text(pageID),
+                .null,
+                .text(orderKey),
+                .text(type.rawValue),
+                .text(try blockPayloadJSON(type: type, text: text)),
+                .text(text),
+                .integer(1),
+                .text("local"),
+                .integer(0),
+                .text(createdAt),
+                .text(createdAt)
             ]
         )
     }

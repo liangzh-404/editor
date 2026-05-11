@@ -5,6 +5,11 @@ struct MarkdownShortcutTransform: Equatable, Sendable {
     let textPlain: String
 }
 
+struct MarkdownBlockDraft: Equatable, Sendable {
+    let type: BlockType
+    let textPlain: String
+}
+
 enum MarkdownTransformer {
     static func shortcutTransform(for text: String) -> MarkdownShortcutTransform? {
         switch text {
@@ -33,6 +38,14 @@ enum MarkdownTransformer {
             .joined(separator: "\n\n")
     }
 
+    static func importBlocks(markdown: String) -> [MarkdownBlockDraft] {
+        markdown
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .map(importBlockDraft(for:))
+    }
+
     private static func markdownLine(for block: BlockSnapshot) -> String {
         switch block.type {
         case .paragraph:
@@ -54,5 +67,25 @@ enum MarkdownTransformer {
         case .attachmentImage, .attachmentVideo, .attachmentFile:
             return "[\(block.textPlain)](\(block.textPlain))"
         }
+    }
+
+    private static func importBlockDraft(for line: String) -> MarkdownBlockDraft {
+        if line.hasPrefix("# ") {
+            return MarkdownBlockDraft(type: .heading1, textPlain: String(line.dropFirst(2)))
+        }
+        if line.hasPrefix("- [ ] ") {
+            return MarkdownBlockDraft(type: .taskItem, textPlain: String(line.dropFirst(6)))
+        }
+        if line.hasPrefix("- ") {
+            return MarkdownBlockDraft(type: .unorderedListItem, textPlain: String(line.dropFirst(2)))
+        }
+        if line.hasPrefix("> ") {
+            return MarkdownBlockDraft(type: .quote, textPlain: String(line.dropFirst(2)))
+        }
+        if line == "---" {
+            return MarkdownBlockDraft(type: .divider, textPlain: "")
+        }
+
+        return MarkdownBlockDraft(type: .paragraph, textPlain: line)
     }
 }
