@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -27,17 +27,39 @@ enum SchemaMigrator {
 
         try database.execute(
             """
-            CREATE TABLE IF NOT EXISTS pages (
+            CREATE TABLE IF NOT EXISTS notebooks (
                 id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL,
-                title TEXT NOT NULL,
+                name TEXT NOT NULL,
                 order_key TEXT NOT NULL,
-                is_archived INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
             );
             """
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pages (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                notebook_id TEXT,
+                title TEXT NOT NULL,
+                order_key TEXT NOT NULL,
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                FOREIGN KEY (notebook_id) REFERENCES notebooks(id) ON DELETE SET NULL
+            );
+            """
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "pages",
+            column: "notebook_id",
+            definition: "TEXT"
         )
 
         try database.execute(
@@ -174,6 +196,7 @@ enum SchemaMigrator {
             VALUES (\(currentVersion), datetime('now'));
             """
         )
+        try ensureDefaultNotebooks(database: database)
     }
 
     private static func addColumnIfMissing(
@@ -188,5 +211,70 @@ enum SchemaMigrator {
         }
 
         try database.execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
+    }
+
+    private static func ensureDefaultNotebooks(database: SQLiteDatabase) throws {
+        let workspaces = try database.query(
+            """
+            SELECT id, created_at, updated_at
+            FROM workspaces
+            ORDER BY created_at ASC
+            """
+        )
+
+        for workspace in workspaces {
+            guard let workspaceID = workspace["id"] else {
+                continue
+            }
+
+            let countRows = try database.query(
+                "SELECT COUNT(*) AS notebook_count FROM notebooks WHERE workspace_id = ?",
+                bindings: [.text(workspaceID)]
+            )
+            let count = Int(countRows.first?["notebook_count"] ?? "") ?? 0
+            if count == 0 {
+                let now = ISO8601DateFormatter().string(from: Date())
+                let notebookID = "notebook-\(workspaceID)"
+                try database.execute(
+                    """
+                    INSERT INTO notebooks (id, workspace_id, name, order_key, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    bindings: [
+                        .text(notebookID),
+                        .text(workspaceID),
+                        .text("Notebook"),
+                        .text("000001"),
+                        .text(workspace["created_at"] ?? now),
+                        .text(workspace["updated_at"] ?? now)
+                    ]
+                )
+            }
+
+            guard let notebookID = try database.query(
+                """
+                SELECT id
+                FROM notebooks
+                WHERE workspace_id = ?
+                ORDER BY order_key ASC
+                LIMIT 1
+                """,
+                bindings: [.text(workspaceID)]
+            ).first?["id"] else {
+                continue
+            }
+
+            try database.execute(
+                """
+                UPDATE pages
+                SET notebook_id = ?
+                WHERE workspace_id = ? AND notebook_id IS NULL
+                """,
+                bindings: [
+                    .text(notebookID),
+                    .text(workspaceID)
+                ]
+            )
+        }
     }
 }

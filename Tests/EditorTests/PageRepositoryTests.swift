@@ -20,7 +20,9 @@ final class PageRepositoryTests: XCTestCase {
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
 
         XCTAssertEqual(snapshot.workspaces.map(\.name), ["Local"])
+        XCTAssertEqual(snapshot.notebooks.map(\.name), ["Notebook"])
         XCTAssertEqual(snapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(snapshot.pages.first?.notebookID, snapshot.notebooks.first?.id)
         XCTAssertEqual(snapshot.blocks.count, 1)
         XCTAssertEqual(snapshot.blocks.first?.type, .paragraph)
         XCTAssertEqual(snapshot.blocks.first?.textPlain, "Start writing in blocks.")
@@ -89,6 +91,46 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(createdBlocks.map(\.type), [.paragraph])
         XCTAssertEqual(createdBlocks.map(\.textPlain), [""])
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().suffix(2).map(\.entityType), ["page", "block"])
+    }
+
+    func testCreateNotebookAndPageInNotebookPersistsGrouping() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+
+        let notebook = try repository.createNotebook(workspaceID: workspaceID, name: "Projects")
+        let page = try repository.createPage(
+            workspaceID: workspaceID,
+            title: "Roadmap",
+            notebookID: notebook.id
+        )
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertTrue(reloadedSnapshot.notebooks.contains(notebook))
+        XCTAssertEqual(reloadedSnapshot.pages.first { $0.id == page.id }?.notebookID, notebook.id)
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().suffix(3).map(\.entityType), ["notebook", "page", "block"])
+    }
+
+    func testArchivePageHidesItAndQueuesSyncChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let createdPage = try repository.createPage(workspaceID: workspaceID, title: "Scratch")
+
+        try repository.archivePage(pageID: createdPage.id)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "page", entityID: createdPage.id, changeType: "archive")
+        )
     }
 
     func testImportMarkdownReplacesPageBlocksWithTypedBlocks() throws {

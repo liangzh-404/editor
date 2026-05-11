@@ -4,6 +4,7 @@ import Foundation
 final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var snapshot: WorkspaceSnapshot
     @Published private(set) var selectedWorkspaceID: String?
+    @Published private(set) var selectedNotebookID: String?
     @Published private(set) var selectedPageID: String?
     @Published private(set) var searchQuery = ""
     @Published private(set) var searchResults: [SearchResult] = []
@@ -24,6 +25,13 @@ final class WorkspaceViewModel: ObservableObject {
             return nil
         }
         return snapshot.pages.first { $0.id == selectedPageID }
+    }
+
+    var selectedNotebook: NotebookSummary? {
+        guard let selectedNotebookID else {
+            return nil
+        }
+        return snapshot.notebooks.first { $0.id == selectedNotebookID }
     }
 
     var visibleBlocks: [BlockSnapshot] {
@@ -66,6 +74,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.cloudKitAccountMetadataService = cloudKitAccountMetadataService
         snapshot = .empty
         selectedWorkspaceID = nil
+        selectedNotebookID = nil
         selectedPageID = nil
         pendingFocusBlockID = nil
     }
@@ -79,6 +88,7 @@ final class WorkspaceViewModel: ObservableObject {
         cloudKitAccountMetadataService = nil
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
+        selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
         pendingFocusBlockID = nil
     }
@@ -139,6 +149,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     func selectPage(id: String) {
         selectedPageID = id
+        selectedNotebookID = snapshot.pages.first { $0.id == id }?.notebookID ?? selectedNotebookID
         refreshBacklinksForSelectedPage()
     }
 
@@ -249,7 +260,10 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     @discardableResult
-    func createPageInSelectedWorkspace(title: String = "Untitled") throws -> PageSummary {
+    func createPageInSelectedWorkspace(
+        title: String = "Untitled",
+        notebookID: String? = nil
+    ) throws -> PageSummary {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
         }
@@ -257,11 +271,42 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingSelection
         }
 
-        let page = try repository.createPage(workspaceID: selectedWorkspaceID, title: title)
+        let page = try repository.createPage(
+            workspaceID: selectedWorkspaceID,
+            title: title,
+            notebookID: notebookID ?? selectedNotebookID
+        )
         try load()
         selectPage(id: page.id)
         requestFocusForInitialEmptyBlockIfNeeded(source: "page_create")
         return page
+    }
+
+    @discardableResult
+    func createNotebookInSelectedWorkspace(name: String = "New Notebook") throws -> NotebookSummary {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedWorkspaceID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        let notebook = try repository.createNotebook(workspaceID: selectedWorkspaceID, name: name)
+        try load()
+        selectedNotebookID = notebook.id
+        return notebook
+    }
+
+    func archiveSelectedPage() throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedPageID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        try repository.archivePage(pageID: selectedPageID)
+        try load()
     }
 
     func addParagraphBlockToCurrentPage() -> String? {
@@ -277,9 +322,9 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    func addPageToSelectedWorkspace() -> String? {
+    func addPageToSelectedWorkspace(notebookID: String? = nil) -> String? {
         do {
-            let page = try createPageInSelectedWorkspace()
+            let page = try createPageInSelectedWorkspace(notebookID: notebookID)
             EditorLog.input.debug("page_added page_id=\(page.id, privacy: .public)")
             return page.id
         } catch {
@@ -287,6 +332,33 @@ final class WorkspaceViewModel: ObservableObject {
                 "page_add_failed error=\(String(describing: error), privacy: .public)"
             )
             return nil
+        }
+    }
+
+    func addNotebookToSelectedWorkspace() -> String? {
+        do {
+            let notebook = try createNotebookInSelectedWorkspace()
+            EditorLog.input.debug("notebook_added notebook_id=\(notebook.id, privacy: .public)")
+            return notebook.id
+        } catch {
+            EditorLog.input.error(
+                "notebook_add_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func archivePageForUI(id pageID: String) {
+        let previousSelection = selectedPageID
+        selectedPageID = pageID
+        do {
+            try archiveSelectedPage()
+            EditorLog.input.debug("page_archive_visible page_id=\(pageID, privacy: .public)")
+        } catch {
+            selectedPageID = previousSelection
+            EditorLog.input.error(
+                "page_archive_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
         }
     }
 
@@ -374,6 +446,7 @@ final class WorkspaceViewModel: ObservableObject {
     private func apply(snapshot: WorkspaceSnapshot) {
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
+        selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
     }
 

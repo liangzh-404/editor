@@ -6,10 +6,24 @@ struct WorkspaceSummary: Identifiable, Equatable, Sendable {
     let name: String
 }
 
+struct NotebookSummary: Identifiable, Equatable, Sendable {
+    let id: String
+    let workspaceID: String
+    let name: String
+}
+
 struct PageSummary: Identifiable, Equatable, Sendable {
     let id: String
     let workspaceID: String
+    let notebookID: String?
     let title: String
+
+    init(id: String, workspaceID: String, notebookID: String? = nil, title: String) {
+        self.id = id
+        self.workspaceID = workspaceID
+        self.notebookID = notebookID
+        self.title = title
+    }
 }
 
 enum BlockType: String, Equatable, Sendable {
@@ -120,32 +134,58 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
 
 struct WorkspaceSnapshot: Equatable, Sendable {
     let workspaces: [WorkspaceSummary]
+    let notebooks: [NotebookSummary]
     let pages: [PageSummary]
     let blocks: [BlockSnapshot]
     let attachments: [AttachmentSnapshot]
     let selectedWorkspaceID: String?
+    let selectedNotebookID: String?
     let selectedPageID: String?
+
+    init(
+        workspaces: [WorkspaceSummary],
+        notebooks: [NotebookSummary] = [],
+        pages: [PageSummary],
+        blocks: [BlockSnapshot],
+        attachments: [AttachmentSnapshot],
+        selectedWorkspaceID: String?,
+        selectedNotebookID: String? = nil,
+        selectedPageID: String?
+    ) {
+        self.workspaces = workspaces
+        self.notebooks = notebooks
+        self.pages = pages
+        self.blocks = blocks
+        self.attachments = attachments
+        self.selectedWorkspaceID = selectedWorkspaceID
+        self.selectedNotebookID = selectedNotebookID
+        self.selectedPageID = selectedPageID
+    }
 }
 
 extension WorkspaceSnapshot {
     static let empty = WorkspaceSnapshot(
         workspaces: [],
+        notebooks: [],
         pages: [],
         blocks: [],
         attachments: [],
         selectedWorkspaceID: nil,
+        selectedNotebookID: nil,
         selectedPageID: nil
     )
 
     func replacingBlock(blockID: String, type: BlockType, text: String) -> WorkspaceSnapshot {
         WorkspaceSnapshot(
             workspaces: workspaces,
+            notebooks: notebooks,
             pages: pages,
             blocks: blocks.map { block in
                 block.id == blockID ? block.replacing(type: type, text: text) : block
             },
             attachments: attachments,
             selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
         )
     }
@@ -161,14 +201,21 @@ extension WorkspaceSnapshot {
     func replacingPageTitle(pageID: String, title: String) -> WorkspaceSnapshot {
         WorkspaceSnapshot(
             workspaces: workspaces,
+            notebooks: notebooks,
             pages: pages.map { page in
                 page.id == pageID
-                    ? PageSummary(id: page.id, workspaceID: page.workspaceID, title: title)
+                    ? PageSummary(
+                        id: page.id,
+                        workspaceID: page.workspaceID,
+                        notebookID: page.notebookID,
+                        title: title
+                    )
                     : page
             },
             blocks: blocks,
             attachments: attachments,
             selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
         )
     }

@@ -156,6 +156,43 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCreateNotebookRefreshesSnapshot() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        let notebook = try viewModel.createNotebookInSelectedWorkspace(name: "Projects")
+
+        XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["Notebook", "Projects"])
+        XCTAssertEqual(viewModel.snapshot.notebooks.last, notebook)
+    }
+
+    @MainActor
+    func testArchiveSelectedPageHidesPageAndSelectsRemainingPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let page = try viewModel.createPageInSelectedWorkspace(title: "Scratch")
+        XCTAssertEqual(viewModel.selectedPageID, page.id)
+
+        try viewModel.archiveSelectedPage()
+
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Start writing in blocks."])
+    }
+
+    @MainActor
     func testCreatePageRequestsFocusForInitialEmptyBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }

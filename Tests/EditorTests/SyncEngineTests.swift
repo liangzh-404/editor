@@ -155,6 +155,30 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(result.recordName, "block-\(blockID)")
     }
 
+    func testCloudKitPrivateDatabaseAdapterMapsNotebookChangeToRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let notebook = try pageRepository.createNotebook(workspaceID: workspaceID, name: "Projects")
+        let saver = CapturingCloudKitRecordSaver()
+
+        let result = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordSaver: saver
+        ).upload(change: SyncChange(entityType: "notebook", entityID: notebook.id, changeType: "create"))
+
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        XCTAssertEqual(record.recordType, "NotebookRecord")
+        XCTAssertEqual(record.recordID.recordName, "notebook-\(notebook.id)")
+        XCTAssertEqual(record["entityID"] as? String, notebook.id)
+        XCTAssertEqual(record["workspaceID"] as? String, workspaceID)
+        XCTAssertEqual(record["name"] as? String, "Projects")
+        XCTAssertEqual(result.recordName, "notebook-\(notebook.id)")
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

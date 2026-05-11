@@ -4,6 +4,7 @@ final class PageRepository {
     private let database: SQLiteDatabase
 
     private let defaultWorkspaceID = "workspace-local"
+    private let defaultNotebookID = "notebook-local"
     private let defaultPageID = "page-welcome"
     private let defaultBlockID = "block-welcome-001"
 
@@ -37,18 +38,42 @@ final class PageRepository {
 
         let selectedWorkspaceID = workspaces.first?.id
 
-        let pages = try database.query(
+        let notebooks = try database.query(
             """
-            SELECT id, workspace_id, title
-            FROM pages
+            SELECT id, workspace_id, name
+            FROM notebooks
             WHERE workspace_id = ?
             ORDER BY order_key ASC
+            """,
+            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
+        ).map { row in
+            NotebookSummary(
+                id: row["id"] ?? "",
+                workspaceID: row["workspace_id"] ?? "",
+                name: row["name"] ?? ""
+            )
+        }
+
+        let selectedNotebookID = notebooks.first?.id
+
+        let pages = try database.query(
+            """
+            SELECT pages.id,
+                   pages.workspace_id,
+                   pages.notebook_id,
+                   pages.title
+            FROM pages
+            LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
+            WHERE pages.workspace_id = ?
+              AND pages.is_archived = 0
+            ORDER BY COALESCE(notebooks.order_key, '999999'), pages.order_key ASC
             """,
             bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
         ).map { row in
             PageSummary(
                 id: row["id"] ?? "",
                 workspaceID: row["workspace_id"] ?? "",
+                notebookID: row["notebook_id"] ?? nil,
                 title: row["title"] ?? ""
             )
         }
@@ -89,10 +114,12 @@ final class PageRepository {
 
         return WorkspaceSnapshot(
             workspaces: workspaces,
+            notebooks: notebooks,
             pages: pages,
             blocks: blocks,
             attachments: attachments,
             selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
         )
     }
@@ -153,7 +180,7 @@ final class PageRepository {
         )
     }
 
-    func createPage(workspaceID: String, title: String) throws -> PageSummary {
+    func createNotebook(workspaceID: String, name: String) throws -> NotebookSummary {
         let workspaceRows = try database.query(
             """
             SELECT id
@@ -168,20 +195,85 @@ final class PageRepository {
         }
 
         let now = ISO8601DateFormatter().string(from: Date())
+        let notebookID = "notebook-\(UUID().uuidString.lowercased())"
+        let orderKey = try nextNotebookOrderKey(workspaceID: workspaceID)
+
+        try database.execute(
+            """
+            INSERT INTO notebooks (id, workspace_id, name, order_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(notebookID),
+                .text(workspaceID),
+                .text(name),
+                .text(orderKey),
+                .text(now),
+                .text(now)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "notebook",
+            entityID: notebookID,
+            changeType: "create"
+        )
+
+        EditorLog.store.debug(
+            "notebook_created notebook_id=\(notebookID, privacy: .public) workspace_id=\(workspaceID, privacy: .public)"
+        )
+
+        return NotebookSummary(id: notebookID, workspaceID: workspaceID, name: name)
+    }
+
+    func createPage(workspaceID: String, title: String, notebookID: String? = nil) throws -> PageSummary {
+        let workspaceRows = try database.query(
+            """
+            SELECT id
+            FROM workspaces
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(workspaceID)]
+        )
+        guard workspaceRows.first != nil else {
+            throw PageRepositoryError.workspaceNotFound
+        }
+
+        let resolvedNotebookID = try notebookID ?? defaultNotebookID(for: workspaceID)
+        if let resolvedNotebookID {
+            let notebookRows = try database.query(
+                """
+                SELECT id
+                FROM notebooks
+                WHERE id = ? AND workspace_id = ?
+                LIMIT 1
+                """,
+                bindings: [
+                    .text(resolvedNotebookID),
+                    .text(workspaceID)
+                ]
+            )
+            guard notebookRows.first != nil else {
+                throw PageRepositoryError.notebookNotFound
+            }
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
         let pageID = "page-\(UUID().uuidString.lowercased())"
         let blockID = "block-\(UUID().uuidString.lowercased())"
-        let orderKey = try nextPageOrderKey(workspaceID: workspaceID)
+        let orderKey = try nextPageOrderKey(workspaceID: workspaceID, notebookID: resolvedNotebookID)
 
         try database.execute("BEGIN IMMEDIATE TRANSACTION")
         do {
             try database.execute(
                 """
-                INSERT INTO pages (id, workspace_id, title, order_key, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO pages (id, workspace_id, notebook_id, title, order_key, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 bindings: [
                     .text(pageID),
                     .text(workspaceID),
+                    resolvedNotebookID.map(SQLiteValue.text) ?? .null,
                     .text(title),
                     .text(orderKey),
                     .text(now),
@@ -210,7 +302,43 @@ final class PageRepository {
             "page_created page_id=\(pageID, privacy: .public) workspace_id=\(workspaceID, privacy: .public)"
         )
 
-        return PageSummary(id: pageID, workspaceID: workspaceID, title: title)
+        return PageSummary(id: pageID, workspaceID: workspaceID, notebookID: resolvedNotebookID, title: title)
+    }
+
+    func archivePage(pageID: String) throws {
+        let rows = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE id = ? AND is_archived = 0
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        guard rows.first != nil else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            UPDATE pages
+            SET is_archived = 1,
+                updated_at = ?
+            WHERE id = ? AND is_archived = 0
+            """,
+            bindings: [
+                .text(now),
+                .text(pageID)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "page",
+            entityID: pageID,
+            changeType: "archive"
+        )
+
+        EditorLog.store.debug("page_archived page_id=\(pageID, privacy: .public)")
     }
 
     func updateBlock(blockID: String, type: BlockType, text: String) throws {
@@ -462,12 +590,28 @@ final class PageRepository {
 
         try database.execute(
             """
-            INSERT INTO pages (id, workspace_id, title, order_key, created_at, updated_at)
+            INSERT INTO notebooks (id, workspace_id, name, order_key, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(defaultNotebookID),
+                .text(defaultWorkspaceID),
+                .text("Notebook"),
+                .text("000001"),
+                .text(now),
+                .text(now)
+            ]
+        )
+
+        try database.execute(
+            """
+            INSERT INTO pages (id, workspace_id, notebook_id, title, order_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             bindings: [
                 .text(defaultPageID),
                 .text(defaultWorkspaceID),
+                .text(defaultNotebookID),
                 .text("Welcome"),
                 .text("000001"),
                 .text(now),
@@ -536,12 +680,12 @@ final class PageRepository {
         }
     }
 
-    private func nextPageOrderKey(workspaceID: String) throws -> String {
+    private func nextNotebookOrderKey(workspaceID: String) throws -> String {
         let rows = try database.query(
             """
             SELECT order_key
-            FROM pages
-            WHERE workspace_id = ? AND is_archived = 0
+            FROM notebooks
+            WHERE workspace_id = ?
             ORDER BY order_key DESC
             LIMIT 1
             """,
@@ -550,6 +694,44 @@ final class PageRepository {
         let lastOrderKey = rows.first.flatMap { $0["order_key"] } ?? "000000"
         let nextValue = (Int(lastOrderKey) ?? 0) + 1
         return String(format: "%06d", nextValue)
+    }
+
+    private func nextPageOrderKey(workspaceID: String, notebookID: String?) throws -> String {
+        let rows = try database.query(
+            """
+            SELECT order_key
+            FROM pages
+            WHERE workspace_id = ?
+              AND is_archived = 0
+              AND (
+                  (notebook_id IS NULL AND ? IS NULL)
+                  OR notebook_id = ?
+              )
+            ORDER BY order_key DESC
+            LIMIT 1
+            """,
+            bindings: [
+                .text(workspaceID),
+                notebookID.map(SQLiteValue.text) ?? .null,
+                notebookID.map(SQLiteValue.text) ?? .null
+            ]
+        )
+        let lastOrderKey = rows.first.flatMap { $0["order_key"] } ?? "000000"
+        let nextValue = (Int(lastOrderKey) ?? 0) + 1
+        return String(format: "%06d", nextValue)
+    }
+
+    private func defaultNotebookID(for workspaceID: String) throws -> String? {
+        try database.query(
+            """
+            SELECT id
+            FROM notebooks
+            WHERE workspace_id = ?
+            ORDER BY order_key ASC
+            LIMIT 1
+            """,
+            bindings: [.text(workspaceID)]
+        ).first?["id"] ?? nil
     }
 
     private func insertBlock(
@@ -619,6 +801,7 @@ final class PageRepository {
 
 enum PageRepositoryError: Error, Equatable {
     case workspaceNotFound
+    case notebookNotFound
     case pageNotFound
     case blockNotFound
     case invalidPayloadEncoding

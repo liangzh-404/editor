@@ -131,6 +131,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         switch change.entityType {
         case "workspace":
             return try workspaceRecord(entityID: change.entityID)
+        case "notebook":
+            return try notebookRecord(entityID: change.entityID)
         case "page":
             return try pageRecord(entityID: change.entityID)
         case "block":
@@ -158,10 +160,28 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         return record
     }
 
+    private func notebookRecord(entityID: String) throws -> CKRecord {
+        let row = try requiredRow(
+            """
+            SELECT id, workspace_id, name, order_key, updated_at
+            FROM notebooks
+            WHERE id = ?
+            LIMIT 1
+            """,
+            entityID: entityID
+        )
+        let record = makeRecord(type: "NotebookRecord", entityType: "notebook", entityID: entityID)
+        record["workspaceID"] = row["workspace_id"] as CKRecordValue?
+        record["name"] = row["name"] as CKRecordValue?
+        record["orderKey"] = row["order_key"] as CKRecordValue?
+        record["updatedAt"] = row["updated_at"] as CKRecordValue?
+        return record
+    }
+
     private func pageRecord(entityID: String) throws -> CKRecord {
         let row = try requiredRow(
             """
-            SELECT id, workspace_id, title, order_key, is_archived, updated_at
+            SELECT id, workspace_id, notebook_id, title, order_key, is_archived, updated_at
             FROM pages
             WHERE id = ?
             LIMIT 1
@@ -170,6 +190,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         )
         let record = makeRecord(type: "PageRecord", entityType: "page", entityID: entityID)
         record["workspaceID"] = row["workspace_id"] as CKRecordValue?
+        record["notebookID"] = row["notebook_id"] as CKRecordValue?
         record["title"] = row["title"] as CKRecordValue?
         record["orderKey"] = row["order_key"] as CKRecordValue?
         record["isArchived"] = NSNumber(value: Int(row["is_archived"] ?? "") ?? 0)

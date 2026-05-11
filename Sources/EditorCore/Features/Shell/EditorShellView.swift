@@ -204,20 +204,41 @@ private struct PageListView: View {
         List(selection: selectedPageBinding) {
             SearchSectionView(viewModel: viewModel)
 
-            Section {
-                ForEach(viewModel.snapshot.pages) { page in
-                    PageRow(page: page)
-                        .tag(Optional(page.id))
+            ForEach(viewModel.snapshot.notebooks) { notebook in
+                Section {
+                    ForEach(pages(in: notebook)) { page in
+                        PageRow(page: page)
+                            .tag(Optional(page.id))
+                            .contextMenu {
+                                Button {
+                                    viewModel.archivePageForUI(id: page.id)
+                                } label: {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                            }
+                    }
+                } header: {
+                    NotebookSectionHeader(title: notebook.name) {
+                        _ = viewModel.addPageToSelectedWorkspace(notebookID: notebook.id)
+                    }
                 }
-            } header: {
-                PageSectionHeader {
-                    _ = viewModel.addPageToSelectedWorkspace()
+            }
+
+            Section {
+                Button {
+                    _ = viewModel.addNotebookToSelectedWorkspace()
+                } label: {
+                    Label("New Notebook", systemImage: "folder.badge.plus")
                 }
             }
         }
         .navigationTitle("Pages")
         .scrollContentBackground(.hidden)
         .background(Color.white)
+    }
+
+    private func pages(in notebook: NotebookSummary) -> [PageSummary] {
+        viewModel.snapshot.pages.filter { $0.notebookID == notebook.id }
     }
 
     private var selectedPageBinding: Binding<String?> {
@@ -238,52 +259,69 @@ private struct CompactPageListView: View {
         List {
             SearchSectionView(viewModel: viewModel)
 
-            Section {
-                ForEach(viewModel.snapshot.pages) { page in
-                    NavigationLink {
-                        EditorCanvasView(
-                            page: page,
-                            blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
-                            backlinks: viewModel.selectedPageBacklinks,
-                            pendingFocusBlockID: viewModel.pendingFocusBlockID,
-                            onAddParagraphBlock: {
-                                viewModel.addParagraphBlockToCurrentPage()
-                            },
-                            onMoveBlock: { blockID, targetIndex in
-                                viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
-                            },
-                            onSelectBacklink: { backlink in
-                                viewModel.selectBacklink(backlink)
-                            },
-                            onPageTitleChange: { title in
-                                viewModel.editSelectedPageTitle(title)
-                            },
-                            onImportMarkdown: { sourceURL in
-                                viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
-                            },
-                            onExportMarkdown: {
-                                viewModel.exportCurrentPageMarkdown()
-                            },
-                            onBlockTextChange: { blockID, text in
-                                viewModel.editBlockText(blockID: blockID, text: text)
-                            },
-                            onImportAttachment: { sourceURL in
-                                viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
-                            },
-                            onPendingBlockFocusHandled: {
-                                _ = viewModel.consumePendingFocusBlockID()
+            ForEach(viewModel.snapshot.notebooks) { notebook in
+                Section {
+                    ForEach(pages(in: notebook)) { page in
+                        NavigationLink {
+                            EditorCanvasView(
+                                page: page,
+                                blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
+                                backlinks: viewModel.selectedPageBacklinks,
+                                pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                                onAddParagraphBlock: {
+                                    viewModel.addParagraphBlockToCurrentPage()
+                                },
+                                onMoveBlock: { blockID, targetIndex in
+                                    viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
+                                },
+                                onSelectBacklink: { backlink in
+                                    viewModel.selectBacklink(backlink)
+                                },
+                                onPageTitleChange: { title in
+                                    viewModel.editSelectedPageTitle(title)
+                                },
+                                onImportMarkdown: { sourceURL in
+                                    viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
+                                },
+                                onExportMarkdown: {
+                                    viewModel.exportCurrentPageMarkdown()
+                                },
+                                onBlockTextChange: { blockID, text in
+                                    viewModel.editBlockText(blockID: blockID, text: text)
+                                },
+                                onImportAttachment: { sourceURL in
+                                    viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+                                },
+                                onPendingBlockFocusHandled: {
+                                    _ = viewModel.consumePendingFocusBlockID()
+                                }
+                            )
+                            .onAppear {
+                                viewModel.selectPage(id: page.id)
                             }
-                        )
-                        .onAppear {
-                            viewModel.selectPage(id: page.id)
+                        } label: {
+                            PageRow(page: page)
                         }
-                    } label: {
-                        PageRow(page: page)
+                        .contextMenu {
+                            Button {
+                                viewModel.archivePageForUI(id: page.id)
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+                        }
+                    }
+                } header: {
+                    NotebookSectionHeader(title: notebook.name) {
+                        _ = viewModel.addPageToSelectedWorkspace(notebookID: notebook.id)
                     }
                 }
-            } header: {
-                PageSectionHeader {
-                    _ = viewModel.addPageToSelectedWorkspace()
+            }
+
+            Section {
+                Button {
+                    _ = viewModel.addNotebookToSelectedWorkspace()
+                } label: {
+                    Label("New Notebook", systemImage: "folder.badge.plus")
                 }
             }
         }
@@ -291,14 +329,19 @@ private struct CompactPageListView: View {
         .scrollContentBackground(.hidden)
         .background(Color.white)
     }
+
+    private func pages(in notebook: NotebookSummary) -> [PageSummary] {
+        viewModel.snapshot.pages.filter { $0.notebookID == notebook.id }
+    }
 }
 
-private struct PageSectionHeader: View {
+private struct NotebookSectionHeader: View {
+    let title: String
     let onAddPage: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
-            Text("Pages")
+            Text(title)
             Spacer(minLength: 8)
             Button {
                 onAddPage()

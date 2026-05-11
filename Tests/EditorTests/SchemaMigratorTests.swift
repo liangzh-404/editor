@@ -27,6 +27,7 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(tableNames.contains("pages"))
         XCTAssertTrue(tableNames.contains("blocks"))
         XCTAssertTrue(tableNames.contains("attachments"))
+        XCTAssertTrue(tableNames.contains("notebooks"))
         XCTAssertTrue(tableNames.contains("links"))
         XCTAssertTrue(tableNames.contains("sync_changes"))
         XCTAssertTrue(tableNames.contains("sync_records"))
@@ -45,6 +46,21 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(columns.contains("attempt_count"))
         XCTAssertTrue(columns.contains("last_error"))
         XCTAssertTrue(columns.contains("next_attempt_at"))
+    }
+
+    func testPagesCanBelongToNotebooks() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let pageColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('pages')"))
+        let notebookColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('notebooks')"))
+
+        XCTAssertTrue(pageColumns.contains("notebook_id"))
+        XCTAssertTrue(notebookColumns.contains("workspace_id"))
+        XCTAssertTrue(notebookColumns.contains("name"))
+        XCTAssertTrue(notebookColumns.contains("order_key"))
     }
 
     func testMigrationRecordsSchemaVersionOne() throws {
