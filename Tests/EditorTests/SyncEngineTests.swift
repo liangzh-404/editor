@@ -159,6 +159,78 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
+    func testFetchRemoteChangesAppliesRemoteBlockDeletion() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try BacklinkRepository(database: database).rebuildLinksForBlock(
+            blockID: blockID,
+            text: "See [[Welcome]]"
+        )
+        XCTAssertFalse(try BacklinkRepository(database: database).backlinks(targetPageID: pageID).isEmpty)
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            changes: [],
+            deletedRecords: [
+                RemoteDeletedRecord(entityType: "block", entityID: blockID)
+            ]
+        )
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(result.appliedCount, 1)
+        XCTAssertEqual(reloadedSnapshot.blocks, [])
+        XCTAssertEqual(try BacklinkRepository(database: database).backlinks(targetPageID: pageID), [])
+    }
+
+    func testFetchRemoteChangesAppliesRemoteBlockSoftDeleteRecords() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try BacklinkRepository(database: database).rebuildLinksForBlock(
+            blockID: blockID,
+            text: "See [[Welcome]]"
+        )
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            changes: [
+                RemoteBlockChange(
+                    blockID: blockID,
+                    pageID: pageID,
+                    type: .paragraph,
+                    textPlain: "",
+                    payloadJSON: "{\"text\":\"\"}",
+                    revision: 2,
+                    isDeleted: true
+                )
+            ]
+        )
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(result.appliedCount, 1)
+        XCTAssertEqual(reloadedSnapshot.blocks, [])
+        XCTAssertEqual(try BacklinkRepository(database: database).backlinks(targetPageID: pageID), [])
+    }
+
     func testFetchRemoteChangesAppliesWorkspaceNotebookPageAttachmentAndBlockChanges() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -293,6 +365,32 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.pageChanges.map(\.pageID), ["page-remote"])
         XCTAssertEqual(changeSet.attachmentChanges.map(\.attachmentID), ["attachment-remote"])
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
+    }
+
+    func testCloudKitPrivateDatabaseAdapterMapsDeletedRecordIDsToDeletionChanges() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let nextToken = Data("next-token".utf8)
+        let fetcher = TokenAwareCloudKitRecordFetcher(
+            recordsByType: [:],
+            deletedRecordIDsByType: [
+                "BlockRecord": [
+                    CKRecord.ID(recordName: "block-block-remote")
+                ]
+            ],
+            nextServerChangeTokenData: nextToken
+        )
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+
+        XCTAssertEqual(changeSet.deletedRecords, [
+            RemoteDeletedRecord(entityType: "block", entityID: "block-remote")
+        ])
+        XCTAssertEqual(changeSet.serverChangeTokenData, nextToken)
     }
 
     func testCloudKitPrivateDatabaseAdapterUsesTokenAwareRecordChangeFetcher() throws {
@@ -430,6 +528,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
     let pageChanges: [RemotePageChange]
     let attachmentChanges: [RemoteAttachmentChange]
     let changes: [RemoteBlockChange]
+    let deletedRecords: [RemoteDeletedRecord]
     let serverChangeTokenData: Data?
     private(set) var receivedServerChangeTokenData: Data?
 
@@ -439,6 +538,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
         pageChanges: [RemotePageChange] = [],
         attachmentChanges: [RemoteAttachmentChange] = [],
         changes: [RemoteBlockChange],
+        deletedRecords: [RemoteDeletedRecord] = [],
         serverChangeTokenData: Data? = nil
     ) {
         self.workspaceChanges = workspaceChanges
@@ -446,6 +546,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
         self.pageChanges = pageChanges
         self.attachmentChanges = attachmentChanges
         self.changes = changes
+        self.deletedRecords = deletedRecords
         self.serverChangeTokenData = serverChangeTokenData
     }
 
@@ -459,6 +560,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
             pageChanges: pageChanges,
             attachmentChanges: attachmentChanges,
             blockChanges: changes,
+            deletedRecords: deletedRecords,
             serverChangeTokenData: self.serverChangeTokenData
         )
     }
@@ -495,12 +597,18 @@ final class StaticCloudKitRecordFetcher: CloudKitRecordFetching {
 
 final class TokenAwareCloudKitRecordFetcher: CloudKitRecordFetching {
     let recordsByType: [String: [CKRecord]]
+    let deletedRecordIDsByType: [String: [CKRecord.ID]]
     let nextServerChangeTokenData: Data
     private(set) var receivedServerChangeTokenData: Data?
     private(set) var fetchRecordsCalls: [String] = []
 
-    init(recordsByType: [String: [CKRecord]], nextServerChangeTokenData: Data) {
+    init(
+        recordsByType: [String: [CKRecord]],
+        deletedRecordIDsByType: [String: [CKRecord.ID]] = [:],
+        nextServerChangeTokenData: Data
+    ) {
         self.recordsByType = recordsByType
+        self.deletedRecordIDsByType = deletedRecordIDsByType
         self.nextServerChangeTokenData = nextServerChangeTokenData
     }
 
@@ -515,6 +623,7 @@ final class TokenAwareCloudKitRecordFetcher: CloudKitRecordFetching {
         receivedServerChangeTokenData = serverChangeTokenData
         return CloudKitFetchedRecordChangeSet(
             recordsByType: recordsByType,
+            deletedRecordIDsByType: deletedRecordIDsByType,
             serverChangeTokenData: nextServerChangeTokenData
         )
     }

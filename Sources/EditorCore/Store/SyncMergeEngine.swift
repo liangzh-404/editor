@@ -30,6 +30,7 @@ struct RemoteBlockChange: Equatable, Sendable {
     let revision: Int
     let parentBlockID: String?
     let orderKey: String
+    let isDeleted: Bool
 
     init(
         blockID: String,
@@ -39,7 +40,8 @@ struct RemoteBlockChange: Equatable, Sendable {
         payloadJSON: String,
         revision: Int,
         parentBlockID: String? = nil,
-        orderKey: String = "000001"
+        orderKey: String = "000001",
+        isDeleted: Bool = false
     ) {
         self.blockID = blockID
         self.pageID = pageID
@@ -49,6 +51,7 @@ struct RemoteBlockChange: Equatable, Sendable {
         self.revision = revision
         self.parentBlockID = parentBlockID
         self.orderKey = orderKey
+        self.isDeleted = isDeleted
     }
 }
 
@@ -61,6 +64,11 @@ struct RemoteAttachmentChange: Equatable, Sendable {
     let contentHash: String
     let localPath: String
     let thumbnailPath: String?
+}
+
+struct RemoteDeletedRecord: Equatable, Sendable {
+    let entityType: String
+    let entityID: String
 }
 
 final class SyncMergeEngine {
@@ -216,15 +224,19 @@ final class SyncMergeEngine {
                 .text(remote.textPlain),
                 .integer(remote.revision),
                 .text("synced"),
-                .integer(0),
+                .integer(remote.isDeleted ? 1 : 0),
                 .text(now),
                 .text(now)
             ]
         )
-        try BacklinkRepository(database: database).rebuildLinksForBlock(
-            blockID: remote.blockID,
-            text: remote.textPlain
-        )
+        if remote.isDeleted {
+            try deleteSourceLinks(blockID: remote.blockID)
+        } else {
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: remote.blockID,
+                text: remote.textPlain
+            )
+        }
     }
 
     func applyRemoteAttachment(_ remote: RemoteAttachmentChange) throws {
@@ -276,6 +288,21 @@ final class SyncMergeEngine {
         )
     }
 
+    func applyRemoteDeletion(_ remote: RemoteDeletedRecord) throws {
+        guard try !hasPendingLocalChange(entityType: remote.entityType, entityID: remote.entityID) else {
+            return
+        }
+
+        switch remote.entityType {
+        case "block":
+            try applyRemoteBlockDeletion(blockID: remote.entityID)
+        default:
+            EditorLog.sync.debug(
+                "remote_deletion_ignored entity_type=\(remote.entityType, privacy: .public) entity_id=\(remote.entityID, privacy: .public)"
+            )
+        }
+    }
+
     private func hasPendingLocalChange(entityType: String, entityID: String) throws -> Bool {
         let rows = try database.query(
             """
@@ -289,5 +316,45 @@ final class SyncMergeEngine {
             ]
         )
         return Int(rows.first?["COUNT(*)"] ?? "") ?? 0 > 0
+    }
+
+    private func applyRemoteBlockDeletion(blockID: String) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try database.execute(
+                """
+                UPDATE blocks
+                SET is_deleted = 1,
+                    sync_state = ?,
+                    updated_at = ?
+                WHERE id = ? AND is_deleted = 0
+                """,
+                bindings: [
+                    .text("synced"),
+                    .text(now),
+                    .text(blockID)
+                ]
+            )
+            try deleteSourceLinks(blockID: blockID)
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        EditorLog.sync.debug(
+            "remote_block_deleted block_id=\(blockID, privacy: .public)"
+        )
+    }
+
+    private func deleteSourceLinks(blockID: String) throws {
+        try database.execute(
+            """
+            DELETE FROM links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(blockID)]
+        )
     }
 }

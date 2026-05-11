@@ -22,6 +22,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
     let pageChanges: [RemotePageChange]
     let attachmentChanges: [RemoteAttachmentChange]
     let blockChanges: [RemoteBlockChange]
+    let deletedRecords: [RemoteDeletedRecord]
     let serverChangeTokenData: Data?
 
     init(
@@ -30,6 +31,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
         pageChanges: [RemotePageChange] = [],
         attachmentChanges: [RemoteAttachmentChange] = [],
         blockChanges: [RemoteBlockChange] = [],
+        deletedRecords: [RemoteDeletedRecord] = [],
         serverChangeTokenData: Data? = nil
     ) {
         self.workspaceChanges = workspaceChanges
@@ -37,6 +39,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
         self.pageChanges = pageChanges
         self.attachmentChanges = attachmentChanges
         self.blockChanges = blockChanges
+        self.deletedRecords = deletedRecords
         self.serverChangeTokenData = serverChangeTokenData
     }
 }
@@ -54,7 +57,18 @@ protocol CloudKitRecordFetching {
 
 struct CloudKitFetchedRecordChangeSet: Equatable {
     let recordsByType: [String: [CKRecord]]
+    let deletedRecordIDsByType: [String: [CKRecord.ID]]
     let serverChangeTokenData: Data?
+
+    init(
+        recordsByType: [String: [CKRecord]],
+        deletedRecordIDsByType: [String: [CKRecord.ID]] = [:],
+        serverChangeTokenData: Data?
+    ) {
+        self.recordsByType = recordsByType
+        self.deletedRecordIDsByType = deletedRecordIDsByType
+        self.serverChangeTokenData = serverChangeTokenData
+    }
 }
 
 enum CloudKitServerChangeTokenCodec {
@@ -88,6 +102,7 @@ extension CloudKitRecordFetching {
         )
         return CloudKitFetchedRecordChangeSet(
             recordsByType: recordsByType,
+            deletedRecordIDsByType: [:],
             serverChangeTokenData: nil
         )
     }
@@ -184,6 +199,7 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching {
         let semaphore = DispatchSemaphore(value: 0)
         final class FetchBox: @unchecked Sendable {
             var records: [CKRecord] = []
+            var deletedRecordIDsByType: [String: [CKRecord.ID]] = [:]
             var serverChangeTokenData: Data?
             var error: Error?
         }
@@ -196,6 +212,9 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching {
             case .failure(let error):
                 fetchBox.error = error
             }
+        }
+        operation.recordWithIDWasDeletedBlock = { recordID, recordType in
+            fetchBox.deletedRecordIDsByType[recordType, default: []].append(recordID)
         }
         operation.recordZoneFetchResultBlock = { _, result in
             switch result {
@@ -226,6 +245,7 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching {
 
         return CloudKitFetchedRecordChangeSet(
             recordsByType: Dictionary(grouping: fetchBox.records, by: \.recordType),
+            deletedRecordIDsByType: fetchBox.deletedRecordIDsByType,
             serverChangeTokenData: fetchBox.serverChangeTokenData
         )
     }
@@ -273,6 +293,11 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             sinceServerChangeTokenData: serverChangeTokenData
         )
         let recordsByType = fetchedChanges.recordsByType
+        let deletedRecords = Self.recordTypes.flatMap { recordType in
+            (fetchedChanges.deletedRecordIDsByType[recordType] ?? []).compactMap { recordID in
+                remoteDeletedRecord(recordType: recordType, recordID: recordID)
+            }
+        }
 
         return CloudKitRemoteChangeSet(
             workspaceChanges: (recordsByType["WorkspaceRecord"] ?? []).compactMap(remoteWorkspaceChange),
@@ -280,6 +305,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             pageChanges: (recordsByType["PageRecord"] ?? []).compactMap(remotePageChange),
             attachmentChanges: (recordsByType["AttachmentRecord"] ?? []).compactMap(remoteAttachmentChange),
             blockChanges: (recordsByType["BlockRecord"] ?? []).compactMap(remoteBlockChange),
+            deletedRecords: deletedRecords,
             serverChangeTokenData: fetchedChanges.serverChangeTokenData
         )
     }
@@ -484,7 +510,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             payloadJSON: payloadJSON,
             revision: revision,
             parentBlockID: record["parentBlockID"] as? String,
-            orderKey: record["orderKey"] as? String ?? "000001"
+            orderKey: record["orderKey"] as? String ?? "000001",
+            isDeleted: (record["isDeleted"] as? NSNumber)?.boolValue ?? false
         )
     }
 
@@ -507,6 +534,53 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             contentHash: contentHash,
             localPath: localPath,
             thumbnailPath: record["thumbnailPath"] as? String
+        )
+    }
+
+    private func remoteDeletedRecord(recordType: String, recordID: CKRecord.ID) -> RemoteDeletedRecord? {
+        guard let expectedEntityType = entityType(recordType: recordType),
+              let entityReference = Self.entityReference(recordName: recordID.recordName),
+              entityReference.entityType == expectedEntityType else {
+            return nil
+        }
+
+        return RemoteDeletedRecord(
+            entityType: entityReference.entityType,
+            entityID: entityReference.entityID
+        )
+    }
+
+    private func entityType(recordType: String) -> String? {
+        switch recordType {
+        case "WorkspaceRecord":
+            return "workspace"
+        case "NotebookRecord":
+            return "notebook"
+        case "PageRecord":
+            return "page"
+        case "AttachmentRecord":
+            return "attachment"
+        case "BlockRecord":
+            return "block"
+        default:
+            return nil
+        }
+    }
+
+    private static func entityReference(recordName: String) -> (entityType: String, entityID: String)? {
+        guard let separator = recordName.firstIndex(of: "-") else {
+            return nil
+        }
+
+        let entityType = String(recordName[..<separator])
+        let entityIDStart = recordName.index(after: separator)
+        guard entityIDStart < recordName.endIndex else {
+            return nil
+        }
+
+        return (
+            entityType: entityType,
+            entityID: String(recordName[entityIDStart...])
         )
     }
 
@@ -609,6 +683,9 @@ final class SyncEngine {
         for change in changeSet.blockChanges {
             try mergeEngine.applyRemoteBlock(change)
         }
+        for deletion in changeSet.deletedRecords {
+            try mergeEngine.applyRemoteDeletion(deletion)
+        }
         if let serverChangeTokenData = changeSet.serverChangeTokenData {
             try syncRepository.saveServerChangeTokenData(
                 serverChangeTokenData,
@@ -621,6 +698,7 @@ final class SyncEngine {
                 + changeSet.pageChanges.count
                 + changeSet.attachmentChanges.count
                 + changeSet.blockChanges.count
+                + changeSet.deletedRecords.count
         )
     }
 
