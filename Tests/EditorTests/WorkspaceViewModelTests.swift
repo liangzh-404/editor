@@ -1,4 +1,5 @@
 import Foundation
+import CloudKit
 import XCTest
 
 final class WorkspaceViewModelTests: XCTestCase {
@@ -246,6 +247,32 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Third", "First", "Second"])
     }
 
+    @MainActor
+    func testRefreshCloudKitAccountStatusStoresVisibleStatus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let keychainStore = KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        defer {
+            try? keychainStore.removeValue(for: CloudKitAccountMetadataService.accountStatusKey)
+        }
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            cloudKitAccountMetadataService: CloudKitAccountMetadataService(
+                provider: WorkspaceStaticCloudKitAccountStatusProvider(status: .available),
+                metadataStore: keychainStore
+            )
+        )
+        try viewModel.load()
+
+        try viewModel.refreshCloudKitAccountStatus()
+
+        XCTAssertEqual(viewModel.cloudKitAccountStatus, .available)
+        XCTAssertEqual(viewModel.cloudKitAccountStatusText, "iCloud Available")
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)
@@ -272,5 +299,13 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory
+    }
+}
+
+private struct WorkspaceStaticCloudKitAccountStatusProvider: CloudKitAccountStatusProviding {
+    let status: CKAccountStatus
+
+    func accountStatus() throws -> CKAccountStatus {
+        status
     }
 }

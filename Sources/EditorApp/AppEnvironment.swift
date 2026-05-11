@@ -30,7 +30,8 @@ enum AppEnvironment {
             repository: repository,
             attachmentRepository: attachmentRepository,
             searchRepository: SearchRepository(database: database),
-            backlinkRepository: BacklinkRepository(database: database)
+            backlinkRepository: BacklinkRepository(database: database),
+            cloudKitAccountMetadataService: CloudKitAccountMetadataService()
         )
         try viewModel.load()
         return viewModel

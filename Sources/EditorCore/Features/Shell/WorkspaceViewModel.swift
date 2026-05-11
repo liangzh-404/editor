@@ -8,11 +8,13 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var searchQuery = ""
     @Published private(set) var searchResults: [SearchResult] = []
     @Published private(set) var selectedPageBacklinks: [Backlink] = []
+    @Published private(set) var cloudKitAccountStatus: CloudKitAccountAvailability?
 
     private let repository: PageRepository?
     private let attachmentRepository: AttachmentRepository?
     private let searchRepository: SearchRepository?
     private let backlinkRepository: BacklinkRepository?
+    private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
 
     var selectedPage: PageSummary? {
         guard let selectedPageID else {
@@ -28,16 +30,35 @@ final class WorkspaceViewModel: ObservableObject {
         return snapshot.blocks.filter { $0.pageID == selectedPageID }
     }
 
+    var cloudKitAccountStatusText: String {
+        switch cloudKitAccountStatus {
+        case .available:
+            return "iCloud Available"
+        case .noAccount:
+            return "iCloud No Account"
+        case .restricted:
+            return "iCloud Restricted"
+        case .couldNotDetermine:
+            return "iCloud Unknown"
+        case .temporarilyUnavailable:
+            return "iCloud Unavailable"
+        case nil:
+            return "iCloud Not Checked"
+        }
+    }
+
     init(
         repository: PageRepository,
         attachmentRepository: AttachmentRepository? = nil,
         searchRepository: SearchRepository? = nil,
-        backlinkRepository: BacklinkRepository? = nil
+        backlinkRepository: BacklinkRepository? = nil,
+        cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil
     ) {
         self.repository = repository
         self.attachmentRepository = attachmentRepository
         self.searchRepository = searchRepository
         self.backlinkRepository = backlinkRepository
+        self.cloudKitAccountMetadataService = cloudKitAccountMetadataService
         snapshot = .empty
         selectedWorkspaceID = nil
         selectedPageID = nil
@@ -48,6 +69,7 @@ final class WorkspaceViewModel: ObservableObject {
         attachmentRepository = nil
         searchRepository = nil
         backlinkRepository = nil
+        cloudKitAccountMetadataService = nil
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedPageID = snapshot.selectedPageID
@@ -61,6 +83,25 @@ final class WorkspaceViewModel: ObservableObject {
         let loadedSnapshot = try repository.loadWorkspaceSnapshot()
         apply(snapshot: loadedSnapshot)
         try refreshDerivedState(rebuildSearchIndex: true)
+    }
+
+    func refreshCloudKitAccountStatus() throws {
+        guard let cloudKitAccountMetadataService else {
+            return
+        }
+
+        cloudKitAccountStatus = try cloudKitAccountMetadataService.refreshAndStoreStatus()
+    }
+
+    func refreshCloudKitAccountStatusForUI() {
+        do {
+            try refreshCloudKitAccountStatus()
+        } catch {
+            cloudKitAccountStatus = .couldNotDetermine
+            EditorLog.sync.error(
+                "cloudkit_account_status_failed error=\(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     func selectPage(id: String) {

@@ -42,7 +42,7 @@ private struct ThreeColumnEditorShell: View {
 
     var body: some View {
         NavigationSplitView {
-            WorkspaceSidebar(snapshot: viewModel.snapshot)
+            WorkspaceSidebar(viewModel: viewModel)
         } content: {
             PageListView(viewModel: viewModel)
         } detail: {
@@ -88,6 +88,8 @@ private struct CompactEditorShell: View {
                         }
                     }
                 }
+
+                CloudKitAccountStatusSection(viewModel: viewModel)
             }
             .navigationTitle("Editor")
             .background(Color.white)
@@ -96,15 +98,17 @@ private struct CompactEditorShell: View {
 }
 
 private struct WorkspaceSidebar: View {
-    let snapshot: WorkspaceSnapshot
+    @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
         List {
             Section("Spaces") {
-                ForEach(snapshot.workspaces) { workspace in
+                ForEach(viewModel.snapshot.workspaces) { workspace in
                     Label(workspace.name, systemImage: "tray.full")
                 }
             }
+
+            CloudKitAccountStatusSection(viewModel: viewModel)
 
             Section("Library") {
                 Label("Favorites", systemImage: "star")
@@ -114,6 +118,58 @@ private struct WorkspaceSidebar: View {
         .navigationTitle("Editor")
         .scrollContentBackground(.hidden)
         .background(Color(red: 0.98, green: 0.98, blue: 0.96))
+    }
+}
+
+private struct CloudKitAccountStatusSection: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+
+    var body: some View {
+        Section("Sync") {
+            HStack(spacing: 8) {
+                Image(systemName: statusIconName)
+                    .foregroundStyle(statusColor)
+                    .frame(width: 18)
+
+                Text(viewModel.cloudKitAccountStatusText)
+                    .font(.callout)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    viewModel.refreshCloudKitAccountStatusForUI()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh iCloud status")
+                .accessibilityIdentifier("editor.refresh-icloud-status")
+            }
+            .accessibilityIdentifier("editor.icloud-status")
+        }
+    }
+
+    private var statusIconName: String {
+        switch viewModel.cloudKitAccountStatus {
+        case .available:
+            return "checkmark.icloud"
+        case .noAccount, .restricted, .temporarilyUnavailable:
+            return "xmark.icloud"
+        case .couldNotDetermine, nil:
+            return "icloud"
+        }
+    }
+
+    private var statusColor: Color {
+        switch viewModel.cloudKitAccountStatus {
+        case .available:
+            return .green
+        case .noAccount, .restricted, .temporarilyUnavailable:
+            return .red
+        case .couldNotDetermine, nil:
+            return .secondary
+        }
     }
 }
 
