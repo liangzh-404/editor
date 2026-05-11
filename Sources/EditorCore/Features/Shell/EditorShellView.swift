@@ -46,7 +46,10 @@ private struct ThreeColumnEditorShell: View {
         } detail: {
             EditorCanvasView(
                 page: viewModel.selectedPage,
-                blocks: viewModel.visibleBlocks
+                blocks: viewModel.visibleBlocks,
+                onBlockTextChange: { blockID, text in
+                    viewModel.editBlockText(blockID: blockID, text: text)
+                }
             )
         }
     }
@@ -131,7 +134,10 @@ private struct CompactPageListView: View {
                 NavigationLink {
                     EditorCanvasView(
                         page: page,
-                        blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id }
+                        blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
+                        onBlockTextChange: { blockID, text in
+                            viewModel.editBlockText(blockID: blockID, text: text)
+                        }
                     )
                     .onAppear {
                         viewModel.selectPage(id: page.id)
@@ -165,6 +171,7 @@ private struct PageRow: View {
 private struct EditorCanvasView: View {
     let page: PageSummary?
     let blocks: [BlockSnapshot]
+    let onBlockTextChange: (String, String) -> Void
 
     var body: some View {
         ScrollView {
@@ -173,7 +180,9 @@ private struct EditorCanvasView: View {
                     .font(.largeTitle.weight(.semibold))
 
                 ForEach(blocks) { block in
-                    BlockRowView(block: block)
+                    BlockRowView(block: block) { text in
+                        onBlockTextChange(block.id, text)
+                    }
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -187,6 +196,14 @@ private struct EditorCanvasView: View {
 
 private struct BlockRowView: View {
     let block: BlockSnapshot
+    let onTextChange: (String) -> Void
+    @State private var draftText: String
+
+    init(block: BlockSnapshot, onTextChange: @escaping (String) -> Void) {
+        self.block = block
+        self.onTextChange = onTextChange
+        _draftText = State(initialValue: block.textPlain)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -195,10 +212,28 @@ private struct BlockRowView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)
 
-            Text(block.textPlain)
-                .font(.body)
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            TextField(
+                "Start writing",
+                text: Binding(
+                    get: { draftText },
+                    set: { newValue in
+                        draftText = newValue
+                        onTextChange(newValue)
+                    }
+                ),
+                axis: .vertical
+            )
+            .textFieldStyle(.plain)
+            .font(.body)
+            .foregroundStyle(.primary)
+            .lineLimit(1...8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("editor.block.\(block.id)")
+            .onChange(of: block.textPlain) { _, newValue in
+                if newValue != draftText {
+                    draftText = newValue
+                }
+            }
         }
         .padding(.vertical, 7)
         .contentShape(Rectangle())

@@ -49,6 +49,27 @@ final class WorkspaceViewModel: ObservableObject {
         selectedPageID = id
     }
 
+    func updateBlockText(blockID: String, text: String) throws {
+        if let repository {
+            try repository.updateBlockText(blockID: blockID, text: text)
+        }
+
+        snapshot = snapshot.replacingBlockText(blockID: blockID, text: text)
+    }
+
+    func editBlockText(blockID: String, text: String) {
+        do {
+            try updateBlockText(blockID: blockID, text: text)
+            EditorLog.input.debug(
+                "block_edit_saved id=\(blockID, privacy: .public) length=\(text.count, privacy: .public)"
+            )
+        } catch {
+            EditorLog.input.error(
+                "block_edit_failed id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     private func apply(snapshot: WorkspaceSnapshot) {
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID

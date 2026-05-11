@@ -83,6 +83,30 @@ final class PageRepository {
         )
     }
 
+    func updateBlockText(blockID: String, text: String) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let payloadJSON = try paragraphPayloadJSON(text: text)
+
+        try database.execute(
+            """
+            UPDATE blocks
+            SET payload_json = ?,
+                text_plain = ?,
+                revision = revision + 1,
+                sync_state = ?,
+                updated_at = ?
+            WHERE id = ? AND is_deleted = 0
+            """,
+            bindings: [
+                .text(payloadJSON),
+                .text(text),
+                .text("local"),
+                .text(now),
+                .text(blockID)
+            ]
+        )
+    }
+
     private func insertDefaultContent() throws {
         let now = ISO8601DateFormatter().string(from: Date())
 
@@ -148,5 +172,21 @@ final class PageRepository {
             ]
         )
     }
+
+    private func paragraphPayloadJSON(text: String) throws -> String {
+        let data = try JSONSerialization.data(
+            withJSONObject: ["text": text],
+            options: [.sortedKeys]
+        )
+
+        guard let payload = String(data: data, encoding: .utf8) else {
+            throw PageRepositoryError.invalidPayloadEncoding
+        }
+
+        return payload
+    }
 }
 
+enum PageRepositoryError: Error, Equatable {
+    case invalidPayloadEncoding
+}

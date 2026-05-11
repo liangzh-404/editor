@@ -42,6 +42,20 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(snapshot.blocks.count, 1)
     }
 
+    func testUpdateBlockTextPersistsParagraphContent() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(initialSnapshot.blocks.first?.id)
+
+        try repository.updateBlockText(blockID: blockID, text: "Edited locally")
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "Edited locally")
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)
@@ -59,4 +73,3 @@ final class PageRepositoryTests: XCTestCase {
         return directory.appendingPathComponent("editor.sqlite").path
     }
 }
-
