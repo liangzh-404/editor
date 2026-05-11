@@ -35,4 +35,21 @@ final class EditorMacEditingUITests: XCTestCase {
         let value = textView.value as? String ?? ""
         XCTAssertTrue(value.contains("Editable"), "Typing into the welcome block should update the native text view value")
     }
+
+    @MainActor
+    func testClickingBlockRowFocusesEditorForTyping() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let blockRow = app.otherElements["editor.block.block-welcome-001"]
+        XCTAssertTrue(blockRow.waitForExistence(timeout: 5), "Welcome block row should be visible and tappable")
+
+        blockRow.click()
+        app.typeText(" Row focus")
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        let value = textView.value as? String ?? ""
+        XCTAssertTrue(value.contains("Row focus"), "Typing after clicking the block row should edit the native text view")
+    }
 }

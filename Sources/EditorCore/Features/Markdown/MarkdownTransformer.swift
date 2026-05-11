@@ -46,11 +46,13 @@ enum MarkdownTransformer {
         var drafts: [MarkdownBlockDraft] = []
         var codeLines: [String]?
         var tableLines: [String] = []
+        var paragraphLines: [String] = []
 
         for line in markdown.components(separatedBy: .newlines) {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
 
             if codeLines != nil {
+                flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
                 if trimmedLine == "```" {
                     drafts.append(
@@ -67,26 +69,41 @@ enum MarkdownTransformer {
             }
 
             if trimmedLine == "```" {
+                flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
                 codeLines = []
                 continue
             }
 
             guard !trimmedLine.isEmpty else {
+                flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
                 continue
             }
 
             if isTableLine(trimmedLine) {
+                flushParagraphLines(&paragraphLines, into: &drafts)
                 tableLines.append(trimmedLine)
                 continue
             }
 
             flushTableLines(&tableLines, into: &drafts)
-            drafts.append(importBlockDraft(for: trimmedLine))
+            let draft = importBlockDraft(for: trimmedLine)
+            if draft.type == .paragraph {
+                if shouldContinueParagraph(with: trimmedLine, existingLines: paragraphLines) {
+                    paragraphLines.append(trimmedLine)
+                } else {
+                    flushParagraphLines(&paragraphLines, into: &drafts)
+                    paragraphLines.append(trimmedLine)
+                }
+            } else {
+                flushParagraphLines(&paragraphLines, into: &drafts)
+                drafts.append(draft)
+            }
         }
 
         if let codeLines {
+            flushParagraphLines(&paragraphLines, into: &drafts)
             drafts.append(
                 MarkdownBlockDraft(
                     type: .codeBlock,
@@ -94,6 +111,7 @@ enum MarkdownTransformer {
                 )
             )
         }
+        flushParagraphLines(&paragraphLines, into: &drafts)
         flushTableLines(&tableLines, into: &drafts)
 
         return drafts
@@ -187,6 +205,35 @@ enum MarkdownTransformer {
             )
         )
         tableLines.removeAll()
+    }
+
+    private static func flushParagraphLines(
+        _ paragraphLines: inout [String],
+        into drafts: inout [MarkdownBlockDraft]
+    ) {
+        guard !paragraphLines.isEmpty else {
+            return
+        }
+
+        drafts.append(
+            MarkdownBlockDraft(
+                type: .paragraph,
+                textPlain: paragraphLines.joined(separator: " ")
+            )
+        )
+        paragraphLines.removeAll()
+    }
+
+    private static func shouldContinueParagraph(
+        with line: String,
+        existingLines: [String]
+    ) -> Bool {
+        guard !existingLines.isEmpty,
+              let firstCharacter = line.first else {
+            return false
+        }
+
+        return firstCharacter.isLowercase
     }
 
     private static func toggleText(for line: String) -> String? {

@@ -136,6 +136,27 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownPreservesInlineSyntaxAcrossWrappedParagraphLines() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    This paragraph keeps **bold text**
+                    and [a link](https://example.com) with `inline code`.
+
+                    - Separate item
+                    """
+            ),
+            [
+                MarkdownBlockDraft(
+                    type: .paragraph,
+                    textPlain: "This paragraph keeps **bold text** and [a link](https://example.com) with `inline code`."
+                ),
+                MarkdownBlockDraft(type: .unorderedListItem, textPlain: "Separate item")
+            ]
+        )
+    }
+
     func testExportAdvancedBlocksToMarkdownFallbackSyntax() {
         let blocks = [
             block(type: .table, text: "| A | B |\n| --- | --- |\n| 1 | 2 |"),

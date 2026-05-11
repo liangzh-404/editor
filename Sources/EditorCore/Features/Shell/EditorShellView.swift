@@ -748,6 +748,7 @@ private struct BlockRowView: View {
     let focusRequestID: UUID?
     let onFocusRequestHandled: () -> Void
     let onTextChange: (String) -> Void
+    @State private var rowFocusRequest: BlockFocusRequest?
 
     init(
         block: BlockSnapshot,
@@ -807,8 +808,8 @@ private struct BlockRowView: View {
                     text: block.textPlain,
                     blockType: block.type,
                     session: editorSession,
-                    focusRequestID: focusRequestID,
-                    onFocusRequestHandled: onFocusRequestHandled,
+                    focusRequestID: effectiveFocusRequestID,
+                    onFocusRequestHandled: handleFocusRequestHandled,
                     onTextChange: onTextChange
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -823,6 +824,31 @@ private struct BlockRowView: View {
         }
         .padding(.vertical, 7)
         .contentShape(Rectangle())
+        .onTapGesture {
+            requestRowFocus()
+        }
+    }
+
+    private var effectiveFocusRequestID: UUID? {
+        rowFocusRequest?.id ?? focusRequestID
+    }
+
+    private func requestRowFocus() {
+        guard block.type.isTextEditable else {
+            return
+        }
+
+        rowFocusRequest = BlockFocusRequest(blockID: block.id)
+        EditorLog.focus.debug(
+            "editor_focus_request_scheduled block_id=\(block.id, privacy: .public) source=row_tap"
+        )
+    }
+
+    private func handleFocusRequestHandled() {
+        if rowFocusRequest?.blockID == block.id {
+            rowFocusRequest = nil
+        }
+        onFocusRequestHandled()
     }
 }
 
