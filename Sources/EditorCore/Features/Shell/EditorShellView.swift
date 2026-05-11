@@ -1,8 +1,17 @@
 import SwiftUI
 
 struct EditorShellView: View {
+    @StateObject private var viewModel: WorkspaceViewModel
+
+    init(viewModel: WorkspaceViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
+
     var body: some View {
         AdaptiveEditorShell()
+            .task {
+                try? viewModel.load()
+            }
     }
 }
 
@@ -86,6 +95,24 @@ private struct PlaceholderEditorCanvas: View {
 }
 
 #Preview {
-    EditorShellView()
+    EditorShellView(
+        viewModel: WorkspaceViewModel(
+            snapshot: WorkspaceSnapshot(
+                workspaces: [WorkspaceSummary(id: "workspace-local", name: "Local")],
+                pages: [PageSummary(id: "page-welcome", workspaceID: "workspace-local", title: "Welcome")],
+                blocks: [
+                    BlockSnapshot(
+                        id: "block-welcome-001",
+                        pageID: "page-welcome",
+                        parentBlockID: nil,
+                        orderKey: "000001",
+                        type: .paragraph,
+                        textPlain: "Start writing in blocks."
+                    )
+                ],
+                selectedWorkspaceID: "workspace-local",
+                selectedPageID: "page-welcome"
+            )
+        )
+    )
 }
-

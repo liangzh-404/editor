@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		01073C4629A8F9C0729414E2 /* PageRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99D2978B31BEE2E16B778433 /* PageRepository.swift */; };
 		05CD53853A98F46E200DDC65 /* SchemaMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA32BC9667143AD004CA8F5 /* SchemaMigratorTests.swift */; };
+		09BB0A14C4C2ACE82E7B8514 /* WorkspaceViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 199BD1746B6CDF8429B282CD /* WorkspaceViewModelTests.swift */; };
 		12017FEFC29019F7885E9A8B /* SchemaMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1775693501BBE99927D7F07C /* SchemaMigrator.swift */; };
 		14615EF0D0385EC1544687A5 /* PageRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99D2978B31BEE2E16B778433 /* PageRepository.swift */; };
 		203C8C57D64D5D4A849EF8AA /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC9BD3D38C16BD85AE9DB4C /* AppEnvironment.swift */; };
@@ -17,12 +18,15 @@
 		30761AF9DB95A5C98582DB35 /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC9BD3D38C16BD85AE9DB4C /* AppEnvironment.swift */; };
 		38F36C057252483E1CD4A0BA /* EditorLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40AB9B809EE4F1C8F4A7E86C /* EditorLog.swift */; };
 		3985E53DC8AF5E84FB2C5250 /* EditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */; };
+		3C93E4F9F743D69CA90FEC98 /* WorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */; };
 		4F4123269A16D4618CA56BD2 /* EditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */; };
 		5D5CF87AA264C0F8EB86F299 /* EditorLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40AB9B809EE4F1C8F4A7E86C /* EditorLog.swift */; };
 		69876CE14D2D2E8A4A00992B /* EditorShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */; };
 		6A7F865DCBB7545701FE6F7D /* EditorShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */; };
 		711E78B4E602143661DC5F2C /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
 		781AE5A449EDE2D71F14245B /* EditorShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */; };
+		78B01CD737100B6614E6E8A2 /* WorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */; };
+		7C0A1A9E3A837DBCD1EA2C74 /* WorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */; };
 		7F9B997D95099BF35D291D2D /* EditorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B5B868AE25C29EA7A31C8A /* EditorApp.swift */; };
 		8A525D5BB973025C3CB43C21 /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
 		A10CB67698B1FCCF81CE837A /* EditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */; };
@@ -37,7 +41,9 @@
 		0710D1C7EF032791B008493B /* EditorIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = EditorIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1270B98A9F61963B3A04FAE9 /* EditorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EditorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1775693501BBE99927D7F07C /* SchemaMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaMigrator.swift; sourceTree = "<group>"; };
+		199BD1746B6CDF8429B282CD /* WorkspaceViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceViewModelTests.swift; sourceTree = "<group>"; };
 		20B5B868AE25C29EA7A31C8A /* EditorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorApp.swift; sourceTree = "<group>"; };
+		21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceViewModel.swift; sourceTree = "<group>"; };
 		3EE30DA9DBD41CF2A9B3375E /* PageRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageRepositoryTests.swift; sourceTree = "<group>"; };
 		40AB9B809EE4F1C8F4A7E86C /* EditorLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorLog.swift; sourceTree = "<group>"; };
 		4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorModels.swift; sourceTree = "<group>"; };
@@ -120,6 +126,7 @@
 			isa = PBXGroup;
 			children = (
 				CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */,
+				21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -139,6 +146,7 @@
 			children = (
 				3EE30DA9DBD41CF2A9B3375E /* PageRepositoryTests.swift */,
 				EEA32BC9667143AD004CA8F5 /* SchemaMigratorTests.swift */,
+				199BD1746B6CDF8429B282CD /* WorkspaceViewModelTests.swift */,
 			);
 			name = EditorTests;
 			path = Tests/EditorTests;
@@ -249,6 +257,8 @@
 				711E78B4E602143661DC5F2C /* SQLiteDatabase.swift in Sources */,
 				2B18D251AA0DE11D5BE12665 /* SchemaMigrator.swift in Sources */,
 				05CD53853A98F46E200DDC65 /* SchemaMigratorTests.swift in Sources */,
+				78B01CD737100B6614E6E8A2 /* WorkspaceViewModel.swift in Sources */,
+				09BB0A14C4C2ACE82E7B8514 /* WorkspaceViewModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -264,6 +274,7 @@
 				E4033F9ECF39040100D58D6D /* PageRepository.swift in Sources */,
 				8A525D5BB973025C3CB43C21 /* SQLiteDatabase.swift in Sources */,
 				12017FEFC29019F7885E9A8B /* SchemaMigrator.swift in Sources */,
+				3C93E4F9F743D69CA90FEC98 /* WorkspaceViewModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -279,6 +290,7 @@
 				14615EF0D0385EC1544687A5 /* PageRepository.swift in Sources */,
 				A71E6C145467696785F16C68 /* SQLiteDatabase.swift in Sources */,
 				23382344C31EB384088840F4 /* SchemaMigrator.swift in Sources */,
+				7C0A1A9E3A837DBCD1EA2C74 /* WorkspaceViewModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
