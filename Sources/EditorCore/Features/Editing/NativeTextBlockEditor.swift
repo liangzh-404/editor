@@ -44,7 +44,7 @@ struct NativeTextBlockEditor: View {
         switch blockType {
         case .heading1:
             return 34
-        case .codeBlock:
+        case .codeBlock, .table:
             return 28
         default:
             return 24
@@ -117,7 +117,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         switch blockType {
         case .heading1:
             return .systemFont(ofSize: 22, weight: .semibold)
-        case .codeBlock:
+        case .codeBlock, .table:
             return .monospacedSystemFont(ofSize: 14, weight: .regular)
         default:
             return .systemFont(ofSize: 15, weight: .regular)
@@ -217,7 +217,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         switch blockType {
         case .heading1:
             return .preferredFont(forTextStyle: .title2)
-        case .codeBlock:
+        case .codeBlock, .table:
             return .monospacedSystemFont(ofSize: 15, weight: .regular)
         default:
             return .preferredFont(forTextStyle: .body)

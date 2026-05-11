@@ -106,6 +106,57 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownSupportsTableCalloutAndToggleBlocks() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    | Name | Status |
+                    | --- | --- |
+                    | Editor | Local |
+
+                    > [!NOTE] Keep local first
+
+                    <details><summary>More</summary></details>
+                    """
+            ),
+            [
+                MarkdownBlockDraft(
+                    type: .table,
+                    textPlain:
+                        """
+                        | Name | Status |
+                        | --- | --- |
+                        | Editor | Local |
+                        """
+                ),
+                MarkdownBlockDraft(type: .callout, textPlain: "Keep local first"),
+                MarkdownBlockDraft(type: .toggle, textPlain: "More")
+            ]
+        )
+    }
+
+    func testExportAdvancedBlocksToMarkdownFallbackSyntax() {
+        let blocks = [
+            block(type: .table, text: "| A | B |\n| --- | --- |\n| 1 | 2 |"),
+            block(type: .callout, text: "Important"),
+            block(type: .toggle, text: "Details")
+        ]
+
+        XCTAssertEqual(
+            MarkdownTransformer.export(blocks: blocks),
+            """
+            | A | B |
+            | --- | --- |
+            | 1 | 2 |
+
+            > [!NOTE] Important
+
+            <details><summary>Details</summary></details>
+            """
+        )
+    }
+
     private func block(type: BlockType, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: UUID().uuidString,

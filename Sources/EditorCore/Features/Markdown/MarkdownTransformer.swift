@@ -25,6 +25,10 @@ enum MarkdownTransformer {
             return MarkdownShortcutTransform(type: .taskItem, textPlain: "")
         case "```":
             return MarkdownShortcutTransform(type: .codeBlock, textPlain: "")
+        case "> [!NOTE] ":
+            return MarkdownShortcutTransform(type: .callout, textPlain: "")
+        case "<details>":
+            return MarkdownShortcutTransform(type: .toggle, textPlain: "")
         case "---":
             return MarkdownShortcutTransform(type: .divider, textPlain: "")
         default:
@@ -41,11 +45,13 @@ enum MarkdownTransformer {
     static func importBlocks(markdown: String) -> [MarkdownBlockDraft] {
         var drafts: [MarkdownBlockDraft] = []
         var codeLines: [String]?
+        var tableLines: [String] = []
 
         for line in markdown.components(separatedBy: .newlines) {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
 
             if codeLines != nil {
+                flushTableLines(&tableLines, into: &drafts)
                 if trimmedLine == "```" {
                     drafts.append(
                         MarkdownBlockDraft(
@@ -61,14 +67,22 @@ enum MarkdownTransformer {
             }
 
             if trimmedLine == "```" {
+                flushTableLines(&tableLines, into: &drafts)
                 codeLines = []
                 continue
             }
 
             guard !trimmedLine.isEmpty else {
+                flushTableLines(&tableLines, into: &drafts)
                 continue
             }
 
+            if isTableLine(trimmedLine) {
+                tableLines.append(trimmedLine)
+                continue
+            }
+
+            flushTableLines(&tableLines, into: &drafts)
             drafts.append(importBlockDraft(for: trimmedLine))
         }
 
@@ -80,6 +94,7 @@ enum MarkdownTransformer {
                 )
             )
         }
+        flushTableLines(&tableLines, into: &drafts)
 
         return drafts
     }
@@ -100,6 +115,12 @@ enum MarkdownTransformer {
             return "> \(block.textPlain)"
         case .codeBlock:
             return "```\n\(block.textPlain)\n```"
+        case .table:
+            return block.textPlain
+        case .callout:
+            return "> [!NOTE] \(block.textPlain)"
+        case .toggle:
+            return "<details><summary>\(block.textPlain)</summary></details>"
         case .divider:
             return "---"
         case .attachmentImage, .attachmentVideo, .attachmentFile:
@@ -120,8 +141,14 @@ enum MarkdownTransformer {
         if let orderedListText = orderedListItemText(for: line) {
             return MarkdownBlockDraft(type: .orderedListItem, textPlain: orderedListText)
         }
+        if line.hasPrefix("> [!NOTE] ") {
+            return MarkdownBlockDraft(type: .callout, textPlain: String(line.dropFirst(10)))
+        }
         if line.hasPrefix("> ") {
             return MarkdownBlockDraft(type: .quote, textPlain: String(line.dropFirst(2)))
+        }
+        if let toggleText = toggleText(for: line) {
+            return MarkdownBlockDraft(type: .toggle, textPlain: toggleText)
         }
         if line == "---" {
             return MarkdownBlockDraft(type: .divider, textPlain: "")
@@ -140,5 +167,35 @@ enum MarkdownTransformer {
         }
 
         return String(parts[1])
+    }
+
+    private static func isTableLine(_ line: String) -> Bool {
+        line.contains("|") && line.trimmingCharacters(in: .whitespaces).hasPrefix("|")
+    }
+
+    private static func flushTableLines(
+        _ tableLines: inout [String],
+        into drafts: inout [MarkdownBlockDraft]
+    ) {
+        guard !tableLines.isEmpty else {
+            return
+        }
+        drafts.append(
+            MarkdownBlockDraft(
+                type: .table,
+                textPlain: tableLines.joined(separator: "\n")
+            )
+        )
+        tableLines.removeAll()
+    }
+
+    private static func toggleText(for line: String) -> String? {
+        let prefix = "<details><summary>"
+        let suffix = "</summary></details>"
+        guard line.hasPrefix(prefix), line.hasSuffix(suffix) else {
+            return nil
+        }
+
+        return String(line.dropFirst(prefix.count).dropLast(suffix.count))
     }
 }

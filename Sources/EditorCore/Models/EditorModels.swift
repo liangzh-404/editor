@@ -20,6 +20,9 @@ enum BlockType: String, Equatable, Sendable {
     case taskItem
     case quote
     case codeBlock
+    case table
+    case callout
+    case toggle
     case divider
     case attachmentImage
     case attachmentVideo
@@ -33,7 +36,10 @@ enum BlockType: String, Equatable, Sendable {
              .orderedListItem,
              .taskItem,
              .quote,
-             .codeBlock:
+             .codeBlock,
+             .table,
+             .callout,
+             .toggle:
             return true
         case .divider,
              .attachmentImage,
