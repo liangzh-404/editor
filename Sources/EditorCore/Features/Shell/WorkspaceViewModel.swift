@@ -392,12 +392,32 @@ final class WorkspaceViewModel: ObservableObject {
         try load()
     }
 
+    func deleteBlock(blockID: String) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        try repository.deleteBlock(blockID: blockID)
+        try load()
+    }
+
     func moveBlockInCurrentPage(blockID: String, toIndex: Int) {
         do {
             try moveBlock(blockID: blockID, toIndex: toIndex)
         } catch {
             EditorLog.store.error(
                 "block_move_failed block_id=\(blockID, privacy: .public) target_index=\(toIndex, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func deleteBlockFromCurrentPage(blockID: String) {
+        do {
+            try deleteBlock(blockID: blockID)
+            EditorLog.store.debug("block_delete_visible block_id=\(blockID, privacy: .public)")
+        } catch {
+            EditorLog.store.error(
+                "block_delete_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }

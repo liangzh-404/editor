@@ -631,6 +631,63 @@ final class PageRepository {
         )
     }
 
+    func deleteBlock(blockID: String) throws {
+        let selectedRows = try database.query(
+            """
+            SELECT page_id
+            FROM blocks
+            WHERE id = ? AND is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        )
+
+        guard let pageID = selectedRows.first?["page_id"] ?? nil else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try database.execute(
+                """
+                UPDATE blocks
+                SET is_deleted = 1,
+                    revision = revision + 1,
+                    sync_state = ?,
+                    updated_at = ?
+                WHERE id = ? AND is_deleted = 0
+                """,
+                bindings: [
+                    .text("local"),
+                    .text(now),
+                    .text(blockID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM links
+                WHERE source_block_id = ?
+                """,
+                bindings: [.text(blockID)]
+            )
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        try SyncRepository(database: database).enqueue(
+            entityType: "block",
+            entityID: blockID,
+            changeType: "delete"
+        )
+
+        EditorLog.store.debug(
+            "block_deleted block_id=\(blockID, privacy: .public) page_id=\(pageID, privacy: .public)"
+        )
+    }
+
     private func insertDefaultContent() throws {
         let now = ISO8601DateFormatter().string(from: Date())
 

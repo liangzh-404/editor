@@ -232,6 +232,28 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityID, appendedBlock.id)
     }
 
+    func testDeleteBlockHidesItQueuesSyncChangeAndRemovesBacklinks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "See [[Welcome]]")
+        XCTAssertFalse(try BacklinkRepository(database: database).backlinks(targetPageID: pageID).isEmpty)
+
+        try repository.deleteBlock(blockID: blockID)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.blocks, [])
+        XCTAssertEqual(try BacklinkRepository(database: database).backlinks(targetPageID: pageID), [])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "block", entityID: blockID, changeType: "delete")
+        )
+    }
+
     func testLargePageImportLoadAndSearchIndexRemainUsable() throws {
         let database = try migratedDatabase()
         defer { database.close() }

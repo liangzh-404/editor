@@ -437,6 +437,23 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testDeleteVisibleBlockRefreshesVisibleBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.deleteBlock(blockID: blockID)
+
+        XCTAssertEqual(viewModel.visibleBlocks, [])
+    }
+
+    @MainActor
     func testRefreshCloudKitAccountStatusStoresVisibleStatus() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -85,6 +85,32 @@ final class AttachmentRepositoryTests: XCTestCase {
         XCTAssertEqual(file.block.type, .attachmentFile)
     }
 
+    func testDeletingAttachmentBlockRemovesReferenceButKeepsAttachmentMetadata() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let repository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let result = try repository.importAttachment(
+            sourceURL: makeSourceFile(name: "brief.txt", contents: "local attachment"),
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+
+        try pageRepository.deleteBlock(blockID: result.block.id)
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertFalse(reloadedSnapshot.blocks.contains { $0.id == result.block.id })
+        XCTAssertTrue(reloadedSnapshot.attachments.contains(result.attachment))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.attachment.localPath))
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

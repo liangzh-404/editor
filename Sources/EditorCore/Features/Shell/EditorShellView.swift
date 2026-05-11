@@ -57,6 +57,9 @@ private struct ThreeColumnEditorShell: View {
                 onMoveBlock: { blockID, targetIndex in
                     viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                 },
+                onDeleteBlock: { blockID in
+                    viewModel.deleteBlockFromCurrentPage(blockID: blockID)
+                },
                 onSelectBacklink: { backlink in
                     viewModel.selectBacklink(backlink)
                 },
@@ -284,6 +287,9 @@ private struct CompactPageListView: View {
                                 onMoveBlock: { blockID, targetIndex in
                                     viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                                 },
+                                onDeleteBlock: { blockID in
+                                    viewModel.deleteBlockFromCurrentPage(blockID: blockID)
+                                },
                                 onSelectBacklink: { backlink in
                                     viewModel.selectBacklink(backlink)
                                 },
@@ -492,6 +498,7 @@ private struct EditorCanvasView: View {
     let pendingFocusBlockID: String?
     let onAddParagraphBlock: () -> String?
     let onMoveBlock: (String, Int) -> Void
+    let onDeleteBlock: (String) -> Void
     let onSelectBacklink: (Backlink) -> Void
     let onPageTitleChange: (String) -> Void
     let onImportMarkdown: (URL) -> Void
@@ -572,6 +579,9 @@ private struct EditorCanvasView: View {
                         },
                         onMoveDown: {
                             onMoveBlock(block.id, index + 1)
+                        },
+                        onDelete: {
+                            onDeleteBlock(block.id)
                         },
                         focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
                         onFocusRequestHandled: {
@@ -745,6 +755,7 @@ private struct BlockRowView: View {
     let canMoveDown: Bool
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
+    let onDelete: () -> Void
     let focusRequestID: UUID?
     let onFocusRequestHandled: () -> Void
     let onTextChange: (String) -> Void
@@ -757,6 +768,7 @@ private struct BlockRowView: View {
         canMoveDown: Bool = false,
         onMoveUp: @escaping () -> Void = {},
         onMoveDown: @escaping () -> Void = {},
+        onDelete: @escaping () -> Void = {},
         focusRequestID: UUID? = nil,
         onFocusRequestHandled: @escaping () -> Void = {},
         onTextChange: @escaping (String) -> Void
@@ -767,6 +779,7 @@ private struct BlockRowView: View {
         self.canMoveDown = canMoveDown
         self.onMoveUp = onMoveUp
         self.onMoveDown = onMoveDown
+        self.onDelete = onDelete
         self.focusRequestID = focusRequestID
         self.onFocusRequestHandled = onFocusRequestHandled
         self.onTextChange = onTextChange
@@ -798,6 +811,15 @@ private struct BlockRowView: View {
                 .disabled(!canMoveDown)
                 .help("Move down")
                 .accessibilityIdentifier("editor.block.\(block.id).move-down")
+
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Delete")
+                .accessibilityIdentifier("editor.block.\(block.id).delete")
             }
             .frame(width: 24)
             .padding(.top, 1)
