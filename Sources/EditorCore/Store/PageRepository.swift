@@ -74,10 +74,41 @@ final class PageRepository {
             )
         }
 
+        let attachments = try database.query(
+            """
+            SELECT id,
+                   workspace_id,
+                   original_filename,
+                   uti_type,
+                   byte_size,
+                   content_hash,
+                   local_path,
+                   thumbnail_path
+            FROM attachments
+            WHERE workspace_id = ?
+            ORDER BY created_at ASC
+            """,
+            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
+        ).map { row in
+            let utiType = row["uti_type"] ?? "public.data"
+            return AttachmentSnapshot(
+                id: row["id"] ?? "",
+                workspaceID: row["workspace_id"] ?? "",
+                originalFilename: row["original_filename"] ?? "",
+                utiType: utiType,
+                byteSize: Int(row["byte_size"] ?? "") ?? 0,
+                contentHash: row["content_hash"] ?? "",
+                localPath: row["local_path"] ?? "",
+                thumbnailPath: row["thumbnail_path"] ?? nil,
+                kind: AttachmentKind(utiType: utiType)
+            )
+        }
+
         return WorkspaceSnapshot(
             workspaces: workspaces,
             pages: pages,
             blocks: blocks,
+            attachments: attachments,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedPageID: selectedPageID
         )

@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		01073C4629A8F9C0729414E2 /* PageRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99D2978B31BEE2E16B778433 /* PageRepository.swift */; };
 		05CD53853A98F46E200DDC65 /* SchemaMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA32BC9667143AD004CA8F5 /* SchemaMigratorTests.swift */; };
+		0974C8550941134BA36D7147 /* AttachmentRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1927809A95C559A7342DE2D0 /* AttachmentRepository.swift */; };
 		09BB0A14C4C2ACE82E7B8514 /* WorkspaceViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 199BD1746B6CDF8429B282CD /* WorkspaceViewModelTests.swift */; };
 		12017FEFC29019F7885E9A8B /* SchemaMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1775693501BBE99927D7F07C /* SchemaMigrator.swift */; };
 		14615EF0D0385EC1544687A5 /* PageRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99D2978B31BEE2E16B778433 /* PageRepository.swift */; };
@@ -16,6 +17,7 @@
 		23382344C31EB384088840F4 /* SchemaMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1775693501BBE99927D7F07C /* SchemaMigrator.swift */; };
 		2B18D251AA0DE11D5BE12665 /* SchemaMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1775693501BBE99927D7F07C /* SchemaMigrator.swift */; };
 		30761AF9DB95A5C98582DB35 /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC9BD3D38C16BD85AE9DB4C /* AppEnvironment.swift */; };
+		330DE8B1EA9F4976ACB74DE0 /* AttachmentRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40CF7A6C22692BF36767B56 /* AttachmentRepositoryTests.swift */; };
 		38F36C057252483E1CD4A0BA /* EditorLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40AB9B809EE4F1C8F4A7E86C /* EditorLog.swift */; };
 		3985E53DC8AF5E84FB2C5250 /* EditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */; };
 		3C93E4F9F743D69CA90FEC98 /* WorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */; };
@@ -33,14 +35,17 @@
 		A71E6C145467696785F16C68 /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
 		CF0299159866AE5746836C4C /* EditorLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40AB9B809EE4F1C8F4A7E86C /* EditorLog.swift */; };
 		E4033F9ECF39040100D58D6D /* PageRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99D2978B31BEE2E16B778433 /* PageRepository.swift */; };
+		EE128CFD6F34622441D84ECC /* AttachmentRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1927809A95C559A7342DE2D0 /* AttachmentRepository.swift */; };
 		F388BABBAE95664822C1F37E /* PageRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EE30DA9DBD41CF2A9B3375E /* PageRepositoryTests.swift */; };
 		F44CF7F592C10A7416E91935 /* EditorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B5B868AE25C29EA7A31C8A /* EditorApp.swift */; };
+		FE6EAB327B1CFEEF7F9914A3 /* AttachmentRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1927809A95C559A7342DE2D0 /* AttachmentRepository.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		0710D1C7EF032791B008493B /* EditorIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = EditorIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1270B98A9F61963B3A04FAE9 /* EditorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EditorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1775693501BBE99927D7F07C /* SchemaMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaMigrator.swift; sourceTree = "<group>"; };
+		1927809A95C559A7342DE2D0 /* AttachmentRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentRepository.swift; sourceTree = "<group>"; };
 		199BD1746B6CDF8429B282CD /* WorkspaceViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceViewModelTests.swift; sourceTree = "<group>"; };
 		20B5B868AE25C29EA7A31C8A /* EditorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorApp.swift; sourceTree = "<group>"; };
 		21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceViewModel.swift; sourceTree = "<group>"; };
@@ -52,6 +57,7 @@
 		99D2978B31BEE2E16B778433 /* PageRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageRepository.swift; sourceTree = "<group>"; };
 		CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorShellView.swift; sourceTree = "<group>"; };
 		D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteDatabase.swift; sourceTree = "<group>"; };
+		D40CF7A6C22692BF36767B56 /* AttachmentRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentRepositoryTests.swift; sourceTree = "<group>"; };
 		EEA32BC9667143AD004CA8F5 /* SchemaMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaMigratorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -115,6 +121,7 @@
 		BC78694AE5B5C2675D3D979E /* Store */ = {
 			isa = PBXGroup;
 			children = (
+				1927809A95C559A7342DE2D0 /* AttachmentRepository.swift */,
 				99D2978B31BEE2E16B778433 /* PageRepository.swift */,
 				1775693501BBE99927D7F07C /* SchemaMigrator.swift */,
 				D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */,
@@ -144,6 +151,7 @@
 		FEE26AE84D63ADF71A380F74 /* EditorTests */ = {
 			isa = PBXGroup;
 			children = (
+				D40CF7A6C22692BF36767B56 /* AttachmentRepositoryTests.swift */,
 				3EE30DA9DBD41CF2A9B3375E /* PageRepositoryTests.swift */,
 				EEA32BC9667143AD004CA8F5 /* SchemaMigratorTests.swift */,
 				199BD1746B6CDF8429B282CD /* WorkspaceViewModelTests.swift */,
@@ -249,6 +257,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0974C8550941134BA36D7147 /* AttachmentRepository.swift in Sources */,
+				330DE8B1EA9F4976ACB74DE0 /* AttachmentRepositoryTests.swift in Sources */,
 				38F36C057252483E1CD4A0BA /* EditorLog.swift in Sources */,
 				4F4123269A16D4618CA56BD2 /* EditorModels.swift in Sources */,
 				69876CE14D2D2E8A4A00992B /* EditorShellView.swift in Sources */,
@@ -267,6 +277,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				203C8C57D64D5D4A849EF8AA /* AppEnvironment.swift in Sources */,
+				EE128CFD6F34622441D84ECC /* AttachmentRepository.swift in Sources */,
 				F44CF7F592C10A7416E91935 /* EditorApp.swift in Sources */,
 				CF0299159866AE5746836C4C /* EditorLog.swift in Sources */,
 				3985E53DC8AF5E84FB2C5250 /* EditorModels.swift in Sources */,
@@ -283,6 +294,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				30761AF9DB95A5C98582DB35 /* AppEnvironment.swift in Sources */,
+				FE6EAB327B1CFEEF7F9914A3 /* AttachmentRepository.swift in Sources */,
 				7F9B997D95099BF35D291D2D /* EditorApp.swift in Sources */,
 				5D5CF87AA264C0F8EB86F299 /* EditorLog.swift in Sources */,
 				A10CB67698B1FCCF81CE837A /* EditorModels.swift in Sources */,

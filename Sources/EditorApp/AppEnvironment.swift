@@ -17,8 +17,15 @@ enum AppEnvironment {
 
         let repository = PageRepository(database: database)
         try repository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: try attachmentsDirectory()
+        )
 
-        let viewModel = WorkspaceViewModel(repository: repository)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            attachmentRepository: attachmentRepository
+        )
         try viewModel.load()
         return viewModel
     }
@@ -34,6 +41,21 @@ enum AppEnvironment {
             withIntermediateDirectories: true
         )
         return directory.appendingPathComponent("editor.sqlite").path
+    }
+
+    private static func attachmentsDirectory() throws -> URL {
+        let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+        let directory = applicationSupport
+            .appendingPathComponent("Editor", isDirectory: true)
+            .appendingPathComponent("Attachments", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
     }
 }
 

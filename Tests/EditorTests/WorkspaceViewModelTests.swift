@@ -49,6 +49,30 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Editable now"])
     }
 
+    @MainActor
+    func testImportAttachmentRefreshesVisibleBlocksAndAttachmentMetadata() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let sourceURL = try makeSourceFile(name: "screen.png", contents: "png-data")
+
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository
+        )
+        try viewModel.load()
+        try viewModel.importAttachment(sourceURL: sourceURL)
+
+        XCTAssertEqual(viewModel.visibleBlocks.last?.type, .attachmentImage)
+        XCTAssertEqual(viewModel.snapshot.attachments.map(\.originalFilename), ["screen.png"])
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)
@@ -56,6 +80,17 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     private func temporaryDatabasePath() -> String {
+        makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path
+    }
+
+    private func makeSourceFile(name: String, contents: String) throws -> URL {
+        let directory = makeTemporaryDirectory()
+        let fileURL = directory.appendingPathComponent(name)
+        try contents.data(using: .utf8)?.write(to: fileURL)
+        return fileURL
+    }
+
+    private func makeTemporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(
@@ -63,6 +98,6 @@ final class WorkspaceViewModelTests: XCTestCase {
             withIntermediateDirectories: true
         )
         temporaryFiles.append(directory)
-        return directory.appendingPathComponent("editor.sqlite").path
+        return directory
     }
 }
