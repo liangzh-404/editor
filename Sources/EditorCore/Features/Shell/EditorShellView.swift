@@ -214,7 +214,7 @@ private struct PageListView: View {
         List(selection: selectedPageBinding) {
             SearchSectionView(viewModel: viewModel)
 
-            ForEach(viewModel.snapshot.notebooks) { notebook in
+            ForEach(Array(viewModel.snapshot.notebooks.enumerated()), id: \.element.id) { index, notebook in
                 Section {
                     ForEach(pages(in: notebook)) { page in
                         PageRow(page: page)
@@ -228,9 +228,23 @@ private struct PageListView: View {
                             }
                     }
                 } header: {
-                    NotebookSectionHeader(title: notebook.name) {
-                        _ = viewModel.addPageToSelectedWorkspace(notebookID: notebook.id)
-                    }
+                    NotebookSectionHeader(
+                        notebook: notebook,
+                        canMoveUp: index > 0,
+                        canMoveDown: index < viewModel.snapshot.notebooks.count - 1,
+                        onRename: { name in
+                            viewModel.renameNotebookForUI(id: notebook.id, name: name)
+                        },
+                        onMoveUp: {
+                            viewModel.moveNotebookForUI(id: notebook.id, toIndex: index - 1)
+                        },
+                        onMoveDown: {
+                            viewModel.moveNotebookForUI(id: notebook.id, toIndex: index + 1)
+                        },
+                        onAddPage: {
+                            _ = viewModel.addPageToSelectedWorkspace(notebookID: notebook.id)
+                        }
+                    )
                 }
             }
 
@@ -279,7 +293,7 @@ private struct CompactPageListView: View {
         List {
             SearchSectionView(viewModel: viewModel)
 
-            ForEach(viewModel.snapshot.notebooks) { notebook in
+            ForEach(Array(viewModel.snapshot.notebooks.enumerated()), id: \.element.id) { index, notebook in
                 Section {
                     ForEach(pages(in: notebook)) { page in
                         NavigationLink {
@@ -335,9 +349,23 @@ private struct CompactPageListView: View {
                         }
                     }
                 } header: {
-                    NotebookSectionHeader(title: notebook.name) {
-                        _ = viewModel.addPageToSelectedWorkspace(notebookID: notebook.id)
-                    }
+                    NotebookSectionHeader(
+                        notebook: notebook,
+                        canMoveUp: index > 0,
+                        canMoveDown: index < viewModel.snapshot.notebooks.count - 1,
+                        onRename: { name in
+                            viewModel.renameNotebookForUI(id: notebook.id, name: name)
+                        },
+                        onMoveUp: {
+                            viewModel.moveNotebookForUI(id: notebook.id, toIndex: index - 1)
+                        },
+                        onMoveDown: {
+                            viewModel.moveNotebookForUI(id: notebook.id, toIndex: index + 1)
+                        },
+                        onAddPage: {
+                            _ = viewModel.addPageToSelectedWorkspace(notebookID: notebook.id)
+                        }
+                    )
                 }
             }
 
@@ -370,13 +398,62 @@ private struct CompactPageListView: View {
 }
 
 private struct NotebookSectionHeader: View {
-    let title: String
+    let notebook: NotebookSummary
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let onRename: (String) -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
     let onAddPage: () -> Void
+    @State private var draftName: String
+
+    init(
+        notebook: NotebookSummary,
+        canMoveUp: Bool,
+        canMoveDown: Bool,
+        onRename: @escaping (String) -> Void,
+        onMoveUp: @escaping () -> Void,
+        onMoveDown: @escaping () -> Void,
+        onAddPage: @escaping () -> Void
+    ) {
+        self.notebook = notebook
+        self.canMoveUp = canMoveUp
+        self.canMoveDown = canMoveDown
+        self.onRename = onRename
+        self.onMoveUp = onMoveUp
+        self.onMoveDown = onMoveDown
+        self.onAddPage = onAddPage
+        _draftName = State(initialValue: notebook.name)
+    }
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(title)
+            TextField("Notebook", text: nameBinding)
+                .textFieldStyle(.plain)
+                .font(.caption.weight(.semibold))
+                .accessibilityIdentifier("editor.notebook.\(notebook.id).name")
             Spacer(minLength: 8)
+
+            Button {
+                onMoveUp()
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!canMoveUp)
+            .help("Move up")
+            .accessibilityIdentifier("editor.notebook.\(notebook.id).move-up")
+
+            Button {
+                onMoveDown()
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!canMoveDown)
+            .help("Move down")
+            .accessibilityIdentifier("editor.notebook.\(notebook.id).move-down")
+
             Button {
                 onAddPage()
             } label: {
@@ -384,7 +461,21 @@ private struct NotebookSectionHeader: View {
             }
             .buttonStyle(.borderless)
             .help("New page")
-            .accessibilityIdentifier("editor.add-page")
+            .accessibilityIdentifier("editor.notebook.\(notebook.id).add-page")
+        }
+        .onChange(of: notebook.name) { _, name in
+            if draftName != name {
+                draftName = name
+            }
+        }
+    }
+
+    private var nameBinding: Binding<String> {
+        Binding {
+            draftName
+        } set: { name in
+            draftName = name
+            onRename(name)
         }
     }
 }

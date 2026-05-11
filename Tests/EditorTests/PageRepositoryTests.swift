@@ -114,6 +114,44 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().suffix(3).map(\.entityType), ["notebook", "page", "block"])
     }
 
+    func testUpdateNotebookNamePersistsAndQueuesSyncChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let notebookID = try XCTUnwrap(initialSnapshot.selectedNotebookID)
+
+        try repository.updateNotebookName(notebookID: notebookID, name: "Projects")
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.notebooks.first?.name, "Projects")
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "notebook", entityID: notebookID, changeType: "update")
+        )
+    }
+
+    func testMoveNotebookPersistsStableOrderAndQueuesSyncChanges() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        _ = try repository.createNotebook(workspaceID: workspaceID, name: "Projects")
+        let areas = try repository.createNotebook(workspaceID: workspaceID, name: "Areas")
+
+        try repository.moveNotebook(notebookID: areas.id, toIndex: 0)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.notebooks.map(\.name), ["Areas", "Notebook", "Projects"])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().suffix(3).map(\.entityType),
+            ["notebook", "notebook", "notebook"]
+        )
+    }
+
     func testArchivePageHidesItAndQueuesSyncChange() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -229,4 +229,26 @@ extension WorkspaceSnapshot {
             selectedPageID: selectedPageID
         )
     }
+
+    func replacingNotebookName(notebookID: String, name: String) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks.map { notebook in
+                notebook.id == notebookID
+                    ? NotebookSummary(
+                        id: notebook.id,
+                        workspaceID: notebook.workspaceID,
+                        name: name
+                    )
+                    : notebook
+            },
+            pages: pages,
+            archivedPages: archivedPages,
+            blocks: blocks,
+            attachments: attachments,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
 }

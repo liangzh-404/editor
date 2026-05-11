@@ -248,6 +248,129 @@ final class PageRepository {
         return NotebookSummary(id: notebookID, workspaceID: workspaceID, name: name)
     }
 
+    func updateNotebookName(notebookID: String, name: String) throws {
+        let rows = try database.query(
+            """
+            SELECT id
+            FROM notebooks
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(notebookID)]
+        )
+        guard rows.first != nil else {
+            throw PageRepositoryError.notebookNotFound
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            UPDATE notebooks
+            SET name = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .text(name),
+                .text(now),
+                .text(notebookID)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "notebook",
+            entityID: notebookID,
+            changeType: "update"
+        )
+
+        EditorLog.store.debug(
+            "notebook_renamed notebook_id=\(notebookID, privacy: .public) length=\(name.count, privacy: .public)"
+        )
+    }
+
+    func moveNotebook(notebookID: String, toIndex targetIndex: Int) throws {
+        let selectedRows = try database.query(
+            """
+            SELECT workspace_id
+            FROM notebooks
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(notebookID)]
+        )
+
+        guard let workspaceID = selectedRows.first?["workspace_id"] ?? nil else {
+            throw PageRepositoryError.notebookNotFound
+        }
+
+        let notebooks = try database.query(
+            """
+            SELECT id, order_key
+            FROM notebooks
+            WHERE workspace_id = ?
+            ORDER BY order_key ASC
+            """,
+            bindings: [.text(workspaceID)]
+        ).map { row in
+            OrderedNotebook(
+                id: row["id"] ?? "",
+                orderKey: row["order_key"] ?? ""
+            )
+        }
+
+        guard let currentIndex = notebooks.firstIndex(where: { $0.id == notebookID }) else {
+            throw PageRepositoryError.notebookNotFound
+        }
+
+        var reorderedNotebooks = notebooks
+        let movingNotebook = reorderedNotebooks.remove(at: currentIndex)
+        let clampedTargetIndex = min(max(targetIndex, 0), reorderedNotebooks.count)
+        reorderedNotebooks.insert(movingNotebook, at: clampedTargetIndex)
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        var changedNotebookIDs: [String] = []
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            for (index, notebook) in reorderedNotebooks.enumerated() {
+                let nextOrderKey = String(format: "%06d", index + 1)
+                guard nextOrderKey != notebook.orderKey else {
+                    continue
+                }
+
+                try database.execute(
+                    """
+                    UPDATE notebooks
+                    SET order_key = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    bindings: [
+                        .text(nextOrderKey),
+                        .text(now),
+                        .text(notebook.id)
+                    ]
+                )
+                changedNotebookIDs.append(notebook.id)
+            }
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        let syncRepository = SyncRepository(database: database)
+        for changedNotebookID in changedNotebookIDs {
+            try syncRepository.enqueue(
+                entityType: "notebook",
+                entityID: changedNotebookID,
+                changeType: "update"
+            )
+        }
+
+        EditorLog.store.debug(
+            "notebook_moved notebook_id=\(notebookID, privacy: .public) workspace_id=\(workspaceID, privacy: .public) target_index=\(targetIndex, privacy: .public) changed_notebooks=\(changedNotebookIDs.count, privacy: .public)"
+        )
+    }
+
     func createPage(workspaceID: String, title: String, notebookID: String? = nil) throws -> PageSummary {
         let workspaceRows = try database.query(
             """
@@ -924,6 +1047,11 @@ enum PageRepositoryError: Error, Equatable {
 }
 
 private struct OrderedBlock {
+    let id: String
+    let orderKey: String
+}
+
+private struct OrderedNotebook {
     let id: String
     let orderKey: String
 }

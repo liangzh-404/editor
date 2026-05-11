@@ -297,6 +297,38 @@ final class WorkspaceViewModel: ObservableObject {
         return notebook
     }
 
+    func selectNotebook(id notebookID: String) {
+        guard snapshot.notebooks.contains(where: { $0.id == notebookID }) else {
+            return
+        }
+
+        selectedNotebookID = notebookID
+    }
+
+    func renameNotebook(id notebookID: String, name: String) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let previousNotebookID = selectedNotebookID
+        let previousPageID = selectedPageID
+        try repository.updateNotebookName(notebookID: notebookID, name: name)
+        snapshot = snapshot.replacingNotebookName(notebookID: notebookID, name: name)
+        restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+    }
+
+    func moveNotebook(id notebookID: String, toIndex: Int) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let previousNotebookID = selectedNotebookID
+        let previousPageID = selectedPageID
+        try repository.moveNotebook(notebookID: notebookID, toIndex: toIndex)
+        try load()
+        restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+    }
+
     func archiveSelectedPage() throws {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
@@ -355,6 +387,28 @@ final class WorkspaceViewModel: ObservableObject {
                 "notebook_add_failed error=\(String(describing: error), privacy: .public)"
             )
             return nil
+        }
+    }
+
+    func renameNotebookForUI(id notebookID: String, name: String) {
+        do {
+            try renameNotebook(id: notebookID, name: name)
+            EditorLog.input.debug("notebook_rename_visible notebook_id=\(notebookID, privacy: .public)")
+        } catch {
+            EditorLog.input.error(
+                "notebook_rename_failed notebook_id=\(notebookID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func moveNotebookForUI(id notebookID: String, toIndex: Int) {
+        do {
+            try moveNotebook(id: notebookID, toIndex: toIndex)
+            EditorLog.input.debug("notebook_move_visible notebook_id=\(notebookID, privacy: .public) target_index=\(toIndex, privacy: .public)")
+        } catch {
+            EditorLog.input.error(
+                "notebook_move_failed notebook_id=\(notebookID, privacy: .public) target_index=\(toIndex, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
         }
     }
 
@@ -544,6 +598,19 @@ final class WorkspaceViewModel: ObservableObject {
                 "backlinks_failed page_id=\(selectedPageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
+    }
+
+    private func restoreSelection(previousNotebookID: String?, previousPageID: String?) {
+        if let previousNotebookID,
+           snapshot.notebooks.contains(where: { $0.id == previousNotebookID }) {
+            selectedNotebookID = previousNotebookID
+        }
+
+        if let previousPageID,
+           snapshot.pages.contains(where: { $0.id == previousPageID }) {
+            selectedPageID = previousPageID
+        }
+        refreshBacklinksForSelectedPage()
     }
 
     private func nextBlockState(currentType: BlockType, text: String) -> (type: BlockType, text: String) {

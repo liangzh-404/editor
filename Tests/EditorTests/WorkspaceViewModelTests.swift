@@ -173,6 +173,45 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRenameNotebookRefreshesSnapshotAndKeepsSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let notebookID = try XCTUnwrap(viewModel.selectedNotebookID)
+
+        try viewModel.renameNotebook(id: notebookID, name: "Projects")
+
+        XCTAssertEqual(viewModel.snapshot.notebooks.first?.name, "Projects")
+        XCTAssertEqual(viewModel.selectedNotebookID, notebookID)
+    }
+
+    @MainActor
+    func testMoveNotebookRefreshesSnapshotAndKeepsSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let workspaceID = try XCTUnwrap(viewModel.selectedWorkspaceID)
+        _ = try repository.createNotebook(workspaceID: workspaceID, name: "Projects")
+        let areas = try repository.createNotebook(workspaceID: workspaceID, name: "Areas")
+        try viewModel.load()
+        viewModel.selectNotebook(id: areas.id)
+
+        try viewModel.moveNotebook(id: areas.id, toIndex: 0)
+
+        XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["Areas", "Notebook", "Projects"])
+        XCTAssertEqual(viewModel.selectedNotebookID, areas.id)
+    }
+
+    @MainActor
     func testArchiveSelectedPageHidesPageAndSelectsRemainingPage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
