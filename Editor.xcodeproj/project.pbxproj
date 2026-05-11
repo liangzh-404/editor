@@ -57,6 +57,7 @@
 		7F3274622A5EBEC25A0042FB /* DataProtectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA04F3B5378D60E40322DFDE /* DataProtectionService.swift */; };
 		7F9B997D95099BF35D291D2D /* EditorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B5B868AE25C29EA7A31C8A /* EditorApp.swift */; };
 		8A525D5BB973025C3CB43C21 /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
+		8C91ABADEB2F8674C8A8BB79 /* EditorMacEditingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830B98899C8D1F1F4FF0083E /* EditorMacEditingUITests.swift */; };
 		9F6522F31BB2558F8858A5FD /* SearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCF64425F694601BF7DC842 /* SearchRepository.swift */; };
 		A10CB67698B1FCCF81CE837A /* EditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */; };
 		A418DA90E22E8111FC906101 /* NativeTextBlockEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B305E7542E1D1459C797CE /* NativeTextBlockEditor.swift */; };
@@ -79,6 +80,16 @@
 		F44CF7F592C10A7416E91935 /* EditorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B5B868AE25C29EA7A31C8A /* EditorApp.swift */; };
 		FE6EAB327B1CFEEF7F9914A3 /* AttachmentRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1927809A95C559A7342DE2D0 /* AttachmentRepository.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		19B60E2B481A30D521EA0A79 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 069CC3F098A07CA0727AF3A5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 872A4C60FF7B0F2EAFF04A89;
+			remoteInfo = EditorMac;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		0710D1C7EF032791B008493B /* EditorIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = EditorIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -103,7 +114,9 @@
 		6BCEEC54CE3487C39364879C /* EditorSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSessionTests.swift; sourceTree = "<group>"; };
 		721AB2B9FBD1E62EB105C77B /* BacklinkRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BacklinkRepository.swift; sourceTree = "<group>"; };
 		74204D7572275A5FE96AABBC /* MarkdownTransformer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTransformer.swift; sourceTree = "<group>"; };
+		830B98899C8D1F1F4FF0083E /* EditorMacEditingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorMacEditingUITests.swift; sourceTree = "<group>"; };
 		87174FBC64830887961BD6C0 /* EditorMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EditorMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8A367F12EB4E9E770B0ACA8E /* EditorMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EditorMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8BC9BD3D38C16BD85AE9DB4C /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
 		9020679BDD2802585CAFFF9A /* SyncMergeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncMergeEngine.swift; sourceTree = "<group>"; };
 		97FDEF1160608404948118EE /* EditorIOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EditorIOS.entitlements; sourceTree = "<group>"; };
@@ -141,6 +154,7 @@
 			children = (
 				04769CC27094EB3B05D7B2F5 /* EditorApp */,
 				5B3D3574E4C1FE1CE19818BC /* EditorCore */,
+				378A7E8CFE386008720DF15E /* EditorMacUITests */,
 				FEE26AE84D63ADF71A380F74 /* EditorTests */,
 				FD41236BEF8F0AF43B905F8E /* Products */,
 			);
@@ -152,6 +166,15 @@
 				40AB9B809EE4F1C8F4A7E86C /* EditorLog.swift */,
 			);
 			path = Observability;
+			sourceTree = "<group>";
+		};
+		378A7E8CFE386008720DF15E /* EditorMacUITests */ = {
+			isa = PBXGroup;
+			children = (
+				830B98899C8D1F1F4FF0083E /* EditorMacEditingUITests.swift */,
+			);
+			name = EditorMacUITests;
+			path = Tests/EditorMacUITests;
 			sourceTree = "<group>";
 		};
 		5B3D3574E4C1FE1CE19818BC /* EditorCore */ = {
@@ -241,6 +264,7 @@
 			children = (
 				0710D1C7EF032791B008493B /* EditorIOS.app */,
 				87174FBC64830887961BD6C0 /* EditorMac.app */,
+				8A367F12EB4E9E770B0ACA8E /* EditorMacUITests.xctest */,
 				1270B98A9F61963B3A04FAE9 /* EditorTests.xctest */,
 			);
 			name = Products;
@@ -270,6 +294,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		1C591F3F52C1C368D687079C /* EditorMacUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0C7DF22D77F08B26D07CD39 /* Build configuration list for PBXNativeTarget "EditorMacUITests" */;
+			buildPhases = (
+				F25450F656442905D1708515 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AF5B4A132A4E2E39C3145905 /* PBXTargetDependency */,
+			);
+			name = EditorMacUITests;
+			packageProductDependencies = (
+			);
+			productName = EditorMacUITests;
+			productReference = 8A367F12EB4E9E770B0ACA8E /* EditorMacUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		5AC71F5A2320A80B95A71B41 /* EditorIOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 6E694F3CA1D62FA8E5A6BA97 /* Build configuration list for PBXNativeTarget "EditorIOS" */;
@@ -330,6 +372,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					1C591F3F52C1C368D687079C = {
+						TestTargetID = 872A4C60FF7B0F2EAFF04A89;
+					};
 					5AC71F5A2320A80B95A71B41 = {
 						ProvisioningStyle = Automatic;
 					};
@@ -354,6 +399,7 @@
 			targets = (
 				5AC71F5A2320A80B95A71B41 /* EditorIOS */,
 				872A4C60FF7B0F2EAFF04A89 /* EditorMac */,
+				1C591F3F52C1C368D687079C /* EditorMacUITests */,
 				E606C235FEE9CDB5DE53B070 /* EditorTests */,
 			);
 		};
@@ -452,7 +498,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F25450F656442905D1708515 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8C91ABADEB2F8674C8A8BB79 /* EditorMacEditingUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AF5B4A132A4E2E39C3145905 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 872A4C60FF7B0F2EAFF04A89 /* EditorMac */;
+			targetProxy = 19B60E2B481A30D521EA0A79 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		0BC7A12E14D81A49DBA5D05C /* Debug */ = {
@@ -518,6 +580,40 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		3012EA7548A4AF026A39B777 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.liangzhang.editor.mac.uitests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = EditorMac;
+			};
+			name = Release;
+		};
+		54BBCB085469A80DCE228940 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.liangzhang.editor.mac.uitests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = EditorMac;
 			};
 			name = Debug;
 		};
@@ -733,6 +829,15 @@
 			buildConfigurations = (
 				610F437780298855481B9D82 /* Debug */,
 				CEE1AAF009C91064B6FC1B33 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C0C7DF22D77F08B26D07CD39 /* Build configuration list for PBXNativeTarget "EditorMacUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				54BBCB085469A80DCE228940 /* Debug */,
+				3012EA7548A4AF026A39B777 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

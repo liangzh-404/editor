@@ -157,4 +157,19 @@ extension WorkspaceSnapshot {
 
         return replacingBlock(blockID: blockID, type: block.type, text: text)
     }
+
+    func replacingPageTitle(pageID: String, title: String) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            pages: pages.map { page in
+                page.id == pageID
+                    ? PageSummary(id: page.id, workspaceID: page.workspaceID, title: title)
+                    : page
+            },
+            blocks: blocks,
+            attachments: attachments,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedPageID: selectedPageID
+        )
+    }
 }

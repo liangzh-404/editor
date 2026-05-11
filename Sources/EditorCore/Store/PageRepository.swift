@@ -131,6 +131,45 @@ final class PageRepository {
         try updateBlock(blockID: blockID, type: type, text: text)
     }
 
+    func updatePageTitle(pageID: String, title: String) throws {
+        let rows = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE id = ? AND is_archived = 0
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        guard rows.first != nil else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            UPDATE pages
+            SET title = ?,
+                updated_at = ?
+            WHERE id = ? AND is_archived = 0
+            """,
+            bindings: [
+                .text(title),
+                .text(now),
+                .text(pageID)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "page",
+            entityID: pageID,
+            changeType: "update"
+        )
+
+        EditorLog.store.debug(
+            "page_title_updated page_id=\(pageID, privacy: .public) length=\(title.count, privacy: .public)"
+        )
+    }
+
     func updateBlock(blockID: String, type: BlockType, text: String) throws {
         let now = ISO8601DateFormatter().string(from: Date())
         let payloadJSON = try blockPayloadJSON(type: type, text: text)

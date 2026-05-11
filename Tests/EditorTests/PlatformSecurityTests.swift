@@ -93,6 +93,16 @@ final class PlatformSecurityTests: XCTestCase {
         XCTAssertEqual(try service.lastStoredStatus(), .available)
     }
 
+    func testCloudKitEntitlementInspectorRequiresContainerIdentifiers() {
+        XCTAssertFalse(CloudKitEntitlementInspector.hasCloudKitContainers(entitlementValue: nil))
+        XCTAssertFalse(CloudKitEntitlementInspector.hasCloudKitContainers(entitlementValue: [] as [String]))
+        XCTAssertTrue(
+            CloudKitEntitlementInspector.hasCloudKitContainers(
+                entitlementValue: ["iCloud.com.liangzhang.editor"]
+            )
+        )
+    }
+
     private func makeTemporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

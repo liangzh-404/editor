@@ -56,6 +56,9 @@ private struct ThreeColumnEditorShell: View {
                 onMoveBlock: { blockID, targetIndex in
                     viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                 },
+                onPageTitleChange: { title in
+                    viewModel.editSelectedPageTitle(title)
+                },
                 onImportMarkdown: { sourceURL in
                     viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
                 },
@@ -223,6 +226,9 @@ private struct CompactPageListView: View {
                             onMoveBlock: { blockID, targetIndex in
                                 viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                             },
+                            onPageTitleChange: { title in
+                                viewModel.editSelectedPageTitle(title)
+                            },
                             onImportMarkdown: { sourceURL in
                                 viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
                             },
@@ -331,6 +337,7 @@ private struct EditorCanvasView: View {
     let backlinks: [Backlink]
     let onAddParagraphBlock: () -> String?
     let onMoveBlock: (String, Int) -> Void
+    let onPageTitleChange: (String) -> Void
     let onImportMarkdown: (URL) -> Void
     let onExportMarkdown: () -> String
     let onBlockTextChange: (String, String) -> Void
@@ -346,8 +353,11 @@ private struct EditorCanvasView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .center, spacing: 12) {
-                    Text(page?.title ?? "No Page")
+                    TextField("Untitled", text: pageTitleBinding)
+                        .textFieldStyle(.plain)
                         .font(.largeTitle.weight(.semibold))
+                        .disabled(page == nil)
+                        .accessibilityIdentifier("editor.page-title")
 
                     Spacer(minLength: 12)
 
@@ -468,6 +478,14 @@ private struct EditorCanvasView: View {
                 }
                 onImportAttachment(sourceURL)
             }
+        }
+    }
+
+    private var pageTitleBinding: Binding<String> {
+        Binding {
+            page?.title ?? ""
+        } set: { title in
+            onPageTitleChange(title)
         }
     }
 }

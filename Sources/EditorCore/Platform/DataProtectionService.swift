@@ -36,6 +36,35 @@ enum DataProtectionService {
     }
 }
 
+enum CloudKitEntitlementInspector {
+    private static let containerIdentifiersKey = "com.apple.developer.icloud-container-identifiers"
+
+    static func currentProcessHasCloudKitContainers() -> Bool {
+#if os(macOS)
+        guard let task = SecTaskCreateFromSelf(nil),
+              let entitlement = SecTaskCopyValueForEntitlement(
+                task,
+                containerIdentifiersKey as CFString,
+                nil
+              ) else {
+            return false
+        }
+
+        return hasCloudKitContainers(entitlementValue: entitlement)
+#else
+        return true
+#endif
+    }
+
+    static func hasCloudKitContainers(entitlementValue: Any?) -> Bool {
+        guard let containers = entitlementValue as? [String] else {
+            return false
+        }
+
+        return containers.contains { !$0.isEmpty }
+    }
+}
+
 final class KeychainMetadataStore {
     private let service: String
 

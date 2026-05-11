@@ -54,6 +54,17 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.liangzhang.editor.tests
         GENERATE_INFOPLIST_FILE: "YES"
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
+  EditorMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/EditorMacUITests
+    dependencies:
+      - target: EditorMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.liangzhang.editor.mac.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
 schemes:
   EditorMac:
     build:
@@ -71,3 +82,12 @@ schemes:
       gatherCoverageData: false
       targets:
         - EditorTests
+  EditorMacUITests:
+    build:
+      targets:
+        EditorMac: all
+        EditorMacUITests: all
+    test:
+      gatherCoverageData: false
+      targets:
+        - EditorMacUITests

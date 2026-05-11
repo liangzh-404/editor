@@ -31,17 +31,23 @@ enum AppEnvironment {
             attachmentRepository: attachmentRepository,
             searchRepository: SearchRepository(database: database),
             backlinkRepository: BacklinkRepository(database: database),
-            cloudKitAccountMetadataService: CloudKitAccountMetadataService()
+            cloudKitAccountMetadataService: makeCloudKitAccountMetadataService()
         )
         try viewModel.load()
         return viewModel
     }
 
+    private static func makeCloudKitAccountMetadataService() -> CloudKitAccountMetadataService? {
+        guard CloudKitEntitlementInspector.currentProcessHasCloudKitContainers() else {
+            EditorLog.sync.debug("cloudkit_account_service_disabled reason=missing_entitlement")
+            return nil
+        }
+
+        return CloudKitAccountMetadataService()
+    }
+
     private static func databasePath() throws -> String {
-        let applicationSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        )[0]
+        let applicationSupport = applicationSupportRoot()
         let directory = applicationSupport.appendingPathComponent("Editor", isDirectory: true)
         try FileManager.default.createDirectory(
             at: directory,
@@ -51,10 +57,7 @@ enum AppEnvironment {
     }
 
     private static func attachmentsDirectory() throws -> URL {
-        let applicationSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        )[0]
+        let applicationSupport = applicationSupportRoot()
         let directory = applicationSupport
             .appendingPathComponent("Editor", isDirectory: true)
             .appendingPathComponent("Attachments", isDirectory: true)
@@ -63,6 +66,18 @@ enum AppEnvironment {
             withIntermediateDirectories: true
         )
         return directory
+    }
+
+    private static func applicationSupportRoot() -> URL {
+        if let override = ProcessInfo.processInfo.environment["EDITOR_APP_SUPPORT_DIR"],
+           !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+
+        return FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
     }
 }
 

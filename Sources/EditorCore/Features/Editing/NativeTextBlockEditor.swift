@@ -82,6 +82,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         context.coordinator.textLayoutManager = textLayoutManager
 
         let textView = NSTextView(frame: .zero, textContainer: textContainer)
+        textView.setAccessibilityIdentifier("editor.text.\(blockID)")
         textView.delegate = context.coordinator
         textView.string = text
         textView.font = nsFont
@@ -189,6 +190,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView(usingTextLayoutManager: true)
+        textView.accessibilityIdentifier = "editor.text.\(blockID)"
         textView.delegate = context.coordinator
         textView.text = text
         textView.font = uiFont

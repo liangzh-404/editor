@@ -51,6 +51,28 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdateSelectedPageTitleRefreshesSnapshotAndSearchResults() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            searchRepository: SearchRepository(database: database)
+        )
+        try viewModel.load()
+
+        try viewModel.updateSelectedPageTitle("Editable Title")
+        viewModel.updateSearchQuery("Editable")
+
+        XCTAssertEqual(viewModel.selectedPage?.title, "Editable Title")
+        XCTAssertEqual(viewModel.searchResults.first?.entityType, "page")
+        XCTAssertEqual(viewModel.searchResults.first?.snippet, "Editable Title")
+    }
+
+    @MainActor
     func testImportAttachmentRefreshesVisibleBlocksAndAttachmentMetadata() throws {
         let database = try migratedDatabase()
         defer { database.close() }

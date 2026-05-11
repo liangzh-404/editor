@@ -56,6 +56,22 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "Edited locally")
     }
 
+    func testUpdatePageTitlePersistsAndQueuesSyncChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+
+        try repository.updatePageTitle(pageID: pageID, title: "Editable Title")
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.pages.first?.title, "Editable Title")
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityType, "page")
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityID, pageID)
+    }
+
     func testImportMarkdownReplacesPageBlocksWithTypedBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -128,6 +144,28 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.id).last, appendedBlock.id)
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.orderKey), ["000001", "000002"])
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityID, appendedBlock.id)
+    }
+
+    func testLargePageImportLoadAndSearchIndexRemainUsable() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let markdown = (1...750)
+            .map { "Block \($0) searchable content" }
+            .joined(separator: "\n")
+
+        try repository.importMarkdown(pageID: pageID, markdown: markdown)
+        let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+        try SearchRepository(database: database).rebuildIndex()
+        let searchResults = try SearchRepository(database: database).search("Block 750")
+
+        XCTAssertEqual(loadedSnapshot.blocks.count, 750)
+        XCTAssertEqual(loadedSnapshot.blocks.first?.orderKey, "000001")
+        XCTAssertEqual(loadedSnapshot.blocks.last?.orderKey, "000750")
+        XCTAssertTrue(searchResults.contains { $0.snippet == "Block 750 searchable content" })
     }
 
     private func migratedDatabase() throws -> SQLiteDatabase {

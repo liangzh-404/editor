@@ -129,6 +129,19 @@ final class WorkspaceViewModel: ObservableObject {
         try refreshDerivedState(rebuildSearchIndex: true)
     }
 
+    func updateSelectedPageTitle(_ title: String) throws {
+        guard let selectedPageID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        if let repository {
+            try repository.updatePageTitle(pageID: selectedPageID, title: title)
+        }
+
+        snapshot = snapshot.replacingPageTitle(pageID: selectedPageID, title: title)
+        try refreshDerivedState(rebuildSearchIndex: true)
+    }
+
     func editBlockText(blockID: String, text: String) {
         do {
             try updateBlockText(blockID: blockID, text: text)
@@ -138,6 +151,19 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "block_edit_failed id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func editSelectedPageTitle(_ title: String) {
+        do {
+            try updateSelectedPageTitle(title)
+            EditorLog.input.debug(
+                "page_title_edit_saved length=\(title.count, privacy: .public)"
+            )
+        } catch {
+            EditorLog.input.error(
+                "page_title_edit_failed error=\(String(describing: error), privacy: .public)"
             )
         }
     }
