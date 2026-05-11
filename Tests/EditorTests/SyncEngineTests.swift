@@ -467,6 +467,41 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
     }
 
+    func testCloudKitPrivateDatabaseAdapterDownloadsAttachmentAssets() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let assetURL = try makeSourceFile(name: "brief.pdf", contents: "remote asset")
+        let downloadDirectory = makeTemporaryDirectory()
+        let fetcher = StaticCloudKitRecordFetcher(recordsByType: [
+            "AttachmentRecord": [
+                makeRecord(type: "AttachmentRecord", entityType: "attachment", entityID: "attachment-remote") {
+                    $0["workspaceID"] = "workspace-remote" as CKRecordValue
+                    $0["originalFilename"] = "brief.pdf" as CKRecordValue
+                    $0["utiType"] = "com.adobe.pdf" as CKRecordValue
+                    $0["byteSize"] = NSNumber(value: 12)
+                    $0["contentHash"] = "hash-remote" as CKRecordValue
+                    $0["localPath"] = "/remote/brief.pdf" as CKRecordValue
+                    $0["asset"] = CKAsset(fileURL: assetURL)
+                }
+            ]
+        ])
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher,
+            attachmentDownloadDirectory: downloadDirectory
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+        let attachment = try XCTUnwrap(changeSet.attachmentChanges.first)
+
+        XCTAssertNotEqual(attachment.localPath, "/remote/brief.pdf")
+        XCTAssertTrue(attachment.localPath.hasPrefix(downloadDirectory.path))
+        XCTAssertEqual(
+            try String(contentsOfFile: attachment.localPath, encoding: .utf8),
+            "remote asset"
+        )
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsDeletedRecordIDsToDeletionChanges() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -263,15 +263,21 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
     private let database: SQLiteDatabase
     private let recordSaver: CloudKitRecordSaving?
     private let recordFetcher: CloudKitRecordFetching?
+    private let attachmentDownloadDirectory: URL?
+    private let fileManager: FileManager
 
     init(
         database: SQLiteDatabase,
         recordSaver: CloudKitRecordSaving? = nil,
-        recordFetcher: CloudKitRecordFetching? = nil
+        recordFetcher: CloudKitRecordFetching? = nil,
+        attachmentDownloadDirectory: URL? = nil,
+        fileManager: FileManager = .default
     ) {
         self.database = database
         self.recordSaver = recordSaver
         self.recordFetcher = recordFetcher
+        self.attachmentDownloadDirectory = attachmentDownloadDirectory
+        self.fileManager = fileManager
     }
 
     func upload(change: SyncChange) throws -> CloudKitUploadResult {
@@ -303,7 +309,9 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             workspaceChanges: (recordsByType["WorkspaceRecord"] ?? []).compactMap(remoteWorkspaceChange),
             notebookChanges: (recordsByType["NotebookRecord"] ?? []).compactMap(remoteNotebookChange),
             pageChanges: (recordsByType["PageRecord"] ?? []).compactMap(remotePageChange),
-            attachmentChanges: (recordsByType["AttachmentRecord"] ?? []).compactMap(remoteAttachmentChange),
+            attachmentChanges: try (recordsByType["AttachmentRecord"] ?? []).compactMap { record in
+                try remoteAttachmentChange(record: record)
+            },
             blockChanges: (recordsByType["BlockRecord"] ?? []).compactMap(remoteBlockChange),
             deletedRecords: deletedRecords,
             serverChangeTokenData: fetchedChanges.serverChangeTokenData
@@ -515,7 +523,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         )
     }
 
-    private func remoteAttachmentChange(record: CKRecord) -> RemoteAttachmentChange? {
+    private func remoteAttachmentChange(record: CKRecord) throws -> RemoteAttachmentChange? {
         guard let attachmentID = record["entityID"] as? String,
               let workspaceID = record["workspaceID"] as? String,
               let originalFilename = record["originalFilename"] as? String,
@@ -532,9 +540,41 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             utiType: utiType,
             byteSize: (record["byteSize"] as? NSNumber)?.intValue ?? 0,
             contentHash: contentHash,
-            localPath: localPath,
+            localPath: try downloadedAttachmentPath(
+                record: record,
+                workspaceID: workspaceID,
+                attachmentID: attachmentID,
+                originalFilename: originalFilename
+            ) ?? localPath,
             thumbnailPath: record["thumbnailPath"] as? String
         )
+    }
+
+    private func downloadedAttachmentPath(
+        record: CKRecord,
+        workspaceID: String,
+        attachmentID: String,
+        originalFilename: String
+    ) throws -> String? {
+        guard let attachmentDownloadDirectory,
+              let asset = record["asset"] as? CKAsset,
+              let sourceURL = asset.fileURL else {
+            return nil
+        }
+
+        let targetDirectory = attachmentDownloadDirectory
+            .appendingPathComponent(workspaceID, isDirectory: true)
+            .appendingPathComponent(attachmentID, isDirectory: true)
+        let targetURL = targetDirectory.appendingPathComponent(originalFilename)
+        try fileManager.createDirectory(
+            at: targetDirectory,
+            withIntermediateDirectories: true
+        )
+        if fileManager.fileExists(atPath: targetURL.path) {
+            try fileManager.removeItem(at: targetURL)
+        }
+        try fileManager.copyItem(at: sourceURL, to: targetURL)
+        return targetURL.path
     }
 
     private func remoteDeletedRecord(recordType: String, recordID: CKRecord.ID) -> RemoteDeletedRecord? {
