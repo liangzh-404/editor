@@ -47,6 +47,50 @@ protocol CloudKitRecordSaving {
 
 protocol CloudKitRecordFetching {
     func fetchRecords(recordType: String) throws -> [CKRecord]
+    func fetchRecordChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitFetchedRecordChangeSet
+}
+
+struct CloudKitFetchedRecordChangeSet: Equatable {
+    let recordsByType: [String: [CKRecord]]
+    let serverChangeTokenData: Data?
+}
+
+enum CloudKitServerChangeTokenCodec {
+    static func data(from token: CKServerChangeToken) throws -> Data {
+        try NSKeyedArchiver.archivedData(
+            withRootObject: token,
+            requiringSecureCoding: true
+        )
+    }
+
+    static func serverChangeToken(from data: Data?) throws -> CKServerChangeToken? {
+        guard let data else {
+            return nil
+        }
+
+        return try NSKeyedUnarchiver.unarchivedObject(
+            ofClass: CKServerChangeToken.self,
+            from: data
+        )
+    }
+}
+
+extension CloudKitRecordFetching {
+    func fetchRecordChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitFetchedRecordChangeSet {
+        let recordsByType = try Dictionary(
+            uniqueKeysWithValues: CloudKitPrivateDatabaseAdapter.recordTypes.map { recordType in
+                (recordType, try fetchRecords(recordType: recordType))
+            }
+        )
+        return CloudKitFetchedRecordChangeSet(
+            recordsByType: recordsByType,
+            serverChangeTokenData: nil
+        )
+    }
 }
 
 final class LiveCloudKitRecordSaver: CloudKitRecordSaving {
@@ -120,9 +164,82 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching {
 
         return try fetchBox.result?.get() ?? []
     }
+
+    func fetchRecordChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitFetchedRecordChangeSet {
+        let previousToken = try CloudKitServerChangeTokenCodec.serverChangeToken(
+            from: serverChangeTokenData
+        )
+        let zoneID = CKRecordZone.default().zoneID
+        let configuration = CKFetchRecordZoneChangesOperation.ZoneConfiguration(
+            previousServerChangeToken: previousToken
+        )
+        let operation = CKFetchRecordZoneChangesOperation(
+            recordZoneIDs: [zoneID],
+            configurationsByRecordZoneID: [zoneID: configuration]
+        )
+        operation.fetchAllChanges = true
+
+        let semaphore = DispatchSemaphore(value: 0)
+        final class FetchBox: @unchecked Sendable {
+            var records: [CKRecord] = []
+            var serverChangeTokenData: Data?
+            var error: Error?
+        }
+        let fetchBox = FetchBox()
+
+        operation.recordWasChangedBlock = { _, recordResult in
+            switch recordResult {
+            case .success(let record):
+                fetchBox.records.append(record)
+            case .failure(let error):
+                fetchBox.error = error
+            }
+        }
+        operation.recordZoneFetchResultBlock = { _, result in
+            switch result {
+            case .success(let response):
+                do {
+                    fetchBox.serverChangeTokenData = try CloudKitServerChangeTokenCodec
+                        .data(from: response.serverChangeToken)
+                } catch {
+                    fetchBox.error = error
+                }
+            case .failure(let error):
+                fetchBox.error = error
+            }
+        }
+        operation.fetchRecordZoneChangesResultBlock = { result in
+            if case .failure(let error) = result {
+                fetchBox.error = error
+            }
+            semaphore.signal()
+        }
+
+        database.add(operation)
+        semaphore.wait()
+
+        if let error = fetchBox.error {
+            throw error
+        }
+
+        return CloudKitFetchedRecordChangeSet(
+            recordsByType: Dictionary(grouping: fetchBox.records, by: \.recordType),
+            serverChangeTokenData: fetchBox.serverChangeTokenData
+        )
+    }
 }
 
 final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteChangeFetching {
+    static let recordTypes = [
+        "WorkspaceRecord",
+        "NotebookRecord",
+        "PageRecord",
+        "AttachmentRecord",
+        "BlockRecord"
+    ]
+
     private let database: SQLiteDatabase
     private let recordSaver: CloudKitRecordSaving?
     private let recordFetcher: CloudKitRecordFetching?
@@ -152,13 +269,18 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         guard let recordFetcher else {
             throw CloudKitPrivateDatabaseAdapterError.remoteFetchUnavailable
         }
+        let fetchedChanges = try recordFetcher.fetchRecordChanges(
+            sinceServerChangeTokenData: serverChangeTokenData
+        )
+        let recordsByType = fetchedChanges.recordsByType
 
         return CloudKitRemoteChangeSet(
-            workspaceChanges: try recordFetcher.fetchRecords(recordType: "WorkspaceRecord").compactMap(remoteWorkspaceChange),
-            notebookChanges: try recordFetcher.fetchRecords(recordType: "NotebookRecord").compactMap(remoteNotebookChange),
-            pageChanges: try recordFetcher.fetchRecords(recordType: "PageRecord").compactMap(remotePageChange),
-            attachmentChanges: try recordFetcher.fetchRecords(recordType: "AttachmentRecord").compactMap(remoteAttachmentChange),
-            blockChanges: try recordFetcher.fetchRecords(recordType: "BlockRecord").compactMap(remoteBlockChange)
+            workspaceChanges: (recordsByType["WorkspaceRecord"] ?? []).compactMap(remoteWorkspaceChange),
+            notebookChanges: (recordsByType["NotebookRecord"] ?? []).compactMap(remoteNotebookChange),
+            pageChanges: (recordsByType["PageRecord"] ?? []).compactMap(remotePageChange),
+            attachmentChanges: (recordsByType["AttachmentRecord"] ?? []).compactMap(remoteAttachmentChange),
+            blockChanges: (recordsByType["BlockRecord"] ?? []).compactMap(remoteBlockChange),
+            serverChangeTokenData: fetchedChanges.serverChangeTokenData
         )
     }
 

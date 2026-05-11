@@ -295,6 +295,36 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
     }
 
+    func testCloudKitPrivateDatabaseAdapterUsesTokenAwareRecordChangeFetcher() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let previousToken = Data("previous-token".utf8)
+        let nextToken = Data("next-token".utf8)
+        let fetcher = TokenAwareCloudKitRecordFetcher(
+            recordsByType: [
+                "WorkspaceRecord": [
+                    makeRecord(type: "WorkspaceRecord", entityType: "workspace", entityID: "workspace-token") {
+                        $0["name"] = "Token Remote" as CKRecordValue
+                    }
+                ]
+            ],
+            nextServerChangeTokenData: nextToken
+        )
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher
+        ).fetchRemoteChanges(sinceServerChangeTokenData: previousToken)
+
+        XCTAssertEqual(fetcher.receivedServerChangeTokenData, previousToken)
+        XCTAssertEqual(fetcher.fetchRecordsCalls, [])
+        XCTAssertEqual(changeSet.serverChangeTokenData, nextToken)
+        XCTAssertEqual(changeSet.workspaceChanges, [
+            RemoteWorkspaceChange(workspaceID: "workspace-token", name: "Token Remote")
+        ])
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsBlockChangeToRecord() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -460,6 +490,33 @@ final class StaticCloudKitRecordFetcher: CloudKitRecordFetching {
 
     func fetchRecords(recordType: String) throws -> [CKRecord] {
         recordsByType[recordType] ?? []
+    }
+}
+
+final class TokenAwareCloudKitRecordFetcher: CloudKitRecordFetching {
+    let recordsByType: [String: [CKRecord]]
+    let nextServerChangeTokenData: Data
+    private(set) var receivedServerChangeTokenData: Data?
+    private(set) var fetchRecordsCalls: [String] = []
+
+    init(recordsByType: [String: [CKRecord]], nextServerChangeTokenData: Data) {
+        self.recordsByType = recordsByType
+        self.nextServerChangeTokenData = nextServerChangeTokenData
+    }
+
+    func fetchRecords(recordType: String) throws -> [CKRecord] {
+        fetchRecordsCalls.append(recordType)
+        return recordsByType[recordType] ?? []
+    }
+
+    func fetchRecordChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitFetchedRecordChangeSet {
+        receivedServerChangeTokenData = serverChangeTokenData
+        return CloudKitFetchedRecordChangeSet(
+            recordsByType: recordsByType,
+            serverChangeTokenData: nextServerChangeTokenData
+        )
     }
 }
 
