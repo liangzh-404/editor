@@ -29,7 +29,7 @@ Implement the approved editor architecture so the app supports the full requeste
 | local-first | SQLite opens from Application Support and app can launch without network | Partial |
 | attachment blocks | `AttachmentRepositoryTests`, `AttachmentRepository`, `WorkspaceViewModel.importAttachment`, and `EditorShellView` file importer cover local copy, metadata, attachment block insertion, reload, and basic row rendering | Partial; thumbnails, async preview work, deletion GC, and live CloudKit asset sync remain |
 | Markdown | `MarkdownTransformerTests`, `MarkdownTransformer`, and `WorkspaceViewModel.updateBlockText` cover core shortcut transforms and basic block export | Partial; import UI, file export, tables, callout/toggle fallback syntax, and TextKit-integrated shortcut handling remain |
-| CloudKit sync | `SyncRepositoryTests`, `SyncRepository`, block edits, and attachment imports now enqueue local dirty changes | Partial; no CloudKit adapter, remote fetch, retry, change-tag persistence, or conflict merge yet |
+| CloudKit sync | `SyncRepositoryTests`, `SyncEngineTests`, `SyncRepository`, `SyncEngine`, and `CloudKitSyncAdapter` cover dirty queue upload through an adapter, local `sync_records` persistence, and pending-change clearing | Partial; no live CloudKit adapter, remote fetch, retry policy, private database entitlement, or conflict merge yet |
 | native protection | `PlatformSecurityTests`, `EditorMac.entitlements`, and `DataProtectionService` cover macOS app sandbox, user-selected file read entitlement, and native file-protection hook for local database/attachment paths | Partial; Keychain metadata and CloudKit private iCloud scope remain |
 | three-column desktop navigation | `NavigationSplitView` shell | Partial |
 | mobile collapsed navigation | compact `NavigationStack` shell | Partial |
@@ -51,4 +51,4 @@ The completed attachment slice proves:
 4. Reloading the repository returns the attachment block and metadata.
 5. The app exposes an insertion command and renders image, video, and file attachment rows.
 
-The next concrete gaps are adding Markdown import/export UI, backlink maintenance, CloudKit adapter behavior, Keychain/iCloud account metadata, and advanced block interactions.
+The next concrete gaps are adding Markdown import/export UI, backlink maintenance, live CloudKit adapter behavior, Keychain/iCloud account metadata, and advanced block interactions.
