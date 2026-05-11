@@ -79,6 +79,33 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownSupportsOrderedListsAndFencedCodeBlocks() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    1. First
+
+                    ```
+                    let value = 1
+                    print(value)
+                    ```
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .orderedListItem, textPlain: "First"),
+                MarkdownBlockDraft(
+                    type: .codeBlock,
+                    textPlain:
+                        """
+                        let value = 1
+                        print(value)
+                        """
+                )
+            ]
+        )
+    }
+
     private func block(type: BlockType, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: UUID().uuidString,

@@ -39,11 +39,49 @@ enum MarkdownTransformer {
     }
 
     static func importBlocks(markdown: String) -> [MarkdownBlockDraft] {
-        markdown
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .map(importBlockDraft(for:))
+        var drafts: [MarkdownBlockDraft] = []
+        var codeLines: [String]?
+
+        for line in markdown.components(separatedBy: .newlines) {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+
+            if codeLines != nil {
+                if trimmedLine == "```" {
+                    drafts.append(
+                        MarkdownBlockDraft(
+                            type: .codeBlock,
+                            textPlain: codeLines?.joined(separator: "\n") ?? ""
+                        )
+                    )
+                    codeLines = nil
+                } else {
+                    codeLines?.append(line)
+                }
+                continue
+            }
+
+            if trimmedLine == "```" {
+                codeLines = []
+                continue
+            }
+
+            guard !trimmedLine.isEmpty else {
+                continue
+            }
+
+            drafts.append(importBlockDraft(for: trimmedLine))
+        }
+
+        if let codeLines {
+            drafts.append(
+                MarkdownBlockDraft(
+                    type: .codeBlock,
+                    textPlain: codeLines.joined(separator: "\n")
+                )
+            )
+        }
+
+        return drafts
     }
 
     private static func markdownLine(for block: BlockSnapshot) -> String {
@@ -79,6 +117,9 @@ enum MarkdownTransformer {
         if line.hasPrefix("- ") {
             return MarkdownBlockDraft(type: .unorderedListItem, textPlain: String(line.dropFirst(2)))
         }
+        if let orderedListText = orderedListItemText(for: line) {
+            return MarkdownBlockDraft(type: .orderedListItem, textPlain: orderedListText)
+        }
         if line.hasPrefix("> ") {
             return MarkdownBlockDraft(type: .quote, textPlain: String(line.dropFirst(2)))
         }
@@ -87,5 +128,17 @@ enum MarkdownTransformer {
         }
 
         return MarkdownBlockDraft(type: .paragraph, textPlain: line)
+    }
+
+    private static func orderedListItemText(for line: String) -> String? {
+        let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let marker = parts.first,
+              marker.hasSuffix("."),
+              marker.dropLast().allSatisfy(\.isNumber) else {
+            return nil
+        }
+
+        return String(parts[1])
     }
 }
