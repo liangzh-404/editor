@@ -563,6 +563,61 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testKeyboardMoveBlockReordersAndKeepsFocusOnMovedBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                Third
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let secondBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+
+        XCTAssertTrue(try viewModel.moveBlockByKeyboard(blockID: secondBlockID, direction: .up))
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Second", "First", "Third"])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, secondBlockID)
+    }
+
+    @MainActor
+    func testKeyboardMoveBlockIgnoresBoundaryMoves() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let firstBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        XCTAssertFalse(try viewModel.moveBlockByKeyboard(blockID: firstBlockID, direction: .up))
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["First", "Second"])
+        XCTAssertNil(viewModel.pendingFocusBlockID)
+    }
+
+    @MainActor
     func testDeleteVisibleBlockRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

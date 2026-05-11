@@ -71,6 +71,9 @@ private struct ThreeColumnEditorShell: View {
                 onMoveBlock: { blockID, targetIndex in
                     viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                 },
+                onMoveBlockByKeyboard: { blockID, direction in
+                    viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
+                },
                 onDeleteBlock: { blockID in
                     viewModel.deleteBlockFromCurrentPage(blockID: blockID)
                 },
@@ -175,6 +178,9 @@ private struct CompactPageDestination: View {
                 },
                 onMoveBlock: { blockID, targetIndex in
                     viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
+                },
+                onMoveBlockByKeyboard: { blockID, direction in
+                    viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
                 },
                 onDeleteBlock: { blockID in
                     viewModel.deleteBlockFromCurrentPage(blockID: blockID)
@@ -685,6 +691,7 @@ private struct EditorCanvasView: View {
     let pendingFocusBlockID: String?
     let onAddParagraphBlock: () -> String?
     let onMoveBlock: (String, Int) -> Void
+    let onMoveBlockByKeyboard: (String, BlockKeyboardMoveDirection) -> Bool
     let onDeleteBlock: (String) -> Void
     let onSelectBacklink: (Backlink) -> Void
     let onPageTitleChange: (String) -> Void
@@ -768,6 +775,9 @@ private struct EditorCanvasView: View {
                         },
                         onMoveDown: {
                             onMoveBlock(block.id, index + 1)
+                        },
+                        onMoveByKeyboard: { direction in
+                            onMoveBlockByKeyboard(block.id, direction)
                         },
                         onDelete: {
                             onDeleteBlock(block.id)
@@ -952,6 +962,7 @@ private struct BlockRowView: View {
     let canMoveDown: Bool
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
+    let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
     let onDelete: () -> Void
     let onChangeType: (BlockType) -> Void
     let focusRequestID: UUID?
@@ -967,6 +978,7 @@ private struct BlockRowView: View {
         canMoveDown: Bool = false,
         onMoveUp: @escaping () -> Void = {},
         onMoveDown: @escaping () -> Void = {},
+        onMoveByKeyboard: @escaping (BlockKeyboardMoveDirection) -> Bool = { _ in false },
         onDelete: @escaping () -> Void = {},
         onChangeType: @escaping (BlockType) -> Void = { _ in },
         focusRequestID: UUID? = nil,
@@ -980,6 +992,7 @@ private struct BlockRowView: View {
         self.canMoveDown = canMoveDown
         self.onMoveUp = onMoveUp
         self.onMoveDown = onMoveDown
+        self.onMoveByKeyboard = onMoveByKeyboard
         self.onDelete = onDelete
         self.onChangeType = onChangeType
         self.focusRequestID = focusRequestID
@@ -1051,6 +1064,7 @@ private struct BlockRowView: View {
                     session: editorSession,
                     focusRequestID: effectiveFocusRequestID,
                     onFocusRequestHandled: handleFocusRequestHandled,
+                    onMoveByKeyboard: onMoveByKeyboard,
                     onTextChange: onTextChange
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)

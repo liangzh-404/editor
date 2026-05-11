@@ -528,6 +528,35 @@ final class WorkspaceViewModel: ObservableObject {
         try load()
     }
 
+    @discardableResult
+    func moveBlockByKeyboard(
+        blockID: String,
+        direction: BlockKeyboardMoveDirection
+    ) throws -> Bool {
+        guard let currentIndex = visibleBlocks.firstIndex(where: { $0.id == blockID }) else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        let targetIndex: Int
+        switch direction {
+        case .up:
+            targetIndex = currentIndex - 1
+        case .down:
+            targetIndex = currentIndex + 1
+        }
+
+        guard visibleBlocks.indices.contains(targetIndex) else {
+            return false
+        }
+
+        try moveBlock(blockID: blockID, toIndex: targetIndex)
+        pendingFocusBlockID = blockID
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=keyboard_reorder"
+        )
+        return true
+    }
+
     func deleteBlock(blockID: String) throws {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
@@ -544,6 +573,23 @@ final class WorkspaceViewModel: ObservableObject {
             EditorLog.store.error(
                 "block_move_failed block_id=\(blockID, privacy: .public) target_index=\(toIndex, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
+        }
+    }
+
+    func moveBlockByKeyboardForUI(blockID: String, direction: BlockKeyboardMoveDirection) -> Bool {
+        do {
+            let didMove = try moveBlockByKeyboard(blockID: blockID, direction: direction)
+            if didMove {
+                EditorLog.store.debug(
+                    "block_keyboard_move_visible block_id=\(blockID, privacy: .public) direction=\(String(describing: direction), privacy: .public)"
+                )
+            }
+            return didMove
+        } catch {
+            EditorLog.store.error(
+                "block_keyboard_move_failed block_id=\(blockID, privacy: .public) direction=\(String(describing: direction), privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
         }
     }
 

@@ -1,5 +1,39 @@
 import SwiftUI
 
+enum BlockKeyboardMoveDirection: Equatable, Sendable {
+    case up
+    case down
+}
+
+enum BlockKeyboardShortcutModifier: Equatable, Hashable, Sendable {
+    case command
+    case option
+}
+
+enum BlockKeyboardShortcutResolver {
+    static let upArrowKeyCode: UInt16 = 126
+    static let downArrowKeyCode: UInt16 = 125
+
+    static func moveDirection(
+        keyCode: UInt16,
+        modifiers: Set<BlockKeyboardShortcutModifier>
+    ) -> BlockKeyboardMoveDirection? {
+        guard modifiers.contains(.command),
+              modifiers.contains(.option) else {
+            return nil
+        }
+
+        switch keyCode {
+        case upArrowKeyCode:
+            return .up
+        case downArrowKeyCode:
+            return .down
+        default:
+            return nil
+        }
+    }
+}
+
 struct NativeTextFocusRequestState {
     private var handledFocusRequestID: UUID?
     private var scheduledFocusRequestID: UUID?
@@ -33,6 +67,7 @@ struct NativeTextBlockEditor: View {
     @ObservedObject var session: EditorSession
     let focusRequestID: UUID?
     let onFocusRequestHandled: () -> Void
+    let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
     let onTextChange: (String) -> Void
 
     init(
@@ -42,6 +77,7 @@ struct NativeTextBlockEditor: View {
         session: EditorSession,
         focusRequestID: UUID? = nil,
         onFocusRequestHandled: @escaping () -> Void = {},
+        onMoveByKeyboard: @escaping (BlockKeyboardMoveDirection) -> Bool = { _ in false },
         onTextChange: @escaping (String) -> Void
     ) {
         self.blockID = blockID
@@ -50,6 +86,7 @@ struct NativeTextBlockEditor: View {
         self.session = session
         self.focusRequestID = focusRequestID
         self.onFocusRequestHandled = onFocusRequestHandled
+        self.onMoveByKeyboard = onMoveByKeyboard
         self.onTextChange = onTextChange
     }
 
@@ -62,6 +99,7 @@ struct NativeTextBlockEditor: View {
                 session: session,
                 focusRequestID: focusRequestID,
                 onFocusRequestHandled: onFocusRequestHandled,
+                onMoveByKeyboard: onMoveByKeyboard,
                 onTextChange: onTextChange
             )
 
@@ -113,6 +151,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     @ObservedObject var session: EditorSession
     let focusRequestID: UUID?
     let onFocusRequestHandled: () -> Void
+    let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
     let onTextChange: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -136,6 +175,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.onMouseDown = {
             EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
         }
+        textView.onKeyboardMove = onMoveByKeyboard
         textView.setAccessibilityIdentifier("editor.text.\(blockID)")
         textView.delegate = context.coordinator
         textView.string = text
@@ -165,6 +205,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             textView.onMouseDown = {
                 EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
             }
+            textView.onKeyboardMove = onMoveByKeyboard
         }
         if textView.string != text {
             textView.string = text
@@ -279,6 +320,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
 
 private final class EditorNSTextView: NSTextView {
     var onMouseDown: (() -> Void)?
+    var onKeyboardMove: ((BlockKeyboardMoveDirection) -> Bool)?
 
     override func mouseDown(with event: NSEvent) {
         onMouseDown?()
@@ -286,6 +328,30 @@ private final class EditorNSTextView: NSTextView {
             window.makeFirstResponder(self)
         }
         super.mouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if let direction = BlockKeyboardShortcutResolver.moveDirection(
+            keyCode: event.keyCode,
+            modifiers: event.blockKeyboardShortcutModifiers
+        ), onKeyboardMove?(direction) == true {
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+}
+
+private extension NSEvent {
+    var blockKeyboardShortcutModifiers: Set<BlockKeyboardShortcutModifier> {
+        var modifiers: Set<BlockKeyboardShortcutModifier> = []
+        if modifierFlags.contains(.command) {
+            modifiers.insert(.command)
+        }
+        if modifierFlags.contains(.option) {
+            modifiers.insert(.option)
+        }
+        return modifiers
     }
 }
 #elseif os(iOS)
@@ -298,6 +364,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     @ObservedObject var session: EditorSession
     let focusRequestID: UUID?
     let onFocusRequestHandled: () -> Void
+    let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
     let onTextChange: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -305,7 +372,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView(usingTextLayoutManager: true)
+        let textView = EditorUITextView(usingTextLayoutManager: true)
+        textView.onKeyboardMove = onMoveByKeyboard
         textView.accessibilityIdentifier = "editor.text.\(blockID)"
         textView.delegate = context.coordinator
         textView.text = text
@@ -324,6 +392,9 @@ private struct PlatformNativeTextView: UIViewRepresentable {
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.parent = self
+        if let textView = textView as? EditorUITextView {
+            textView.onKeyboardMove = onMoveByKeyboard
+        }
         if textView.text != text {
             textView.text = text
         }
@@ -423,6 +494,33 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         private func focusDelay(for remainingAttempts: Int) -> DispatchTimeInterval {
             remainingAttempts == 8 ? .milliseconds(0) : .milliseconds(35)
         }
+    }
+}
+
+private final class EditorUITextView: UITextView {
+    var onKeyboardMove: ((BlockKeyboardMoveDirection) -> Bool)?
+
+    override var keyCommands: [UIKeyCommand]? {
+        [
+            UIKeyCommand(
+                input: UIKeyCommand.inputUpArrow,
+                modifierFlags: [.command, .alternate],
+                action: #selector(moveBlockUp)
+            ),
+            UIKeyCommand(
+                input: UIKeyCommand.inputDownArrow,
+                modifierFlags: [.command, .alternate],
+                action: #selector(moveBlockDown)
+            )
+        ]
+    }
+
+    @objc private func moveBlockUp() {
+        _ = onKeyboardMove?(.up)
+    }
+
+    @objc private func moveBlockDown() {
+        _ = onKeyboardMove?(.down)
     }
 }
 #endif

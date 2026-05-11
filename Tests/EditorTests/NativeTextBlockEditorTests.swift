@@ -63,4 +63,33 @@ final class NativeTextBlockEditorTests: XCTestCase {
 
         XCTAssertNil(state.beginScheduling(requestID))
     }
+
+    func testBlockKeyboardShortcutResolverHandlesCommandOptionArrowsOnly() {
+        XCTAssertEqual(
+            BlockKeyboardShortcutResolver.moveDirection(
+                keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
+                modifiers: [.command, .option]
+            ),
+            .up
+        )
+        XCTAssertEqual(
+            BlockKeyboardShortcutResolver.moveDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [.command, .option]
+            ),
+            .down
+        )
+        XCTAssertNil(
+            BlockKeyboardShortcutResolver.moveDirection(
+                keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
+                modifiers: [.command]
+            )
+        )
+        XCTAssertNil(
+            BlockKeyboardShortcutResolver.moveDirection(
+                keyCode: 0,
+                modifiers: [.command, .option]
+            )
+        )
+    }
 }
