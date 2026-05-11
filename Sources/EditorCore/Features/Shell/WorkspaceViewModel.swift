@@ -53,11 +53,22 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func updateBlockText(blockID: String, text: String) throws {
+        let currentType = snapshot.blocks.first { $0.id == blockID }?.type ?? .paragraph
+        let nextBlock = nextBlockState(currentType: currentType, text: text)
+
         if let repository {
-            try repository.updateBlockText(blockID: blockID, text: text)
+            try repository.updateBlock(
+                blockID: blockID,
+                type: nextBlock.type,
+                text: nextBlock.text
+            )
         }
 
-        snapshot = snapshot.replacingBlockText(blockID: blockID, text: text)
+        snapshot = snapshot.replacingBlock(
+            blockID: blockID,
+            type: nextBlock.type,
+            text: nextBlock.text
+        )
     }
 
     func editBlockText(blockID: String, text: String) {
@@ -104,6 +115,17 @@ final class WorkspaceViewModel: ObservableObject {
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedPageID = snapshot.selectedPageID
+    }
+
+    private func nextBlockState(currentType: BlockType, text: String) -> (type: BlockType, text: String) {
+        if let transform = MarkdownTransformer.shortcutTransform(for: text) {
+            EditorLog.markdown.debug(
+                "markdown_shortcut type=\(transform.type.rawValue, privacy: .public)"
+            )
+            return (transform.type, transform.textPlain)
+        }
+
+        return (currentType, text)
     }
 }
 

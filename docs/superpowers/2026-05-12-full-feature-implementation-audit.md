@@ -28,7 +28,7 @@ Implement the approved editor architecture so the app supports the full requeste
 | editable text | paragraph text can be edited and persisted through `PageRepository.updateBlockText` | Partial; not TextKit 2 |
 | local-first | SQLite opens from Application Support and app can launch without network | Partial |
 | attachment blocks | `AttachmentRepositoryTests`, `AttachmentRepository`, `WorkspaceViewModel.importAttachment`, and `EditorShellView` file importer cover local copy, metadata, attachment block insertion, reload, and basic row rendering | Partial; thumbnails, async preview work, deletion GC, and live CloudKit asset sync remain |
-| Markdown | architecture document only | Missing implementation |
+| Markdown | `MarkdownTransformerTests`, `MarkdownTransformer`, and `WorkspaceViewModel.updateBlockText` cover core shortcut transforms and basic block export | Partial; import UI, file export, tables, callout/toggle fallback syntax, and TextKit-integrated shortcut handling remain |
 | CloudKit sync | schema placeholders only | Missing implementation |
 | native protection | architecture document only | Missing implementation |
 | three-column desktop navigation | `NavigationSplitView` shell | Partial |
@@ -51,4 +51,4 @@ The completed attachment slice proves:
 4. Reloading the repository returns the attachment block and metadata.
 5. The app exposes an insertion command and renders image, video, and file attachment rows.
 
-The next concrete gaps are Markdown shortcuts/import/export and replacing the temporary SwiftUI text field with the planned TextKit 2-backed text block editor.
+The next concrete gaps are replacing the temporary SwiftUI text field with the planned TextKit 2-backed text block editor, adding Markdown import/export UI, and adding CloudKit/native-protection layers.

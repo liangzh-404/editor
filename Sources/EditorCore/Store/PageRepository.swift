@@ -115,13 +115,31 @@ final class PageRepository {
     }
 
     func updateBlockText(blockID: String, text: String) throws {
+        let rows = try database.query(
+            """
+            SELECT type
+            FROM blocks
+            WHERE id = ? AND is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        )
+        let type = rows.first
+            .flatMap { $0["type"] }
+            .flatMap(BlockType.init(rawValue:)) ?? .paragraph
+
+        try updateBlock(blockID: blockID, type: type, text: text)
+    }
+
+    func updateBlock(blockID: String, type: BlockType, text: String) throws {
         let now = ISO8601DateFormatter().string(from: Date())
-        let payloadJSON = try paragraphPayloadJSON(text: text)
+        let payloadJSON = try blockPayloadJSON(type: type, text: text)
 
         try database.execute(
             """
             UPDATE blocks
-            SET payload_json = ?,
+            SET type = ?,
+                payload_json = ?,
                 text_plain = ?,
                 revision = revision + 1,
                 sync_state = ?,
@@ -129,6 +147,7 @@ final class PageRepository {
             WHERE id = ? AND is_deleted = 0
             """,
             bindings: [
+                .text(type.rawValue),
                 .text(payloadJSON),
                 .text(text),
                 .text("local"),
@@ -204,9 +223,17 @@ final class PageRepository {
         )
     }
 
-    private func paragraphPayloadJSON(text: String) throws -> String {
+    private func blockPayloadJSON(type: BlockType, text: String) throws -> String {
+        let payload: [String: String]
+        switch type {
+        case .divider:
+            payload = [:]
+        default:
+            payload = ["text": text]
+        }
+
         let data = try JSONSerialization.data(
-            withJSONObject: ["text": text],
+            withJSONObject: payload,
             options: [.sortedKeys]
         )
 

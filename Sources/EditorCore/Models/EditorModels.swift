@@ -14,9 +14,34 @@ struct PageSummary: Identifiable, Equatable, Sendable {
 
 enum BlockType: String, Equatable, Sendable {
     case paragraph
+    case heading1
+    case unorderedListItem
+    case orderedListItem
+    case taskItem
+    case quote
+    case codeBlock
+    case divider
     case attachmentImage
     case attachmentVideo
     case attachmentFile
+
+    var isTextEditable: Bool {
+        switch self {
+        case .paragraph,
+             .heading1,
+             .unorderedListItem,
+             .orderedListItem,
+             .taskItem,
+             .quote,
+             .codeBlock:
+            return true
+        case .divider,
+             .attachmentImage,
+             .attachmentVideo,
+             .attachmentFile:
+            return false
+        }
+    }
 }
 
 enum AttachmentKind: String, Equatable, Sendable {
@@ -60,6 +85,10 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
     let textPlain: String
 
     func replacingText(_ text: String) -> BlockSnapshot {
+        replacing(type: type, text: text)
+    }
+
+    func replacing(type: BlockType, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: id,
             pageID: pageID,
@@ -102,16 +131,24 @@ extension WorkspaceSnapshot {
         selectedPageID: nil
     )
 
-    func replacingBlockText(blockID: String, text: String) -> WorkspaceSnapshot {
+    func replacingBlock(blockID: String, type: BlockType, text: String) -> WorkspaceSnapshot {
         WorkspaceSnapshot(
             workspaces: workspaces,
             pages: pages,
             blocks: blocks.map { block in
-                block.id == blockID ? block.replacingText(text) : block
+                block.id == blockID ? block.replacing(type: type, text: text) : block
             },
             attachments: attachments,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedPageID: selectedPageID
         )
+    }
+
+    func replacingBlockText(blockID: String, text: String) -> WorkspaceSnapshot {
+        guard let block = blocks.first(where: { $0.id == blockID }) else {
+            return self
+        }
+
+        return replacingBlock(blockID: blockID, type: block.type, text: text)
     }
 }

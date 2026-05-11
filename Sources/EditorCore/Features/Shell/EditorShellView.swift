@@ -249,8 +249,7 @@ private struct BlockRowView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)
 
-            switch block.type {
-            case .paragraph:
+            if block.type.isTextEditable {
                 TextField(
                     "Start writing",
                     text: Binding(
@@ -263,7 +262,7 @@ private struct BlockRowView: View {
                     axis: .vertical
                 )
                 .textFieldStyle(.plain)
-                .font(.body)
+                .font(textFont)
                 .foregroundStyle(.primary)
                 .lineLimit(1...8)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -273,12 +272,27 @@ private struct BlockRowView: View {
                         draftText = newValue
                     }
                 }
-            case .attachmentImage, .attachmentVideo, .attachmentFile:
+            } else if block.type == .divider {
+                Divider()
+                    .padding(.vertical, 10)
+                    .accessibilityIdentifier("editor.divider.\(block.id)")
+            } else {
                 AttachmentBlockRow(block: block)
             }
         }
         .padding(.vertical, 7)
         .contentShape(Rectangle())
+    }
+
+    private var textFont: Font {
+        switch block.type {
+        case .heading1:
+            return .title2.weight(.semibold)
+        case .codeBlock:
+            return .system(.body, design: .monospaced)
+        default:
+            return .body
+        }
     }
 }
 
@@ -319,7 +333,7 @@ private struct AttachmentBlockRow: View {
             return "film"
         case .attachmentFile:
             return "doc"
-        case .paragraph:
+        default:
             return "doc.text"
         }
     }
@@ -332,7 +346,7 @@ private struct AttachmentBlockRow: View {
             return "Video"
         case .attachmentFile:
             return "File"
-        case .paragraph:
+        default:
             return "Text"
         }
     }
