@@ -8,7 +8,7 @@ struct EditorShellView: View {
     }
 
     var body: some View {
-        AdaptiveEditorShell()
+        AdaptiveEditorShell(viewModel: viewModel)
             .task {
                 try? viewModel.load()
             }
@@ -16,6 +16,8 @@ struct EditorShellView: View {
 }
 
 private struct AdaptiveEditorShell: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+
 #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 #endif
@@ -23,74 +25,183 @@ private struct AdaptiveEditorShell: View {
     var body: some View {
 #if os(iOS)
         if horizontalSizeClass == .compact {
-            CompactEditorShell()
+            CompactEditorShell(viewModel: viewModel)
         } else {
-            ThreeColumnEditorShell()
+            ThreeColumnEditorShell(viewModel: viewModel)
         }
 #else
-        ThreeColumnEditorShell()
+        ThreeColumnEditorShell(viewModel: viewModel)
 #endif
     }
 }
 
 private struct ThreeColumnEditorShell: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+
     var body: some View {
         NavigationSplitView {
-            List {
-                Section("Spaces") {
-                    Label("Local", systemImage: "tray.full")
-                    Label("Favorites", systemImage: "star")
-                    Label("Archive", systemImage: "archivebox")
-                }
-            }
-            .navigationTitle("Editor")
+            WorkspaceSidebar(snapshot: viewModel.snapshot)
         } content: {
-            List {
-                Text("Welcome")
-            }
-            .navigationTitle("Pages")
+            PageListView(viewModel: viewModel)
         } detail: {
-            PlaceholderEditorCanvas()
+            EditorCanvasView(
+                page: viewModel.selectedPage,
+                blocks: viewModel.visibleBlocks
+            )
         }
     }
 }
 
 private struct CompactEditorShell: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+
     var body: some View {
         NavigationStack {
             List {
-                NavigationLink("Local") {
-                    List {
-                        NavigationLink("Welcome") {
-                            PlaceholderEditorCanvas()
+                Section("Spaces") {
+                    ForEach(viewModel.snapshot.workspaces) { workspace in
+                        NavigationLink {
+                            CompactPageListView(viewModel: viewModel)
+                        } label: {
+                            Label(workspace.name, systemImage: "tray.full")
                         }
                     }
-                    .navigationTitle("Pages")
                 }
             }
             .navigationTitle("Editor")
+            .background(Color.white)
         }
     }
 }
 
-private struct PlaceholderEditorCanvas: View {
+private struct WorkspaceSidebar: View {
+    let snapshot: WorkspaceSnapshot
+
+    var body: some View {
+        List {
+            Section("Spaces") {
+                ForEach(snapshot.workspaces) { workspace in
+                    Label(workspace.name, systemImage: "tray.full")
+                }
+            }
+
+            Section("Library") {
+                Label("Favorites", systemImage: "star")
+                Label("Archive", systemImage: "archivebox")
+            }
+        }
+        .navigationTitle("Editor")
+        .scrollContentBackground(.hidden)
+        .background(Color(red: 0.98, green: 0.98, blue: 0.96))
+    }
+}
+
+private struct PageListView: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+
+    var body: some View {
+        List(selection: selectedPageBinding) {
+            ForEach(viewModel.snapshot.pages) { page in
+                PageRow(page: page)
+                    .tag(Optional(page.id))
+            }
+        }
+        .navigationTitle("Pages")
+        .scrollContentBackground(.hidden)
+        .background(Color.white)
+    }
+
+    private var selectedPageBinding: Binding<String?> {
+        Binding {
+            viewModel.selectedPageID
+        } set: { newValue in
+            if let newValue {
+                viewModel.selectPage(id: newValue)
+            }
+        }
+    }
+}
+
+private struct CompactPageListView: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+
+    var body: some View {
+        List {
+            ForEach(viewModel.snapshot.pages) { page in
+                NavigationLink {
+                    EditorCanvasView(
+                        page: page,
+                        blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id }
+                    )
+                    .onAppear {
+                        viewModel.selectPage(id: page.id)
+                    }
+                } label: {
+                    PageRow(page: page)
+                }
+            }
+        }
+        .navigationTitle("Pages")
+        .scrollContentBackground(.hidden)
+        .background(Color.white)
+    }
+}
+
+private struct PageRow: View {
+    let page: PageSummary
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(.secondary)
+            Text(page.title)
+                .font(.body)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 5)
+    }
+}
+
+private struct EditorCanvasView: View {
+    let page: PageSummary?
+    let blocks: [BlockSnapshot]
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Welcome")
+                Text(page?.title ?? "No Page")
                     .font(.largeTitle.weight(.semibold))
 
-                Text("Start writing in blocks.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 8)
+                ForEach(blocks) { block in
+                    BlockRowView(block: block)
+                }
             }
             .frame(maxWidth: 760, alignment: .leading)
             .padding(.horizontal, 40)
             .padding(.vertical, 36)
         }
         .background(Color.white)
-        .navigationTitle("Welcome")
+        .navigationTitle(page?.title ?? "Editor")
+    }
+}
+
+private struct BlockRowView: View {
+    let block: BlockSnapshot
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "circle.grid.2x2")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 4)
+
+            Text(block.textPlain)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
     }
 }
 

@@ -8,6 +8,20 @@ final class WorkspaceViewModel: ObservableObject {
 
     private let repository: PageRepository?
 
+    var selectedPage: PageSummary? {
+        guard let selectedPageID else {
+            return nil
+        }
+        return snapshot.pages.first { $0.id == selectedPageID }
+    }
+
+    var visibleBlocks: [BlockSnapshot] {
+        guard let selectedPageID else {
+            return []
+        }
+        return snapshot.blocks.filter { $0.pageID == selectedPageID }
+    }
+
     init(repository: PageRepository) {
         self.repository = repository
         snapshot = .empty
@@ -41,4 +55,3 @@ final class WorkspaceViewModel: ObservableObject {
         selectedPageID = snapshot.selectedPageID
     }
 }
-

@@ -28,6 +28,8 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.blocks.count, 1)
         XCTAssertEqual(viewModel.selectedWorkspaceID, viewModel.snapshot.workspaces.first?.id)
         XCTAssertEqual(viewModel.selectedPageID, viewModel.snapshot.pages.first?.id)
+        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Start writing in blocks."])
     }
 
     private func migratedDatabase() throws -> SQLiteDatabase {
