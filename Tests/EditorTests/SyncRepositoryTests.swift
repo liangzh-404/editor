@@ -51,6 +51,29 @@ final class SyncRepositoryTests: XCTestCase {
         XCTAssertTrue(changes.contains(SyncChange(entityType: "block", entityID: importResult.block.id, changeType: "create")))
     }
 
+    func testRecordFailureKeepsChangeAndSchedulesRetry() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = SyncRepository(database: database)
+        try repository.enqueue(entityType: "block", entityID: "block-1", changeType: "update")
+        let change = try XCTUnwrap(repository.pendingChanges().first)
+        let retryDate = Date(timeIntervalSince1970: 1_800)
+
+        try repository.recordFailure(
+            change: change,
+            errorDescription: "Network unavailable",
+            nextAttemptAt: retryDate
+        )
+
+        XCTAssertEqual(try repository.pendingChanges().map(\.entityID), ["block-1"])
+        XCTAssertEqual(try repository.retryState(change: change), SyncRetryState(
+            attemptCount: 1,
+            lastError: "Network unavailable",
+            nextAttemptAt: retryDate
+        ))
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

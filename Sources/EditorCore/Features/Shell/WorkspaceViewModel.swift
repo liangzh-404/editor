@@ -9,11 +9,13 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var searchResults: [SearchResult] = []
     @Published private(set) var selectedPageBacklinks: [Backlink] = []
     @Published private(set) var cloudKitAccountStatus: CloudKitAccountAvailability?
+    @Published private(set) var syncStatusText = "Sync Idle"
 
     private let repository: PageRepository?
     private let attachmentRepository: AttachmentRepository?
     private let searchRepository: SearchRepository?
     private let backlinkRepository: BacklinkRepository?
+    private let syncEngine: SyncEngine?
     private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
 
     var selectedPage: PageSummary? {
@@ -52,12 +54,14 @@ final class WorkspaceViewModel: ObservableObject {
         attachmentRepository: AttachmentRepository? = nil,
         searchRepository: SearchRepository? = nil,
         backlinkRepository: BacklinkRepository? = nil,
+        syncEngine: SyncEngine? = nil,
         cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil
     ) {
         self.repository = repository
         self.attachmentRepository = attachmentRepository
         self.searchRepository = searchRepository
         self.backlinkRepository = backlinkRepository
+        self.syncEngine = syncEngine
         self.cloudKitAccountMetadataService = cloudKitAccountMetadataService
         snapshot = .empty
         selectedWorkspaceID = nil
@@ -69,6 +73,7 @@ final class WorkspaceViewModel: ObservableObject {
         attachmentRepository = nil
         searchRepository = nil
         backlinkRepository = nil
+        syncEngine = nil
         cloudKitAccountMetadataService = nil
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
@@ -100,6 +105,27 @@ final class WorkspaceViewModel: ObservableObject {
             cloudKitAccountStatus = .couldNotDetermine
             EditorLog.sync.error(
                 "cloudkit_account_status_failed error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func syncNow() {
+        guard let syncEngine else {
+            syncStatusText = "Sync Unavailable"
+            return
+        }
+
+        do {
+            let summary = try syncEngine.uploadPendingChanges()
+            if summary.failedCount > 0 {
+                syncStatusText = "Sync Retry Scheduled"
+            } else {
+                syncStatusText = "Synced \(summary.uploadedCount) \(summary.uploadedCount == 1 ? "change" : "changes")"
+            }
+        } catch {
+            syncStatusText = "Sync Failed"
+            EditorLog.sync.error(
+                "sync_now_failed error=\(String(describing: error), privacy: .public)"
             )
         }
     }

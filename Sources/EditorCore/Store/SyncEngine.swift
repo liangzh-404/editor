@@ -206,23 +206,81 @@ enum CloudKitPrivateDatabaseAdapterError: Error, Equatable {
     case unsupportedEntityType(String)
 }
 
+struct SyncRetryPolicy: Equatable, Sendable {
+    let baseDelay: TimeInterval
+    let maximumDelay: TimeInterval
+
+    init(baseDelay: TimeInterval = 30, maximumDelay: TimeInterval = 900) {
+        self.baseDelay = baseDelay
+        self.maximumDelay = maximumDelay
+    }
+
+    func nextAttemptDate(afterFailureCount failureCount: Int, now: Date) -> Date {
+        let exponent = max(failureCount - 1, 0)
+        let multiplier = pow(2.0, Double(exponent))
+        return now.addingTimeInterval(min(baseDelay * multiplier, maximumDelay))
+    }
+}
+
+struct SyncUploadSummary: Equatable, Sendable {
+    let uploadedCount: Int
+    let failedCount: Int
+}
+
 final class SyncEngine {
     private let syncRepository: SyncRepository
     private let adapter: CloudKitSyncAdapter
+    private let retryPolicy: SyncRetryPolicy
+    private let now: () -> Date
 
-    init(syncRepository: SyncRepository, adapter: CloudKitSyncAdapter) {
+    init(
+        syncRepository: SyncRepository,
+        adapter: CloudKitSyncAdapter,
+        retryPolicy: SyncRetryPolicy = SyncRetryPolicy(),
+        now: @escaping () -> Date = Date.init
+    ) {
         self.syncRepository = syncRepository
         self.adapter = adapter
+        self.retryPolicy = retryPolicy
+        self.now = now
     }
 
-    func uploadPendingChanges() throws {
+    @discardableResult
+    func uploadPendingChanges() throws -> SyncUploadSummary {
         let changes = try syncRepository.pendingChanges()
+        var uploadedCount = 0
+        var failedCount = 0
         for change in changes {
-            let result = try adapter.upload(change: change)
-            try syncRepository.markUploaded(change: change, uploadResult: result)
-            EditorLog.sync.debug(
-                "sync_change_uploaded entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
-            )
+            let retryState = try syncRepository.retryState(change: change)
+            let currentDate = now()
+            if let nextAttemptAt = retryState.nextAttemptAt,
+               nextAttemptAt > currentDate {
+                EditorLog.sync.debug(
+                    "sync_change_deferred entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
+                )
+                continue
+            }
+
+            do {
+                let result = try adapter.upload(change: change)
+                try syncRepository.markUploaded(change: change, uploadResult: result)
+                uploadedCount += 1
+                EditorLog.sync.debug(
+                    "sync_change_uploaded entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
+                )
+            } catch {
+                let failureCount = retryState.attemptCount + 1
+                try syncRepository.recordFailure(
+                    change: change,
+                    errorDescription: String(describing: error),
+                    nextAttemptAt: retryPolicy.nextAttemptDate(afterFailureCount: failureCount, now: currentDate)
+                )
+                failedCount += 1
+                EditorLog.sync.error(
+                    "sync_change_upload_failed entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
+            }
         }
+        return SyncUploadSummary(uploadedCount: uploadedCount, failedCount: failedCount)
     }
 }

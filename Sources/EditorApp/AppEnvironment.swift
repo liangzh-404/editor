@@ -31,6 +31,7 @@ enum AppEnvironment {
             attachmentRepository: attachmentRepository,
             searchRepository: SearchRepository(database: database),
             backlinkRepository: BacklinkRepository(database: database),
+            syncEngine: makeCloudKitSyncEngine(database: database),
             cloudKitAccountMetadataService: makeCloudKitAccountMetadataService()
         )
         try viewModel.load()
@@ -44,6 +45,18 @@ enum AppEnvironment {
         }
 
         return CloudKitAccountMetadataService()
+    }
+
+    private static func makeCloudKitSyncEngine(database: SQLiteDatabase) -> SyncEngine? {
+        guard CloudKitEntitlementInspector.currentProcessHasCloudKitContainers() else {
+            EditorLog.sync.debug("cloudkit_sync_engine_disabled reason=missing_entitlement")
+            return nil
+        }
+
+        return SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: CloudKitPrivateDatabaseAdapter(database: database)
+        )
     }
 
     private static func databasePath() throws -> String {

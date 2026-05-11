@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -102,9 +102,30 @@ enum SchemaMigrator {
                 entity_type TEXT NOT NULL,
                 entity_id TEXT NOT NULL,
                 change_type TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                next_attempt_at TEXT,
                 created_at TEXT NOT NULL
             );
             """
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "sync_changes",
+            column: "attempt_count",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "sync_changes",
+            column: "last_error",
+            definition: "TEXT"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "sync_changes",
+            column: "next_attempt_at",
+            definition: "TEXT"
         )
 
         try database.execute(
@@ -153,5 +174,19 @@ enum SchemaMigrator {
             VALUES (\(currentVersion), datetime('now'));
             """
         )
+    }
+
+    private static func addColumnIfMissing(
+        database: SQLiteDatabase,
+        table: String,
+        column: String,
+        definition: String
+    ) throws {
+        let columns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('\(table)')"))
+        guard !columns.contains(column) else {
+            return
+        }
+
+        try database.execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
     }
 }

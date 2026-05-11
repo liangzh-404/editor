@@ -13,8 +13,15 @@ struct SyncRecord: Equatable, Sendable {
     let changeTag: String?
 }
 
+struct SyncRetryState: Equatable, Sendable {
+    let attemptCount: Int
+    let lastError: String?
+    let nextAttemptAt: Date?
+}
+
 final class SyncRepository {
     private let database: SQLiteDatabase
+    private let dateFormatter = ISO8601DateFormatter()
 
     init(database: SQLiteDatabase) {
         self.database = database
@@ -28,16 +35,18 @@ final class SyncRepository {
                 entity_type,
                 entity_id,
                 change_type,
+                attempt_count,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             bindings: [
                 .text("sync-\(UUID().uuidString.lowercased())"),
                 .text(entityType),
                 .text(entityID),
                 .text(changeType),
-                .text(ISO8601DateFormatter().string(from: Date()))
+                .integer(0),
+                .text(dateFormatter.string(from: Date()))
             ]
         )
 
@@ -62,6 +71,74 @@ final class SyncRepository {
         }
     }
 
+    func retryState(change: SyncChange) throws -> SyncRetryState {
+        let row = try database.query(
+            """
+            SELECT attempt_count, last_error, next_attempt_at
+            FROM sync_changes
+            WHERE entity_type = ?
+              AND entity_id = ?
+              AND change_type = ?
+            LIMIT 1
+            """,
+            bindings: [
+                .text(change.entityType),
+                .text(change.entityID),
+                .text(change.changeType)
+            ]
+        ).first
+
+        return SyncRetryState(
+            attemptCount: Int(row?["attempt_count"] ?? "") ?? 0,
+            lastError: row?["last_error"] ?? nil,
+            nextAttemptAt: (row?["next_attempt_at"] ?? nil).flatMap(dateFormatter.date(from:))
+        )
+    }
+
+    func recordFailure(
+        change: SyncChange,
+        errorDescription: String,
+        nextAttemptAt: Date
+    ) throws {
+        try database.execute(
+            """
+            UPDATE sync_changes
+            SET attempt_count = attempt_count + 1,
+                last_error = ?,
+                next_attempt_at = ?
+            WHERE entity_type = ?
+              AND entity_id = ?
+              AND change_type = ?
+            """,
+            bindings: [
+                .text(errorDescription),
+                .text(dateFormatter.string(from: nextAttemptAt)),
+                .text(change.entityType),
+                .text(change.entityID),
+                .text(change.changeType)
+            ]
+        )
+    }
+
+    func clearRetryState(change: SyncChange) throws {
+        try database.execute(
+            """
+            UPDATE sync_changes
+            SET attempt_count = 0,
+                last_error = NULL,
+                next_attempt_at = NULL
+            WHERE entity_type = ?
+              AND entity_id = ?
+              AND change_type = ?
+            """,
+            bindings: [
+                .text(change.entityType),
+                .text(change.entityID),
+                .text(change.changeType)
+            ]
+        )
+    }
+
     func markUploaded(change: SyncChange, uploadResult: CloudKitUploadResult) throws {
         try database.execute(
             """
@@ -81,7 +158,7 @@ final class SyncRepository {
                 .text(change.entityID),
                 .text(uploadResult.recordName),
                 uploadResult.changeTag.map(SQLiteValue.text) ?? .null,
-                .text(ISO8601DateFormatter().string(from: Date()))
+                .text(dateFormatter.string(from: Date()))
             ]
         )
 

@@ -144,6 +144,15 @@ private struct CloudKitAccountStatusSection: View {
                 Spacer(minLength: 8)
 
                 Button {
+                    viewModel.syncNow()
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath.icloud")
+                }
+                .buttonStyle(.borderless)
+                .help("Sync now")
+                .accessibilityIdentifier("editor.sync-now")
+
+                Button {
                     viewModel.refreshCloudKitAccountStatusForUI()
                 } label: {
                     Image(systemName: "arrow.clockwise")
@@ -153,6 +162,11 @@ private struct CloudKitAccountStatusSection: View {
                 .accessibilityIdentifier("editor.refresh-icloud-status")
             }
             .accessibilityIdentifier("editor.icloud-status")
+
+            Text(viewModel.syncStatusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("editor.sync-status")
         }
     }
 

@@ -383,6 +383,32 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.cloudKitAccountStatusText, "iCloud Available")
     }
 
+    @MainActor
+    func testSyncNowUploadsPendingChangesAndUpdatesVisibleStatus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Sync from UI")
+        let syncRepository = SyncRepository(database: database)
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: RecordingCloudKitSyncAdapter()
+            )
+        )
+        try viewModel.load()
+
+        viewModel.syncNow()
+
+        XCTAssertEqual(try syncRepository.pendingChanges(), [])
+        XCTAssertEqual(viewModel.syncStatusText, "Synced 1 change")
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)

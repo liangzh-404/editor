@@ -34,6 +34,19 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(tableNames.contains("search_index"))
     }
 
+    func testSyncChangesTableTracksRetryState() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let columns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('sync_changes')"))
+
+        XCTAssertTrue(columns.contains("attempt_count"))
+        XCTAssertTrue(columns.contains("last_error"))
+        XCTAssertTrue(columns.contains("next_attempt_at"))
+    }
+
     func testMigrationRecordsSchemaVersionOne() throws {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         defer { database.close() }
@@ -43,7 +56,7 @@ final class SchemaMigratorTests: XCTestCase {
         let version = try database.queryInt(
             "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
         )
-        XCTAssertEqual(version, 1)
+        XCTAssertEqual(version, SchemaMigrator.currentVersion)
     }
 
     private func temporaryDatabasePath() -> String {

@@ -43,6 +43,62 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
+    func testUploadFailureRecordsRetryStateAndContinuesWithLaterChanges() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        try syncRepository.enqueue(entityType: "block", entityID: "block-failing", changeType: "update")
+        try syncRepository.enqueue(entityType: "block", entityID: "block-success", changeType: "update")
+        let adapter = FailingOnceCloudKitSyncAdapter(failingEntityID: "block-failing")
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: adapter,
+            retryPolicy: SyncRetryPolicy(baseDelay: 60, maximumDelay: 300),
+            now: { Date(timeIntervalSince1970: 1_000) }
+        ).uploadPendingChanges()
+
+        XCTAssertEqual(result.uploadedCount, 1)
+        XCTAssertEqual(result.failedCount, 1)
+        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), ["block-failing", "block-success"])
+        XCTAssertEqual(try syncRepository.pendingChanges(), [
+            SyncChange(entityType: "block", entityID: "block-failing", changeType: "update")
+        ])
+        XCTAssertEqual(try syncRepository.retryState(change: SyncChange(entityType: "block", entityID: "block-failing", changeType: "update")), SyncRetryState(
+            attemptCount: 1,
+            lastError: "temporaryUnavailable",
+            nextAttemptAt: Date(timeIntervalSince1970: 1_060)
+        ))
+        XCTAssertEqual(try syncRepository.syncRecords().map(\.entityID), ["block-success"])
+    }
+
+    func testUploadSkipsChangesUntilRetryDate() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        try syncRepository.enqueue(entityType: "block", entityID: "block-waiting", changeType: "update")
+        let change = try XCTUnwrap(syncRepository.pendingChanges().first)
+        try syncRepository.recordFailure(
+            change: change,
+            errorDescription: "temporaryUnavailable",
+            nextAttemptAt: Date(timeIntervalSince1970: 1_500)
+        )
+        let adapter = RecordingCloudKitSyncAdapter()
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: adapter,
+            now: { Date(timeIntervalSince1970: 1_000) }
+        ).uploadPendingChanges()
+
+        XCTAssertEqual(result.uploadedCount, 0)
+        XCTAssertEqual(result.failedCount, 0)
+        XCTAssertEqual(adapter.uploadedChanges, [])
+        XCTAssertEqual(try syncRepository.pendingChanges(), [change])
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsBlockChangeToRecord() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -94,6 +150,35 @@ final class RecordingCloudKitSyncAdapter: CloudKitSyncAdapter {
             recordName: "\(change.entityType)-\(change.entityID)",
             changeTag: "tag-\(change.entityID)"
         )
+    }
+}
+
+final class FailingOnceCloudKitSyncAdapter: CloudKitSyncAdapter {
+    private(set) var uploadedChanges: [SyncChange] = []
+    private let failingEntityID: String
+
+    init(failingEntityID: String) {
+        self.failingEntityID = failingEntityID
+    }
+
+    func upload(change: SyncChange) throws -> CloudKitUploadResult {
+        uploadedChanges.append(change)
+        if change.entityID == failingEntityID {
+            throw SyncEngineTestError.temporaryUnavailable
+        }
+
+        return CloudKitUploadResult(
+            recordName: "\(change.entityType)-\(change.entityID)",
+            changeTag: "tag-\(change.entityID)"
+        )
+    }
+}
+
+enum SyncEngineTestError: Error, CustomStringConvertible {
+    case temporaryUnavailable
+
+    var description: String {
+        "temporaryUnavailable"
     }
 }
 
