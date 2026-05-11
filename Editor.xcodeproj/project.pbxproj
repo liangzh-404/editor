@@ -64,6 +64,7 @@
 		A54C11EF0D68422276A9E23A /* NativeTextBlockEditorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC06280694090DAA0387F96 /* NativeTextBlockEditorTests.swift */; };
 		A71E6C145467696785F16C68 /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
 		A94BCFD1FAB72981D2ABA60E /* NativeTextBlockEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B305E7542E1D1459C797CE /* NativeTextBlockEditor.swift */; };
+		B314C4800CB52538C63604C6 /* EditorIOS-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = BE299953F1B4500B81B093A6 /* EditorIOS-Info.plist */; };
 		BE8D6775DA5E9F581EDCD86E /* SyncMergeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9020679BDD2802585CAFFF9A /* SyncMergeEngine.swift */; };
 		C2EB3CA38DD087183990B22D /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED15DB1BFFA5B14D21B49851 /* SyncEngine.swift */; };
 		CD88B386243D25D829DA765D /* ConflictRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4214430A753C37880763D5D8 /* ConflictRepository.swift */; };
@@ -125,6 +126,7 @@
 		9E5987A98D4AEC7981273C41 /* SyncRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRepository.swift; sourceTree = "<group>"; };
 		BA04F3B5378D60E40322DFDE /* DataProtectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataProtectionService.swift; sourceTree = "<group>"; };
 		BE22D36D2A1E20D4EF5DC1C6 /* EditorMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EditorMac.entitlements; sourceTree = "<group>"; };
+		BE299953F1B4500B81B093A6 /* EditorIOS-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "EditorIOS-Info.plist"; sourceTree = "<group>"; };
 		CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorShellView.swift; sourceTree = "<group>"; };
 		D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteDatabase.swift; sourceTree = "<group>"; };
 		D40CF7A6C22692BF36767B56 /* AttachmentRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentRepositoryTests.swift; sourceTree = "<group>"; };
@@ -142,6 +144,7 @@
 				8BC9BD3D38C16BD85AE9DB4C /* AppEnvironment.swift */,
 				20B5B868AE25C29EA7A31C8A /* EditorApp.swift */,
 				1214EBBA79907FAE38BD08D0 /* EditorCloudKit.entitlements */,
+				BE299953F1B4500B81B093A6 /* EditorIOS-Info.plist */,
 				97FDEF1160608404948118EE /* EditorIOS.entitlements */,
 				BE22D36D2A1E20D4EF5DC1C6 /* EditorMac.entitlements */,
 			);
@@ -334,6 +337,7 @@
 			buildConfigurationList = 7970C0A2F454CED75AC31E23 /* Build configuration list for PBXNativeTarget "EditorMac" */;
 			buildPhases = (
 				D8FFA47E03A6D1860C3C7A78 /* Sources */,
+				705B4A895D1F0C0686ABEFD4 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -404,6 +408,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		705B4A895D1F0C0686ABEFD4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B314C4800CB52538C63604C6 /* EditorIOS-Info.plist in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		30D873B1875A5AE471319CE3 /* Sources */ = {
@@ -624,9 +639,7 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/EditorApp/EditorIOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Editor;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_FILE = "Sources/EditorApp/EditorIOS-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -779,9 +792,7 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/EditorApp/EditorIOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Editor;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_FILE = "Sources/EditorApp/EditorIOS-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

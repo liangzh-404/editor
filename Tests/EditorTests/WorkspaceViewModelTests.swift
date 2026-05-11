@@ -616,6 +616,29 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSyncAfterActivationEnsuresRemoteChangeSubscriptionWhenEngineIsAvailable() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let subscriptionEnsurer = RecordingCloudKitSubscriptionEnsurer()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: SyncRepository(database: database),
+                adapter: RecordingCloudKitSyncAdapter(),
+                subscriptionEnsurer: subscriptionEnsurer
+            )
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+
+        XCTAssertEqual(subscriptionEnsurer.ensureCallCount, 1)
+    }
+
+    @MainActor
     func testSyncNowFetchesRemoteChangesAndRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

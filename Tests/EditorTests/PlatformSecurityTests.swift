@@ -54,6 +54,12 @@ final class PlatformSecurityTests: XCTestCase {
         )
     }
 
+    func testIOSProjectDeclaresRemoteNotificationBackgroundMode() throws {
+        let plist = try appPlist(named: "EditorIOS-Info.plist")
+
+        XCTAssertEqual(plist["UIBackgroundModes"] as? [String], ["remote-notification"])
+    }
+
     func testDataProtectionServiceKeepsProtectedFileReadable() throws {
         let fileURL = makeTemporaryDirectory().appendingPathComponent("protected.sqlite")
         try Data("protected".utf8).write(to: fileURL)
@@ -115,6 +121,10 @@ final class PlatformSecurityTests: XCTestCase {
     }
 
     private func entitlementsPlist(named filename: String) throws -> [String: Any] {
+        try appPlist(named: filename)
+    }
+
+    private func appPlist(named filename: String) throws -> [String: Any] {
         let entitlementsURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()

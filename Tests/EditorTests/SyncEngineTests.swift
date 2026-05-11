@@ -159,6 +159,33 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
+    func testEnsureRemoteChangeSubscriptionCreatesSilentDatabaseSubscription() throws {
+        let saver = CapturingCloudKitSubscriptionSaver()
+        let ensurer = CloudKitPrivateDatabaseSubscriptionEnsurer(subscriptionSaver: saver)
+
+        try ensurer.ensureRemoteChangeSubscription()
+
+        let subscription = try XCTUnwrap(saver.savedSubscriptions.first as? CKDatabaseSubscription)
+        XCTAssertEqual(subscription.subscriptionID, "editor-private-database-changes")
+        XCTAssertEqual(subscription.notificationInfo?.shouldSendContentAvailable, true)
+        XCTAssertNil(subscription.notificationInfo?.alertBody)
+    }
+
+    func testSyncEngineEnsuresRemoteChangeSubscriptionThroughInjectedEnsurer() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let ensurer = RecordingCloudKitSubscriptionEnsurer()
+
+        try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            subscriptionEnsurer: ensurer
+        ).ensureRemoteChangeSubscription()
+
+        XCTAssertEqual(ensurer.ensureCallCount, 1)
+    }
+
     func testFetchRemoteChangesAppliesRemoteBlockDeletion() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -734,6 +761,23 @@ final class CapturingCloudKitRecordSaver: CloudKitRecordSaving {
     func save(record: CKRecord) throws -> CKRecord {
         savedRecords.append(record)
         return record
+    }
+}
+
+final class CapturingCloudKitSubscriptionSaver: CloudKitSubscriptionSaving {
+    private(set) var savedSubscriptions: [CKSubscription] = []
+
+    func save(subscription: CKSubscription) throws -> CKSubscription {
+        savedSubscriptions.append(subscription)
+        return subscription
+    }
+}
+
+final class RecordingCloudKitSubscriptionEnsurer: CloudKitSubscriptionEnsuring {
+    private(set) var ensureCallCount = 0
+
+    func ensureRemoteChangeSubscription() throws {
+        ensureCallCount += 1
     }
 }
 

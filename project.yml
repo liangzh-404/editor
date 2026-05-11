@@ -32,12 +32,16 @@ targets:
     sources:
       - path: Sources/EditorApp
       - path: Sources/EditorCore
+    info:
+      path: Sources/EditorApp/EditorIOS-Info.plist
+      properties:
+        CFBundleDisplayName: Editor
+        NSHumanReadableCopyright: ""
+        UIBackgroundModes:
+          - remote-notification
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.liangzhang.editor.ios
-        GENERATE_INFOPLIST_FILE: "YES"
-        INFOPLIST_KEY_CFBundleDisplayName: Editor
-        INFOPLIST_KEY_NSHumanReadableCopyright: ""
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: "NO"
         CODE_SIGN_STYLE: Automatic

@@ -133,6 +133,8 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        ensureRemoteChangeSubscriptionForUI()
+
         do {
             let summary = try syncEngine.uploadPendingChanges()
             let fetchSummary = try syncEngine.fetchRemoteChanges()
@@ -627,6 +629,16 @@ final class WorkspaceViewModel: ObservableObject {
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=\(source, privacy: .public)"
         )
+    }
+
+    private func ensureRemoteChangeSubscriptionForUI() {
+        do {
+            try syncEngine?.ensureRemoteChangeSubscription()
+        } catch {
+            EditorLog.sync.error(
+                "cloudkit_subscription_ensure_failed error=\(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     private func refreshDerivedState(rebuildSearchIndex: Bool) throws {

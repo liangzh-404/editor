@@ -48,6 +48,14 @@ protocol CloudKitRecordSaving {
     func save(record: CKRecord) throws -> CKRecord
 }
 
+protocol CloudKitSubscriptionSaving {
+    func save(subscription: CKSubscription) throws -> CKSubscription
+}
+
+protocol CloudKitSubscriptionEnsuring {
+    func ensureRemoteChangeSubscription() throws
+}
+
 protocol CloudKitRecordFetching {
     func fetchRecords(recordType: String) throws -> [CKRecord]
     func fetchRecordChanges(
@@ -137,6 +145,57 @@ final class LiveCloudKitRecordSaver: CloudKitRecordSaving {
         return try saveBox.result?.get() ?? {
             throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
         }()
+    }
+}
+
+final class LiveCloudKitSubscriptionSaver: CloudKitSubscriptionSaving {
+    private let database: CKDatabase
+
+    init(database: CKDatabase = CKContainer.default().privateCloudDatabase) {
+        self.database = database
+    }
+
+    func save(subscription: CKSubscription) throws -> CKSubscription {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class SaveBox: @unchecked Sendable {
+            var result: Result<CKSubscription, Error>?
+        }
+        let saveBox = SaveBox()
+
+        database.save(subscription) { savedSubscription, error in
+            if let error {
+                saveBox.result = .failure(error)
+            } else if let savedSubscription {
+                saveBox.result = .success(savedSubscription)
+            } else {
+                saveBox.result = .failure(CloudKitPrivateDatabaseAdapterError.missingSavedRecord)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        return try saveBox.result?.get() ?? {
+            throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
+        }()
+    }
+}
+
+final class CloudKitPrivateDatabaseSubscriptionEnsurer: CloudKitSubscriptionEnsuring {
+    static let subscriptionID = "editor-private-database-changes"
+
+    private let subscriptionSaver: CloudKitSubscriptionSaving
+
+    init(subscriptionSaver: CloudKitSubscriptionSaving = LiveCloudKitSubscriptionSaver()) {
+        self.subscriptionSaver = subscriptionSaver
+    }
+
+    func ensureRemoteChangeSubscription() throws {
+        let subscription = CKDatabaseSubscription(subscriptionID: Self.subscriptionID)
+        let notificationInfo = CKSubscription.NotificationInfo()
+        notificationInfo.shouldSendContentAvailable = true
+        subscription.notificationInfo = notificationInfo
+
+        _ = try subscriptionSaver.save(subscription: subscription)
     }
 }
 
@@ -679,6 +738,7 @@ final class SyncEngine {
     private let adapter: CloudKitSyncAdapter
     private let remoteChangeFetcher: CloudKitRemoteChangeFetching?
     private let mergeEngine: SyncMergeEngine?
+    private let subscriptionEnsurer: CloudKitSubscriptionEnsuring?
     private let retryPolicy: SyncRetryPolicy
     private let now: () -> Date
 
@@ -687,6 +747,7 @@ final class SyncEngine {
         adapter: CloudKitSyncAdapter,
         remoteChangeFetcher: CloudKitRemoteChangeFetching? = nil,
         mergeEngine: SyncMergeEngine? = nil,
+        subscriptionEnsurer: CloudKitSubscriptionEnsuring? = nil,
         retryPolicy: SyncRetryPolicy = SyncRetryPolicy(),
         now: @escaping () -> Date = Date.init
     ) {
@@ -694,8 +755,13 @@ final class SyncEngine {
         self.adapter = adapter
         self.remoteChangeFetcher = remoteChangeFetcher
         self.mergeEngine = mergeEngine
+        self.subscriptionEnsurer = subscriptionEnsurer
         self.retryPolicy = retryPolicy
         self.now = now
+    }
+
+    func ensureRemoteChangeSubscription() throws {
+        try subscriptionEnsurer?.ensureRemoteChangeSubscription()
     }
 
     func fetchRemoteChanges() throws -> SyncFetchSummary {

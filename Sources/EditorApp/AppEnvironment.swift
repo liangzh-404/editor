@@ -71,7 +71,8 @@ enum AppEnvironment {
             syncRepository: SyncRepository(database: database),
             adapter: adapter,
             remoteChangeFetcher: adapter,
-            mergeEngine: SyncMergeEngine(database: database)
+            mergeEngine: SyncMergeEngine(database: database),
+            subscriptionEnsurer: CloudKitPrivateDatabaseSubscriptionEnsurer()
         )
     }
 
