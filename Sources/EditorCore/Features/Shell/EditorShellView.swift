@@ -181,6 +181,7 @@ private struct EditorCanvasView: View {
     let onBlockTextChange: (String, String) -> Void
     let onImportAttachment: (URL) -> Void
     @State private var isAttachmentImporterPresented = false
+    @StateObject private var editorSession = EditorSession()
 
     var body: some View {
         ScrollView {
@@ -202,7 +203,7 @@ private struct EditorCanvasView: View {
                 }
 
                 ForEach(blocks) { block in
-                    BlockRowView(block: block) { text in
+                    BlockRowView(block: block, editorSession: editorSession) { text in
                         onBlockTextChange(block.id, text)
                     }
                 }
@@ -233,13 +234,17 @@ private struct EditorCanvasView: View {
 
 private struct BlockRowView: View {
     let block: BlockSnapshot
+    @ObservedObject var editorSession: EditorSession
     let onTextChange: (String) -> Void
-    @State private var draftText: String
 
-    init(block: BlockSnapshot, onTextChange: @escaping (String) -> Void) {
+    init(
+        block: BlockSnapshot,
+        editorSession: EditorSession,
+        onTextChange: @escaping (String) -> Void
+    ) {
         self.block = block
+        self.editorSession = editorSession
         self.onTextChange = onTextChange
-        _draftText = State(initialValue: block.textPlain)
     }
 
     var body: some View {
@@ -250,28 +255,15 @@ private struct BlockRowView: View {
                 .padding(.top, 4)
 
             if block.type.isTextEditable {
-                TextField(
-                    "Start writing",
-                    text: Binding(
-                        get: { draftText },
-                        set: { newValue in
-                            draftText = newValue
-                            onTextChange(newValue)
-                        }
-                    ),
-                    axis: .vertical
+                NativeTextBlockEditor(
+                    blockID: block.id,
+                    text: block.textPlain,
+                    blockType: block.type,
+                    session: editorSession,
+                    onTextChange: onTextChange
                 )
-                .textFieldStyle(.plain)
-                .font(textFont)
-                .foregroundStyle(.primary)
-                .lineLimit(1...8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("editor.block.\(block.id)")
-                .onChange(of: block.textPlain) { _, newValue in
-                    if newValue != draftText {
-                        draftText = newValue
-                    }
-                }
             } else if block.type == .divider {
                 Divider()
                     .padding(.vertical, 10)
@@ -282,17 +274,6 @@ private struct BlockRowView: View {
         }
         .padding(.vertical, 7)
         .contentShape(Rectangle())
-    }
-
-    private var textFont: Font {
-        switch block.type {
-        case .heading1:
-            return .title2.weight(.semibold)
-        case .codeBlock:
-            return .system(.body, design: .monospaced)
-        default:
-            return .body
-        }
     }
 }
 
