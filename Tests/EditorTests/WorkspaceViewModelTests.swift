@@ -161,6 +161,27 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testChangeBlockTypeRefreshesVisibleBlockAndQueuesSyncChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.changeBlockType(blockID: blockID, type: .quote)
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .quote)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+        )
+    }
+
+    @MainActor
     func testAppendParagraphBlockRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

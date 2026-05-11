@@ -89,6 +89,9 @@ private struct ThreeColumnEditorShell: View {
                 onBlockTextChange: { blockID, text in
                     viewModel.editBlockText(blockID: blockID, text: text)
                 },
+                onBlockTypeChange: { blockID, type in
+                    viewModel.changeBlockTypeForUI(blockID: blockID, type: type)
+                },
                 onImportAttachment: { sourceURL in
                     viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
                 },
@@ -190,6 +193,9 @@ private struct CompactPageDestination: View {
                 },
                 onBlockTextChange: { blockID, text in
                     viewModel.editBlockText(blockID: blockID, text: text)
+                },
+                onBlockTypeChange: { blockID, type in
+                    viewModel.changeBlockTypeForUI(blockID: blockID, type: type)
                 },
                 onImportAttachment: { sourceURL in
                     viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
@@ -663,6 +669,7 @@ private struct EditorCanvasView: View {
     let onImportMarkdown: (URL) -> Void
     let onExportMarkdown: () -> String
     let onBlockTextChange: (String, String) -> Void
+    let onBlockTypeChange: (String, BlockType) -> Void
     let onImportAttachment: (URL) -> Void
     let onPendingBlockFocusHandled: () -> Void
     @State private var isAttachmentImporterPresented = false
@@ -742,6 +749,9 @@ private struct EditorCanvasView: View {
                         },
                         onDelete: {
                             onDeleteBlock(block.id)
+                        },
+                        onChangeType: { type in
+                            onBlockTypeChange(block.id, type)
                         },
                         focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
                         onFocusRequestHandled: {
@@ -921,6 +931,7 @@ private struct BlockRowView: View {
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onDelete: () -> Void
+    let onChangeType: (BlockType) -> Void
     let focusRequestID: UUID?
     let onFocusRequestHandled: () -> Void
     let onTextChange: (String) -> Void
@@ -935,6 +946,7 @@ private struct BlockRowView: View {
         onMoveUp: @escaping () -> Void = {},
         onMoveDown: @escaping () -> Void = {},
         onDelete: @escaping () -> Void = {},
+        onChangeType: @escaping (BlockType) -> Void = { _ in },
         focusRequestID: UUID? = nil,
         onFocusRequestHandled: @escaping () -> Void = {},
         onTextChange: @escaping (String) -> Void
@@ -947,6 +959,7 @@ private struct BlockRowView: View {
         self.onMoveUp = onMoveUp
         self.onMoveDown = onMoveDown
         self.onDelete = onDelete
+        self.onChangeType = onChangeType
         self.focusRequestID = focusRequestID
         self.onFocusRequestHandled = onFocusRequestHandled
         self.onTextChange = onTextChange
@@ -958,6 +971,23 @@ private struct BlockRowView: View {
                 Image(systemName: "circle.grid.2x2")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+
+                if block.type.isTextEditable {
+                    Menu {
+                        ForEach(Self.textBlockMenuTypes, id: \.self) { type in
+                            Button {
+                                onChangeType(type)
+                            } label: {
+                                Label(type.editorMenuTitle, systemImage: type.editorMenuSystemImage)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "textformat")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .help("Block type")
+                    .accessibilityIdentifier("editor.block.\(block.id).type-menu")
+                }
 
                 Button {
                     onMoveUp()
@@ -1022,6 +1052,18 @@ private struct BlockRowView: View {
         rowFocusRequest?.id ?? focusRequestID
     }
 
+    private static let textBlockMenuTypes: [BlockType] = [
+        .paragraph,
+        .heading1,
+        .unorderedListItem,
+        .orderedListItem,
+        .taskItem,
+        .quote,
+        .codeBlock,
+        .callout,
+        .toggle
+    ]
+
     private func requestRowFocus() {
         guard block.type.isTextEditable else {
             return
@@ -1038,6 +1080,74 @@ private struct BlockRowView: View {
             rowFocusRequest = nil
         }
         onFocusRequestHandled()
+    }
+}
+
+private extension BlockType {
+    var editorMenuTitle: String {
+        switch self {
+        case .paragraph:
+            return "Paragraph"
+        case .heading1:
+            return "Heading"
+        case .unorderedListItem:
+            return "Bulleted List"
+        case .orderedListItem:
+            return "Numbered List"
+        case .taskItem:
+            return "Task"
+        case .quote:
+            return "Quote"
+        case .codeBlock:
+            return "Code"
+        case .callout:
+            return "Callout"
+        case .toggle:
+            return "Toggle"
+        case .table:
+            return "Table"
+        case .divider:
+            return "Divider"
+        case .attachmentImage:
+            return "Image"
+        case .attachmentVideo:
+            return "Video"
+        case .attachmentFile:
+            return "File"
+        }
+    }
+
+    var editorMenuSystemImage: String {
+        switch self {
+        case .paragraph:
+            return "text.alignleft"
+        case .heading1:
+            return "textformat.size"
+        case .unorderedListItem:
+            return "list.bullet"
+        case .orderedListItem:
+            return "list.number"
+        case .taskItem:
+            return "checklist"
+        case .quote:
+            return "quote.opening"
+        case .codeBlock:
+            return "chevron.left.forwardslash.chevron.right"
+        case .callout:
+            return "exclamationmark.bubble"
+        case .toggle:
+            return "chevron.right.square"
+        case .table:
+            return "tablecells"
+        case .divider:
+            return "minus"
+        case .attachmentImage:
+            return "photo"
+        case .attachmentVideo:
+            return "film"
+        case .attachmentFile:
+            return "doc"
+        }
     }
 }
 

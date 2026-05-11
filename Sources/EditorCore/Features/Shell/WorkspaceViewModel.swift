@@ -230,6 +230,27 @@ final class WorkspaceViewModel: ObservableObject {
         try refreshDerivedState(rebuildSearchIndex: true)
     }
 
+    func changeBlockType(blockID: String, type: BlockType) throws {
+        guard let block = snapshot.blocks.first(where: { $0.id == blockID }) else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        if let repository {
+            try repository.updateBlock(
+                blockID: blockID,
+                type: type,
+                text: block.textPlain
+            )
+        }
+
+        snapshot = snapshot.replacingBlock(
+            blockID: blockID,
+            type: type,
+            text: block.textPlain
+        )
+        try refreshDerivedState(rebuildSearchIndex: true)
+    }
+
     func updateSelectedPageTitle(_ title: String) throws {
         guard let selectedPageID else {
             throw WorkspaceViewModelError.missingSelection
@@ -252,6 +273,19 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "block_edit_failed id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func changeBlockTypeForUI(blockID: String, type: BlockType) {
+        do {
+            try changeBlockType(blockID: blockID, type: type)
+            EditorLog.input.debug(
+                "block_type_changed id=\(blockID, privacy: .public) type=\(type.rawValue, privacy: .public)"
+            )
+        } catch {
+            EditorLog.input.error(
+                "block_type_change_failed id=\(blockID, privacy: .public) type=\(type.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }
