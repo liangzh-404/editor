@@ -160,6 +160,10 @@ final class PageRepository {
             entityID: blockID,
             changeType: "update"
         )
+        try BacklinkRepository(database: database).rebuildLinksForBlock(
+            blockID: blockID,
+            text: text
+        )
     }
 
     private func insertDefaultContent() throws {
