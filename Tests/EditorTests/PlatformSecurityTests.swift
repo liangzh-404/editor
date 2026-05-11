@@ -28,6 +28,32 @@ final class PlatformSecurityTests: XCTestCase {
         XCTAssertEqual(plist["com.apple.security.files.user-selected.read-only"] as? Bool, true)
     }
 
+    func testMacOSEntitlementsEnableNetworkClientForSync() throws {
+        let plist = try entitlementsPlist(named: "EditorMac.entitlements")
+
+        XCTAssertEqual(plist["com.apple.security.network.client"] as? Bool, true)
+    }
+
+    func testCloudKitCapabilityEntitlementsDeclarePrivateContainer() throws {
+        let plist = try entitlementsPlist(named: "EditorCloudKit.entitlements")
+
+        XCTAssertEqual(plist["com.apple.developer.icloud-services"] as? [String], ["CloudKit"])
+        XCTAssertEqual(
+            plist["com.apple.developer.icloud-container-identifiers"] as? [String],
+            ["iCloud.com.liangzhang.editor"]
+        )
+    }
+
+    func testIOSEntitlementsDeclareCloudKitPrivateContainer() throws {
+        let plist = try entitlementsPlist(named: "EditorIOS.entitlements")
+
+        XCTAssertEqual(plist["com.apple.developer.icloud-services"] as? [String], ["CloudKit"])
+        XCTAssertEqual(
+            plist["com.apple.developer.icloud-container-identifiers"] as? [String],
+            ["iCloud.com.liangzhang.editor"]
+        )
+    }
+
     func testDataProtectionServiceKeepsProtectedFileReadable() throws {
         let fileURL = makeTemporaryDirectory().appendingPathComponent("protected.sqlite")
         try Data("protected".utf8).write(to: fileURL)
@@ -76,6 +102,19 @@ final class PlatformSecurityTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory
+    }
+
+    private func entitlementsPlist(named filename: String) throws -> [String: Any] {
+        let entitlementsURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/EditorApp")
+            .appendingPathComponent(filename)
+        let data = try Data(contentsOf: entitlementsURL)
+        return try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
     }
 }
 

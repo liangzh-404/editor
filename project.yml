@@ -41,6 +41,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: "NO"
         CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: Sources/EditorApp/EditorIOS.entitlements
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
   EditorTests:
     type: bundle.unit-test
