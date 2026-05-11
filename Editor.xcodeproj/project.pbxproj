@@ -29,6 +29,8 @@
 		46B14E454EBFA01097FE244B /* SyncRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E5987A98D4AEC7981273C41 /* SyncRepository.swift */; };
 		4F4123269A16D4618CA56BD2 /* EditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */; };
 		5879BDF8333F324C85EDF287 /* NativeTextBlockEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B305E7542E1D1459C797CE /* NativeTextBlockEditor.swift */; };
+		58E5CFCAD5D62D9F4174E252 /* DataProtectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA04F3B5378D60E40322DFDE /* DataProtectionService.swift */; };
+		59B1FACACA6B52B3A1F96247 /* PlatformSecurityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24FBE1A3FB70990D18514EB8 /* PlatformSecurityTests.swift */; };
 		5D5CF87AA264C0F8EB86F299 /* EditorLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40AB9B809EE4F1C8F4A7E86C /* EditorLog.swift */; };
 		680FA555099757D0954DBFF7 /* SyncRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E5987A98D4AEC7981273C41 /* SyncRepository.swift */; };
 		6861322C7C6B927B36EB0D01 /* SyncRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21C821093352B684252705EC /* SyncRepositoryTests.swift */; };
@@ -40,6 +42,8 @@
 		781AE5A449EDE2D71F14245B /* EditorShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */; };
 		78B01CD737100B6614E6E8A2 /* WorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */; };
 		7C0A1A9E3A837DBCD1EA2C74 /* WorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */; };
+		7E12A9744DD490C10F4DDB2A /* DataProtectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA04F3B5378D60E40322DFDE /* DataProtectionService.swift */; };
+		7F3274622A5EBEC25A0042FB /* DataProtectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA04F3B5378D60E40322DFDE /* DataProtectionService.swift */; };
 		7F9B997D95099BF35D291D2D /* EditorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B5B868AE25C29EA7A31C8A /* EditorApp.swift */; };
 		8A525D5BB973025C3CB43C21 /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
 		9F6522F31BB2558F8858A5FD /* SearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCF64425F694601BF7DC842 /* SearchRepository.swift */; };
@@ -70,6 +74,7 @@
 		20B5B868AE25C29EA7A31C8A /* EditorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorApp.swift; sourceTree = "<group>"; };
 		21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceViewModel.swift; sourceTree = "<group>"; };
 		21C821093352B684252705EC /* SyncRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRepositoryTests.swift; sourceTree = "<group>"; };
+		24FBE1A3FB70990D18514EB8 /* PlatformSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformSecurityTests.swift; sourceTree = "<group>"; };
 		3B4FFAB9393B2FC649D63658 /* MarkdownTransformerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTransformerTests.swift; sourceTree = "<group>"; };
 		3EE30DA9DBD41CF2A9B3375E /* PageRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageRepositoryTests.swift; sourceTree = "<group>"; };
 		40AB9B809EE4F1C8F4A7E86C /* EditorLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorLog.swift; sourceTree = "<group>"; };
@@ -83,6 +88,8 @@
 		99D2978B31BEE2E16B778433 /* PageRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageRepository.swift; sourceTree = "<group>"; };
 		9AC06280694090DAA0387F96 /* NativeTextBlockEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTextBlockEditorTests.swift; sourceTree = "<group>"; };
 		9E5987A98D4AEC7981273C41 /* SyncRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRepository.swift; sourceTree = "<group>"; };
+		BA04F3B5378D60E40322DFDE /* DataProtectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataProtectionService.swift; sourceTree = "<group>"; };
+		BE22D36D2A1E20D4EF5DC1C6 /* EditorMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EditorMac.entitlements; sourceTree = "<group>"; };
 		CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorShellView.swift; sourceTree = "<group>"; };
 		D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteDatabase.swift; sourceTree = "<group>"; };
 		D40CF7A6C22692BF36767B56 /* AttachmentRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentRepositoryTests.swift; sourceTree = "<group>"; };
@@ -97,6 +104,7 @@
 			children = (
 				8BC9BD3D38C16BD85AE9DB4C /* AppEnvironment.swift */,
 				20B5B868AE25C29EA7A31C8A /* EditorApp.swift */,
+				BE22D36D2A1E20D4EF5DC1C6 /* EditorMac.entitlements */,
 			);
 			name = EditorApp;
 			path = Sources/EditorApp;
@@ -126,6 +134,7 @@
 				7C4C05837DD92B9666104896 /* Features */,
 				72DBBC826A9F0DB51E7D88E8 /* Models */,
 				3481DCF4843DA387637AE7C3 /* Observability */,
+				FC1F69997D4CCB1774C4B9D2 /* Platform */,
 				BC78694AE5B5C2675D3D979E /* Store */,
 			);
 			name = EditorCore;
@@ -189,6 +198,14 @@
 			path = Shell;
 			sourceTree = "<group>";
 		};
+		FC1F69997D4CCB1774C4B9D2 /* Platform */ = {
+			isa = PBXGroup;
+			children = (
+				BA04F3B5378D60E40322DFDE /* DataProtectionService.swift */,
+			);
+			path = Platform;
+			sourceTree = "<group>";
+		};
 		FD41236BEF8F0AF43B905F8E /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -207,6 +224,7 @@
 				3B4FFAB9393B2FC649D63658 /* MarkdownTransformerTests.swift */,
 				9AC06280694090DAA0387F96 /* NativeTextBlockEditorTests.swift */,
 				3EE30DA9DBD41CF2A9B3375E /* PageRepositoryTests.swift */,
+				24FBE1A3FB70990D18514EB8 /* PlatformSecurityTests.swift */,
 				EEA32BC9667143AD004CA8F5 /* SchemaMigratorTests.swift */,
 				DFB2B8F9B01CF891E67A570A /* SearchRepositoryTests.swift */,
 				21C821093352B684252705EC /* SyncRepositoryTests.swift */,
@@ -315,6 +333,7 @@
 			files = (
 				0974C8550941134BA36D7147 /* AttachmentRepository.swift in Sources */,
 				330DE8B1EA9F4976ACB74DE0 /* AttachmentRepositoryTests.swift in Sources */,
+				58E5CFCAD5D62D9F4174E252 /* DataProtectionService.swift in Sources */,
 				38F36C057252483E1CD4A0BA /* EditorLog.swift in Sources */,
 				4F4123269A16D4618CA56BD2 /* EditorModels.swift in Sources */,
 				26F7E5CCFB8BE819F7BFECD1 /* EditorSession.swift in Sources */,
@@ -326,6 +345,7 @@
 				A54C11EF0D68422276A9E23A /* NativeTextBlockEditorTests.swift in Sources */,
 				01073C4629A8F9C0729414E2 /* PageRepository.swift in Sources */,
 				F388BABBAE95664822C1F37E /* PageRepositoryTests.swift in Sources */,
+				59B1FACACA6B52B3A1F96247 /* PlatformSecurityTests.swift in Sources */,
 				711E78B4E602143661DC5F2C /* SQLiteDatabase.swift in Sources */,
 				2B18D251AA0DE11D5BE12665 /* SchemaMigrator.swift in Sources */,
 				05CD53853A98F46E200DDC65 /* SchemaMigratorTests.swift in Sources */,
@@ -344,6 +364,7 @@
 			files = (
 				203C8C57D64D5D4A849EF8AA /* AppEnvironment.swift in Sources */,
 				EE128CFD6F34622441D84ECC /* AttachmentRepository.swift in Sources */,
+				7F3274622A5EBEC25A0042FB /* DataProtectionService.swift in Sources */,
 				F44CF7F592C10A7416E91935 /* EditorApp.swift in Sources */,
 				CF0299159866AE5746836C4C /* EditorLog.swift in Sources */,
 				3985E53DC8AF5E84FB2C5250 /* EditorModels.swift in Sources */,
@@ -366,6 +387,7 @@
 			files = (
 				30761AF9DB95A5C98582DB35 /* AppEnvironment.swift in Sources */,
 				FE6EAB327B1CFEEF7F9914A3 /* AttachmentRepository.swift in Sources */,
+				7E12A9744DD490C10F4DDB2A /* DataProtectionService.swift in Sources */,
 				7F9B997D95099BF35D291D2D /* EditorApp.swift in Sources */,
 				5D5CF87AA264C0F8EB86F299 /* EditorLog.swift in Sources */,
 				A10CB67698B1FCCF81CE837A /* EditorModels.swift in Sources */,
@@ -493,6 +515,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sources/EditorApp/EditorMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -571,6 +594,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sources/EditorApp/EditorMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;

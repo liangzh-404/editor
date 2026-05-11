@@ -12,14 +12,18 @@ enum AppEnvironment {
 
     @MainActor
     private static func makeWorkspaceViewModel() throws -> WorkspaceViewModel {
-        let database = try SQLiteDatabase.open(path: databasePath())
+        let databasePath = try databasePath()
+        let database = try SQLiteDatabase.open(path: databasePath)
         try SchemaMigrator.migrate(database: database)
+        try DataProtectionService.applyNativeProtection(to: URL(fileURLWithPath: databasePath))
 
         let repository = PageRepository(database: database)
         try repository.bootstrapWorkspaceIfNeeded()
+        let attachmentsDirectory = try attachmentsDirectory()
+        try DataProtectionService.applyNativeProtectionRecursively(to: attachmentsDirectory)
         let attachmentRepository = AttachmentRepository(
             database: database,
-            attachmentsDirectory: try attachmentsDirectory()
+            attachmentsDirectory: attachmentsDirectory
         )
 
         let viewModel = WorkspaceViewModel(

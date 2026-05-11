@@ -24,6 +24,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Editor
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: Sources/EditorApp/EditorMac.entitlements
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
   EditorIOS:
     type: application
@@ -69,4 +70,3 @@ schemes:
       gatherCoverageData: false
       targets:
         - EditorTests
-
