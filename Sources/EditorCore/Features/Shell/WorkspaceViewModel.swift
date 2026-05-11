@@ -132,6 +132,25 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func moveBlock(blockID: String, toIndex: Int) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        try repository.moveBlock(blockID: blockID, toIndex: toIndex)
+        try load()
+    }
+
+    func moveBlockInCurrentPage(blockID: String, toIndex: Int) {
+        do {
+            try moveBlock(blockID: blockID, toIndex: toIndex)
+        } catch {
+            EditorLog.store.error(
+                "block_move_failed block_id=\(blockID, privacy: .public) target_index=\(toIndex, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     func exportCurrentPageMarkdown() -> String {
         MarkdownTransformer.export(blocks: visibleBlocks)
     }

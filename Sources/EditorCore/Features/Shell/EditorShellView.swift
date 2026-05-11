@@ -53,6 +53,9 @@ private struct ThreeColumnEditorShell: View {
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
                 },
+                onMoveBlock: { blockID, targetIndex in
+                    viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
+                },
                 onImportMarkdown: { sourceURL in
                     viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
                 },
@@ -161,6 +164,9 @@ private struct CompactPageListView: View {
                             onAddParagraphBlock: {
                                 viewModel.addParagraphBlockToCurrentPage()
                             },
+                            onMoveBlock: { blockID, targetIndex in
+                                viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
+                            },
                             onImportMarkdown: { sourceURL in
                                 viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
                             },
@@ -268,6 +274,7 @@ private struct EditorCanvasView: View {
     let blocks: [BlockSnapshot]
     let backlinks: [Backlink]
     let onAddParagraphBlock: () -> String?
+    let onMoveBlock: (String, Int) -> Void
     let onImportMarkdown: (URL) -> Void
     let onExportMarkdown: () -> String
     let onBlockTextChange: (String, String) -> Void
@@ -331,10 +338,18 @@ private struct EditorCanvasView: View {
                     .accessibilityIdentifier("editor.insert-attachment")
                 }
 
-                ForEach(blocks) { block in
+                ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
                     BlockRowView(
                         block: block,
                         editorSession: editorSession,
+                        canMoveUp: index > 0,
+                        canMoveDown: index < blocks.count - 1,
+                        onMoveUp: {
+                            onMoveBlock(block.id, index - 1)
+                        },
+                        onMoveDown: {
+                            onMoveBlock(block.id, index + 1)
+                        },
                         focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
                         onFocusRequestHandled: {
                             if pendingFocusRequest?.blockID == block.id {
@@ -469,6 +484,10 @@ private struct BlockFocusRequest: Equatable {
 private struct BlockRowView: View {
     let block: BlockSnapshot
     @ObservedObject var editorSession: EditorSession
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
     let focusRequestID: UUID?
     let onFocusRequestHandled: () -> Void
     let onTextChange: (String) -> Void
@@ -476,12 +495,20 @@ private struct BlockRowView: View {
     init(
         block: BlockSnapshot,
         editorSession: EditorSession,
+        canMoveUp: Bool = false,
+        canMoveDown: Bool = false,
+        onMoveUp: @escaping () -> Void = {},
+        onMoveDown: @escaping () -> Void = {},
         focusRequestID: UUID? = nil,
         onFocusRequestHandled: @escaping () -> Void = {},
         onTextChange: @escaping (String) -> Void
     ) {
         self.block = block
         self.editorSession = editorSession
+        self.canMoveUp = canMoveUp
+        self.canMoveDown = canMoveDown
+        self.onMoveUp = onMoveUp
+        self.onMoveDown = onMoveDown
         self.focusRequestID = focusRequestID
         self.onFocusRequestHandled = onFocusRequestHandled
         self.onTextChange = onTextChange
@@ -489,10 +516,33 @@ private struct BlockRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "circle.grid.2x2")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .padding(.top, 4)
+            VStack(spacing: 2) {
+                Image(systemName: "circle.grid.2x2")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+                Button {
+                    onMoveUp()
+                } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!canMoveUp)
+                .help("Move up")
+                .accessibilityIdentifier("editor.block.\(block.id).move-up")
+
+                Button {
+                    onMoveDown()
+                } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!canMoveDown)
+                .help("Move down")
+                .accessibilityIdentifier("editor.block.\(block.id).move-down")
+            }
+            .frame(width: 24)
+            .padding(.top, 1)
 
             if block.type.isTextEditable {
                 NativeTextBlockEditor(

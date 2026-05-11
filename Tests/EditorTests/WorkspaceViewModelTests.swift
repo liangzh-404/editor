@@ -219,6 +219,33 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testMoveVisibleBlockRefreshesOrder() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                Third
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let thirdBlockID = try XCTUnwrap(viewModel.visibleBlocks.last?.id)
+
+        try viewModel.moveBlock(blockID: thirdBlockID, toIndex: 0)
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Third", "First", "Second"])
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)
