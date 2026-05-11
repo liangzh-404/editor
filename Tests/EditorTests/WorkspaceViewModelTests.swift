@@ -97,6 +97,33 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPurgeUnreferencedAttachmentsRefreshesSnapshot() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let sourceURL = try makeSourceFile(name: "brief.txt", contents: "local attachment")
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository
+        )
+        try viewModel.load()
+        try viewModel.importAttachment(sourceURL: sourceURL)
+        let attachmentBlockID = try XCTUnwrap(viewModel.visibleBlocks.last?.id)
+        try viewModel.deleteBlock(blockID: attachmentBlockID)
+
+        let purgedCount = try viewModel.purgeUnreferencedAttachments()
+
+        XCTAssertEqual(purgedCount, 1)
+        XCTAssertEqual(viewModel.snapshot.attachments, [])
+    }
+
+    @MainActor
     func testMarkdownHeadingShortcutUpdatesBlockTypeAndText() throws {
         let database = try migratedDatabase()
         defer { database.close() }

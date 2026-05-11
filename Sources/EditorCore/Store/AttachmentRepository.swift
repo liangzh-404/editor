@@ -97,6 +97,70 @@ final class AttachmentRepository {
         return AttachmentImportResult(attachment: attachment, block: block)
     }
 
+    @discardableResult
+    func purgeUnreferencedAttachments(workspaceID: String) throws -> Int {
+        let orphanedAttachments = try database.query(
+            """
+            SELECT id, local_path, thumbnail_path
+            FROM attachments
+            WHERE workspace_id = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM blocks
+                  WHERE blocks.is_deleted = 0
+                    AND json_extract(blocks.payload_json, '$.attachment_id') = attachments.id
+              )
+            """,
+            bindings: [.text(workspaceID)]
+        )
+        guard !orphanedAttachments.isEmpty else {
+            return 0
+        }
+
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            for row in orphanedAttachments {
+                let attachmentID = row["id"] ?? ""
+                try database.execute(
+                    """
+                    DELETE FROM search_index
+                    WHERE entity_type = 'attachment' AND entity_id = ?
+                    """,
+                    bindings: [.text(attachmentID)]
+                )
+                try database.execute(
+                    """
+                    DELETE FROM attachments
+                    WHERE id = ?
+                    """,
+                    bindings: [.text(attachmentID)]
+                )
+            }
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        for row in orphanedAttachments {
+            if let localPath = row["local_path"] ?? nil {
+                let attachmentDirectory = URL(fileURLWithPath: localPath)
+                    .deletingLastPathComponent()
+                if fileManager.fileExists(atPath: attachmentDirectory.path) {
+                    try fileManager.removeItem(at: attachmentDirectory)
+                }
+            } else if let thumbnailPath = row["thumbnail_path"] ?? nil,
+                      fileManager.fileExists(atPath: thumbnailPath) {
+                try fileManager.removeItem(atPath: thumbnailPath)
+            }
+        }
+
+        EditorLog.attachment.debug(
+            "unreferenced_attachments_purged workspace_id=\(workspaceID, privacy: .public) count=\(orphanedAttachments.count, privacy: .public)"
+        )
+        return orphanedAttachments.count
+    }
+
     private func insert(attachment: AttachmentSnapshot, createdAt: String) throws {
         try database.execute(
             """

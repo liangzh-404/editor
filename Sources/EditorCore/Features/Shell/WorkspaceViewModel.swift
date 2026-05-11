@@ -546,6 +546,22 @@ final class WorkspaceViewModel: ObservableObject {
         try load()
     }
 
+    @discardableResult
+    func purgeUnreferencedAttachments() throws -> Int {
+        guard let attachmentRepository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedWorkspaceID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        let purgedCount = try attachmentRepository.purgeUnreferencedAttachments(
+            workspaceID: selectedWorkspaceID
+        )
+        try load()
+        return purgedCount
+    }
+
     func updateSearchQuery(_ query: String) {
         searchQuery = query
         refreshSearchResults()
@@ -558,6 +574,19 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.attachment.error(
                 "attachment_import_failed source=\(sourceURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func purgeUnreferencedAttachmentsForUI() {
+        do {
+            let purgedCount = try purgeUnreferencedAttachments()
+            EditorLog.attachment.debug(
+                "attachment_gc_visible count=\(purgedCount, privacy: .public)"
+            )
+        } catch {
+            EditorLog.attachment.error(
+                "attachment_gc_failed error=\(String(describing: error), privacy: .public)"
             )
         }
     }

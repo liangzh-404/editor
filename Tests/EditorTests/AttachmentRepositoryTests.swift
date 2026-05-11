@@ -263,6 +263,36 @@ final class AttachmentRepositoryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.attachment.localPath))
     }
 
+    func testPurgeUnreferencedAttachmentsRemovesMetadataAndLocalFiles() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let repository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let result = try repository.importAttachment(
+            sourceURL: makeSourceFile(name: "brief.txt", contents: "local attachment"),
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+        let attachmentDirectory = URL(fileURLWithPath: result.attachment.localPath)
+            .deletingLastPathComponent()
+        try pageRepository.deleteBlock(blockID: result.block.id)
+
+        let purgedCount = try repository.purgeUnreferencedAttachments(workspaceID: workspaceID)
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(purgedCount, 1)
+        XCTAssertFalse(reloadedSnapshot.attachments.contains { $0.id == result.attachment.id })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: result.attachment.localPath))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: attachmentDirectory.path))
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

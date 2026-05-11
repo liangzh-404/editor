@@ -265,6 +265,15 @@ private struct CloudKitAccountStatusSection: View {
                 .buttonStyle(.borderless)
                 .help("Refresh iCloud status")
                 .accessibilityIdentifier("editor.refresh-icloud-status")
+
+                Button {
+                    viewModel.purgeUnreferencedAttachmentsForUI()
+                } label: {
+                    Image(systemName: "trash.slash")
+                }
+                .buttonStyle(.borderless)
+                .help("Clean unreferenced attachments")
+                .accessibilityIdentifier("editor.clean-attachments")
             }
             .accessibilityIdentifier("editor.icloud-status")
 
