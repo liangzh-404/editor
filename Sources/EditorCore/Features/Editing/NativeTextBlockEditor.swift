@@ -1,5 +1,31 @@
 import SwiftUI
 
+struct NativeTextFocusRequestState {
+    private var handledFocusRequestID: UUID?
+    private var scheduledFocusRequestID: UUID?
+
+    mutating func beginScheduling(_ focusRequestID: UUID?) -> UUID? {
+        guard let focusRequestID,
+              handledFocusRequestID != focusRequestID,
+              scheduledFocusRequestID != focusRequestID else {
+            return nil
+        }
+
+        scheduledFocusRequestID = focusRequestID
+        return focusRequestID
+    }
+
+    mutating func finish(requestID: UUID, didFocus: Bool) {
+        if scheduledFocusRequestID == requestID {
+            scheduledFocusRequestID = nil
+        }
+
+        if didFocus {
+            handledFocusRequestID = requestID
+        }
+    }
+}
+
 struct NativeTextBlockEditor: View {
     let blockID: String
     let text: String
@@ -155,7 +181,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         var parent: PlatformNativeTextView
         var textContentStorage: NSTextContentStorage?
         var textLayoutManager: NSTextLayoutManager?
-        private var handledFocusRequestID: UUID?
+        private var focusRequestState = NativeTextFocusRequestState()
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
@@ -179,21 +205,66 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         }
 
         func handleFocusRequestIfNeeded(textView: NSTextView) {
-            guard let focusRequestID = parent.focusRequestID,
-                  handledFocusRequestID != focusRequestID else {
+            guard let focusRequestID = focusRequestState.beginScheduling(parent.focusRequestID) else {
                 return
             }
 
-            handledFocusRequestID = focusRequestID
-            DispatchQueue.main.async { [weak textView, weak self] in
+            scheduleFocusAttempt(
+                textView: textView,
+                focusRequestID: focusRequestID,
+                remainingAttempts: 8
+            )
+        }
+
+        private func scheduleFocusAttempt(
+            textView: NSTextView,
+            focusRequestID: UUID,
+            remainingAttempts: Int
+        ) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + focusDelay(for: remainingAttempts)) { [weak textView, weak self] in
                 guard let textView, let self else {
                     return
                 }
-                textView.window?.makeFirstResponder(textView)
-                textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
-                self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
-                self.parent.onFocusRequestHandled()
+
+                if self.performFocus(textView: textView) {
+                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: true)
+                    self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
+                    self.parent.onFocusRequestHandled()
+                    return
+                }
+
+                guard remainingAttempts > 0 else {
+                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: false)
+                    EditorLog.focus.debug(
+                        "editor_focus_request_retry_exhausted block_id=\(self.parent.blockID, privacy: .public)"
+                    )
+                    return
+                }
+
+                self.scheduleFocusAttempt(
+                    textView: textView,
+                    focusRequestID: focusRequestID,
+                    remainingAttempts: remainingAttempts - 1
+                )
             }
+        }
+
+        private func performFocus(textView: NSTextView) -> Bool {
+            guard let window = textView.window else {
+                return false
+            }
+
+            window.makeKeyAndOrderFront(nil)
+            guard window.makeFirstResponder(textView) else {
+                return false
+            }
+
+            textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+            return true
+        }
+
+        private func focusDelay(for remainingAttempts: Int) -> DispatchTimeInterval {
+            remainingAttempts == 8 ? .milliseconds(0) : .milliseconds(35)
         }
     }
 }
@@ -254,7 +325,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: PlatformNativeTextView
-        private var handledFocusRequestID: UUID?
+        private var focusRequestState = NativeTextFocusRequestState()
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
@@ -275,21 +346,62 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
 
         func handleFocusRequestIfNeeded(textView: UITextView) {
-            guard let focusRequestID = parent.focusRequestID,
-                  handledFocusRequestID != focusRequestID else {
+            guard let focusRequestID = focusRequestState.beginScheduling(parent.focusRequestID) else {
                 return
             }
 
-            handledFocusRequestID = focusRequestID
-            DispatchQueue.main.async { [weak textView, weak self] in
+            scheduleFocusAttempt(
+                textView: textView,
+                focusRequestID: focusRequestID,
+                remainingAttempts: 8
+            )
+        }
+
+        private func scheduleFocusAttempt(
+            textView: UITextView,
+            focusRequestID: UUID,
+            remainingAttempts: Int
+        ) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + focusDelay(for: remainingAttempts)) { [weak textView, weak self] in
                 guard let textView, let self else {
                     return
                 }
-                textView.becomeFirstResponder()
-                textView.selectedRange = NSRange(location: textView.text.count, length: 0)
-                self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
-                self.parent.onFocusRequestHandled()
+
+                if self.performFocus(textView: textView) {
+                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: true)
+                    self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
+                    self.parent.onFocusRequestHandled()
+                    return
+                }
+
+                guard remainingAttempts > 0 else {
+                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: false)
+                    EditorLog.focus.debug(
+                        "editor_focus_request_retry_exhausted block_id=\(self.parent.blockID, privacy: .public)"
+                    )
+                    return
+                }
+
+                self.scheduleFocusAttempt(
+                    textView: textView,
+                    focusRequestID: focusRequestID,
+                    remainingAttempts: remainingAttempts - 1
+                )
             }
+        }
+
+        private func performFocus(textView: UITextView) -> Bool {
+            guard textView.window != nil,
+                  textView.becomeFirstResponder() else {
+                return false
+            }
+
+            textView.selectedRange = NSRange(location: textView.text.count, length: 0)
+            return true
+        }
+
+        private func focusDelay(for remainingAttempts: Int) -> DispatchTimeInterval {
+            remainingAttempts == 8 ? .milliseconds(0) : .milliseconds(35)
         }
     }
 }

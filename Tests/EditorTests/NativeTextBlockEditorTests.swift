@@ -50,4 +50,17 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
         XCTAssertFalse(editorWithText.showsPlaceholder)
     }
+
+    func testNativeFocusRequestStateRetriesUntilFocusSucceeds() {
+        let requestID = UUID()
+        var state = NativeTextFocusRequestState()
+
+        XCTAssertEqual(state.beginScheduling(requestID), requestID)
+        state.finish(requestID: requestID, didFocus: false)
+
+        XCTAssertEqual(state.beginScheduling(requestID), requestID)
+        state.finish(requestID: requestID, didFocus: true)
+
+        XCTAssertNil(state.beginScheduling(requestID))
+    }
 }

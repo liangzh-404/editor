@@ -20,6 +20,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let backlinkRepository: BacklinkRepository?
     private let syncEngine: SyncEngine?
     private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
+    private var didRequestInitialEditorFocus = false
 
     var selectedPage: PageSummary? {
         guard let selectedPageID else {
@@ -104,6 +105,7 @@ final class WorkspaceViewModel: ObservableObject {
         let loadedSnapshot = try repository.loadWorkspaceSnapshot()
         apply(snapshot: loadedSnapshot)
         try refreshDerivedState(rebuildSearchIndex: true)
+        requestInitialEditorFocusIfNeeded(source: "load")
     }
 
     func refreshCloudKitAccountStatus() throws {
@@ -606,6 +608,21 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        pendingFocusBlockID = block.id
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=\(source, privacy: .public)"
+        )
+    }
+
+    private func requestInitialEditorFocusIfNeeded(source: String) {
+        guard !didRequestInitialEditorFocus,
+              visibleBlocks.count == 1,
+              let block = visibleBlocks.first,
+              block.type.isTextEditable else {
+            return
+        }
+
+        didRequestInitialEditorFocus = true
         pendingFocusBlockID = block.id
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=\(source, privacy: .public)"

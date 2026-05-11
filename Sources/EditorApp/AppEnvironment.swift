@@ -6,6 +6,9 @@ enum AppEnvironment {
         do {
             return AnyView(EditorShellView(viewModel: try makeWorkspaceViewModel()))
         } catch {
+            EditorLog.render.error(
+                "app_startup_failed error=\(String(describing: error), privacy: .public)"
+            )
             return AnyView(AppStartupFailureView(error: error))
         }
     }

@@ -34,6 +34,21 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadRequestsFocusForInitialEditableBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let initialBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        XCTAssertEqual(viewModel.pendingFocusBlockID, initialBlockID)
+    }
+
+    @MainActor
     func testUpdateBlockTextRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }
