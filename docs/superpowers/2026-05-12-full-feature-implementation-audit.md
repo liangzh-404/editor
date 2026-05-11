@@ -38,7 +38,7 @@ Implement the approved editor architecture so the app supports the full requeste
 | editor session state | `EditorSessionTests` and `EditorSession` cover focused block, focus reason, draft text, dirty blocks, and commit clearing | Partial; undo scope, selection/caret metadata, composition state, and drag reorder state remain |
 | advanced blocks | paragraph only | Missing implementation |
 | search/backlinks | `search_index` FTS5 table plus `SearchRepositoryTests`/`SearchRepository` cover page title, block text, and attachment filename search; `BacklinkRepositoryTests`/`BacklinkRepository` cover incremental `[[Page]]` backlink maintenance and stale link cleanup | Partial; UI search/backlink views and richer link syntaxes remain |
-| sync conflicts | `conflict_versions` table exists only | Missing implementation |
+| sync conflicts | `SyncMergeEngineTests`, `SyncMergeEngine`, and `ConflictRepository` cover same-block remote conflict preservation: local text remains and remote version is stored in `conflict_versions` | Partial; conflict UI and manual merge/recovery remain |
 | verification | repository/view-model tests and app builds | Partial |
 
 ## Next Implementation Slice
