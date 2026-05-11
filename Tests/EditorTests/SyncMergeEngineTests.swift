@@ -47,6 +47,36 @@ final class SyncMergeEngineTests: XCTestCase {
         )
     }
 
+    func testAcceptRemoteConflictAppliesRemoteTextAndClearsLocalPendingChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Local edit")
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: blockID,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote edit",
+                payloadJSON: "{\"text\":\"Remote edit\"}",
+                revision: 2
+            )
+        )
+        let conflictRepository = ConflictRepository(database: database)
+        let conflict = try XCTUnwrap(try conflictRepository.conflicts(pageID: pageID).first)
+
+        let accepted = try conflictRepository.acceptRemoteVersion(conflictID: conflict.id)
+
+        XCTAssertEqual(accepted.blockID, blockID)
+        XCTAssertEqual(try pageRepository.loadWorkspaceSnapshot().blocks.first?.textPlain, "Remote edit")
+        XCTAssertEqual(try conflictRepository.conflicts(pageID: pageID), [])
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

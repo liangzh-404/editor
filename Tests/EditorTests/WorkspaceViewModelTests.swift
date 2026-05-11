@@ -501,6 +501,41 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectedPageConflictsRefreshAndAcceptRemoteVersion() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Local edit")
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: blockID,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote edit",
+                payloadJSON: "{\"text\":\"Remote edit\"}",
+                revision: 2
+            )
+        )
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            conflictRepository: ConflictRepository(database: database)
+        )
+        try viewModel.load()
+        let conflict = try XCTUnwrap(viewModel.selectedPageConflicts.first)
+
+        try viewModel.acceptRemoteConflict(id: conflict.id)
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Remote edit")
+        XCTAssertEqual(viewModel.selectedPageConflicts, [])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+    }
+
+    @MainActor
     func testSelectBacklinkNavigatesToSourcePage() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -34,6 +34,7 @@ enum AppEnvironment {
             attachmentRepository: attachmentRepository,
             searchRepository: SearchRepository(database: database),
             backlinkRepository: BacklinkRepository(database: database),
+            conflictRepository: ConflictRepository(database: database),
             syncEngine: makeCloudKitSyncEngine(
                 database: database,
                 attachmentsDirectory: attachmentsDirectory

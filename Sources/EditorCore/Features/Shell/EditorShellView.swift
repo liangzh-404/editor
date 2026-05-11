@@ -64,6 +64,7 @@ private struct ThreeColumnEditorShell: View {
                 blocks: viewModel.visibleBlocks,
                 attachments: viewModel.snapshot.attachments,
                 backlinks: viewModel.selectedPageBacklinks,
+                conflicts: viewModel.selectedPageConflicts,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
@@ -85,6 +86,9 @@ private struct ThreeColumnEditorShell: View {
                 },
                 onSelectBacklink: { backlink in
                     viewModel.selectBacklink(backlink)
+                },
+                onAcceptConflict: { conflict in
+                    viewModel.acceptRemoteConflictForUI(id: conflict.id)
                 },
                 onPageTitleChange: { title in
                     viewModel.editSelectedPageTitle(title)
@@ -178,6 +182,7 @@ private struct CompactPageDestination: View {
                 blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
                 attachments: viewModel.snapshot.attachments,
                 backlinks: viewModel.selectedPageBacklinks,
+                conflicts: viewModel.selectedPageConflicts,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
@@ -199,6 +204,9 @@ private struct CompactPageDestination: View {
                 },
                 onSelectBacklink: { backlink in
                     viewModel.selectBacklink(backlink)
+                },
+                onAcceptConflict: { conflict in
+                    viewModel.acceptRemoteConflictForUI(id: conflict.id)
                 },
                 onPageTitleChange: { title in
                     viewModel.editSelectedPageTitle(title)
@@ -700,6 +708,7 @@ private struct EditorCanvasView: View {
     let blocks: [BlockSnapshot]
     let attachments: [AttachmentSnapshot]
     let backlinks: [Backlink]
+    let conflicts: [ConflictSnapshot]
     let pendingFocusBlockID: String?
     let onAddParagraphBlock: () -> String?
     let onMoveBlock: (String, Int) -> Void
@@ -708,6 +717,7 @@ private struct EditorCanvasView: View {
     let onOutdentBlock: (String) -> Bool
     let onDeleteBlock: (String) -> Void
     let onSelectBacklink: (Backlink) -> Void
+    let onAcceptConflict: (ConflictSnapshot) -> Void
     let onPageTitleChange: (String) -> Void
     let onImportMarkdown: (URL) -> Void
     let onExportMarkdown: () -> String
@@ -822,6 +832,10 @@ private struct EditorCanvasView: View {
 
                 if !backlinks.isEmpty {
                     BacklinksPanel(backlinks: backlinks, onSelectBacklink: onSelectBacklink)
+                }
+
+                if !conflicts.isEmpty {
+                    ConflictPanel(conflicts: conflicts, onAcceptConflict: onAcceptConflict)
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -953,6 +967,51 @@ private struct BacklinksPanel: View {
                 .buttonStyle(.plain)
                 .padding(.vertical, 3)
                 .accessibilityIdentifier("editor.backlink.\(backlink.id)")
+            }
+        }
+        .padding(.top, 10)
+    }
+}
+
+private struct ConflictPanel: View {
+    let conflicts: [ConflictSnapshot]
+    let onAcceptConflict: (ConflictSnapshot) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Sync Conflicts")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ForEach(conflicts) { conflict in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .frame(width: 16)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(conflict.textPlain)
+                            .font(.callout)
+                            .lineLimit(2)
+
+                        HStack(spacing: 8) {
+                            Text("Remote revision \(conflict.remoteRevision)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                onAcceptConflict(conflict)
+                            } label: {
+                                Label("Use Remote", systemImage: "arrow.down.doc")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityIdentifier("editor.conflict.\(conflict.id).accept-remote")
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+                .accessibilityIdentifier("editor.conflict.\(conflict.id)")
             }
         }
         .padding(.top, 10)

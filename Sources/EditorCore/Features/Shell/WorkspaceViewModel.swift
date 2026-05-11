@@ -9,6 +9,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var searchQuery = ""
     @Published private(set) var searchResults: [SearchResult] = []
     @Published private(set) var selectedPageBacklinks: [Backlink] = []
+    @Published private(set) var selectedPageConflicts: [ConflictSnapshot] = []
     @Published private(set) var cloudKitAccountStatus: CloudKitAccountAvailability?
     @Published private(set) var syncStatusText = "Sync Idle"
     @Published private(set) var pendingFocusBlockID: String?
@@ -18,6 +19,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let attachmentRepository: AttachmentRepository?
     private let searchRepository: SearchRepository?
     private let backlinkRepository: BacklinkRepository?
+    private let conflictRepository: ConflictRepository?
     private let syncEngine: SyncEngine?
     private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
     private var didRequestInitialEditorFocus = false
@@ -65,6 +67,7 @@ final class WorkspaceViewModel: ObservableObject {
         attachmentRepository: AttachmentRepository? = nil,
         searchRepository: SearchRepository? = nil,
         backlinkRepository: BacklinkRepository? = nil,
+        conflictRepository: ConflictRepository? = nil,
         syncEngine: SyncEngine? = nil,
         cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil
     ) {
@@ -72,6 +75,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.attachmentRepository = attachmentRepository
         self.searchRepository = searchRepository
         self.backlinkRepository = backlinkRepository
+        self.conflictRepository = conflictRepository
         self.syncEngine = syncEngine
         self.cloudKitAccountMetadataService = cloudKitAccountMetadataService
         snapshot = .empty
@@ -87,6 +91,7 @@ final class WorkspaceViewModel: ObservableObject {
         attachmentRepository = nil
         searchRepository = nil
         backlinkRepository = nil
+        conflictRepository = nil
         syncEngine = nil
         cloudKitAccountMetadataService = nil
         self.snapshot = snapshot
@@ -169,6 +174,7 @@ final class WorkspaceViewModel: ObservableObject {
         selectedPageID = id
         selectedNotebookID = snapshot.pages.first { $0.id == id }?.notebookID ?? selectedNotebookID
         refreshBacklinksForSelectedPage()
+        refreshConflictsForSelectedPage()
     }
 
     func selectSearchResult(_ result: SearchResult) {
@@ -661,6 +667,33 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func acceptRemoteConflict(id conflictID: String) throws {
+        guard let conflictRepository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let previousNotebookID = selectedNotebookID
+        let previousPageID = selectedPageID
+        let accepted = try conflictRepository.acceptRemoteVersion(conflictID: conflictID)
+        try load()
+        restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+        pendingFocusBlockID = accepted.blockID
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(accepted.blockID, privacy: .public) source=conflict_accept"
+        )
+    }
+
+    func acceptRemoteConflictForUI(id conflictID: String) {
+        do {
+            try acceptRemoteConflict(id: conflictID)
+            EditorLog.sync.debug("sync_conflict_remote_accepted conflict_id=\(conflictID, privacy: .public)")
+        } catch {
+            EditorLog.sync.error(
+                "sync_conflict_accept_failed conflict_id=\(conflictID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     func deleteBlockFromCurrentPage(blockID: String) {
         do {
             try deleteBlock(blockID: blockID)
@@ -815,6 +848,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
         refreshSearchResults()
         refreshBacklinksForSelectedPage()
+        refreshConflictsForSelectedPage()
     }
 
     private func refreshSearchResults() {
@@ -850,6 +884,22 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    private func refreshConflictsForSelectedPage() {
+        guard let selectedPageID, let conflictRepository else {
+            selectedPageConflicts = []
+            return
+        }
+
+        do {
+            selectedPageConflicts = try conflictRepository.conflicts(pageID: selectedPageID)
+        } catch {
+            selectedPageConflicts = []
+            EditorLog.sync.error(
+                "conflicts_failed page_id=\(selectedPageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     private func restoreSelection(previousNotebookID: String?, previousPageID: String?) {
         if let previousNotebookID,
            snapshot.notebooks.contains(where: { $0.id == previousNotebookID }) {
@@ -861,6 +911,7 @@ final class WorkspaceViewModel: ObservableObject {
             selectedPageID = previousPageID
         }
         refreshBacklinksForSelectedPage()
+        refreshConflictsForSelectedPage()
     }
 
     private func nextBlockState(currentType: BlockType, text: String) -> (type: BlockType, text: String) {
