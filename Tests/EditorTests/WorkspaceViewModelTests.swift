@@ -379,6 +379,9 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.selectedPageID, secondPageID)
         XCTAssertEqual(viewModel.selectedPage?.title, "Second")
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, secondPageID)
+        XCTAssertEqual(viewModel.consumePendingCompactPageNavigationID(), secondPageID)
+        XCTAssertNil(viewModel.pendingCompactPageNavigationID)
     }
 
     @MainActor
@@ -446,6 +449,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.selectedPageID, snapshot.selectedPageID)
         XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, snapshot.selectedPageID)
     }
 
     @MainActor

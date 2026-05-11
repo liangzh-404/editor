@@ -95,15 +95,14 @@ private struct ThreeColumnEditorShell: View {
 
 private struct CompactEditorShell: View {
     @ObservedObject var viewModel: WorkspaceViewModel
+    @State private var path: [CompactRoute] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 Section("Spaces") {
                     ForEach(viewModel.snapshot.workspaces) { workspace in
-                        NavigationLink {
-                            CompactPageListView(viewModel: viewModel)
-                        } label: {
+                        NavigationLink(value: CompactRoute.pages) {
                             Label(workspace.name, systemImage: "tray.full")
                         }
                     }
@@ -113,6 +112,91 @@ private struct CompactEditorShell: View {
             }
             .navigationTitle("Editor")
             .background(Color.white)
+            .navigationDestination(for: CompactRoute.self) { route in
+                switch route {
+                case .pages:
+                    CompactPageListView(viewModel: viewModel)
+                case .page(let pageID):
+                    CompactPageDestination(
+                        viewModel: viewModel,
+                        pageID: pageID
+                    )
+                }
+            }
+            .onChange(of: viewModel.pendingCompactPageNavigationID) { _, pageID in
+                guard let pageID = viewModel.consumePendingCompactPageNavigationID() ?? pageID else {
+                    return
+                }
+                pushPageIfNeeded(pageID)
+            }
+        }
+    }
+
+    private func pushPageIfNeeded(_ pageID: String) {
+        guard viewModel.snapshot.pages.contains(where: { $0.id == pageID }) else {
+            return
+        }
+
+        if path.last != .page(pageID) {
+            path.append(.page(pageID))
+        }
+    }
+}
+
+private enum CompactRoute: Hashable {
+    case pages
+    case page(String)
+}
+
+private struct CompactPageDestination: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+    let pageID: String
+
+    var body: some View {
+        if let page = viewModel.snapshot.pages.first(where: { $0.id == pageID }) {
+            EditorCanvasView(
+                page: page,
+                blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
+                attachments: viewModel.snapshot.attachments,
+                backlinks: viewModel.selectedPageBacklinks,
+                pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                onAddParagraphBlock: {
+                    viewModel.addParagraphBlockToCurrentPage()
+                },
+                onMoveBlock: { blockID, targetIndex in
+                    viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
+                },
+                onDeleteBlock: { blockID in
+                    viewModel.deleteBlockFromCurrentPage(blockID: blockID)
+                },
+                onSelectBacklink: { backlink in
+                    viewModel.selectBacklink(backlink)
+                },
+                onPageTitleChange: { title in
+                    viewModel.editSelectedPageTitle(title)
+                },
+                onImportMarkdown: { sourceURL in
+                    viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
+                },
+                onExportMarkdown: {
+                    viewModel.exportCurrentPageMarkdown()
+                },
+                onBlockTextChange: { blockID, text in
+                    viewModel.editBlockText(blockID: blockID, text: text)
+                },
+                onImportAttachment: { sourceURL in
+                    viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+                },
+                onPendingBlockFocusHandled: {
+                    _ = viewModel.consumePendingFocusBlockID()
+                }
+            )
+            .onAppear {
+                viewModel.selectPage(id: page.id)
+            }
+        } else {
+            Color.white
+                .navigationTitle("Editor")
         }
     }
 }
@@ -296,48 +380,7 @@ private struct CompactPageListView: View {
             ForEach(Array(viewModel.snapshot.notebooks.enumerated()), id: \.element.id) { index, notebook in
                 Section {
                     ForEach(pages(in: notebook)) { page in
-                        NavigationLink {
-                            EditorCanvasView(
-                                page: page,
-                                blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
-                                attachments: viewModel.snapshot.attachments,
-                                backlinks: viewModel.selectedPageBacklinks,
-                                pendingFocusBlockID: viewModel.pendingFocusBlockID,
-                                onAddParagraphBlock: {
-                                    viewModel.addParagraphBlockToCurrentPage()
-                                },
-                                onMoveBlock: { blockID, targetIndex in
-                                    viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
-                                },
-                                onDeleteBlock: { blockID in
-                                    viewModel.deleteBlockFromCurrentPage(blockID: blockID)
-                                },
-                                onSelectBacklink: { backlink in
-                                    viewModel.selectBacklink(backlink)
-                                },
-                                onPageTitleChange: { title in
-                                    viewModel.editSelectedPageTitle(title)
-                                },
-                                onImportMarkdown: { sourceURL in
-                                    viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
-                                },
-                                onExportMarkdown: {
-                                    viewModel.exportCurrentPageMarkdown()
-                                },
-                                onBlockTextChange: { blockID, text in
-                                    viewModel.editBlockText(blockID: blockID, text: text)
-                                },
-                                onImportAttachment: { sourceURL in
-                                    viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
-                                },
-                                onPendingBlockFocusHandled: {
-                                    _ = viewModel.consumePendingFocusBlockID()
-                                }
-                            )
-                            .onAppear {
-                                viewModel.selectPage(id: page.id)
-                            }
-                        } label: {
+                        NavigationLink(value: CompactRoute.page(page.id)) {
                             PageRow(page: page)
                         }
                         .contextMenu {

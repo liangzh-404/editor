@@ -12,6 +12,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var cloudKitAccountStatus: CloudKitAccountAvailability?
     @Published private(set) var syncStatusText = "Sync Idle"
     @Published private(set) var pendingFocusBlockID: String?
+    @Published private(set) var pendingCompactPageNavigationID: String?
 
     private let repository: PageRepository?
     private let attachmentRepository: AttachmentRepository?
@@ -77,6 +78,7 @@ final class WorkspaceViewModel: ObservableObject {
         selectedNotebookID = nil
         selectedPageID = nil
         pendingFocusBlockID = nil
+        pendingCompactPageNavigationID = nil
     }
 
     init(snapshot: WorkspaceSnapshot) {
@@ -91,6 +93,7 @@ final class WorkspaceViewModel: ObservableObject {
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
         pendingFocusBlockID = nil
+        pendingCompactPageNavigationID = nil
     }
 
     func load() throws {
@@ -162,6 +165,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         selectPage(id: destinationPageID)
+        pendingCompactPageNavigationID = destinationPageID
         EditorLog.render.debug(
             "search_result_selected page_id=\(destinationPageID, privacy: .public) entity_type=\(result.entityType, privacy: .public)"
         )
@@ -169,6 +173,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     func selectBacklink(_ backlink: Backlink) {
         selectPage(id: backlink.sourcePageID)
+        pendingCompactPageNavigationID = backlink.sourcePageID
         EditorLog.render.debug(
             "backlink_selected source_page_id=\(backlink.sourcePageID, privacy: .public)"
         )
@@ -180,6 +185,14 @@ final class WorkspaceViewModel: ObservableObject {
             pendingFocusBlockID = nil
         }
         return pendingFocusBlockID
+    }
+
+    @discardableResult
+    func consumePendingCompactPageNavigationID() -> String? {
+        defer {
+            pendingCompactPageNavigationID = nil
+        }
+        return pendingCompactPageNavigationID
     }
 
     func updateBlockText(blockID: String, text: String) throws {
