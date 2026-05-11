@@ -72,6 +72,25 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityID, pageID)
     }
 
+    func testCreatePagePersistsEmptyEditablePageAtEnd() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+
+        let createdPage = try repository.createPage(workspaceID: workspaceID, title: "Untitled")
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let createdBlocks = reloadedSnapshot.blocks.filter { $0.pageID == createdPage.id }
+
+        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["Welcome", "Untitled"])
+        XCTAssertEqual(reloadedSnapshot.pages.last?.id, createdPage.id)
+        XCTAssertEqual(createdBlocks.map(\.type), [.paragraph])
+        XCTAssertEqual(createdBlocks.map(\.textPlain), [""])
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().suffix(2).map(\.entityType), ["page", "block"])
+    }
+
     func testImportMarkdownReplacesPageBlocksWithTypedBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

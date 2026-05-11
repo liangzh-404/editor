@@ -207,6 +207,21 @@ final class WorkspaceViewModel: ObservableObject {
         return block
     }
 
+    @discardableResult
+    func createPageInSelectedWorkspace(title: String = "Untitled") throws -> PageSummary {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedWorkspaceID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        let page = try repository.createPage(workspaceID: selectedWorkspaceID, title: title)
+        try load()
+        selectPage(id: page.id)
+        return page
+    }
+
     func addParagraphBlockToCurrentPage() -> String? {
         do {
             let block = try appendParagraphBlockToCurrentPage()
@@ -215,6 +230,19 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "paragraph_block_add_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func addPageToSelectedWorkspace() -> String? {
+        do {
+            let page = try createPageInSelectedWorkspace()
+            EditorLog.input.debug("page_added page_id=\(page.id, privacy: .public)")
+            return page.id
+        } catch {
+            EditorLog.input.error(
+                "page_add_failed error=\(String(describing: error), privacy: .public)"
             )
             return nil
         }

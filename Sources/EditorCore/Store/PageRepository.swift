@@ -55,24 +55,7 @@ final class PageRepository {
 
         let selectedPageID = pages.first?.id
 
-        let blocks = try database.query(
-            """
-            SELECT id, page_id, parent_block_id, order_key, type, text_plain
-            FROM blocks
-            WHERE page_id = ? AND is_deleted = 0
-            ORDER BY order_key ASC
-            """,
-            bindings: selectedPageID.map { [.text($0)] } ?? [.text("")]
-        ).map { row in
-            BlockSnapshot(
-                id: row["id"] ?? "",
-                pageID: row["page_id"] ?? "",
-                parentBlockID: row["parent_block_id"] ?? nil,
-                orderKey: row["order_key"] ?? "",
-                type: BlockType(rawValue: row["type"] ?? "") ?? .paragraph,
-                textPlain: row["text_plain"] ?? ""
-            )
-        }
+        let blocks = try loadBlocks(pageIDs: pages.map(\.id))
 
         let attachments = try database.query(
             """
@@ -168,6 +151,66 @@ final class PageRepository {
         EditorLog.store.debug(
             "page_title_updated page_id=\(pageID, privacy: .public) length=\(title.count, privacy: .public)"
         )
+    }
+
+    func createPage(workspaceID: String, title: String) throws -> PageSummary {
+        let workspaceRows = try database.query(
+            """
+            SELECT id
+            FROM workspaces
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(workspaceID)]
+        )
+        guard workspaceRows.first != nil else {
+            throw PageRepositoryError.workspaceNotFound
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        let pageID = "page-\(UUID().uuidString.lowercased())"
+        let blockID = "block-\(UUID().uuidString.lowercased())"
+        let orderKey = try nextPageOrderKey(workspaceID: workspaceID)
+
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try database.execute(
+                """
+                INSERT INTO pages (id, workspace_id, title, order_key, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                bindings: [
+                    .text(pageID),
+                    .text(workspaceID),
+                    .text(title),
+                    .text(orderKey),
+                    .text(now),
+                    .text(now)
+                ]
+            )
+            try insertBlock(
+                id: blockID,
+                pageID: pageID,
+                orderKey: "000001",
+                type: .paragraph,
+                text: "",
+                createdAt: now
+            )
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        let syncRepository = SyncRepository(database: database)
+        try syncRepository.enqueue(entityType: "page", entityID: pageID, changeType: "create")
+        try syncRepository.enqueue(entityType: "block", entityID: blockID, changeType: "create")
+
+        EditorLog.store.debug(
+            "page_created page_id=\(pageID, privacy: .public) workspace_id=\(workspaceID, privacy: .public)"
+        )
+
+        return PageSummary(id: pageID, workspaceID: workspaceID, title: title)
     }
 
     func updateBlock(blockID: String, type: BlockType, text: String) throws {
@@ -467,6 +510,48 @@ final class PageRepository {
         )
     }
 
+    private func loadBlocks(pageIDs: [String]) throws -> [BlockSnapshot] {
+        guard !pageIDs.isEmpty else {
+            return []
+        }
+
+        let placeholders = Array(repeating: "?", count: pageIDs.count).joined(separator: ", ")
+        return try database.query(
+            """
+            SELECT id, page_id, parent_block_id, order_key, type, text_plain
+            FROM blocks
+            WHERE page_id IN (\(placeholders)) AND is_deleted = 0
+            ORDER BY page_id ASC, order_key ASC
+            """,
+            bindings: pageIDs.map(SQLiteValue.text)
+        ).map { row in
+            BlockSnapshot(
+                id: row["id"] ?? "",
+                pageID: row["page_id"] ?? "",
+                parentBlockID: row["parent_block_id"] ?? nil,
+                orderKey: row["order_key"] ?? "",
+                type: BlockType(rawValue: row["type"] ?? "") ?? .paragraph,
+                textPlain: row["text_plain"] ?? ""
+            )
+        }
+    }
+
+    private func nextPageOrderKey(workspaceID: String) throws -> String {
+        let rows = try database.query(
+            """
+            SELECT order_key
+            FROM pages
+            WHERE workspace_id = ? AND is_archived = 0
+            ORDER BY order_key DESC
+            LIMIT 1
+            """,
+            bindings: [.text(workspaceID)]
+        )
+        let lastOrderKey = rows.first.flatMap { $0["order_key"] } ?? "000000"
+        let nextValue = (Int(lastOrderKey) ?? 0) + 1
+        return String(format: "%06d", nextValue)
+    }
+
     private func insertBlock(
         id: String,
         pageID: String,
@@ -533,6 +618,7 @@ final class PageRepository {
 }
 
 enum PageRepositoryError: Error, Equatable {
+    case workspaceNotFound
     case pageNotFound
     case blockNotFound
     case invalidPayloadEncoding

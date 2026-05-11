@@ -186,10 +186,14 @@ private struct PageListView: View {
         List(selection: selectedPageBinding) {
             SearchSectionView(viewModel: viewModel)
 
-            Section("Pages") {
+            Section {
                 ForEach(viewModel.snapshot.pages) { page in
                     PageRow(page: page)
                         .tag(Optional(page.id))
+                }
+            } header: {
+                PageSectionHeader {
+                    _ = viewModel.addPageToSelectedWorkspace()
                 }
             }
         }
@@ -216,7 +220,7 @@ private struct CompactPageListView: View {
         List {
             SearchSectionView(viewModel: viewModel)
 
-            Section("Pages") {
+            Section {
                 ForEach(viewModel.snapshot.pages) { page in
                     NavigationLink {
                         EditorCanvasView(
@@ -255,11 +259,34 @@ private struct CompactPageListView: View {
                         PageRow(page: page)
                     }
                 }
+            } header: {
+                PageSectionHeader {
+                    _ = viewModel.addPageToSelectedWorkspace()
+                }
             }
         }
         .navigationTitle("Pages")
         .scrollContentBackground(.hidden)
         .background(Color.white)
+    }
+}
+
+private struct PageSectionHeader: View {
+    let onAddPage: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Pages")
+            Spacer(minLength: 8)
+            Button {
+                onAddPage()
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.borderless)
+            .help("New page")
+            .accessibilityIdentifier("editor.add-page")
+        }
     }
 }
 

@@ -136,6 +136,26 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCreatePageSelectsNewEmptyPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        let createdPage = try viewModel.createPageInSelectedWorkspace(title: "Untitled")
+
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Untitled"])
+        XCTAssertEqual(viewModel.selectedPageID, createdPage.id)
+        XCTAssertEqual(viewModel.selectedPage?.title, "Untitled")
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph])
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
+    }
+
+    @MainActor
     func testExportCurrentPageMarkdownUsesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }
