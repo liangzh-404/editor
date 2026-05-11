@@ -1,4 +1,5 @@
 import Foundation
+import CloudKit
 import XCTest
 
 final class PlatformSecurityTests: XCTestCase {
@@ -50,6 +51,22 @@ final class PlatformSecurityTests: XCTestCase {
         XCTAssertNil(try store.string(for: "icloud-account"))
     }
 
+    func testCloudKitAccountMetadataServiceStoresMappedStatusInKeychain() throws {
+        let store = KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        defer {
+            try? store.removeValue(for: CloudKitAccountMetadataService.accountStatusKey)
+        }
+        let service = CloudKitAccountMetadataService(
+            provider: StaticCloudKitAccountStatusProvider(status: .available),
+            metadataStore: store
+        )
+
+        let status = try service.refreshAndStoreStatus()
+
+        XCTAssertEqual(status, .available)
+        XCTAssertEqual(try service.lastStoredStatus(), .available)
+    }
+
     private func makeTemporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -59,5 +76,13 @@ final class PlatformSecurityTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory
+    }
+}
+
+private struct StaticCloudKitAccountStatusProvider: CloudKitAccountStatusProviding {
+    let status: CKAccountStatus
+
+    func accountStatus() throws -> CKAccountStatus {
+        status
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import CloudKit
 import Security
 
 enum DataProtectionService {
@@ -104,4 +105,95 @@ enum KeychainMetadataStoreError: Error, Equatable {
     case invalidStringEncoding
     case invalidStoredData
     case unexpectedStatus(OSStatus)
+}
+
+enum CloudKitAccountAvailability: String, Equatable, Sendable {
+    case available
+    case noAccount
+    case restricted
+    case couldNotDetermine
+    case temporarilyUnavailable
+}
+
+protocol CloudKitAccountStatusProviding {
+    func accountStatus() throws -> CKAccountStatus
+}
+
+final class LiveCloudKitAccountStatusProvider: CloudKitAccountStatusProviding {
+    private let container: CKContainer
+
+    init(container: CKContainer = .default()) {
+        self.container = container
+    }
+
+    func accountStatus() throws -> CKAccountStatus {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class StatusBox: @unchecked Sendable {
+            var result: Result<CKAccountStatus, Error>?
+        }
+        let statusBox = StatusBox()
+
+        container.accountStatus { status, error in
+            if let error {
+                statusBox.result = .failure(error)
+            } else {
+                statusBox.result = .success(status)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        return try statusBox.result?.get() ?? {
+            throw CloudKitAccountMetadataError.missingStatus
+        }()
+    }
+}
+
+final class CloudKitAccountMetadataService {
+    static let accountStatusKey = "cloudkit.account.status"
+
+    private let provider: CloudKitAccountStatusProviding
+    private let metadataStore: KeychainMetadataStore
+
+    init(
+        provider: CloudKitAccountStatusProviding = LiveCloudKitAccountStatusProvider(),
+        metadataStore: KeychainMetadataStore = KeychainMetadataStore()
+    ) {
+        self.provider = provider
+        self.metadataStore = metadataStore
+    }
+
+    func refreshAndStoreStatus() throws -> CloudKitAccountAvailability {
+        let status = Self.availability(for: try provider.accountStatus())
+        try metadataStore.setString(status.rawValue, for: Self.accountStatusKey)
+        return status
+    }
+
+    func lastStoredStatus() throws -> CloudKitAccountAvailability? {
+        guard let rawValue = try metadataStore.string(for: Self.accountStatusKey) else {
+            return nil
+        }
+        return CloudKitAccountAvailability(rawValue: rawValue)
+    }
+
+    static func availability(for status: CKAccountStatus) -> CloudKitAccountAvailability {
+        switch status {
+        case .available:
+            return .available
+        case .noAccount:
+            return .noAccount
+        case .restricted:
+            return .restricted
+        case .couldNotDetermine:
+            return .couldNotDetermine
+        case .temporarilyUnavailable:
+            return .temporarilyUnavailable
+        @unknown default:
+            return .couldNotDetermine
+        }
+    }
+}
+
+enum CloudKitAccountMetadataError: Error, Equatable {
+    case missingStatus
 }
