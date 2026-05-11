@@ -294,6 +294,12 @@ final class SyncMergeEngine {
         }
 
         switch remote.entityType {
+        case "page":
+            try applyRemotePageDeletion(pageID: remote.entityID)
+        case "notebook":
+            try applyRemoteNotebookDeletion(notebookID: remote.entityID)
+        case "attachment":
+            try applyRemoteAttachmentDeletion(attachmentID: remote.entityID)
         case "block":
             try applyRemoteBlockDeletion(blockID: remote.entityID)
         default:
@@ -316,6 +322,167 @@ final class SyncMergeEngine {
             ]
         )
         return Int(rows.first?["COUNT(*)"] ?? "") ?? 0 > 0
+    }
+
+    private func applyRemotePageDeletion(pageID: String) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try database.execute(
+                """
+                UPDATE pages
+                SET is_archived = 1,
+                    updated_at = ?
+                WHERE id = ? AND is_archived = 0
+                """,
+                bindings: [
+                    .text(now),
+                    .text(pageID)
+                ]
+            )
+            try database.execute(
+                """
+                UPDATE blocks
+                SET is_deleted = 1,
+                    sync_state = ?,
+                    updated_at = ?
+                WHERE page_id = ? AND is_deleted = 0
+                """,
+                bindings: [
+                    .text("synced"),
+                    .text(now),
+                    .text(pageID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM links
+                WHERE source_page_id = ? OR target_page_id = ?
+                """,
+                bindings: [
+                    .text(pageID),
+                    .text(pageID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM search_index
+                WHERE (entity_type = 'page' AND entity_id = ?)
+                   OR (entity_type = 'block' AND entity_id IN (
+                       SELECT id FROM blocks WHERE page_id = ?
+                   ))
+                """,
+                bindings: [
+                    .text(pageID),
+                    .text(pageID)
+                ]
+            )
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        EditorLog.sync.debug(
+            "remote_page_deleted page_id=\(pageID, privacy: .public)"
+        )
+    }
+
+    private func applyRemoteNotebookDeletion(notebookID: String) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try database.execute(
+                """
+                UPDATE pages
+                SET notebook_id = NULL,
+                    updated_at = ?
+                WHERE notebook_id = ?
+                """,
+                bindings: [
+                    .text(now),
+                    .text(notebookID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM notebooks
+                WHERE id = ?
+                """,
+                bindings: [.text(notebookID)]
+            )
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        EditorLog.sync.debug(
+            "remote_notebook_deleted notebook_id=\(notebookID, privacy: .public)"
+        )
+    }
+
+    private func applyRemoteAttachmentDeletion(attachmentID: String) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try database.execute(
+                """
+                DELETE FROM links
+                WHERE source_block_id IN (
+                    SELECT id
+                    FROM blocks
+                    WHERE json_extract(payload_json, '$.attachment_id') = ?
+                )
+                """,
+                bindings: [.text(attachmentID)]
+            )
+            try database.execute(
+                """
+                UPDATE blocks
+                SET is_deleted = 1,
+                    sync_state = ?,
+                    updated_at = ?
+                WHERE is_deleted = 0
+                  AND json_extract(payload_json, '$.attachment_id') = ?
+                """,
+                bindings: [
+                    .text("synced"),
+                    .text(now),
+                    .text(attachmentID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM search_index
+                WHERE (entity_type = 'attachment' AND entity_id = ?)
+                   OR (entity_type = 'block' AND entity_id IN (
+                       SELECT id
+                       FROM blocks
+                       WHERE json_extract(payload_json, '$.attachment_id') = ?
+                   ))
+                """,
+                bindings: [
+                    .text(attachmentID),
+                    .text(attachmentID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM attachments
+                WHERE id = ?
+                """,
+                bindings: [.text(attachmentID)]
+            )
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        EditorLog.sync.debug(
+            "remote_attachment_deleted attachment_id=\(attachmentID, privacy: .public)"
+        )
     }
 
     private func applyRemoteBlockDeletion(blockID: String) throws {

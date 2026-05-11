@@ -231,6 +231,106 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try BacklinkRepository(database: database).backlinks(targetPageID: pageID), [])
     }
 
+    func testFetchRemoteChangesAppliesRemotePageDeletion() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try BacklinkRepository(database: database).rebuildLinksForBlock(
+            blockID: blockID,
+            text: "See [[Welcome]]"
+        )
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            changes: [],
+            deletedRecords: [
+                RemoteDeletedRecord(entityType: "page", entityID: pageID)
+            ]
+        )
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(result.appliedCount, 1)
+        XCTAssertEqual(reloadedSnapshot.pages, [])
+        XCTAssertEqual(reloadedSnapshot.archivedPages.map(\.id), [pageID])
+        XCTAssertEqual(reloadedSnapshot.blocks, [])
+        XCTAssertEqual(try BacklinkRepository(database: database).backlinks(targetPageID: pageID), [])
+    }
+
+    func testFetchRemoteChangesAppliesRemoteNotebookDeletionWithoutDeletingPages() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let notebookID = try XCTUnwrap(snapshot.selectedNotebookID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            changes: [],
+            deletedRecords: [
+                RemoteDeletedRecord(entityType: "notebook", entityID: notebookID)
+            ]
+        )
+
+        _ = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.notebooks, [])
+        XCTAssertEqual(reloadedSnapshot.pages.map(\.id), [pageID])
+        XCTAssertNil(reloadedSnapshot.pages.first?.notebookID)
+    }
+
+    func testFetchRemoteChangesAppliesRemoteAttachmentDeletion() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let imported = try attachmentRepository.importAttachment(
+            sourceURL: try makeSourceFile(name: "brief.txt", contents: "local attachment"),
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+        try database.execute("DELETE FROM sync_changes")
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            changes: [],
+            deletedRecords: [
+                RemoteDeletedRecord(entityType: "attachment", entityID: imported.attachment.id)
+            ]
+        )
+
+        _ = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertFalse(reloadedSnapshot.attachments.contains { $0.id == imported.attachment.id })
+        XCTAssertFalse(reloadedSnapshot.blocks.contains { $0.id == imported.block.id })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: imported.attachment.localPath))
+    }
+
     func testFetchRemoteChangesAppliesWorkspaceNotebookPageAttachmentAndBlockChanges() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -375,6 +475,15 @@ final class SyncEngineTests: XCTestCase {
         let fetcher = TokenAwareCloudKitRecordFetcher(
             recordsByType: [:],
             deletedRecordIDsByType: [
+                "NotebookRecord": [
+                    CKRecord.ID(recordName: "notebook-notebook-remote")
+                ],
+                "PageRecord": [
+                    CKRecord.ID(recordName: "page-page-remote")
+                ],
+                "AttachmentRecord": [
+                    CKRecord.ID(recordName: "attachment-attachment-remote")
+                ],
                 "BlockRecord": [
                     CKRecord.ID(recordName: "block-block-remote")
                 ]
@@ -388,6 +497,9 @@ final class SyncEngineTests: XCTestCase {
         ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
 
         XCTAssertEqual(changeSet.deletedRecords, [
+            RemoteDeletedRecord(entityType: "notebook", entityID: "notebook-remote"),
+            RemoteDeletedRecord(entityType: "page", entityID: "page-remote"),
+            RemoteDeletedRecord(entityType: "attachment", entityID: "attachment-remote"),
             RemoteDeletedRecord(entityType: "block", entityID: "block-remote")
         ])
         XCTAssertEqual(changeSet.serverChangeTokenData, nextToken)
@@ -486,6 +598,13 @@ final class SyncEngineTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory
+    }
+
+    private func makeSourceFile(name: String, contents: String) throws -> URL {
+        let directory = makeTemporaryDirectory()
+        let fileURL = directory.appendingPathComponent(name)
+        try Data(contents.utf8).write(to: fileURL)
+        return fileURL
     }
 }
 
