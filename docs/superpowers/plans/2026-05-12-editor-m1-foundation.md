@@ -36,7 +36,7 @@
 - Create: `Sources/EditorCore/Observability/EditorLog.swift`
 - Create: `Sources/EditorCore/Features/Shell/EditorShellView.swift`
 
-- [ ] **Step 1: Ensure XcodeGen is available**
+- [x] **Step 1: Ensure XcodeGen is available**
 
 Run:
 
@@ -46,15 +46,15 @@ command -v xcodegen || brew install xcodegen
 
 Expected: `xcodegen` exists on PATH after the command.
 
-- [ ] **Step 2: Add XcodeGen project spec**
+- [x] **Step 2: Add XcodeGen project spec**
 
 Create `project.yml` with macOS and iOS app targets sharing source directories, plus a macOS unit-test target. App and test targets must link SQLite with `OTHER_LDFLAGS = $(inherited) -lsqlite3`.
 
-- [ ] **Step 3: Add minimal app entrypoint and placeholder shell**
+- [x] **Step 3: Add minimal app entrypoint and placeholder shell**
 
 Create `EditorApp`, `AppEnvironment`, `EditorLog`, and `EditorShellView` with only enough code to compile before repository behavior exists. The placeholder shell can render a static `NavigationSplitView` on regular size classes and a `NavigationStack` on compact size classes.
 
-- [ ] **Step 4: Generate the Xcode project**
+- [x] **Step 4: Generate the Xcode project**
 
 Run:
 
@@ -64,7 +64,7 @@ xcodegen generate
 
 Expected: `Editor.xcodeproj` is created and includes `EditorMac`, `EditorIOS`, and `EditorTests` schemes.
 
-- [ ] **Step 5: Commit scaffold**
+- [x] **Step 5: Commit scaffold**
 
 Run:
 
@@ -80,11 +80,11 @@ git commit -m "Add M1 editor project scaffold"
 - Create: `Sources/EditorCore/Store/SQLiteDatabase.swift`
 - Create: `Sources/EditorCore/Store/SchemaMigrator.swift`
 
-- [ ] **Step 1: Write failing migration tests**
+- [x] **Step 1: Write failing migration tests**
 
 Create tests that open a temporary SQLite database, run `SchemaMigrator.migrate(database:)`, and assert the following tables exist: `schema_migrations`, `workspaces`, `pages`, `blocks`, `attachments`, `links`, `sync_changes`, `sync_records`, and `conflict_versions`.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -94,15 +94,15 @@ xcodebuild test -project Editor.xcodeproj -scheme EditorTests -destination 'plat
 
 Expected: FAIL because `SQLiteDatabase` and `SchemaMigrator` are not implemented.
 
-- [ ] **Step 3: Implement SQLite database wrapper**
+- [x] **Step 3: Implement SQLite database wrapper**
 
 Create `SQLiteDatabase` with `open(path:)`, `close()`, `execute(_:)`, `queryStrings(_:)`, and `queryInt(_:)`. Throw explicit errors on open, prepare, step, and close failures.
 
-- [ ] **Step 4: Implement schema migrator**
+- [x] **Step 4: Implement schema migrator**
 
 Create `SchemaMigrator.migrate(database:)` that creates all M1 tables using `CREATE TABLE IF NOT EXISTS`, inserts schema version `1`, and uses explicit table names from the spec.
 
-- [ ] **Step 5: Run tests and verify GREEN**
+- [x] **Step 5: Run tests and verify GREEN**
 
 Run:
 
@@ -112,7 +112,7 @@ xcodebuild test -project Editor.xcodeproj -scheme EditorTests -destination 'plat
 
 Expected: PASS for migration tests.
 
-- [ ] **Step 6: Commit migration layer**
+- [x] **Step 6: Commit migration layer**
 
 Run:
 
@@ -128,7 +128,7 @@ git commit -m "Add SQLite schema migration foundation"
 - Create: `Sources/EditorCore/Models/EditorModels.swift`
 - Create: `Sources/EditorCore/Store/PageRepository.swift`
 
-- [ ] **Step 1: Write failing repository tests**
+- [x] **Step 1: Write failing repository tests**
 
 Create tests that migrate a temporary database, instantiate `PageRepository`, call `bootstrapWorkspaceIfNeeded()`, and assert:
 
@@ -137,7 +137,7 @@ Create tests that migrate a temporary database, instantiate `PageRepository`, ca
 - the page has one paragraph block
 - calling bootstrap twice is idempotent
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -147,15 +147,15 @@ xcodebuild test -project Editor.xcodeproj -scheme EditorTests -destination 'plat
 
 Expected: FAIL because models and repository behavior are not implemented.
 
-- [ ] **Step 3: Implement editor models**
+- [x] **Step 3: Implement editor models**
 
 Create `WorkspaceSummary`, `PageSummary`, `BlockSnapshot`, and `WorkspaceSnapshot` as lightweight `Identifiable`, `Equatable`, and `Sendable` structs.
 
-- [ ] **Step 4: Implement `PageRepository`**
+- [x] **Step 4: Implement `PageRepository`**
 
 Add `bootstrapWorkspaceIfNeeded()`, `loadWorkspaceSnapshot()`, and helper insert/query methods. Use a default workspace named `Local` and a default page named `Welcome`.
 
-- [ ] **Step 5: Run tests and verify GREEN**
+- [x] **Step 5: Run tests and verify GREEN**
 
 Run:
 
@@ -165,7 +165,7 @@ xcodebuild test -project Editor.xcodeproj -scheme EditorTests -destination 'plat
 
 Expected: PASS for migration and repository tests.
 
-- [ ] **Step 6: Commit repository layer**
+- [x] **Step 6: Commit repository layer**
 
 Run:
 
@@ -181,11 +181,11 @@ git commit -m "Add local page repository bootstrap"
 - Modify: `Sources/EditorCore/Features/Shell/WorkspaceViewModel.swift`
 - Modify: `Sources/EditorApp/AppEnvironment.swift`
 
-- [ ] **Step 1: Write failing view model tests**
+- [x] **Step 1: Write failing view model tests**
 
 Create tests that build a migrated temporary database, bootstrap the repository, call `WorkspaceViewModel.load()`, and assert the view model exposes one workspace, one selected page, and at least one visible block.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -195,15 +195,15 @@ xcodebuild test -project Editor.xcodeproj -scheme EditorTests -destination 'plat
 
 Expected: FAIL because `WorkspaceViewModel` does not load repository snapshots.
 
-- [ ] **Step 3: Implement `WorkspaceViewModel`**
+- [x] **Step 3: Implement `WorkspaceViewModel`**
 
 Make the view model `@MainActor` and `ObservableObject`, expose published `snapshot`, `selectedPageID`, and `selectedWorkspaceID`, and load repository data through `PageRepository`.
 
-- [ ] **Step 4: Wire `AppEnvironment`**
+- [x] **Step 4: Wire `AppEnvironment`**
 
 Create an application-support database path, open SQLite, migrate, bootstrap local content, and return a ready `WorkspaceViewModel`.
 
-- [ ] **Step 5: Run tests and verify GREEN**
+- [x] **Step 5: Run tests and verify GREEN**
 
 Run:
 
@@ -213,7 +213,7 @@ xcodebuild test -project Editor.xcodeproj -scheme EditorTests -destination 'plat
 
 Expected: PASS for migration, repository, and view model tests.
 
-- [ ] **Step 6: Commit view model**
+- [x] **Step 6: Commit view model**
 
 Run:
 
@@ -228,7 +228,7 @@ git commit -m "Load local workspace into editor shell state"
 - Modify: `Sources/EditorCore/Features/Shell/EditorShellView.swift`
 - Modify: `Sources/EditorApp/EditorApp.swift`
 
-- [ ] **Step 1: Replace placeholder shell with repository-backed UI**
+- [x] **Step 1: Replace placeholder shell with repository-backed UI**
 
 Render:
 
@@ -236,7 +236,7 @@ Render:
 - compact iOS: `NavigationStack` from spaces to pages to editor.
 - editor canvas: white block list, title, and first paragraph.
 
-- [ ] **Step 2: Build macOS app**
+- [x] **Step 2: Build macOS app**
 
 Run:
 
@@ -246,7 +246,7 @@ xcodebuild build -project Editor.xcodeproj -scheme EditorMac -destination 'platf
 
 Expected: BUILD SUCCEEDED.
 
-- [ ] **Step 3: Build iOS simulator app**
+- [x] **Step 3: Build iOS simulator app**
 
 Run:
 
@@ -256,7 +256,7 @@ xcodebuild build -project Editor.xcodeproj -scheme EditorIOS -destination 'platf
 
 Expected: BUILD SUCCEEDED.
 
-- [ ] **Step 4: Run focused test suite**
+- [x] **Step 4: Run focused test suite**
 
 Run:
 
@@ -266,7 +266,7 @@ xcodebuild test -project Editor.xcodeproj -scheme EditorTests -destination 'plat
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit runnable shell**
+- [x] **Step 5: Commit runnable shell**
 
 Run:
 
@@ -280,7 +280,7 @@ git commit -m "Render local workspace in macOS and iOS shell"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-05-12-editor-m1-foundation.md`
 
-- [ ] **Step 1: Verify generated project is tracked**
+- [x] **Step 1: Verify generated project is tracked**
 
 Run:
 
@@ -290,7 +290,7 @@ git status --short
 
 Expected: no untracked source or project files except intentional plan checkbox updates.
 
-- [ ] **Step 2: Run complete M1 checks**
+- [x] **Step 2: Run complete M1 checks**
 
 Run:
 
@@ -302,11 +302,11 @@ xcodebuild build -project Editor.xcodeproj -scheme EditorIOS -destination 'platf
 
 Expected: tests pass and both app builds succeed.
 
-- [ ] **Step 3: Update plan checkboxes**
+- [x] **Step 3: Update plan checkboxes**
 
 Mark completed steps in this plan after the commands above have produced the expected output.
 
-- [ ] **Step 4: Commit plan progress**
+- [x] **Step 4: Commit plan progress**
 
 Run:
 
@@ -320,4 +320,3 @@ git commit -m "Document M1 foundation implementation progress"
 - Spec coverage: This plan implements M1 only: shared macOS/iOS project, three-column and collapsed mobile shell, SQLite schema, migrations, repositories, local workspace creation, and basic block list rendering.
 - Deferred by design: TextKit 2 editing, attachments, advanced blocks, CloudKit, search, backlinks, and performance tuning are M2-M6 work from the architecture spec.
 - Type consistency: The plan consistently uses `SQLiteDatabase`, `SchemaMigrator`, `PageRepository`, `WorkspaceViewModel`, `WorkspaceSnapshot`, `WorkspaceSummary`, `PageSummary`, and `BlockSnapshot`.
-
