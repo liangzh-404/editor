@@ -68,6 +68,17 @@ final class AttachmentRepository {
         do {
             try insert(attachment: attachment, createdAt: now)
             try insert(block: block, attachmentID: attachment.id, kind: kind, createdAt: now)
+            let syncRepository = SyncRepository(database: database)
+            try syncRepository.enqueue(
+                entityType: "attachment",
+                entityID: attachment.id,
+                changeType: "create"
+            )
+            try syncRepository.enqueue(
+                entityType: "block",
+                entityID: block.id,
+                changeType: "create"
+            )
         } catch {
             try? fileManager.removeItem(at: targetDirectory)
             throw error

@@ -155,6 +155,11 @@ final class PageRepository {
                 .text(blockID)
             ]
         )
+        try SyncRepository(database: database).enqueue(
+            entityType: "block",
+            entityID: blockID,
+            changeType: "update"
+        )
     }
 
     private func insertDefaultContent() throws {

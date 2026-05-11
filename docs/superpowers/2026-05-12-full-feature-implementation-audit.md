@@ -29,7 +29,7 @@ Implement the approved editor architecture so the app supports the full requeste
 | local-first | SQLite opens from Application Support and app can launch without network | Partial |
 | attachment blocks | `AttachmentRepositoryTests`, `AttachmentRepository`, `WorkspaceViewModel.importAttachment`, and `EditorShellView` file importer cover local copy, metadata, attachment block insertion, reload, and basic row rendering | Partial; thumbnails, async preview work, deletion GC, and live CloudKit asset sync remain |
 | Markdown | `MarkdownTransformerTests`, `MarkdownTransformer`, and `WorkspaceViewModel.updateBlockText` cover core shortcut transforms and basic block export | Partial; import UI, file export, tables, callout/toggle fallback syntax, and TextKit-integrated shortcut handling remain |
-| CloudKit sync | schema placeholders only | Missing implementation |
+| CloudKit sync | `SyncRepositoryTests`, `SyncRepository`, block edits, and attachment imports now enqueue local dirty changes | Partial; no CloudKit adapter, remote fetch, retry, change-tag persistence, or conflict merge yet |
 | native protection | architecture document only | Missing implementation |
 | three-column desktop navigation | `NavigationSplitView` shell | Partial |
 | mobile collapsed navigation | compact `NavigationStack` shell | Partial |
