@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -50,6 +51,12 @@ private struct ThreeColumnEditorShell: View {
                 blocks: viewModel.visibleBlocks,
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
+                },
+                onImportMarkdown: { sourceURL in
+                    viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
+                },
+                onExportMarkdown: {
+                    viewModel.exportCurrentPageMarkdown()
                 },
                 onBlockTextChange: { blockID, text in
                     viewModel.editBlockText(blockID: blockID, text: text)
@@ -145,6 +152,12 @@ private struct CompactPageListView: View {
                         onAddParagraphBlock: {
                             viewModel.addParagraphBlockToCurrentPage()
                         },
+                        onImportMarkdown: { sourceURL in
+                            viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
+                        },
+                        onExportMarkdown: {
+                            viewModel.exportCurrentPageMarkdown()
+                        },
                         onBlockTextChange: { blockID, text in
                             viewModel.editBlockText(blockID: blockID, text: text)
                         },
@@ -185,9 +198,14 @@ private struct EditorCanvasView: View {
     let page: PageSummary?
     let blocks: [BlockSnapshot]
     let onAddParagraphBlock: () -> String?
+    let onImportMarkdown: (URL) -> Void
+    let onExportMarkdown: () -> String
     let onBlockTextChange: (String, String) -> Void
     let onImportAttachment: (URL) -> Void
     @State private var isAttachmentImporterPresented = false
+    @State private var isMarkdownImporterPresented = false
+    @State private var isMarkdownExporterPresented = false
+    @State private var markdownExportDocument = MarkdownFileDocument(text: "")
     @StateObject private var editorSession = EditorSession()
     @State private var pendingFocusRequest: BlockFocusRequest?
 
@@ -210,6 +228,27 @@ private struct EditorCanvasView: View {
                     .buttonStyle(.borderless)
                     .help("New block")
                     .accessibilityIdentifier("editor.add-block")
+                    .disabled(page == nil)
+
+                    Button {
+                        isMarkdownImporterPresented = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Import Markdown")
+                    .accessibilityIdentifier("editor.import-markdown")
+                    .disabled(page == nil)
+
+                    Button {
+                        markdownExportDocument = MarkdownFileDocument(text: onExportMarkdown())
+                        isMarkdownExporterPresented = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Export Markdown")
+                    .accessibilityIdentifier("editor.export-markdown")
                     .disabled(page == nil)
 
                     Button {
@@ -244,6 +283,33 @@ private struct EditorCanvasView: View {
         .background(Color.white)
         .navigationTitle(page?.title ?? "Editor")
         .fileImporter(
+            isPresented: $isMarkdownImporterPresented,
+            allowedContentTypes: MarkdownFileDocument.readableContentTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let sourceURL = urls.first {
+                let isScoped = sourceURL.startAccessingSecurityScopedResource()
+                defer {
+                    if isScoped {
+                        sourceURL.stopAccessingSecurityScopedResource()
+                    }
+                }
+                onImportMarkdown(sourceURL)
+            }
+        }
+        .fileExporter(
+            isPresented: $isMarkdownExporterPresented,
+            document: markdownExportDocument,
+            contentType: MarkdownFileDocument.markdownContentType,
+            defaultFilename: "\(page?.title ?? "Page").md"
+        ) { result in
+            if case .failure(let error) = result {
+                EditorLog.markdown.error(
+                    "markdown_file_export_failed error=\(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+        .fileImporter(
             isPresented: $isAttachmentImporterPresented,
             allowedContentTypes: [.image, .movie, .data, .item],
             allowsMultipleSelection: false
@@ -258,6 +324,33 @@ private struct EditorCanvasView: View {
                 onImportAttachment(sourceURL)
             }
         }
+    }
+}
+
+private struct MarkdownFileDocument: FileDocument {
+    static var markdownContentType: UTType {
+        UTType(filenameExtension: "md") ?? .plainText
+    }
+
+    static var readableContentTypes: [UTType] {
+        [markdownContentType, .plainText]
+    }
+
+    var text: String
+
+    init(text: String = "") {
+        self.text = text
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        text = String(decoding: data, as: UTF8.self)
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }
 

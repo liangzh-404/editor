@@ -115,6 +115,36 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func exportCurrentPageMarkdown() -> String {
+        MarkdownTransformer.export(blocks: visibleBlocks)
+    }
+
+    func importMarkdownToCurrentPage(_ markdown: String) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedPageID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        try repository.importMarkdown(pageID: selectedPageID, markdown: markdown)
+        try load()
+    }
+
+    func importMarkdownFileForCurrentPage(sourceURL: URL) {
+        do {
+            let markdown = try String(contentsOf: sourceURL, encoding: .utf8)
+            try importMarkdownToCurrentPage(markdown)
+            EditorLog.markdown.debug(
+                "markdown_file_imported source=\(sourceURL.lastPathComponent, privacy: .public)"
+            )
+        } catch {
+            EditorLog.markdown.error(
+                "markdown_file_import_failed source=\(sourceURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     func importAttachment(sourceURL: URL) throws {
         guard repository != nil, let attachmentRepository else {
             throw WorkspaceViewModelError.missingRepository

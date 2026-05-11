@@ -112,6 +112,60 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.visibleBlocks.last?.textPlain, "")
     }
 
+    @MainActor
+    func testExportCurrentPageMarkdownUsesVisibleBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                # Title
+
+                Body
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertEqual(
+            viewModel.exportCurrentPageMarkdown(),
+            """
+            # Title
+
+            Body
+            """
+        )
+    }
+
+    @MainActor
+    func testImportMarkdownToCurrentPageRefreshesVisibleBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        try viewModel.importMarkdownToCurrentPage(
+            """
+            # Imported
+
+            - Item
+            """
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.heading1, .unorderedListItem])
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Imported", "Item"])
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)
