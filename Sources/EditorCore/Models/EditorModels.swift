@@ -134,6 +134,19 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
     func matches(block: BlockSnapshot) -> Bool {
         block.type == kind.blockType && block.textPlain == originalFilename
     }
+
+    func previewPath(for block: BlockSnapshot) -> String? {
+        guard matches(block: block) else {
+            return nil
+        }
+
+        switch kind {
+        case .image, .video:
+            return thumbnailPath ?? localPath
+        case .file:
+            return nil
+        }
+    }
 }
 
 struct WorkspaceSnapshot: Equatable, Sendable {

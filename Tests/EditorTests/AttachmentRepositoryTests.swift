@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import XCTest
 
@@ -113,6 +114,36 @@ final class AttachmentRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedAttachment.thumbnailPath, thumbnailPath)
     }
 
+    func testImportVideoCreatesAndPersistsThumbnail() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let repository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+
+        let result = try repository.importAttachment(
+            sourceURL: try makeTinyVideoFile(name: "clip.mov"),
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+        let thumbnailPath = try XCTUnwrap(result.attachment.thumbnailPath)
+        let reloadedAttachment = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().attachments.first { $0.id == result.attachment.id }
+        )
+
+        XCTAssertEqual(result.attachment.kind, .video)
+        XCTAssertEqual(result.block.type, .attachmentVideo)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: thumbnailPath))
+        XCTAssertNotEqual(thumbnailPath, result.attachment.localPath)
+        XCTAssertEqual(reloadedAttachment.thumbnailPath, thumbnailPath)
+    }
+
     func testAttachmentSnapshotMatchesItsAttachmentBlockForPreview() {
         let attachment = AttachmentSnapshot(
             id: "attachment-photo",
@@ -137,6 +168,73 @@ final class AttachmentRepositoryTests: XCTestCase {
 
         XCTAssertTrue(attachment.matches(block: matchingBlock))
         XCTAssertFalse(attachment.matches(block: fileBlock))
+    }
+
+    func testAttachmentPreviewPathSupportsImageAndVideoBlocksOnly() {
+        let imageAttachment = AttachmentSnapshot(
+            id: "attachment-photo",
+            workspaceID: "workspace-local",
+            originalFilename: "photo.png",
+            utiType: "public.png",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/photo.png",
+            thumbnailPath: "/tmp/photo-thumbnail.jpg",
+            kind: .image
+        )
+        let videoAttachment = AttachmentSnapshot(
+            id: "attachment-video",
+            workspaceID: "workspace-local",
+            originalFilename: "clip.mov",
+            utiType: "com.apple.quicktime-movie",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/clip.mov",
+            thumbnailPath: "/tmp/video-thumbnail.jpg",
+            kind: .video
+        )
+        let fileAttachment = AttachmentSnapshot(
+            id: "attachment-file",
+            workspaceID: "workspace-local",
+            originalFilename: "brief.txt",
+            utiType: "public.plain-text",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/brief.txt",
+            thumbnailPath: nil,
+            kind: .file
+        )
+
+        XCTAssertEqual(
+            imageAttachment.previewPath(for: BlockSnapshot(
+                id: "block-photo",
+                pageID: "page-local",
+                parentBlockID: nil,
+                orderKey: "000001",
+                type: .attachmentImage,
+                textPlain: "photo.png"
+            )),
+            "/tmp/photo-thumbnail.jpg"
+        )
+        XCTAssertEqual(
+            videoAttachment.previewPath(for: BlockSnapshot(
+                id: "block-video",
+                pageID: "page-local",
+                parentBlockID: nil,
+                orderKey: "000002",
+                type: .attachmentVideo,
+                textPlain: "clip.mov"
+            )),
+            "/tmp/video-thumbnail.jpg"
+        )
+        XCTAssertNil(fileAttachment.previewPath(for: BlockSnapshot(
+            id: "block-file",
+            pageID: "page-local",
+            parentBlockID: nil,
+            orderKey: "000003",
+            type: .attachmentFile,
+            textPlain: "brief.txt"
+        )))
     }
 
     func testDeletingAttachmentBlockRemovesReferenceButKeepsAttachmentMetadata() throws {
@@ -185,6 +283,75 @@ final class AttachmentRepositoryTests: XCTestCase {
         return fileURL
     }
 
+    private func makeTinyVideoFile(name: String) throws -> URL {
+        let directory = makeTemporaryDirectory()
+        let fileURL = directory.appendingPathComponent(name)
+        let writer = try AVAssetWriter(outputURL: fileURL, fileType: .mov)
+        let input = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: 16,
+                AVVideoHeightKey: 16
+            ]
+        )
+        input.expectsMediaDataInRealTime = false
+
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferWidthKey as String: 16,
+                kCVPixelBufferHeightKey as String: 16
+            ]
+        )
+        writer.add(input)
+
+        guard writer.startWriting() else {
+            throw writer.error ?? AttachmentRepositoryTestError.videoWriterFailed
+        }
+        writer.startSession(atSourceTime: .zero)
+
+        guard let pixelBufferPool = adaptor.pixelBufferPool else {
+            throw AttachmentRepositoryTestError.missingPixelBufferPool
+        }
+        var pixelBuffer: CVPixelBuffer?
+        let pixelBufferStatus = CVPixelBufferPoolCreatePixelBuffer(
+            nil,
+            pixelBufferPool,
+            &pixelBuffer
+        )
+        guard pixelBufferStatus == kCVReturnSuccess, let pixelBuffer else {
+            throw AttachmentRepositoryTestError.pixelBufferCreationFailed(pixelBufferStatus)
+        }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        if let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) {
+            memset(baseAddress, 0x44, CVPixelBufferGetDataSize(pixelBuffer))
+        }
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+
+        while !input.isReadyForMoreMediaData {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        guard adaptor.append(pixelBuffer, withPresentationTime: .zero) else {
+            throw writer.error ?? AttachmentRepositoryTestError.videoWriterFailed
+        }
+        input.markAsFinished()
+
+        let semaphore = DispatchSemaphore(value: 0)
+        writer.finishWriting {
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        if writer.status == .failed {
+            throw writer.error ?? AttachmentRepositoryTestError.videoWriterFailed
+        }
+
+        return fileURL
+    }
+
     private func makeTemporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -199,4 +366,10 @@ final class AttachmentRepositoryTests: XCTestCase {
     private static let onePixelPNGData = Data(base64Encoded:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
     )!
+}
+
+private enum AttachmentRepositoryTestError: Error {
+    case missingPixelBufferPool
+    case pixelBufferCreationFailed(CVReturn)
+    case videoWriterFailed
 }

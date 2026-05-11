@@ -1072,8 +1072,7 @@ private struct AttachmentBlockRow: View {
     }
 
     private var thumbnailImage: Image? {
-        guard block.type == .attachmentImage,
-              let path = attachment?.thumbnailPath ?? attachment?.localPath else {
+        guard let path = attachment?.previewPath(for: block) else {
             return nil
         }
 

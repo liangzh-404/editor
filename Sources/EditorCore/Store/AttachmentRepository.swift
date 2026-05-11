@@ -1,3 +1,4 @@
+import AVFoundation
 import CryptoKit
 import Foundation
 import ImageIO
@@ -219,11 +220,29 @@ final class AttachmentRepository {
         kind: AttachmentKind,
         targetDirectory: URL
     ) throws -> String? {
-        guard kind == .image,
-              let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil) else {
+        switch kind {
+        case .image:
+            return try makeImageThumbnail(
+                sourceURL: sourceURL,
+                targetDirectory: targetDirectory
+            )
+        case .video:
+            return try makeVideoThumbnail(
+                sourceURL: sourceURL,
+                targetDirectory: targetDirectory
+            )
+        case .file:
             return nil
         }
+    }
 
+    private func makeImageThumbnail(
+        sourceURL: URL,
+        targetDirectory: URL
+    ) throws -> String? {
+        guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil) else {
+            return nil
+        }
         let options = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -233,6 +252,52 @@ final class AttachmentRepository {
             return nil
         }
 
+        return try writeThumbnail(thumbnail, targetDirectory: targetDirectory)
+    }
+
+    private func makeVideoThumbnail(
+        sourceURL: URL,
+        targetDirectory: URL
+    ) throws -> String? {
+        let asset = AVURLAsset(url: sourceURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 512, height: 512)
+
+        let semaphore = DispatchSemaphore(value: 0)
+        final class ThumbnailBox: @unchecked Sendable {
+            var result: Result<CGImage, Error>?
+        }
+        let thumbnailBox = ThumbnailBox()
+
+        Task {
+            do {
+                let result = try await generator.image(at: .zero)
+                thumbnailBox.result = .success(result.image)
+            } catch {
+                thumbnailBox.result = .failure(error)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        do {
+            let thumbnail = try thumbnailBox.result?.get() ?? {
+                throw AttachmentRepositoryError.thumbnailGenerationFailed
+            }()
+            return try writeThumbnail(thumbnail, targetDirectory: targetDirectory)
+        } catch {
+            EditorLog.attachment.debug(
+                "video_thumbnail_skipped source=\(sourceURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    private func writeThumbnail(
+        _ thumbnail: CGImage,
+        targetDirectory: URL
+    ) throws -> String? {
         let thumbnailURL = targetDirectory.appendingPathComponent("thumbnail.jpg")
         guard let destination = CGImageDestinationCreateWithURL(
             thumbnailURL as CFURL,
@@ -257,4 +322,5 @@ final class AttachmentRepository {
 
 enum AttachmentRepositoryError: Error, Equatable {
     case invalidPayloadEncoding
+    case thumbnailGenerationFailed
 }
