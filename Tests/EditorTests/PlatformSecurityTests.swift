@@ -36,6 +36,20 @@ final class PlatformSecurityTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fileURL), Data("protected".utf8))
     }
 
+    func testKeychainMetadataStoreRoundTripsAccountMetadata() throws {
+        let store = KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        defer {
+            try? store.removeValue(for: "icloud-account")
+        }
+
+        try store.setString("primary-account", for: "icloud-account")
+
+        XCTAssertEqual(try store.string(for: "icloud-account"), "primary-account")
+
+        try store.removeValue(for: "icloud-account")
+        XCTAssertNil(try store.string(for: "icloud-account"))
+    }
+
     private func makeTemporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
