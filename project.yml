@@ -1,0 +1,72 @@
+name: Editor
+options:
+  bundleIdPrefix: com.liangzhang
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+targets:
+  EditorMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/EditorApp
+      - path: Sources/EditorCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.liangzhang.editor.mac
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_CFBundleDisplayName: Editor
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        CODE_SIGN_STYLE: Automatic
+        OTHER_LDFLAGS: "$(inherited) -lsqlite3"
+  EditorIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/EditorApp
+      - path: Sources/EditorCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.liangzhang.editor.ios
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_CFBundleDisplayName: Editor
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: "NO"
+        CODE_SIGN_STYLE: Automatic
+        OTHER_LDFLAGS: "$(inherited) -lsqlite3"
+  EditorTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/EditorTests
+      - path: Sources/EditorCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.liangzhang.editor.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+        OTHER_LDFLAGS: "$(inherited) -lsqlite3"
+schemes:
+  EditorMac:
+    build:
+      targets:
+        EditorMac: all
+  EditorIOS:
+    build:
+      targets:
+        EditorIOS: all
+  EditorTests:
+    build:
+      targets:
+        EditorTests: all
+    test:
+      gatherCoverageData: false
+      targets:
+        - EditorTests
+
