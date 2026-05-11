@@ -130,6 +130,10 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
     let localPath: String
     let thumbnailPath: String?
     let kind: AttachmentKind
+
+    func matches(block: BlockSnapshot) -> Bool {
+        block.type == kind.blockType && block.textPlain == originalFilename
+    }
 }
 
 struct WorkspaceSnapshot: Equatable, Sendable {

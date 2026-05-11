@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import ImageIO
 import UniformTypeIdentifiers
 
 struct AttachmentImportResult: Equatable {
@@ -44,6 +45,11 @@ final class AttachmentRepository {
             withIntermediateDirectories: true
         )
         try fileManager.copyItem(at: sourceURL, to: targetURL)
+        let thumbnailPath = try makeThumbnailIfNeeded(
+            sourceURL: targetURL,
+            kind: kind,
+            targetDirectory: targetDirectory
+        )
 
         let attachment = AttachmentSnapshot(
             id: attachmentID,
@@ -53,7 +59,7 @@ final class AttachmentRepository {
             byteSize: data.count,
             contentHash: sha256Hex(data),
             localPath: targetURL.path,
-            thumbnailPath: nil,
+            thumbnailPath: thumbnailPath,
             kind: kind
         )
         let block = BlockSnapshot(
@@ -206,6 +212,46 @@ final class AttachmentRepository {
         SHA256.hash(data: data)
             .map { String(format: "%02x", $0) }
             .joined()
+    }
+
+    private func makeThumbnailIfNeeded(
+        sourceURL: URL,
+        kind: AttachmentKind,
+        targetDirectory: URL
+    ) throws -> String? {
+        guard kind == .image,
+              let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil) else {
+            return nil
+        }
+
+        let options = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 512
+        ] as CFDictionary
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
+            return nil
+        }
+
+        let thumbnailURL = targetDirectory.appendingPathComponent("thumbnail.jpg")
+        guard let destination = CGImageDestinationCreateWithURL(
+            thumbnailURL as CFURL,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        ) else {
+            return nil
+        }
+
+        let destinationOptions = [
+            kCGImageDestinationLossyCompressionQuality: 0.82
+        ] as CFDictionary
+        CGImageDestinationAddImage(destination, thumbnail, destinationOptions)
+        guard CGImageDestinationFinalize(destination) else {
+            return nil
+        }
+
+        return thumbnailURL.path
     }
 }
 

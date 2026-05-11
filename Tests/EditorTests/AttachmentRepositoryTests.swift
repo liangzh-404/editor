@@ -85,6 +85,60 @@ final class AttachmentRepositoryTests: XCTestCase {
         XCTAssertEqual(file.block.type, .attachmentFile)
     }
 
+    func testImportImageCreatesAndPersistsThumbnail() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let repository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+
+        let result = try repository.importAttachment(
+            sourceURL: try makeSourceFile(name: "photo.png", data: Self.onePixelPNGData),
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+        let thumbnailPath = try XCTUnwrap(result.attachment.thumbnailPath)
+        let reloadedAttachment = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().attachments.first { $0.id == result.attachment.id }
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: thumbnailPath))
+        XCTAssertNotEqual(thumbnailPath, result.attachment.localPath)
+        XCTAssertEqual(reloadedAttachment.thumbnailPath, thumbnailPath)
+    }
+
+    func testAttachmentSnapshotMatchesItsAttachmentBlockForPreview() {
+        let attachment = AttachmentSnapshot(
+            id: "attachment-photo",
+            workspaceID: "workspace-local",
+            originalFilename: "photo.png",
+            utiType: "public.png",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/photo.png",
+            thumbnailPath: "/tmp/thumbnail.jpg",
+            kind: .image
+        )
+        let matchingBlock = BlockSnapshot(
+            id: "block-photo",
+            pageID: "page-local",
+            parentBlockID: nil,
+            orderKey: "000002",
+            type: .attachmentImage,
+            textPlain: "photo.png"
+        )
+        let fileBlock = matchingBlock.replacing(type: .attachmentFile, text: "photo.png")
+
+        XCTAssertTrue(attachment.matches(block: matchingBlock))
+        XCTAssertFalse(attachment.matches(block: fileBlock))
+    }
+
     func testDeletingAttachmentBlockRemovesReferenceButKeepsAttachmentMetadata() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -124,6 +178,13 @@ final class AttachmentRepositoryTests: XCTestCase {
         return fileURL
     }
 
+    private func makeSourceFile(name: String, data: Data) throws -> URL {
+        let directory = makeTemporaryDirectory()
+        let fileURL = directory.appendingPathComponent(name)
+        try data.write(to: fileURL)
+        return fileURL
+    }
+
     private func makeTemporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -134,4 +195,8 @@ final class AttachmentRepositoryTests: XCTestCase {
         temporaryFiles.append(directory)
         return directory
     }
+
+    private static let onePixelPNGData = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )!
 }

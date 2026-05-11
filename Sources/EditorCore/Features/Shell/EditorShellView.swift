@@ -2,6 +2,12 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
+
 struct EditorShellView: View {
     @StateObject private var viewModel: WorkspaceViewModel
 
@@ -49,6 +55,7 @@ private struct ThreeColumnEditorShell: View {
             EditorCanvasView(
                 page: viewModel.selectedPage,
                 blocks: viewModel.visibleBlocks,
+                attachments: viewModel.snapshot.attachments,
                 backlinks: viewModel.selectedPageBacklinks,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 onAddParagraphBlock: {
@@ -279,6 +286,7 @@ private struct CompactPageListView: View {
                             EditorCanvasView(
                                 page: page,
                                 blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
+                                attachments: viewModel.snapshot.attachments,
                                 backlinks: viewModel.selectedPageBacklinks,
                                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                                 onAddParagraphBlock: {
@@ -494,6 +502,7 @@ private struct ArchivedPageRow: View {
 private struct EditorCanvasView: View {
     let page: PageSummary?
     let blocks: [BlockSnapshot]
+    let attachments: [AttachmentSnapshot]
     let backlinks: [Backlink]
     let pendingFocusBlockID: String?
     let onAddParagraphBlock: () -> String?
@@ -571,6 +580,7 @@ private struct EditorCanvasView: View {
                 ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
                     BlockRowView(
                         block: block,
+                        attachment: attachment(for: block),
                         editorSession: editorSession,
                         canMoveUp: index > 0,
                         canMoveDown: index < blocks.count - 1,
@@ -675,6 +685,10 @@ private struct EditorCanvasView: View {
             "editor_focus_request_scheduled block_id=\(blockID, privacy: .public) source=view_model"
         )
     }
+
+    private func attachment(for block: BlockSnapshot) -> AttachmentSnapshot? {
+        attachments.first { $0.matches(block: block) }
+    }
 }
 
 private struct BacklinksPanel: View {
@@ -750,6 +764,7 @@ private struct BlockFocusRequest: Equatable {
 
 private struct BlockRowView: View {
     let block: BlockSnapshot
+    let attachment: AttachmentSnapshot?
     @ObservedObject var editorSession: EditorSession
     let canMoveUp: Bool
     let canMoveDown: Bool
@@ -763,6 +778,7 @@ private struct BlockRowView: View {
 
     init(
         block: BlockSnapshot,
+        attachment: AttachmentSnapshot? = nil,
         editorSession: EditorSession,
         canMoveUp: Bool = false,
         canMoveDown: Bool = false,
@@ -774,6 +790,7 @@ private struct BlockRowView: View {
         onTextChange: @escaping (String) -> Void
     ) {
         self.block = block
+        self.attachment = attachment
         self.editorSession = editorSession
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
@@ -841,7 +858,7 @@ private struct BlockRowView: View {
                     .padding(.vertical, 10)
                     .accessibilityIdentifier("editor.divider.\(block.id)")
             } else {
-                AttachmentBlockRow(block: block)
+                AttachmentBlockRow(block: block, attachment: attachment)
             }
         }
         .padding(.vertical, 7)
@@ -876,13 +893,23 @@ private struct BlockRowView: View {
 
 private struct AttachmentBlockRow: View {
     let block: BlockSnapshot
+    let attachment: AttachmentSnapshot?
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: iconName)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
+            if let thumbnailImage {
+                thumbnailImage
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 52, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .accessibilityHidden(true)
+            } else {
+                Image(systemName: iconName)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(block.textPlain)
@@ -901,6 +928,27 @@ private struct AttachmentBlockRow: View {
         .background(Color(red: 0.97, green: 0.97, blue: 0.95))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .accessibilityIdentifier("editor.attachment.\(block.id)")
+    }
+
+    private var thumbnailImage: Image? {
+        guard block.type == .attachmentImage,
+              let path = attachment?.thumbnailPath ?? attachment?.localPath else {
+            return nil
+        }
+
+#if os(macOS)
+        guard let image = NSImage(contentsOfFile: path) else {
+            return nil
+        }
+        return Image(nsImage: image)
+#elseif os(iOS)
+        guard let image = UIImage(contentsOfFile: path) else {
+            return nil
+        }
+        return Image(uiImage: image)
+#else
+        return nil
+#endif
     }
 
     private var iconName: String {
