@@ -95,6 +95,23 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "")
     }
 
+    @MainActor
+    func testAppendParagraphBlockRefreshesVisibleBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        try viewModel.appendParagraphBlockToCurrentPage()
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph, .paragraph])
+        XCTAssertEqual(viewModel.visibleBlocks.last?.textPlain, "")
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)

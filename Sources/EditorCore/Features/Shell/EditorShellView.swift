@@ -48,6 +48,9 @@ private struct ThreeColumnEditorShell: View {
             EditorCanvasView(
                 page: viewModel.selectedPage,
                 blocks: viewModel.visibleBlocks,
+                onAddParagraphBlock: {
+                    viewModel.addParagraphBlockToCurrentPage()
+                },
                 onBlockTextChange: { blockID, text in
                     viewModel.editBlockText(blockID: blockID, text: text)
                 },
@@ -139,6 +142,9 @@ private struct CompactPageListView: View {
                     EditorCanvasView(
                         page: page,
                         blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
+                        onAddParagraphBlock: {
+                            viewModel.addParagraphBlockToCurrentPage()
+                        },
                         onBlockTextChange: { blockID, text in
                             viewModel.editBlockText(blockID: blockID, text: text)
                         },
@@ -178,6 +184,7 @@ private struct PageRow: View {
 private struct EditorCanvasView: View {
     let page: PageSummary?
     let blocks: [BlockSnapshot]
+    let onAddParagraphBlock: () -> Void
     let onBlockTextChange: (String, String) -> Void
     let onImportAttachment: (URL) -> Void
     @State private var isAttachmentImporterPresented = false
@@ -191,6 +198,16 @@ private struct EditorCanvasView: View {
                         .font(.largeTitle.weight(.semibold))
 
                     Spacer(minLength: 12)
+
+                    Button {
+                        onAddParagraphBlock()
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("New block")
+                    .accessibilityIdentifier("editor.add-block")
+                    .disabled(page == nil)
 
                     Button {
                         isAttachmentImporterPresented = true

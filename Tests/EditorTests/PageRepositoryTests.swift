@@ -108,6 +108,28 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.orderKey), ["000001", "000002", "000003"])
     }
 
+    func testAppendParagraphBlockPersistsAtEnd() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+
+        let appendedBlock = try repository.appendBlock(
+            pageID: pageID,
+            type: .paragraph,
+            text: ""
+        )
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(appendedBlock.type, .paragraph)
+        XCTAssertEqual(appendedBlock.textPlain, "")
+        XCTAssertEqual(reloadedSnapshot.blocks.map(\.id).last, appendedBlock.id)
+        XCTAssertEqual(reloadedSnapshot.blocks.map(\.orderKey), ["000001", "000002"])
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityID, appendedBlock.id)
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)

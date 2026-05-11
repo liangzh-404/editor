@@ -84,6 +84,33 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func appendParagraphBlockToCurrentPage() throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedPageID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        _ = try repository.appendBlock(
+            pageID: selectedPageID,
+            type: .paragraph,
+            text: ""
+        )
+        try load()
+    }
+
+    func addParagraphBlockToCurrentPage() {
+        do {
+            try appendParagraphBlockToCurrentPage()
+            EditorLog.input.debug("paragraph_block_added")
+        } catch {
+            EditorLog.input.error(
+                "paragraph_block_add_failed error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     func importAttachment(sourceURL: URL) throws {
         guard repository != nil, let attachmentRepository else {
             throw WorkspaceViewModelError.missingRepository

@@ -216,6 +216,65 @@ final class PageRepository {
         )
     }
 
+    func appendBlock(pageID: String, type: BlockType, text: String) throws -> BlockSnapshot {
+        let pageRows = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        guard pageRows.first != nil else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        let blockCountRows = try database.query(
+            """
+            SELECT COUNT(*) AS block_count
+            FROM blocks
+            WHERE page_id = ? AND is_deleted = 0
+            """,
+            bindings: [.text(pageID)]
+        )
+        let blockCount = Int(blockCountRows.first?["block_count"] ?? "") ?? 0
+        let now = ISO8601DateFormatter().string(from: Date())
+        let blockID = "block-\(UUID().uuidString.lowercased())"
+        let orderKey = String(format: "%06d", blockCount + 1)
+
+        try insertBlock(
+            id: blockID,
+            pageID: pageID,
+            orderKey: orderKey,
+            type: type,
+            text: text,
+            createdAt: now
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "block",
+            entityID: blockID,
+            changeType: "create"
+        )
+        try BacklinkRepository(database: database).rebuildLinksForBlock(
+            blockID: blockID,
+            text: text
+        )
+
+        EditorLog.store.debug(
+            "block_appended block_id=\(blockID, privacy: .public) page_id=\(pageID, privacy: .public) type=\(type.rawValue, privacy: .public)"
+        )
+
+        return BlockSnapshot(
+            id: blockID,
+            pageID: pageID,
+            parentBlockID: nil,
+            orderKey: orderKey,
+            type: type,
+            textPlain: text
+        )
+    }
+
     func moveBlock(blockID: String, toIndex targetIndex: Int) throws {
         let selectedRows = try database.query(
             """
@@ -435,6 +494,7 @@ final class PageRepository {
 }
 
 enum PageRepositoryError: Error, Equatable {
+    case pageNotFound
     case blockNotFound
     case invalidPayloadEncoding
 }
