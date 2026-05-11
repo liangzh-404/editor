@@ -193,6 +193,29 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRestoreArchivedPageRefreshesSnapshotAndSelectsRestoredPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let page = try viewModel.createPageInSelectedWorkspace(title: "Scratch")
+        try viewModel.archiveSelectedPage()
+
+        XCTAssertEqual(viewModel.snapshot.archivedPages.map(\.title), ["Scratch"])
+
+        try viewModel.restoreArchivedPage(id: page.id)
+
+        XCTAssertEqual(viewModel.snapshot.archivedPages, [])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Scratch"])
+        XCTAssertEqual(viewModel.selectedPageID, page.id)
+        XCTAssertEqual(viewModel.selectedPage?.title, "Scratch")
+    }
+
+    @MainActor
     func testCreatePageRequestsFocusForInitialEmptyBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }

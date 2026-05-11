@@ -309,6 +309,16 @@ final class WorkspaceViewModel: ObservableObject {
         try load()
     }
 
+    func restoreArchivedPage(id pageID: String) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        try repository.restorePage(pageID: pageID)
+        try load()
+        selectPage(id: pageID)
+    }
+
     func addParagraphBlockToCurrentPage() -> String? {
         do {
             let block = try appendParagraphBlockToCurrentPage()
@@ -358,6 +368,17 @@ final class WorkspaceViewModel: ObservableObject {
             selectedPageID = previousSelection
             EditorLog.input.error(
                 "page_archive_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func restoreArchivedPageForUI(id pageID: String) {
+        do {
+            try restoreArchivedPage(id: pageID)
+            EditorLog.input.debug("page_restore_visible page_id=\(pageID, privacy: .public)")
+        } catch {
+            EditorLog.input.error(
+                "page_restore_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }

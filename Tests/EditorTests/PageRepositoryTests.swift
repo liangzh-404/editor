@@ -133,6 +133,31 @@ final class PageRepositoryTests: XCTestCase {
         )
     }
 
+    func testRestoreArchivedPageMakesItVisibleAndQueuesSyncChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let createdPage = try repository.createPage(workspaceID: workspaceID, title: "Scratch")
+        try repository.archivePage(pageID: createdPage.id)
+
+        let archivedSnapshot = try repository.loadWorkspaceSnapshot()
+        XCTAssertEqual(archivedSnapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(archivedSnapshot.archivedPages.map(\.title), ["Scratch"])
+
+        try repository.restorePage(pageID: createdPage.id)
+        let restoredSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(restoredSnapshot.pages.map(\.title), ["Welcome", "Scratch"])
+        XCTAssertEqual(restoredSnapshot.archivedPages, [])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "page", entityID: createdPage.id, changeType: "restore")
+        )
+    }
+
     func testImportMarkdownReplacesPageBlocksWithTypedBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

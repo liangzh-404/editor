@@ -231,6 +231,16 @@ private struct PageListView: View {
                     Label("New Notebook", systemImage: "folder.badge.plus")
                 }
             }
+
+            if !viewModel.snapshot.archivedPages.isEmpty {
+                Section("Archive") {
+                    ForEach(viewModel.snapshot.archivedPages) { page in
+                        ArchivedPageRow(page: page) {
+                            viewModel.restoreArchivedPageForUI(id: page.id)
+                        }
+                    }
+                }
+            }
         }
         .navigationTitle("Pages")
         .scrollContentBackground(.hidden)
@@ -322,6 +332,16 @@ private struct CompactPageListView: View {
                     _ = viewModel.addNotebookToSelectedWorkspace()
                 } label: {
                     Label("New Notebook", systemImage: "folder.badge.plus")
+                }
+            }
+
+            if !viewModel.snapshot.archivedPages.isEmpty {
+                Section("Archive") {
+                    ForEach(viewModel.snapshot.archivedPages) { page in
+                        ArchivedPageRow(page: page) {
+                            viewModel.restoreArchivedPageForUI(id: page.id)
+                        }
+                    }
                 }
             }
         }
@@ -432,6 +452,36 @@ private struct PageRow: View {
                 .lineLimit(1)
         }
         .padding(.vertical, 5)
+    }
+}
+
+private struct ArchivedPageRow: View {
+    let page: PageSummary
+    let onRestore: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "archivebox")
+                .foregroundStyle(.secondary)
+
+            Text(page.title)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Button {
+                onRestore()
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.borderless)
+            .help("Restore")
+            .accessibilityIdentifier("editor.restore-page.\(page.id)")
+        }
+        .padding(.vertical, 5)
+        .accessibilityIdentifier("editor.archived-page.\(page.id)")
     }
 }
 

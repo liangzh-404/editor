@@ -136,6 +136,7 @@ struct WorkspaceSnapshot: Equatable, Sendable {
     let workspaces: [WorkspaceSummary]
     let notebooks: [NotebookSummary]
     let pages: [PageSummary]
+    let archivedPages: [PageSummary]
     let blocks: [BlockSnapshot]
     let attachments: [AttachmentSnapshot]
     let selectedWorkspaceID: String?
@@ -146,6 +147,7 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         workspaces: [WorkspaceSummary],
         notebooks: [NotebookSummary] = [],
         pages: [PageSummary],
+        archivedPages: [PageSummary] = [],
         blocks: [BlockSnapshot],
         attachments: [AttachmentSnapshot],
         selectedWorkspaceID: String?,
@@ -155,6 +157,7 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         self.workspaces = workspaces
         self.notebooks = notebooks
         self.pages = pages
+        self.archivedPages = archivedPages
         self.blocks = blocks
         self.attachments = attachments
         self.selectedWorkspaceID = selectedWorkspaceID
@@ -168,6 +171,7 @@ extension WorkspaceSnapshot {
         workspaces: [],
         notebooks: [],
         pages: [],
+        archivedPages: [],
         blocks: [],
         attachments: [],
         selectedWorkspaceID: nil,
@@ -180,6 +184,7 @@ extension WorkspaceSnapshot {
             workspaces: workspaces,
             notebooks: notebooks,
             pages: pages,
+            archivedPages: archivedPages,
             blocks: blocks.map { block in
                 block.id == blockID ? block.replacing(type: type, text: text) : block
             },
@@ -212,6 +217,7 @@ extension WorkspaceSnapshot {
                     )
                     : page
             },
+            archivedPages: archivedPages,
             blocks: blocks,
             attachments: attachments,
             selectedWorkspaceID: selectedWorkspaceID,

@@ -78,6 +78,28 @@ final class PageRepository {
             )
         }
 
+        let archivedPages = try database.query(
+            """
+            SELECT pages.id,
+                   pages.workspace_id,
+                   pages.notebook_id,
+                   pages.title
+            FROM pages
+            LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
+            WHERE pages.workspace_id = ?
+              AND pages.is_archived = 1
+            ORDER BY pages.updated_at DESC
+            """,
+            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
+        ).map { row in
+            PageSummary(
+                id: row["id"] ?? "",
+                workspaceID: row["workspace_id"] ?? "",
+                notebookID: row["notebook_id"] ?? nil,
+                title: row["title"] ?? ""
+            )
+        }
+
         let selectedPageID = pages.first?.id
 
         let blocks = try loadBlocks(pageIDs: pages.map(\.id))
@@ -116,6 +138,7 @@ final class PageRepository {
             workspaces: workspaces,
             notebooks: notebooks,
             pages: pages,
+            archivedPages: archivedPages,
             blocks: blocks,
             attachments: attachments,
             selectedWorkspaceID: selectedWorkspaceID,
@@ -339,6 +362,42 @@ final class PageRepository {
         )
 
         EditorLog.store.debug("page_archived page_id=\(pageID, privacy: .public)")
+    }
+
+    func restorePage(pageID: String) throws {
+        let rows = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE id = ? AND is_archived = 1
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        guard rows.first != nil else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            UPDATE pages
+            SET is_archived = 0,
+                updated_at = ?
+            WHERE id = ? AND is_archived = 1
+            """,
+            bindings: [
+                .text(now),
+                .text(pageID)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "page",
+            entityID: pageID,
+            changeType: "restore"
+        )
+
+        EditorLog.store.debug("page_restored page_id=\(pageID, privacy: .public)")
     }
 
     func updateBlock(blockID: String, type: BlockType, text: String) throws {
