@@ -1,11 +1,21 @@
 import Foundation
 
-struct Backlink: Equatable, Sendable {
+struct Backlink: Identifiable, Equatable, Sendable {
     let sourcePageID: String
     let sourceBlockID: String?
     let targetPageID: String?
     let targetBlockID: String?
     let linkText: String
+
+    var id: String {
+        [
+            sourcePageID,
+            sourceBlockID ?? "",
+            targetPageID ?? "",
+            targetBlockID ?? "",
+            linkText
+        ].joined(separator: ":")
+    }
 }
 
 final class BacklinkRepository {

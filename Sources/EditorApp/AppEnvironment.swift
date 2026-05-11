@@ -28,7 +28,9 @@ enum AppEnvironment {
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
-            attachmentRepository: attachmentRepository
+            attachmentRepository: attachmentRepository,
+            searchRepository: SearchRepository(database: database),
+            backlinkRepository: BacklinkRepository(database: database)
         )
         try viewModel.load()
         return viewModel

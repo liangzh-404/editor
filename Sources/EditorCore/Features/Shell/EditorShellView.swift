@@ -49,6 +49,7 @@ private struct ThreeColumnEditorShell: View {
             EditorCanvasView(
                 page: viewModel.selectedPage,
                 blocks: viewModel.visibleBlocks,
+                backlinks: viewModel.selectedPageBacklinks,
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
                 },
@@ -118,9 +119,13 @@ private struct PageListView: View {
 
     var body: some View {
         List(selection: selectedPageBinding) {
-            ForEach(viewModel.snapshot.pages) { page in
-                PageRow(page: page)
-                    .tag(Optional(page.id))
+            SearchSectionView(viewModel: viewModel)
+
+            Section("Pages") {
+                ForEach(viewModel.snapshot.pages) { page in
+                    PageRow(page: page)
+                        .tag(Optional(page.id))
+                }
             }
         }
         .navigationTitle("Pages")
@@ -144,38 +149,102 @@ private struct CompactPageListView: View {
 
     var body: some View {
         List {
-            ForEach(viewModel.snapshot.pages) { page in
-                NavigationLink {
-                    EditorCanvasView(
-                        page: page,
-                        blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
-                        onAddParagraphBlock: {
-                            viewModel.addParagraphBlockToCurrentPage()
-                        },
-                        onImportMarkdown: { sourceURL in
-                            viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
-                        },
-                        onExportMarkdown: {
-                            viewModel.exportCurrentPageMarkdown()
-                        },
-                        onBlockTextChange: { blockID, text in
-                            viewModel.editBlockText(blockID: blockID, text: text)
-                        },
-                        onImportAttachment: { sourceURL in
-                            viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+            SearchSectionView(viewModel: viewModel)
+
+            Section("Pages") {
+                ForEach(viewModel.snapshot.pages) { page in
+                    NavigationLink {
+                        EditorCanvasView(
+                            page: page,
+                            blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
+                            backlinks: viewModel.selectedPageBacklinks,
+                            onAddParagraphBlock: {
+                                viewModel.addParagraphBlockToCurrentPage()
+                            },
+                            onImportMarkdown: { sourceURL in
+                                viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
+                            },
+                            onExportMarkdown: {
+                                viewModel.exportCurrentPageMarkdown()
+                            },
+                            onBlockTextChange: { blockID, text in
+                                viewModel.editBlockText(blockID: blockID, text: text)
+                            },
+                            onImportAttachment: { sourceURL in
+                                viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+                            }
+                        )
+                        .onAppear {
+                            viewModel.selectPage(id: page.id)
                         }
-                    )
-                    .onAppear {
-                        viewModel.selectPage(id: page.id)
+                    } label: {
+                        PageRow(page: page)
                     }
-                } label: {
-                    PageRow(page: page)
                 }
             }
         }
         .navigationTitle("Pages")
         .scrollContentBackground(.hidden)
         .background(Color.white)
+    }
+}
+
+private struct SearchSectionView: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+
+    var body: some View {
+        Section("Search") {
+            TextField("Search", text: searchBinding)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("editor.search-field")
+
+            ForEach(viewModel.searchResults) { result in
+                SearchResultRow(result: result)
+            }
+        }
+    }
+
+    private var searchBinding: Binding<String> {
+        Binding {
+            viewModel.searchQuery
+        } set: { query in
+            viewModel.updateSearchQuery(query)
+        }
+    }
+}
+
+private struct SearchResultRow: View {
+    let result: SearchResult
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: iconName)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(result.title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Text(result.snippet)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityIdentifier("editor.search-result.\(result.id)")
+    }
+
+    private var iconName: String {
+        switch result.entityType {
+        case "page":
+            return "doc.text"
+        case "attachment":
+            return "paperclip"
+        default:
+            return "text.alignleft"
+        }
     }
 }
 
@@ -197,6 +266,7 @@ private struct PageRow: View {
 private struct EditorCanvasView: View {
     let page: PageSummary?
     let blocks: [BlockSnapshot]
+    let backlinks: [Backlink]
     let onAddParagraphBlock: () -> String?
     let onImportMarkdown: (URL) -> Void
     let onExportMarkdown: () -> String
@@ -275,6 +345,10 @@ private struct EditorCanvasView: View {
                         onBlockTextChange(block.id, text)
                     }
                 }
+
+                if !backlinks.isEmpty {
+                    BacklinksPanel(backlinks: backlinks)
+                }
             }
             .frame(maxWidth: 760, alignment: .leading)
             .padding(.horizontal, 40)
@@ -324,6 +398,39 @@ private struct EditorCanvasView: View {
                 onImportAttachment(sourceURL)
             }
         }
+    }
+}
+
+private struct BacklinksPanel: View {
+    let backlinks: [Backlink]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Backlinks")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ForEach(backlinks) { backlink in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "link")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("[[\(backlink.linkText)]]")
+                            .font(.callout)
+                        Text(backlink.sourceBlockID ?? backlink.sourcePageID)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .padding(.vertical, 3)
+                .accessibilityIdentifier("editor.backlink.\(backlink.id)")
+            }
+        }
+        .padding(.top, 10)
     }
 }
 

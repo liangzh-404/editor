@@ -1,10 +1,14 @@
 import Foundation
 
-struct SearchResult: Equatable, Sendable {
+struct SearchResult: Identifiable, Equatable, Sendable {
     let entityType: String
     let entityID: String
     let title: String
     let snippet: String
+
+    var id: String {
+        "\(entityType):\(entityID)"
+    }
 }
 
 final class SearchRepository {

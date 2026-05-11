@@ -5,9 +5,14 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var snapshot: WorkspaceSnapshot
     @Published private(set) var selectedWorkspaceID: String?
     @Published private(set) var selectedPageID: String?
+    @Published private(set) var searchQuery = ""
+    @Published private(set) var searchResults: [SearchResult] = []
+    @Published private(set) var selectedPageBacklinks: [Backlink] = []
 
     private let repository: PageRepository?
     private let attachmentRepository: AttachmentRepository?
+    private let searchRepository: SearchRepository?
+    private let backlinkRepository: BacklinkRepository?
 
     var selectedPage: PageSummary? {
         guard let selectedPageID else {
@@ -23,9 +28,16 @@ final class WorkspaceViewModel: ObservableObject {
         return snapshot.blocks.filter { $0.pageID == selectedPageID }
     }
 
-    init(repository: PageRepository, attachmentRepository: AttachmentRepository? = nil) {
+    init(
+        repository: PageRepository,
+        attachmentRepository: AttachmentRepository? = nil,
+        searchRepository: SearchRepository? = nil,
+        backlinkRepository: BacklinkRepository? = nil
+    ) {
         self.repository = repository
         self.attachmentRepository = attachmentRepository
+        self.searchRepository = searchRepository
+        self.backlinkRepository = backlinkRepository
         snapshot = .empty
         selectedWorkspaceID = nil
         selectedPageID = nil
@@ -34,6 +46,8 @@ final class WorkspaceViewModel: ObservableObject {
     init(snapshot: WorkspaceSnapshot) {
         repository = nil
         attachmentRepository = nil
+        searchRepository = nil
+        backlinkRepository = nil
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedPageID = snapshot.selectedPageID
@@ -46,10 +60,12 @@ final class WorkspaceViewModel: ObservableObject {
 
         let loadedSnapshot = try repository.loadWorkspaceSnapshot()
         apply(snapshot: loadedSnapshot)
+        try refreshDerivedState(rebuildSearchIndex: true)
     }
 
     func selectPage(id: String) {
         selectedPageID = id
+        refreshBacklinksForSelectedPage()
     }
 
     func updateBlockText(blockID: String, text: String) throws {
@@ -69,6 +85,7 @@ final class WorkspaceViewModel: ObservableObject {
             type: nextBlock.type,
             text: nextBlock.text
         )
+        try refreshDerivedState(rebuildSearchIndex: true)
     }
 
     func editBlockText(blockID: String, text: String) {
@@ -161,6 +178,11 @@ final class WorkspaceViewModel: ObservableObject {
         try load()
     }
 
+    func updateSearchQuery(_ query: String) {
+        searchQuery = query
+        refreshSearchResults()
+    }
+
     func importAttachmentForCurrentPage(sourceURL: URL) {
         do {
             try importAttachment(sourceURL: sourceURL)
@@ -176,6 +198,47 @@ final class WorkspaceViewModel: ObservableObject {
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedPageID = snapshot.selectedPageID
+    }
+
+    private func refreshDerivedState(rebuildSearchIndex: Bool) throws {
+        if rebuildSearchIndex {
+            try searchRepository?.rebuildIndex()
+        }
+        refreshSearchResults()
+        refreshBacklinksForSelectedPage()
+    }
+
+    private func refreshSearchResults() {
+        guard !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let searchRepository else {
+            searchResults = []
+            return
+        }
+
+        do {
+            searchResults = try searchRepository.search(searchQuery)
+        } catch {
+            searchResults = []
+            EditorLog.render.error(
+                "search_failed query=\(self.searchQuery, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    private func refreshBacklinksForSelectedPage() {
+        guard let selectedPageID, let backlinkRepository else {
+            selectedPageBacklinks = []
+            return
+        }
+
+        do {
+            selectedPageBacklinks = try backlinkRepository.backlinks(targetPageID: selectedPageID)
+        } catch {
+            selectedPageBacklinks = []
+            EditorLog.render.error(
+                "backlinks_failed page_id=\(selectedPageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     private func nextBlockState(currentType: BlockType, text: String) -> (type: BlockType, text: String) {

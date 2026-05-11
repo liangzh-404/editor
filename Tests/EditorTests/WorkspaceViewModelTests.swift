@@ -166,6 +166,59 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Imported", "Item"])
     }
 
+    @MainActor
+    func testSearchQueryRefreshesResultsFromCurrentBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            searchRepository: SearchRepository(database: database)
+        )
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.updateBlockText(blockID: blockID, text: "Alpha searchable block")
+
+        viewModel.updateSearchQuery("Alpha")
+
+        XCTAssertEqual(viewModel.searchResults.map(\.snippet), ["Alpha searchable block"])
+    }
+
+    @MainActor
+    func testSelectedPageBacklinksRefreshAfterBlockEdit() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let pageID = try XCTUnwrap(viewModel.selectedPageID)
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "See [[Welcome]]")
+
+        XCTAssertEqual(
+            viewModel.selectedPageBacklinks,
+            [
+                Backlink(
+                    sourcePageID: pageID,
+                    sourceBlockID: blockID,
+                    targetPageID: pageID,
+                    targetBlockID: nil,
+                    linkText: "Welcome"
+                )
+            ]
+        )
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)
