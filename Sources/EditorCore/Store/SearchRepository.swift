@@ -92,6 +92,19 @@ final class SearchRepository {
                 """,
                 bindings: [.text(entityID)]
             ).first?["page_id"] ?? nil
+        case "attachment":
+            return try database.query(
+                """
+                SELECT blocks.page_id
+                FROM blocks
+                INNER JOIN pages ON pages.id = blocks.page_id
+                WHERE blocks.is_deleted = 0
+                  AND pages.is_archived = 0
+                  AND json_extract(blocks.payload_json, '$.attachment_id') = ?
+                LIMIT 1
+                """,
+                bindings: [.text(entityID)]
+            ).first?["page_id"] ?? nil
         default:
             return nil
         }

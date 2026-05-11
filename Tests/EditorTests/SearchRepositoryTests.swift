@@ -36,7 +36,7 @@ final class SearchRepositoryTests: XCTestCase {
 
         XCTAssertTrue(try repository.search("Welcome").contains(SearchResult(entityType: "page", entityID: pageID, title: "Welcome", snippet: "Welcome", destinationPageID: pageID)))
         XCTAssertTrue(try repository.search("Alpha").contains(SearchResult(entityType: "block", entityID: blockID, title: "Welcome", snippet: "Alpha searchable block", destinationPageID: pageID)))
-        XCTAssertTrue(try repository.search("invoice").contains(SearchResult(entityType: "attachment", entityID: attachment.id, title: "invoice-2026.pdf", snippet: "invoice-2026.pdf")))
+        XCTAssertTrue(try repository.search("invoice").contains(SearchResult(entityType: "attachment", entityID: attachment.id, title: "invoice-2026.pdf", snippet: "invoice-2026.pdf", destinationPageID: pageID)))
     }
 
     private func migratedDatabase() throws -> SQLiteDatabase {
