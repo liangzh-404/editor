@@ -184,11 +184,12 @@ private struct PageRow: View {
 private struct EditorCanvasView: View {
     let page: PageSummary?
     let blocks: [BlockSnapshot]
-    let onAddParagraphBlock: () -> Void
+    let onAddParagraphBlock: () -> String?
     let onBlockTextChange: (String, String) -> Void
     let onImportAttachment: (URL) -> Void
     @State private var isAttachmentImporterPresented = false
     @StateObject private var editorSession = EditorSession()
+    @State private var pendingFocusRequest: BlockFocusRequest?
 
     var body: some View {
         ScrollView {
@@ -200,7 +201,9 @@ private struct EditorCanvasView: View {
                     Spacer(minLength: 12)
 
                     Button {
-                        onAddParagraphBlock()
+                        if let blockID = onAddParagraphBlock() {
+                            pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+                        }
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -220,7 +223,16 @@ private struct EditorCanvasView: View {
                 }
 
                 ForEach(blocks) { block in
-                    BlockRowView(block: block, editorSession: editorSession) { text in
+                    BlockRowView(
+                        block: block,
+                        editorSession: editorSession,
+                        focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
+                        onFocusRequestHandled: {
+                            if pendingFocusRequest?.blockID == block.id {
+                                pendingFocusRequest = nil
+                            }
+                        }
+                    ) { text in
                         onBlockTextChange(block.id, text)
                     }
                 }
@@ -249,18 +261,29 @@ private struct EditorCanvasView: View {
     }
 }
 
+private struct BlockFocusRequest: Equatable {
+    let id = UUID()
+    let blockID: String
+}
+
 private struct BlockRowView: View {
     let block: BlockSnapshot
     @ObservedObject var editorSession: EditorSession
+    let focusRequestID: UUID?
+    let onFocusRequestHandled: () -> Void
     let onTextChange: (String) -> Void
 
     init(
         block: BlockSnapshot,
         editorSession: EditorSession,
+        focusRequestID: UUID? = nil,
+        onFocusRequestHandled: @escaping () -> Void = {},
         onTextChange: @escaping (String) -> Void
     ) {
         self.block = block
         self.editorSession = editorSession
+        self.focusRequestID = focusRequestID
+        self.onFocusRequestHandled = onFocusRequestHandled
         self.onTextChange = onTextChange
     }
 
@@ -277,6 +300,8 @@ private struct BlockRowView: View {
                     text: block.textPlain,
                     blockType: block.type,
                     session: editorSession,
+                    focusRequestID: focusRequestID,
+                    onFocusRequestHandled: onFocusRequestHandled,
                     onTextChange: onTextChange
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)

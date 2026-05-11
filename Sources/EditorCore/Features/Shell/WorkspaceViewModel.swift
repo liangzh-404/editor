@@ -84,7 +84,8 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    func appendParagraphBlockToCurrentPage() throws {
+    @discardableResult
+    func appendParagraphBlockToCurrentPage() throws -> BlockSnapshot {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
         }
@@ -92,22 +93,25 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingSelection
         }
 
-        _ = try repository.appendBlock(
+        let block = try repository.appendBlock(
             pageID: selectedPageID,
             type: .paragraph,
             text: ""
         )
         try load()
+        return block
     }
 
-    func addParagraphBlockToCurrentPage() {
+    func addParagraphBlockToCurrentPage() -> String? {
         do {
-            try appendParagraphBlockToCurrentPage()
+            let block = try appendParagraphBlockToCurrentPage()
             EditorLog.input.debug("paragraph_block_added")
+            return block.id
         } catch {
             EditorLog.input.error(
                 "paragraph_block_add_failed error=\(String(describing: error), privacy: .public)"
             )
+            return nil
         }
     }
 

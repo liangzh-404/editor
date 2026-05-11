@@ -5,7 +5,27 @@ struct NativeTextBlockEditor: View {
     let text: String
     let blockType: BlockType
     @ObservedObject var session: EditorSession
+    let focusRequestID: UUID?
+    let onFocusRequestHandled: () -> Void
     let onTextChange: (String) -> Void
+
+    init(
+        blockID: String,
+        text: String,
+        blockType: BlockType,
+        session: EditorSession,
+        focusRequestID: UUID? = nil,
+        onFocusRequestHandled: @escaping () -> Void = {},
+        onTextChange: @escaping (String) -> Void
+    ) {
+        self.blockID = blockID
+        self.text = text
+        self.blockType = blockType
+        self.session = session
+        self.focusRequestID = focusRequestID
+        self.onFocusRequestHandled = onFocusRequestHandled
+        self.onTextChange = onTextChange
+    }
 
     var body: some View {
         PlatformNativeTextView(
@@ -13,6 +33,8 @@ struct NativeTextBlockEditor: View {
             text: text,
             blockType: blockType,
             session: session,
+            focusRequestID: focusRequestID,
+            onFocusRequestHandled: onFocusRequestHandled,
             onTextChange: onTextChange
         )
         .frame(minHeight: minimumHeight)
@@ -38,6 +60,8 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let text: String
     let blockType: BlockType
     @ObservedObject var session: EditorSession
+    let focusRequestID: UUID?
+    let onFocusRequestHandled: () -> Void
     let onTextChange: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -86,6 +110,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             textView.string = text
         }
         textView.font = nsFont
+        context.coordinator.handleFocusRequestIfNeeded(textView: textView)
     }
 
     private var nsFont: NSFont {
@@ -104,6 +129,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         var parent: PlatformNativeTextView
         var textContentStorage: NSTextContentStorage?
         var textLayoutManager: NSTextLayoutManager?
+        private var handledFocusRequestID: UUID?
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
@@ -125,6 +151,24 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             _ = parent.session.commitDraft(blockID: parent.blockID)
             parent.session.endEditing(blockID: parent.blockID)
         }
+
+        func handleFocusRequestIfNeeded(textView: NSTextView) {
+            guard let focusRequestID = parent.focusRequestID,
+                  handledFocusRequestID != focusRequestID else {
+                return
+            }
+
+            handledFocusRequestID = focusRequestID
+            DispatchQueue.main.async { [weak textView, weak self] in
+                guard let textView, let self else {
+                    return
+                }
+                textView.window?.makeFirstResponder(textView)
+                textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+                self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
+                self.parent.onFocusRequestHandled()
+            }
+        }
     }
 }
 #elseif os(iOS)
@@ -135,6 +179,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let text: String
     let blockType: BlockType
     @ObservedObject var session: EditorSession
+    let focusRequestID: UUID?
+    let onFocusRequestHandled: () -> Void
     let onTextChange: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -164,6 +210,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             textView.text = text
         }
         textView.font = uiFont
+        context.coordinator.handleFocusRequestIfNeeded(textView: textView)
     }
 
     private var uiFont: UIFont {
@@ -180,6 +227,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: PlatformNativeTextView
+        private var handledFocusRequestID: UUID?
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
@@ -197,6 +245,24 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         func textViewDidEndEditing(_ textView: UITextView) {
             _ = parent.session.commitDraft(blockID: parent.blockID)
             parent.session.endEditing(blockID: parent.blockID)
+        }
+
+        func handleFocusRequestIfNeeded(textView: UITextView) {
+            guard let focusRequestID = parent.focusRequestID,
+                  handledFocusRequestID != focusRequestID else {
+                return
+            }
+
+            handledFocusRequestID = focusRequestID
+            DispatchQueue.main.async { [weak textView, weak self] in
+                guard let textView, let self else {
+                    return
+                }
+                textView.becomeFirstResponder()
+                textView.selectedRange = NSRange(location: textView.text.count, length: 0)
+                self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
+                self.parent.onFocusRequestHandled()
+            }
         }
     }
 }
