@@ -1,4 +1,5 @@
 import Foundation
+import CloudKit
 import XCTest
 
 final class SyncEngineTests: XCTestCase {
@@ -42,6 +43,30 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
+    func testCloudKitPrivateDatabaseAdapterMapsBlockChangeToRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Cloud text")
+        let saver = CapturingCloudKitRecordSaver()
+
+        let result = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordSaver: saver
+        ).upload(change: SyncChange(entityType: "block", entityID: blockID, changeType: "update"))
+
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        XCTAssertEqual(record.recordType, "BlockRecord")
+        XCTAssertEqual(record.recordID.recordName, "block-\(blockID)")
+        XCTAssertEqual(record["entityID"] as? String, blockID)
+        XCTAssertEqual(record["textPlain"] as? String, "Cloud text")
+        XCTAssertEqual(record["type"] as? String, BlockType.paragraph.rawValue)
+        XCTAssertEqual(result.recordName, "block-\(blockID)")
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)
@@ -69,5 +94,14 @@ final class RecordingCloudKitSyncAdapter: CloudKitSyncAdapter {
             recordName: "\(change.entityType)-\(change.entityID)",
             changeTag: "tag-\(change.entityID)"
         )
+    }
+}
+
+final class CapturingCloudKitRecordSaver: CloudKitRecordSaving {
+    private(set) var savedRecords: [CKRecord] = []
+
+    func save(record: CKRecord) throws -> CKRecord {
+        savedRecords.append(record)
+        return record
     }
 }
