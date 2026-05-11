@@ -1,0 +1,152 @@
+import Foundation
+
+final class PageRepository {
+    private let database: SQLiteDatabase
+
+    private let defaultWorkspaceID = "workspace-local"
+    private let defaultPageID = "page-welcome"
+    private let defaultBlockID = "block-welcome-001"
+
+    init(database: SQLiteDatabase) {
+        self.database = database
+    }
+
+    @discardableResult
+    func bootstrapWorkspaceIfNeeded() throws -> WorkspaceSnapshot {
+        let workspaceCount = try database.queryInt("SELECT COUNT(*) FROM workspaces")
+        if workspaceCount == 0 {
+            try insertDefaultContent()
+        }
+
+        return try loadWorkspaceSnapshot()
+    }
+
+    func loadWorkspaceSnapshot() throws -> WorkspaceSnapshot {
+        let workspaces = try database.query(
+            """
+            SELECT id, name
+            FROM workspaces
+            ORDER BY created_at ASC
+            """
+        ).map { row in
+            WorkspaceSummary(
+                id: row["id"] ?? "",
+                name: row["name"] ?? ""
+            )
+        }
+
+        let selectedWorkspaceID = workspaces.first?.id
+
+        let pages = try database.query(
+            """
+            SELECT id, workspace_id, title
+            FROM pages
+            WHERE workspace_id = ?
+            ORDER BY order_key ASC
+            """,
+            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
+        ).map { row in
+            PageSummary(
+                id: row["id"] ?? "",
+                workspaceID: row["workspace_id"] ?? "",
+                title: row["title"] ?? ""
+            )
+        }
+
+        let selectedPageID = pages.first?.id
+
+        let blocks = try database.query(
+            """
+            SELECT id, page_id, parent_block_id, order_key, type, text_plain
+            FROM blocks
+            WHERE page_id = ? AND is_deleted = 0
+            ORDER BY order_key ASC
+            """,
+            bindings: selectedPageID.map { [.text($0)] } ?? [.text("")]
+        ).map { row in
+            BlockSnapshot(
+                id: row["id"] ?? "",
+                pageID: row["page_id"] ?? "",
+                parentBlockID: row["parent_block_id"] ?? nil,
+                orderKey: row["order_key"] ?? "",
+                type: BlockType(rawValue: row["type"] ?? "") ?? .paragraph,
+                textPlain: row["text_plain"] ?? ""
+            )
+        }
+
+        return WorkspaceSnapshot(
+            workspaces: workspaces,
+            pages: pages,
+            blocks: blocks,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedPageID: selectedPageID
+        )
+    }
+
+    private func insertDefaultContent() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        try database.execute(
+            """
+            INSERT INTO workspaces (id, name, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(defaultWorkspaceID),
+                .text("Local"),
+                .text(now),
+                .text(now)
+            ]
+        )
+
+        try database.execute(
+            """
+            INSERT INTO pages (id, workspace_id, title, order_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(defaultPageID),
+                .text(defaultWorkspaceID),
+                .text("Welcome"),
+                .text("000001"),
+                .text(now),
+                .text(now)
+            ]
+        )
+
+        try database.execute(
+            """
+            INSERT INTO blocks (
+                id,
+                page_id,
+                parent_block_id,
+                order_key,
+                type,
+                payload_json,
+                text_plain,
+                revision,
+                sync_state,
+                is_deleted,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(defaultBlockID),
+                .text(defaultPageID),
+                .null,
+                .text("000001"),
+                .text(BlockType.paragraph.rawValue),
+                .text("{\"text\":\"Start writing in blocks.\"}"),
+                .text("Start writing in blocks."),
+                .integer(1),
+                .text("local"),
+                .integer(0),
+                .text(now),
+                .text(now)
+            ]
+        )
+    }
+}
+

@@ -70,6 +70,37 @@ final class SQLiteDatabase {
         }
     }
 
+    func execute(_ sql: String, bindings: [SQLiteValue]) throws {
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+
+        try bind(bindings, to: statement)
+
+        let result = sqlite3_step(statement)
+        guard result == SQLITE_DONE else {
+            throw SQLiteDatabaseError.stepFailed(lastErrorMessage())
+        }
+    }
+
+    func query(_ sql: String, bindings: [SQLiteValue] = []) throws -> [SQLiteRow] {
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+
+        try bind(bindings, to: statement)
+
+        var rows: [SQLiteRow] = []
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_ROW {
+                rows.append(SQLiteRow(statement: statement))
+            } else if result == SQLITE_DONE {
+                return rows
+            } else {
+                throw SQLiteDatabaseError.stepFailed(lastErrorMessage())
+            }
+        }
+    }
+
     func queryStrings(_ sql: String) throws -> [String] {
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
@@ -118,6 +149,26 @@ final class SQLiteDatabase {
         return statement
     }
 
+    private func bind(_ values: [SQLiteValue], to statement: OpaquePointer?) throws {
+        for (offset, value) in values.enumerated() {
+            let index = Int32(offset + 1)
+            let result: Int32
+
+            switch value {
+            case .text(let string):
+                result = sqlite3_bind_text(statement, index, string, -1, sqliteTransient)
+            case .integer(let integer):
+                result = sqlite3_bind_int64(statement, index, Int64(integer))
+            case .null:
+                result = sqlite3_bind_null(statement, index)
+            }
+
+            guard result == SQLITE_OK else {
+                throw SQLiteDatabaseError.executeFailed(lastErrorMessage())
+            }
+        }
+    }
+
     private func requireHandle() throws -> OpaquePointer {
         guard let handle else {
             throw SQLiteDatabaseError.closed
@@ -133,3 +184,40 @@ final class SQLiteDatabase {
     }
 }
 
+enum SQLiteValue: Equatable {
+    case text(String)
+    case integer(Int)
+    case null
+}
+
+struct SQLiteRow: Equatable {
+    private let values: [String: String?]
+
+    init(statement: OpaquePointer?) {
+        var rowValues: [String: String?] = [:]
+        let columnCount = sqlite3_column_count(statement)
+
+        for columnIndex in 0..<columnCount {
+            guard let rawName = sqlite3_column_name(statement, columnIndex) else {
+                continue
+            }
+
+            let name = String(cString: rawName)
+            if sqlite3_column_type(statement, columnIndex) == SQLITE_NULL {
+                rowValues[name] = nil
+            } else if let rawText = sqlite3_column_text(statement, columnIndex) {
+                rowValues[name] = String(cString: rawText)
+            } else {
+                rowValues[name] = ""
+            }
+        }
+
+        values = rowValues
+    }
+
+    subscript(_ column: String) -> String? {
+        values[column] ?? nil
+    }
+}
+
+private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
