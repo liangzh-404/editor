@@ -140,27 +140,40 @@ final class SyncRepository {
     }
 
     func markUploaded(change: SyncChange, uploadResult: CloudKitUploadResult) throws {
-        try database.execute(
-            """
-            INSERT OR REPLACE INTO sync_records (
-                id,
-                entity_type,
-                entity_id,
-                record_name,
-                change_tag,
-                updated_at
+        if change.changeType == "delete" {
+            try database.execute(
+                """
+                DELETE FROM sync_records
+                WHERE entity_type = ? AND entity_id = ?
+                """,
+                bindings: [
+                    .text(change.entityType),
+                    .text(change.entityID)
+                ]
             )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            bindings: [
-                .text("\(change.entityType)-\(change.entityID)"),
-                .text(change.entityType),
-                .text(change.entityID),
-                .text(uploadResult.recordName),
-                uploadResult.changeTag.map(SQLiteValue.text) ?? .null,
-                .text(dateFormatter.string(from: Date()))
-            ]
-        )
+        } else {
+            try database.execute(
+                """
+                INSERT OR REPLACE INTO sync_records (
+                    id,
+                    entity_type,
+                    entity_id,
+                    record_name,
+                    change_tag,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                bindings: [
+                    .text("\(change.entityType)-\(change.entityID)"),
+                    .text(change.entityType),
+                    .text(change.entityID),
+                    .text(uploadResult.recordName),
+                    uploadResult.changeTag.map(SQLiteValue.text) ?? .null,
+                    .text(dateFormatter.string(from: Date()))
+                ]
+            )
+        }
 
         try database.execute(
             """

@@ -413,6 +413,15 @@ final class WorkspaceViewModel: ObservableObject {
         selectPage(id: pageID)
     }
 
+    func permanentlyDeleteArchivedPage(id pageID: String) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        try repository.permanentlyDeleteArchivedPage(pageID: pageID)
+        try load()
+    }
+
     func addParagraphBlockToCurrentPage() -> String? {
         do {
             let block = try appendParagraphBlockToCurrentPage()
@@ -495,6 +504,17 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "page_restore_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func permanentlyDeleteArchivedPageForUI(id pageID: String) {
+        do {
+            try permanentlyDeleteArchivedPage(id: pageID)
+            EditorLog.input.debug("page_delete_visible page_id=\(pageID, privacy: .public)")
+        } catch {
+            EditorLog.input.error(
+                "page_delete_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }

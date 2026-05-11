@@ -318,6 +318,26 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPermanentlyDeleteArchivedPageRefreshesSnapshotAndKeepsVisibleSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let page = try viewModel.createPageInSelectedWorkspace(title: "Scratch")
+        try viewModel.archiveSelectedPage()
+
+        try viewModel.permanentlyDeleteArchivedPage(id: page.id)
+
+        XCTAssertEqual(viewModel.snapshot.archivedPages, [])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
+    }
+
+    @MainActor
     func testCreatePageRequestsFocusForInitialEmptyBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }

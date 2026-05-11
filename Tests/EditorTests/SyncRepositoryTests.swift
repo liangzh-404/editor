@@ -51,6 +51,26 @@ final class SyncRepositoryTests: XCTestCase {
         XCTAssertTrue(changes.contains(SyncChange(entityType: "block", entityID: importResult.block.id, changeType: "create")))
     }
 
+    func testMarkUploadedForDeleteRemovesSyncRecordAndClearsChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = SyncRepository(database: database)
+        try repository.enqueue(entityType: "page", entityID: "page-old", changeType: "delete")
+        try repository.markUploaded(
+            change: SyncChange(entityType: "page", entityID: "page-old", changeType: "update"),
+            uploadResult: CloudKitUploadResult(recordName: "page-page-old", changeTag: "tag-old")
+        )
+
+        try repository.markUploaded(
+            change: SyncChange(entityType: "page", entityID: "page-old", changeType: "delete"),
+            uploadResult: CloudKitUploadResult(recordName: "page-page-old", changeTag: nil)
+        )
+
+        XCTAssertEqual(try repository.pendingChanges(), [])
+        XCTAssertFalse(try repository.syncRecords().contains { $0.entityID == "page-old" })
+    }
+
     func testRecordFailureKeepsChangeAndSchedulesRetry() throws {
         let database = try migratedDatabase()
         defer { database.close() }

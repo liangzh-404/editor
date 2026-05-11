@@ -132,7 +132,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         context.coordinator.textContentStorage = textContentStorage
         context.coordinator.textLayoutManager = textLayoutManager
 
-        let textView = NSTextView(frame: .zero, textContainer: textContainer)
+        let textView = EditorNSTextView(frame: .zero, textContainer: textContainer)
+        textView.onMouseDown = {
+            EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
+        }
         textView.setAccessibilityIdentifier("editor.text.\(blockID)")
         textView.delegate = context.coordinator
         textView.string = text
@@ -158,6 +161,11 @@ private struct PlatformNativeTextView: NSViewRepresentable {
 
     func updateNSView(_ textView: NSTextView, context: Context) {
         context.coordinator.parent = self
+        if let textView = textView as? EditorNSTextView {
+            textView.onMouseDown = {
+                EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
+            }
+        }
         if textView.string != text {
             textView.string = text
         }
@@ -266,6 +274,18 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         private func focusDelay(for remainingAttempts: Int) -> DispatchTimeInterval {
             remainingAttempts == 8 ? .milliseconds(0) : .milliseconds(35)
         }
+    }
+}
+
+private final class EditorNSTextView: NSTextView {
+    var onMouseDown: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onMouseDown?()
+        if let window, window.firstResponder !== self {
+            window.makeFirstResponder(self)
+        }
+        super.mouseDown(with: event)
     }
 }
 #elseif os(iOS)

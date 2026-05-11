@@ -196,6 +196,31 @@ final class PageRepositoryTests: XCTestCase {
         )
     }
 
+    func testPermanentlyDeleteArchivedPageRemovesItAndQueuesDeleteTombstone() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let createdPage = try repository.createPage(workspaceID: workspaceID, title: "Scratch")
+        try repository.archivePage(pageID: createdPage.id)
+
+        try repository.permanentlyDeleteArchivedPage(pageID: createdPage.id)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(reloadedSnapshot.archivedPages, [])
+        XCTAssertEqual(
+            try database.queryInt("SELECT COUNT(*) FROM blocks WHERE page_id = '\(createdPage.id)'"),
+            0
+        )
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "page", entityID: createdPage.id, changeType: "delete")
+        )
+    }
+
     func testImportMarkdownReplacesPageBlocksWithTypedBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -365,9 +365,15 @@ private struct PageListView: View {
             if !viewModel.snapshot.archivedPages.isEmpty {
                 Section("Archive") {
                     ForEach(viewModel.snapshot.archivedPages) { page in
-                        ArchivedPageRow(page: page) {
-                            viewModel.restoreArchivedPageForUI(id: page.id)
-                        }
+                        ArchivedPageRow(
+                            page: page,
+                            onRestore: {
+                                viewModel.restoreArchivedPageForUI(id: page.id)
+                            },
+                            onDelete: {
+                                viewModel.permanentlyDeleteArchivedPageForUI(id: page.id)
+                            }
+                        )
                     }
                 }
             }
@@ -445,9 +451,15 @@ private struct CompactPageListView: View {
             if !viewModel.snapshot.archivedPages.isEmpty {
                 Section("Archive") {
                     ForEach(viewModel.snapshot.archivedPages) { page in
-                        ArchivedPageRow(page: page) {
-                            viewModel.restoreArchivedPageForUI(id: page.id)
-                        }
+                        ArchivedPageRow(
+                            page: page,
+                            onRestore: {
+                                viewModel.restoreArchivedPageForUI(id: page.id)
+                            },
+                            onDelete: {
+                                viewModel.permanentlyDeleteArchivedPageForUI(id: page.id)
+                            }
+                        )
                     }
                 }
             }
@@ -628,6 +640,7 @@ private struct PageRow: View {
 private struct ArchivedPageRow: View {
     let page: PageSummary
     let onRestore: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -649,6 +662,15 @@ private struct ArchivedPageRow: View {
             .buttonStyle(.borderless)
             .help("Restore")
             .accessibilityIdentifier("editor.restore-page.\(page.id)")
+
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Delete permanently")
+            .accessibilityIdentifier("editor.delete-archived-page.\(page.id)")
         }
         .padding(.vertical, 5)
         .accessibilityIdentifier("editor.archived-page.\(page.id)")
@@ -1043,9 +1065,11 @@ private struct BlockRowView: View {
         }
         .padding(.vertical, 7)
         .contentShape(Rectangle())
-        .onTapGesture {
-            requestRowFocus()
-        }
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                requestRowFocus()
+            }
+        )
     }
 
     private var effectiveFocusRequestID: UUID? {

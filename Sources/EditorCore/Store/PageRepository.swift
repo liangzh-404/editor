@@ -523,6 +523,54 @@ final class PageRepository {
         EditorLog.store.debug("page_restored page_id=\(pageID, privacy: .public)")
     }
 
+    func permanentlyDeleteArchivedPage(pageID: String) throws {
+        let rows = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE id = ? AND is_archived = 1
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        guard rows.first != nil else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            let syncRepository = SyncRepository(database: database)
+            try database.execute(
+                """
+                DELETE FROM links
+                WHERE source_page_id = ? OR target_page_id = ?
+                """,
+                bindings: [
+                    .text(pageID),
+                    .text(pageID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM pages
+                WHERE id = ? AND is_archived = 1
+                """,
+                bindings: [.text(pageID)]
+            )
+            try syncRepository.enqueue(
+                entityType: "page",
+                entityID: pageID,
+                changeType: "delete"
+            )
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        EditorLog.store.debug("page_permanently_deleted page_id=\(pageID, privacy: .public)")
+    }
+
     func updateBlock(blockID: String, type: BlockType, text: String) throws {
         let now = ISO8601DateFormatter().string(from: Date())
         let payloadJSON = try blockPayloadJSON(type: type, text: text)

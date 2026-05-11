@@ -48,6 +48,10 @@ protocol CloudKitRecordSaving {
     func save(record: CKRecord) throws -> CKRecord
 }
 
+protocol CloudKitRecordDeleting {
+    func delete(recordID: CKRecord.ID) throws
+}
+
 protocol CloudKitSubscriptionSaving {
     func save(subscription: CKSubscription) throws -> CKSubscription
 }
@@ -145,6 +149,37 @@ final class LiveCloudKitRecordSaver: CloudKitRecordSaving {
         return try saveBox.result?.get() ?? {
             throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
         }()
+    }
+}
+
+final class LiveCloudKitRecordDeleter: CloudKitRecordDeleting {
+    private let database: CKDatabase
+
+    init(database: CKDatabase = CKContainer.default().privateCloudDatabase) {
+        self.database = database
+    }
+
+    func delete(recordID: CKRecord.ID) throws {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class DeleteBox: @unchecked Sendable {
+            var result: Result<Void, Error>?
+        }
+        let deleteBox = DeleteBox()
+
+        database.delete(withRecordID: recordID) { _, error in
+            if let error {
+                deleteBox.result = .failure(error)
+            } else {
+                deleteBox.result = .success(())
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        guard let result = deleteBox.result else {
+            throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
+        }
+        try result.get()
     }
 }
 
@@ -321,6 +356,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
 
     private let database: SQLiteDatabase
     private let recordSaver: CloudKitRecordSaving?
+    private let recordDeleter: CloudKitRecordDeleting?
     private let recordFetcher: CloudKitRecordFetching?
     private let attachmentDownloadDirectory: URL?
     private let fileManager: FileManager
@@ -328,18 +364,28 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
     init(
         database: SQLiteDatabase,
         recordSaver: CloudKitRecordSaving? = nil,
+        recordDeleter: CloudKitRecordDeleting? = nil,
         recordFetcher: CloudKitRecordFetching? = nil,
         attachmentDownloadDirectory: URL? = nil,
         fileManager: FileManager = .default
     ) {
         self.database = database
         self.recordSaver = recordSaver
+        self.recordDeleter = recordDeleter
         self.recordFetcher = recordFetcher
         self.attachmentDownloadDirectory = attachmentDownloadDirectory
         self.fileManager = fileManager
     }
 
     func upload(change: SyncChange) throws -> CloudKitUploadResult {
+        if change.changeType == "delete" {
+            let recordName = Self.recordName(entityType: change.entityType, entityID: change.entityID)
+            try (recordDeleter ?? LiveCloudKitRecordDeleter()).delete(
+                recordID: CKRecord.ID(recordName: recordName)
+            )
+            return CloudKitUploadResult(recordName: recordName, changeTag: nil)
+        }
+
         let record = try record(for: change)
         let savedRecord = try (recordSaver ?? LiveCloudKitRecordSaver()).save(record: record)
         return CloudKitUploadResult(
@@ -684,11 +730,15 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
     }
 
     private func makeRecord(type: String, entityType: String, entityID: String) -> CKRecord {
-        let recordID = CKRecord.ID(recordName: "\(entityType)-\(entityID)")
+        let recordID = CKRecord.ID(recordName: Self.recordName(entityType: entityType, entityID: entityID))
         let record = CKRecord(recordType: type, recordID: recordID)
         record["entityID"] = entityID as CKRecordValue
         record["entityType"] = entityType as CKRecordValue
         return record
+    }
+
+    private static func recordName(entityType: String, entityID: String) -> String {
+        "\(entityType)-\(entityID)"
     }
 
     private func requiredRow(_ sql: String, entityID: String) throws -> SQLiteRow {

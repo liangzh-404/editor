@@ -645,6 +645,22 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(result.recordName, "notebook-\(notebook.id)")
     }
 
+    func testCloudKitPrivateDatabaseAdapterDeletesRecordForDeleteChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let deleter = CapturingCloudKitRecordDeleter()
+
+        let result = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordDeleter: deleter
+        ).upload(change: SyncChange(entityType: "page", entityID: "page-old", changeType: "delete"))
+
+        XCTAssertEqual(deleter.deletedRecordIDs.map(\.recordName), ["page-page-old"])
+        XCTAssertEqual(result.recordName, "page-page-old")
+        XCTAssertNil(result.changeTag)
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)
@@ -761,6 +777,14 @@ final class CapturingCloudKitRecordSaver: CloudKitRecordSaving {
     func save(record: CKRecord) throws -> CKRecord {
         savedRecords.append(record)
         return record
+    }
+}
+
+final class CapturingCloudKitRecordDeleter: CloudKitRecordDeleting {
+    private(set) var deletedRecordIDs: [CKRecord.ID] = []
+
+    func delete(recordID: CKRecord.ID) throws {
+        deletedRecordIDs.append(recordID)
     }
 }
 
