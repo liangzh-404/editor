@@ -42,20 +42,29 @@ final class SearchRepository {
     }
 
     func search(_ query: String, limit: Int = 20) throws -> [SearchResult] {
-        guard let ftsQuery = ftsQuery(for: query) else {
+        let tokens = searchTokens(for: query)
+        guard let ftsQuery = ftsQuery(for: tokens) else {
             return []
         }
 
         let rows = try database.query(
             """
-            SELECT entity_type, entity_id, title, body
+            SELECT entity_type,
+                   entity_id,
+                   title,
+                   snippet(search_index, 3, '', '', '...', 12) AS snippet
             FROM search_index
             WHERE search_index MATCH ?
-            ORDER BY rank
+            ORDER BY CASE
+                         WHEN lower(title) LIKE ? THEN 0
+                         ELSE 1
+                     END ASC,
+                     rank
             LIMIT ?
             """,
             bindings: [
                 .text(ftsQuery),
+                .text(titlePriorityPattern(for: tokens)),
                 .integer(limit)
             ]
         )
@@ -69,7 +78,7 @@ final class SearchRepository {
                     entityType: entityType,
                     entityID: entityID,
                     title: row["title"] ?? "",
-                    snippet: row["body"] ?? "",
+                    snippet: row["snippet"] ?? "",
                     destinationPageID: try destinationPageID(entityType: entityType, entityID: entityID)
                 )
             )
@@ -188,13 +197,15 @@ final class SearchRepository {
         )
     }
 
-    private func ftsQuery(for query: String) -> String? {
-        let tokens = query
+    private func searchTokens(for query: String) -> [String] {
+        query
             .split { character in
                 !character.isLetter && !character.isNumber
             }
             .map(String.init)
+    }
 
+    private func ftsQuery(for tokens: [String]) -> String? {
         guard !tokens.isEmpty else {
             return nil
         }
@@ -202,5 +213,13 @@ final class SearchRepository {
         return tokens
             .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
             .joined(separator: " OR ")
+    }
+
+    private func titlePriorityPattern(for tokens: [String]) -> String {
+        guard let firstToken = tokens.first else {
+            return "%"
+        }
+
+        return "%\(firstToken.lowercased())%"
     }
 }

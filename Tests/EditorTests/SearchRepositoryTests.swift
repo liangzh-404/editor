@@ -39,6 +39,52 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertTrue(try repository.search("invoice").contains(SearchResult(entityType: "attachment", entityID: attachment.id, title: "invoice-2026.pdf", snippet: "invoice-2026.pdf", destinationPageID: pageID)))
     }
 
+    func testSearchRanksTitleMatchesBeforeBodyMatches() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let welcomeBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(
+            blockID: welcomeBlockID,
+            text: "Needle Needle Needle Needle appears repeatedly only in this block body"
+        )
+        let titledPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Needle Project")
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        let results = try repository.search("Needle")
+
+        XCTAssertEqual(results.first?.entityType, "page")
+        XCTAssertEqual(results.first?.entityID, titledPage.id)
+    }
+
+    func testSearchSnippetUsesContextAroundMatch() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let longText = [
+            "Opening context that should not dominate the search result",
+            "middle words around FocusTerm should stay visible",
+            "closing context that should be clipped away from the list row"
+        ].joined(separator: " ")
+        try pageRepository.updateBlockText(blockID: blockID, text: longText)
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        let result = try XCTUnwrap(try repository.search("FocusTerm").first)
+
+        XCTAssertTrue(result.snippet.contains("FocusTerm"))
+        XCTAssertLessThan(result.snippet.count, longText.count)
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)
