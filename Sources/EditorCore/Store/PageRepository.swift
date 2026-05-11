@@ -216,6 +216,93 @@ final class PageRepository {
         )
     }
 
+    func moveBlock(blockID: String, toIndex targetIndex: Int) throws {
+        let selectedRows = try database.query(
+            """
+            SELECT page_id
+            FROM blocks
+            WHERE id = ? AND is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        )
+
+        guard let pageID = selectedRows.first?["page_id"] ?? nil else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        let blocks = try database.query(
+            """
+            SELECT id, order_key
+            FROM blocks
+            WHERE page_id = ? AND is_deleted = 0
+            ORDER BY order_key ASC
+            """,
+            bindings: [.text(pageID)]
+        ).map { row in
+            OrderedBlock(
+                id: row["id"] ?? "",
+                orderKey: row["order_key"] ?? ""
+            )
+        }
+
+        guard let currentIndex = blocks.firstIndex(where: { $0.id == blockID }) else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        var reorderedBlocks = blocks
+        let movingBlock = reorderedBlocks.remove(at: currentIndex)
+        let clampedTargetIndex = min(max(targetIndex, 0), reorderedBlocks.count)
+        reorderedBlocks.insert(movingBlock, at: clampedTargetIndex)
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        var changedBlockIDs: [String] = []
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            for (index, block) in reorderedBlocks.enumerated() {
+                let nextOrderKey = String(format: "%06d", index + 1)
+                guard nextOrderKey != block.orderKey else {
+                    continue
+                }
+
+                try database.execute(
+                    """
+                    UPDATE blocks
+                    SET order_key = ?,
+                        revision = revision + 1,
+                        sync_state = ?,
+                        updated_at = ?
+                    WHERE id = ? AND is_deleted = 0
+                    """,
+                    bindings: [
+                        .text(nextOrderKey),
+                        .text("local"),
+                        .text(now),
+                        .text(block.id)
+                    ]
+                )
+                changedBlockIDs.append(block.id)
+            }
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        let syncRepository = SyncRepository(database: database)
+        for changedBlockID in changedBlockIDs {
+            try syncRepository.enqueue(
+                entityType: "block",
+                entityID: changedBlockID,
+                changeType: "update"
+            )
+        }
+
+        EditorLog.store.debug(
+            "block_moved block_id=\(blockID, privacy: .public) page_id=\(pageID, privacy: .public) target_index=\(targetIndex, privacy: .public) changed_blocks=\(changedBlockIDs.count, privacy: .public)"
+        )
+    }
+
     private func insertDefaultContent() throws {
         let now = ISO8601DateFormatter().string(from: Date())
 
@@ -348,5 +435,11 @@ final class PageRepository {
 }
 
 enum PageRepositoryError: Error, Equatable {
+    case blockNotFound
     case invalidPayloadEncoding
+}
+
+private struct OrderedBlock {
+    let id: String
+    let orderKey: String
 }

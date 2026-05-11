@@ -35,8 +35,8 @@ Implement the approved editor architecture so the app supports the full requeste
 | mobile collapsed navigation | compact `NavigationStack` shell | Partial |
 | performance strategy | OSLog categories and local SQLite; no large-page checks | Partial |
 | TextKit 2 wrappers | `NativeTextBlockEditor` uses AppKit/UIKit native text views; macOS runtime log check shows no `textkit2_unavailable` errors | Partial; needs richer sizing, selection persistence, and focused UI tests |
-| editor session state | `EditorSessionTests` and `EditorSession` cover focused block, focus reason, draft text, dirty blocks, and commit clearing | Partial; undo scope, selection/caret metadata, composition state, and drag reorder state remain |
-| advanced blocks | paragraph only | Missing implementation |
+| editor session state | `EditorSessionTests` and `EditorSession` cover focused block, focus reason, draft text, dirty blocks, and commit clearing | Partial; undo scope, selection/caret metadata, composition state, and UI drag state remain |
+| advanced blocks | typed Markdown-imported blocks plus `PageRepository.moveBlock` cover persistent block reorder with stable `order_key` values | Partial; UI drag handles, keyboard reorder, nesting, tables, callouts, toggles, and block menu remain |
 | search/backlinks | `search_index` FTS5 table plus `SearchRepositoryTests`/`SearchRepository` cover page title, block text, and attachment filename search; `BacklinkRepositoryTests`/`BacklinkRepository` cover incremental `[[Page]]` backlink maintenance and stale link cleanup | Partial; UI search/backlink views and richer link syntaxes remain |
 | sync conflicts | `SyncMergeEngineTests`, `SyncMergeEngine`, and `ConflictRepository` cover same-block remote conflict preservation: local text remains and remote version is stored in `conflict_versions` | Partial; conflict UI and manual merge/recovery remain |
 | verification | repository/view-model tests and app builds | Partial |
@@ -51,4 +51,4 @@ The completed attachment slice proves:
 4. Reloading the repository returns the attachment block and metadata.
 5. The app exposes an insertion command and renders image, video, and file attachment rows.
 
-The next concrete gaps are adding Markdown import/export UI, UI search/backlink views, live CloudKit adapter behavior, Keychain/iCloud account metadata, and advanced block interactions.
+The next concrete gaps are adding Markdown import/export UI, UI search/backlink views, live CloudKit adapter behavior, Keychain/iCloud account metadata, and advanced block UI interactions.
