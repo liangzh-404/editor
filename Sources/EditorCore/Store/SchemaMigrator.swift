@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -158,6 +158,16 @@ enum SchemaMigrator {
                 entity_id TEXT NOT NULL,
                 record_name TEXT NOT NULL,
                 change_tag TEXT,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_server_change_tokens (
+                scope TEXT PRIMARY KEY,
+                token_base64 TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
             """

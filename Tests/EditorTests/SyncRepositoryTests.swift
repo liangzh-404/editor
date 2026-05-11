@@ -74,6 +74,23 @@ final class SyncRepositoryTests: XCTestCase {
         ))
     }
 
+    func testServerChangeTokenRoundTripsByScope() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = SyncRepository(database: database)
+        let tokenData = Data("token-v1".utf8)
+
+        XCTAssertNil(try repository.serverChangeTokenData(scope: "privateDatabase"))
+
+        try repository.saveServerChangeTokenData(tokenData, scope: "privateDatabase")
+
+        XCTAssertEqual(
+            try repository.serverChangeTokenData(scope: "privateDatabase"),
+            tokenData
+        )
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

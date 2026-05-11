@@ -131,6 +131,170 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try pageRepository.loadWorkspaceSnapshot().blocks.first?.textPlain, "Remote fetched text")
     }
 
+    func testFetchRemoteChangesUsesAndPersistsServerChangeToken() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        let previousToken = Data("previous-token".utf8)
+        let nextToken = Data("next-token".utf8)
+        try syncRepository.saveServerChangeTokenData(previousToken, scope: "privateDatabase")
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            changes: [],
+            serverChangeTokenData: nextToken
+        )
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+
+        XCTAssertEqual(result.appliedCount, 0)
+        XCTAssertEqual(fetcher.receivedServerChangeTokenData, previousToken)
+        XCTAssertEqual(
+            try syncRepository.serverChangeTokenData(scope: "privateDatabase"),
+            nextToken
+        )
+    }
+
+    func testFetchRemoteChangesAppliesWorkspaceNotebookPageAttachmentAndBlockChanges() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            workspaceChanges: [
+                RemoteWorkspaceChange(workspaceID: "workspace-remote", name: "Remote")
+            ],
+            notebookChanges: [
+                RemoteNotebookChange(
+                    notebookID: "notebook-remote",
+                    workspaceID: "workspace-remote",
+                    name: "Projects",
+                    orderKey: "000001"
+                )
+            ],
+            pageChanges: [
+                RemotePageChange(
+                    pageID: "page-remote",
+                    workspaceID: "workspace-remote",
+                    notebookID: "notebook-remote",
+                    title: "Roadmap",
+                    orderKey: "000001",
+                    isArchived: false
+                )
+            ],
+            attachmentChanges: [
+                RemoteAttachmentChange(
+                    attachmentID: "attachment-remote",
+                    workspaceID: "workspace-remote",
+                    originalFilename: "brief.pdf",
+                    utiType: "com.adobe.pdf",
+                    byteSize: 128,
+                    contentHash: "hash-remote",
+                    localPath: "/remote/brief.pdf",
+                    thumbnailPath: nil
+                )
+            ],
+            changes: [
+                RemoteBlockChange(
+                    blockID: "block-remote",
+                    pageID: "page-remote",
+                    type: .paragraph,
+                    textPlain: "Remote body",
+                    payloadJSON: "{\"text\":\"Remote body\"}",
+                    revision: 1,
+                    orderKey: "000001"
+                )
+            ]
+        )
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let snapshot = try PageRepository(database: database).loadWorkspaceSnapshot()
+
+        XCTAssertEqual(result.appliedCount, 5)
+        XCTAssertEqual(snapshot.workspaces, [WorkspaceSummary(id: "workspace-remote", name: "Remote")])
+        XCTAssertEqual(snapshot.notebooks, [
+            NotebookSummary(id: "notebook-remote", workspaceID: "workspace-remote", name: "Projects")
+        ])
+        XCTAssertEqual(snapshot.pages, [
+            PageSummary(
+                id: "page-remote",
+                workspaceID: "workspace-remote",
+                notebookID: "notebook-remote",
+                title: "Roadmap"
+            )
+        ])
+        XCTAssertEqual(snapshot.blocks.map(\.textPlain), ["Remote body"])
+        XCTAssertEqual(snapshot.attachments.map(\.originalFilename), ["brief.pdf"])
+    }
+
+    func testCloudKitPrivateDatabaseAdapterMapsRemoteRecordsToChangeSet() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = StaticCloudKitRecordFetcher(recordsByType: [
+            "WorkspaceRecord": [
+                makeRecord(type: "WorkspaceRecord", entityType: "workspace", entityID: "workspace-remote") {
+                    $0["name"] = "Remote" as CKRecordValue
+                }
+            ],
+            "NotebookRecord": [
+                makeRecord(type: "NotebookRecord", entityType: "notebook", entityID: "notebook-remote") {
+                    $0["workspaceID"] = "workspace-remote" as CKRecordValue
+                    $0["name"] = "Projects" as CKRecordValue
+                    $0["orderKey"] = "000001" as CKRecordValue
+                }
+            ],
+            "PageRecord": [
+                makeRecord(type: "PageRecord", entityType: "page", entityID: "page-remote") {
+                    $0["workspaceID"] = "workspace-remote" as CKRecordValue
+                    $0["notebookID"] = "notebook-remote" as CKRecordValue
+                    $0["title"] = "Roadmap" as CKRecordValue
+                    $0["orderKey"] = "000001" as CKRecordValue
+                    $0["isArchived"] = NSNumber(value: false)
+                }
+            ],
+            "AttachmentRecord": [
+                makeRecord(type: "AttachmentRecord", entityType: "attachment", entityID: "attachment-remote") {
+                    $0["workspaceID"] = "workspace-remote" as CKRecordValue
+                    $0["originalFilename"] = "brief.pdf" as CKRecordValue
+                    $0["utiType"] = "com.adobe.pdf" as CKRecordValue
+                    $0["byteSize"] = NSNumber(value: 128)
+                    $0["contentHash"] = "hash-remote" as CKRecordValue
+                    $0["localPath"] = "/remote/brief.pdf" as CKRecordValue
+                }
+            ],
+            "BlockRecord": [
+                makeRecord(type: "BlockRecord", entityType: "block", entityID: "block-remote") {
+                    $0["pageID"] = "page-remote" as CKRecordValue
+                    $0["orderKey"] = "000001" as CKRecordValue
+                    $0["type"] = BlockType.paragraph.rawValue as CKRecordValue
+                    $0["payloadJSON"] = "{\"text\":\"Remote body\"}" as CKRecordValue
+                    $0["textPlain"] = "Remote body" as CKRecordValue
+                    $0["revision"] = NSNumber(value: 1)
+                }
+            ]
+        ])
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+
+        XCTAssertEqual(changeSet.workspaceChanges.map(\.workspaceID), ["workspace-remote"])
+        XCTAssertEqual(changeSet.notebookChanges.map(\.notebookID), ["notebook-remote"])
+        XCTAssertEqual(changeSet.pageChanges.map(\.pageID), ["page-remote"])
+        XCTAssertEqual(changeSet.attachmentChanges.map(\.attachmentID), ["attachment-remote"])
+        XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsBlockChangeToRecord() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -231,14 +395,42 @@ final class FailingOnceCloudKitSyncAdapter: CloudKitSyncAdapter {
 }
 
 final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
+    let workspaceChanges: [RemoteWorkspaceChange]
+    let notebookChanges: [RemoteNotebookChange]
+    let pageChanges: [RemotePageChange]
+    let attachmentChanges: [RemoteAttachmentChange]
     let changes: [RemoteBlockChange]
+    let serverChangeTokenData: Data?
+    private(set) var receivedServerChangeTokenData: Data?
 
-    init(changes: [RemoteBlockChange]) {
+    init(
+        workspaceChanges: [RemoteWorkspaceChange] = [],
+        notebookChanges: [RemoteNotebookChange] = [],
+        pageChanges: [RemotePageChange] = [],
+        attachmentChanges: [RemoteAttachmentChange] = [],
+        changes: [RemoteBlockChange],
+        serverChangeTokenData: Data? = nil
+    ) {
+        self.workspaceChanges = workspaceChanges
+        self.notebookChanges = notebookChanges
+        self.pageChanges = pageChanges
+        self.attachmentChanges = attachmentChanges
         self.changes = changes
+        self.serverChangeTokenData = serverChangeTokenData
     }
 
-    func fetchRemoteBlockChanges() throws -> [RemoteBlockChange] {
-        changes
+    func fetchRemoteChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitRemoteChangeSet {
+        receivedServerChangeTokenData = serverChangeTokenData
+        return CloudKitRemoteChangeSet(
+            workspaceChanges: workspaceChanges,
+            notebookChanges: notebookChanges,
+            pageChanges: pageChanges,
+            attachmentChanges: attachmentChanges,
+            blockChanges: changes,
+            serverChangeTokenData: self.serverChangeTokenData
+        )
     }
 }
 
@@ -257,4 +449,32 @@ final class CapturingCloudKitRecordSaver: CloudKitRecordSaving {
         savedRecords.append(record)
         return record
     }
+}
+
+final class StaticCloudKitRecordFetcher: CloudKitRecordFetching {
+    let recordsByType: [String: [CKRecord]]
+
+    init(recordsByType: [String: [CKRecord]]) {
+        self.recordsByType = recordsByType
+    }
+
+    func fetchRecords(recordType: String) throws -> [CKRecord] {
+        recordsByType[recordType] ?? []
+    }
+}
+
+private func makeRecord(
+    type: String,
+    entityType: String,
+    entityID: String,
+    configure: (CKRecord) -> Void
+) -> CKRecord {
+    let record = CKRecord(
+        recordType: type,
+        recordID: CKRecord.ID(recordName: "\(entityType)-\(entityID)")
+    )
+    record["entityType"] = entityType as CKRecordValue
+    record["entityID"] = entityID as CKRecordValue
+    configure(record)
+    return record
 }

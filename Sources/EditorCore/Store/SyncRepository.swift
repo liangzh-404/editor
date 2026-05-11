@@ -193,4 +193,38 @@ final class SyncRepository {
             )
         }
     }
+
+    func saveServerChangeTokenData(_ tokenData: Data, scope: String) throws {
+        try database.execute(
+            """
+            INSERT OR REPLACE INTO sync_server_change_tokens (
+                scope,
+                token_base64,
+                updated_at
+            )
+            VALUES (?, ?, ?)
+            """,
+            bindings: [
+                .text(scope),
+                .text(tokenData.base64EncodedString()),
+                .text(dateFormatter.string(from: Date()))
+            ]
+        )
+    }
+
+    func serverChangeTokenData(scope: String) throws -> Data? {
+        guard let tokenBase64 = try database.query(
+            """
+            SELECT token_base64
+            FROM sync_server_change_tokens
+            WHERE scope = ?
+            LIMIT 1
+            """,
+            bindings: [.text(scope)]
+        ).first?["token_base64"] ?? nil else {
+            return nil
+        }
+
+        return Data(base64Encoded: tokenBase64)
+    }
 }

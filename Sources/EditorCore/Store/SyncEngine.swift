@@ -11,7 +11,34 @@ protocol CloudKitSyncAdapter {
 }
 
 protocol CloudKitRemoteChangeFetching {
-    func fetchRemoteBlockChanges() throws -> [RemoteBlockChange]
+    func fetchRemoteChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitRemoteChangeSet
+}
+
+struct CloudKitRemoteChangeSet: Equatable, Sendable {
+    let workspaceChanges: [RemoteWorkspaceChange]
+    let notebookChanges: [RemoteNotebookChange]
+    let pageChanges: [RemotePageChange]
+    let attachmentChanges: [RemoteAttachmentChange]
+    let blockChanges: [RemoteBlockChange]
+    let serverChangeTokenData: Data?
+
+    init(
+        workspaceChanges: [RemoteWorkspaceChange] = [],
+        notebookChanges: [RemoteNotebookChange] = [],
+        pageChanges: [RemotePageChange] = [],
+        attachmentChanges: [RemoteAttachmentChange] = [],
+        blockChanges: [RemoteBlockChange] = [],
+        serverChangeTokenData: Data? = nil
+    ) {
+        self.workspaceChanges = workspaceChanges
+        self.notebookChanges = notebookChanges
+        self.pageChanges = pageChanges
+        self.attachmentChanges = attachmentChanges
+        self.blockChanges = blockChanges
+        self.serverChangeTokenData = serverChangeTokenData
+    }
 }
 
 protocol CloudKitRecordSaving {
@@ -97,12 +124,12 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching {
 
 final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteChangeFetching {
     private let database: SQLiteDatabase
-    private let recordSaver: CloudKitRecordSaving
+    private let recordSaver: CloudKitRecordSaving?
     private let recordFetcher: CloudKitRecordFetching?
 
     init(
         database: SQLiteDatabase,
-        recordSaver: CloudKitRecordSaving = LiveCloudKitRecordSaver(),
+        recordSaver: CloudKitRecordSaving? = nil,
         recordFetcher: CloudKitRecordFetching? = nil
     ) {
         self.database = database
@@ -112,19 +139,27 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
 
     func upload(change: SyncChange) throws -> CloudKitUploadResult {
         let record = try record(for: change)
-        let savedRecord = try recordSaver.save(record: record)
+        let savedRecord = try (recordSaver ?? LiveCloudKitRecordSaver()).save(record: record)
         return CloudKitUploadResult(
             recordName: savedRecord.recordID.recordName,
             changeTag: savedRecord.recordChangeTag
         )
     }
 
-    func fetchRemoteBlockChanges() throws -> [RemoteBlockChange] {
+    func fetchRemoteChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitRemoteChangeSet {
         guard let recordFetcher else {
             throw CloudKitPrivateDatabaseAdapterError.remoteFetchUnavailable
         }
 
-        return try recordFetcher.fetchRecords(recordType: "BlockRecord").compactMap(remoteBlockChange)
+        return CloudKitRemoteChangeSet(
+            workspaceChanges: try recordFetcher.fetchRecords(recordType: "WorkspaceRecord").compactMap(remoteWorkspaceChange),
+            notebookChanges: try recordFetcher.fetchRecords(recordType: "NotebookRecord").compactMap(remoteNotebookChange),
+            pageChanges: try recordFetcher.fetchRecords(recordType: "PageRecord").compactMap(remotePageChange),
+            attachmentChanges: try recordFetcher.fetchRecords(recordType: "AttachmentRecord").compactMap(remoteAttachmentChange),
+            blockChanges: try recordFetcher.fetchRecords(recordType: "BlockRecord").compactMap(remoteBlockChange)
+        )
     }
 
     private func record(for change: SyncChange) throws -> CKRecord {
@@ -265,6 +300,49 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         return record
     }
 
+    private func remoteWorkspaceChange(record: CKRecord) -> RemoteWorkspaceChange? {
+        guard let workspaceID = record["entityID"] as? String,
+              let name = record["name"] as? String else {
+            return nil
+        }
+
+        return RemoteWorkspaceChange(workspaceID: workspaceID, name: name)
+    }
+
+    private func remoteNotebookChange(record: CKRecord) -> RemoteNotebookChange? {
+        guard let notebookID = record["entityID"] as? String,
+              let workspaceID = record["workspaceID"] as? String,
+              let name = record["name"] as? String,
+              let orderKey = record["orderKey"] as? String else {
+            return nil
+        }
+
+        return RemoteNotebookChange(
+            notebookID: notebookID,
+            workspaceID: workspaceID,
+            name: name,
+            orderKey: orderKey
+        )
+    }
+
+    private func remotePageChange(record: CKRecord) -> RemotePageChange? {
+        guard let pageID = record["entityID"] as? String,
+              let workspaceID = record["workspaceID"] as? String,
+              let title = record["title"] as? String,
+              let orderKey = record["orderKey"] as? String else {
+            return nil
+        }
+
+        return RemotePageChange(
+            pageID: pageID,
+            workspaceID: workspaceID,
+            notebookID: record["notebookID"] as? String,
+            title: title,
+            orderKey: orderKey,
+            isArchived: (record["isArchived"] as? NSNumber)?.boolValue ?? false
+        )
+    }
+
     private func remoteBlockChange(record: CKRecord) -> RemoteBlockChange? {
         guard let blockID = record["entityID"] as? String,
               let pageID = record["pageID"] as? String,
@@ -282,7 +360,31 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             type: type,
             textPlain: textPlain,
             payloadJSON: payloadJSON,
-            revision: revision
+            revision: revision,
+            parentBlockID: record["parentBlockID"] as? String,
+            orderKey: record["orderKey"] as? String ?? "000001"
+        )
+    }
+
+    private func remoteAttachmentChange(record: CKRecord) -> RemoteAttachmentChange? {
+        guard let attachmentID = record["entityID"] as? String,
+              let workspaceID = record["workspaceID"] as? String,
+              let originalFilename = record["originalFilename"] as? String,
+              let utiType = record["utiType"] as? String,
+              let contentHash = record["contentHash"] as? String,
+              let localPath = record["localPath"] as? String else {
+            return nil
+        }
+
+        return RemoteAttachmentChange(
+            attachmentID: attachmentID,
+            workspaceID: workspaceID,
+            originalFilename: originalFilename,
+            utiType: utiType,
+            byteSize: (record["byteSize"] as? NSNumber)?.intValue ?? 0,
+            contentHash: contentHash,
+            localPath: localPath,
+            thumbnailPath: record["thumbnailPath"] as? String
         )
     }
 
@@ -335,6 +437,8 @@ struct SyncFetchSummary: Equatable, Sendable {
 }
 
 final class SyncEngine {
+    private static let serverChangeTokenScope = "privateDatabase"
+
     private let syncRepository: SyncRepository
     private let adapter: CloudKitSyncAdapter
     private let remoteChangeFetcher: CloudKitRemoteChangeFetching?
@@ -363,11 +467,39 @@ final class SyncEngine {
             return SyncFetchSummary(appliedCount: 0)
         }
 
-        let changes = try remoteChangeFetcher.fetchRemoteBlockChanges()
-        for change in changes {
+        let changeSet = try remoteChangeFetcher.fetchRemoteChanges(
+            sinceServerChangeTokenData: syncRepository.serverChangeTokenData(
+                scope: Self.serverChangeTokenScope
+            )
+        )
+        for change in changeSet.workspaceChanges {
+            try mergeEngine.applyRemoteWorkspace(change)
+        }
+        for change in changeSet.notebookChanges {
+            try mergeEngine.applyRemoteNotebook(change)
+        }
+        for change in changeSet.pageChanges {
+            try mergeEngine.applyRemotePage(change)
+        }
+        for change in changeSet.attachmentChanges {
+            try mergeEngine.applyRemoteAttachment(change)
+        }
+        for change in changeSet.blockChanges {
             try mergeEngine.applyRemoteBlock(change)
         }
-        return SyncFetchSummary(appliedCount: changes.count)
+        if let serverChangeTokenData = changeSet.serverChangeTokenData {
+            try syncRepository.saveServerChangeTokenData(
+                serverChangeTokenData,
+                scope: Self.serverChangeTokenScope
+            )
+        }
+        return SyncFetchSummary(
+            appliedCount: changeSet.workspaceChanges.count
+                + changeSet.notebookChanges.count
+                + changeSet.pageChanges.count
+                + changeSet.attachmentChanges.count
+                + changeSet.blockChanges.count
+        )
     }
 
     @discardableResult
