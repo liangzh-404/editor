@@ -150,6 +150,17 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func syncAfterActivation() {
+        if cloudKitAccountMetadataService != nil {
+            refreshCloudKitAccountStatusForUI()
+        }
+
+        guard syncEngine != nil else {
+            return
+        }
+        syncNow()
+    }
+
     func selectPage(id: String) {
         selectedPageID = id
         selectedNotebookID = snapshot.pages.first { $0.id == id }?.notebookID ?? selectedNotebookID

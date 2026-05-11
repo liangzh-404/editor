@@ -549,6 +549,31 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSyncAfterActivationUploadsPendingChangesWhenEngineIsAvailable() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Foreground sync")
+        let syncRepository = SyncRepository(database: database)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: RecordingCloudKitSyncAdapter()
+            )
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+
+        XCTAssertEqual(try syncRepository.pendingChanges(), [])
+        XCTAssertEqual(viewModel.syncStatusText, "Synced 1 change")
+    }
+
+    @MainActor
     func testSyncNowFetchesRemoteChangesAndRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

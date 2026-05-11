@@ -10,6 +10,7 @@ import UIKit
 
 struct EditorShellView: View {
     @StateObject private var viewModel: WorkspaceViewModel
+    @Environment(\.scenePhase) private var scenePhase
 
     init(viewModel: WorkspaceViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -19,6 +20,12 @@ struct EditorShellView: View {
         AdaptiveEditorShell(viewModel: viewModel)
             .task {
                 try? viewModel.load()
+                viewModel.syncAfterActivation()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    viewModel.syncAfterActivation()
+                }
             }
     }
 }
