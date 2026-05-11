@@ -74,6 +74,12 @@ private struct ThreeColumnEditorShell: View {
                 onMoveBlockByKeyboard: { blockID, direction in
                     viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
                 },
+                onIndentBlock: { blockID in
+                    viewModel.indentBlockForUI(blockID: blockID)
+                },
+                onOutdentBlock: { blockID in
+                    viewModel.outdentBlockForUI(blockID: blockID)
+                },
                 onDeleteBlock: { blockID in
                     viewModel.deleteBlockFromCurrentPage(blockID: blockID)
                 },
@@ -181,6 +187,12 @@ private struct CompactPageDestination: View {
                 },
                 onMoveBlockByKeyboard: { blockID, direction in
                     viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
+                },
+                onIndentBlock: { blockID in
+                    viewModel.indentBlockForUI(blockID: blockID)
+                },
+                onOutdentBlock: { blockID in
+                    viewModel.outdentBlockForUI(blockID: blockID)
                 },
                 onDeleteBlock: { blockID in
                     viewModel.deleteBlockFromCurrentPage(blockID: blockID)
@@ -692,6 +704,8 @@ private struct EditorCanvasView: View {
     let onAddParagraphBlock: () -> String?
     let onMoveBlock: (String, Int) -> Void
     let onMoveBlockByKeyboard: (String, BlockKeyboardMoveDirection) -> Bool
+    let onIndentBlock: (String) -> Bool
+    let onOutdentBlock: (String) -> Bool
     let onDeleteBlock: (String) -> Void
     let onSelectBacklink: (Backlink) -> Void
     let onPageTitleChange: (String) -> Void
@@ -768,6 +782,7 @@ private struct EditorCanvasView: View {
                         block: block,
                         attachment: attachment(for: block),
                         editorSession: editorSession,
+                        nestingLevel: nestingLevel(for: block),
                         canMoveUp: index > 0,
                         canMoveDown: index < blocks.count - 1,
                         onMoveUp: {
@@ -778,6 +793,12 @@ private struct EditorCanvasView: View {
                         },
                         onMoveByKeyboard: { direction in
                             onMoveBlockByKeyboard(block.id, direction)
+                        },
+                        onIndent: {
+                            onIndentBlock(block.id)
+                        },
+                        onOutdent: {
+                            onOutdentBlock(block.id)
                         },
                         onDelete: {
                             onDeleteBlock(block.id)
@@ -881,6 +902,22 @@ private struct EditorCanvasView: View {
     private func attachment(for block: BlockSnapshot) -> AttachmentSnapshot? {
         attachments.first { $0.matches(block: block) }
     }
+
+    private func nestingLevel(for block: BlockSnapshot) -> Int {
+        var level = 0
+        var visitedBlockIDs: Set<String> = [block.id]
+        var parentBlockID = block.parentBlockID
+
+        while let currentParentID = parentBlockID,
+              !visitedBlockIDs.contains(currentParentID),
+              let parentBlock = blocks.first(where: { $0.id == currentParentID }) {
+            level += 1
+            visitedBlockIDs.insert(currentParentID)
+            parentBlockID = parentBlock.parentBlockID
+        }
+
+        return min(level, 6)
+    }
 }
 
 private struct BacklinksPanel: View {
@@ -958,11 +995,14 @@ private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
     @ObservedObject var editorSession: EditorSession
+    let nestingLevel: Int
     let canMoveUp: Bool
     let canMoveDown: Bool
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
+    let onIndent: () -> Bool
+    let onOutdent: () -> Bool
     let onDelete: () -> Void
     let onChangeType: (BlockType) -> Void
     let focusRequestID: UUID?
@@ -974,11 +1014,14 @@ private struct BlockRowView: View {
         block: BlockSnapshot,
         attachment: AttachmentSnapshot? = nil,
         editorSession: EditorSession,
+        nestingLevel: Int = 0,
         canMoveUp: Bool = false,
         canMoveDown: Bool = false,
         onMoveUp: @escaping () -> Void = {},
         onMoveDown: @escaping () -> Void = {},
         onMoveByKeyboard: @escaping (BlockKeyboardMoveDirection) -> Bool = { _ in false },
+        onIndent: @escaping () -> Bool = { false },
+        onOutdent: @escaping () -> Bool = { false },
         onDelete: @escaping () -> Void = {},
         onChangeType: @escaping (BlockType) -> Void = { _ in },
         focusRequestID: UUID? = nil,
@@ -988,11 +1031,14 @@ private struct BlockRowView: View {
         self.block = block
         self.attachment = attachment
         self.editorSession = editorSession
+        self.nestingLevel = nestingLevel
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
         self.onMoveUp = onMoveUp
         self.onMoveDown = onMoveDown
         self.onMoveByKeyboard = onMoveByKeyboard
+        self.onIndent = onIndent
+        self.onOutdent = onOutdent
         self.onDelete = onDelete
         self.onChangeType = onChangeType
         self.focusRequestID = focusRequestID
@@ -1044,6 +1090,26 @@ private struct BlockRowView: View {
                 .help("Move down")
                 .accessibilityIdentifier("editor.block.\(block.id).move-down")
 
+                Button {
+                    _ = onOutdent()
+                } label: {
+                    Image(systemName: "decrease.indent")
+                }
+                .buttonStyle(.borderless)
+                .disabled(nestingLevel == 0)
+                .help("Outdent")
+                .accessibilityIdentifier("editor.block.\(block.id).outdent")
+
+                Button {
+                    _ = onIndent()
+                } label: {
+                    Image(systemName: "increase.indent")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!canMoveUp)
+                .help("Indent")
+                .accessibilityIdentifier("editor.block.\(block.id).indent")
+
                 Button(role: .destructive) {
                     onDelete()
                 } label: {
@@ -1078,6 +1144,7 @@ private struct BlockRowView: View {
             }
         }
         .padding(.vertical, 7)
+        .padding(.leading, CGFloat(nestingLevel) * 24)
         .contentShape(Rectangle())
         .simultaneousGesture(
             TapGesture().onEnded {

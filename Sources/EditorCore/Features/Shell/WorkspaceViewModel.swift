@@ -557,6 +557,44 @@ final class WorkspaceViewModel: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func indentBlock(blockID: String) throws -> Bool {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let didIndent = try repository.indentBlock(blockID: blockID)
+        guard didIndent else {
+            return false
+        }
+
+        try load()
+        pendingFocusBlockID = blockID
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=block_indent"
+        )
+        return true
+    }
+
+    @discardableResult
+    func outdentBlock(blockID: String) throws -> Bool {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let didOutdent = try repository.outdentBlock(blockID: blockID)
+        guard didOutdent else {
+            return false
+        }
+
+        try load()
+        pendingFocusBlockID = blockID
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=block_outdent"
+        )
+        return true
+    }
+
     func deleteBlock(blockID: String) throws {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
@@ -588,6 +626,36 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.store.error(
                 "block_keyboard_move_failed block_id=\(blockID, privacy: .public) direction=\(String(describing: direction), privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    func indentBlockForUI(blockID: String) -> Bool {
+        do {
+            let didIndent = try indentBlock(blockID: blockID)
+            if didIndent {
+                EditorLog.store.debug("block_indent_visible block_id=\(blockID, privacy: .public)")
+            }
+            return didIndent
+        } catch {
+            EditorLog.store.error(
+                "block_indent_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    func outdentBlockForUI(blockID: String) -> Bool {
+        do {
+            let didOutdent = try outdentBlock(blockID: blockID)
+            if didOutdent {
+                EditorLog.store.debug("block_outdent_visible block_id=\(blockID, privacy: .public)")
+            }
+            return didOutdent
+        } catch {
+            EditorLog.store.error(
+                "block_outdent_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return false
         }

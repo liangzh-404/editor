@@ -618,6 +618,62 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testIndentVisibleBlockRefreshesParentAndKeepsFocusOnIndentedBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let firstBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        let secondBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+
+        XCTAssertTrue(try viewModel.indentBlock(blockID: secondBlockID))
+
+        XCTAssertEqual(viewModel.visibleBlocks.first { $0.id == secondBlockID }?.parentBlockID, firstBlockID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, secondBlockID)
+    }
+
+    @MainActor
+    func testOutdentVisibleBlockRefreshesParentAndKeepsFocusOnOutdentedBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let secondBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+        _ = try viewModel.indentBlock(blockID: secondBlockID)
+
+        XCTAssertTrue(try viewModel.outdentBlock(blockID: secondBlockID))
+
+        XCTAssertNil(viewModel.visibleBlocks.first { $0.id == secondBlockID }?.parentBlockID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, secondBlockID)
+    }
+
+    @MainActor
     func testDeleteVisibleBlockRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

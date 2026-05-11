@@ -802,6 +802,40 @@ final class PageRepository {
         )
     }
 
+    func indentBlock(blockID: String) throws -> Bool {
+        let block = try requiredActiveBlock(blockID: blockID)
+        let pageID = block["page_id"] ?? ""
+        let parentBlockID = block["parent_block_id"] ?? nil
+        let siblings = try siblingBlocks(pageID: pageID, parentBlockID: parentBlockID)
+
+        guard let currentIndex = siblings.firstIndex(of: blockID),
+              currentIndex > 0 else {
+            return false
+        }
+
+        let newParentBlockID = siblings[currentIndex - 1]
+        try updateBlockParent(blockID: blockID, parentBlockID: newParentBlockID)
+        EditorLog.store.debug(
+            "block_indented block_id=\(blockID, privacy: .public) parent_block_id=\(newParentBlockID, privacy: .public)"
+        )
+        return true
+    }
+
+    func outdentBlock(blockID: String) throws -> Bool {
+        let block = try requiredActiveBlock(blockID: blockID)
+        guard let parentBlockID = block["parent_block_id"] ?? nil else {
+            return false
+        }
+
+        let parent = try requiredActiveBlock(blockID: parentBlockID)
+        let newParentBlockID = parent["parent_block_id"] ?? nil
+        try updateBlockParent(blockID: blockID, parentBlockID: newParentBlockID)
+        EditorLog.store.debug(
+            "block_outdented block_id=\(blockID, privacy: .public) parent_block_id=\(newParentBlockID ?? "root", privacy: .public)"
+        )
+        return true
+    }
+
     func deleteBlock(blockID: String) throws {
         let selectedRows = try database.query(
             """
@@ -1061,6 +1095,67 @@ final class PageRepository {
                 .text(createdAt),
                 .text(createdAt)
             ]
+        )
+    }
+
+    private func requiredActiveBlock(blockID: String) throws -> SQLiteRow {
+        guard let row = try database.query(
+            """
+            SELECT id, page_id, parent_block_id
+            FROM blocks
+            WHERE id = ? AND is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        ).first else {
+            throw PageRepositoryError.blockNotFound
+        }
+        return row
+    }
+
+    private func siblingBlocks(pageID: String, parentBlockID: String?) throws -> [String] {
+        try database.query(
+            """
+            SELECT id
+            FROM blocks
+            WHERE page_id = ?
+              AND is_deleted = 0
+              AND (
+                  (parent_block_id IS NULL AND ? IS NULL)
+                  OR parent_block_id = ?
+              )
+            ORDER BY order_key ASC
+            """,
+            bindings: [
+                .text(pageID),
+                parentBlockID.map(SQLiteValue.text) ?? .null,
+                parentBlockID.map(SQLiteValue.text) ?? .null
+            ]
+        ).compactMap { $0["id"] }
+    }
+
+    private func updateBlockParent(blockID: String, parentBlockID: String?) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            UPDATE blocks
+            SET parent_block_id = ?,
+                revision = revision + 1,
+                sync_state = ?,
+                updated_at = ?
+            WHERE id = ? AND is_deleted = 0
+            """,
+            bindings: [
+                parentBlockID.map(SQLiteValue.text) ?? .null,
+                .text("local"),
+                .text(now),
+                .text(blockID)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "block",
+            entityID: blockID,
+            changeType: "update"
         )
     }
 

@@ -273,6 +273,65 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.orderKey), ["000001", "000002", "000003"])
     }
 
+    func testIndentBlockNestsUnderPreviousSiblingAndQueuesSync() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                Third
+                """
+        )
+        let importedSnapshot = try repository.loadWorkspaceSnapshot()
+        let firstBlockID = try XCTUnwrap(importedSnapshot.blocks.first?.id)
+        let secondBlockID = try XCTUnwrap(importedSnapshot.blocks.dropFirst().first?.id)
+
+        XCTAssertTrue(try repository.indentBlock(blockID: secondBlockID))
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.blocks.first { $0.id == secondBlockID }?.parentBlockID, firstBlockID)
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "block", entityID: secondBlockID, changeType: "update")
+        )
+    }
+
+    func testOutdentBlockRestoresParentAndQueuesSync() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                """
+        )
+        let importedSnapshot = try repository.loadWorkspaceSnapshot()
+        let secondBlockID = try XCTUnwrap(importedSnapshot.blocks.dropFirst().first?.id)
+        _ = try repository.indentBlock(blockID: secondBlockID)
+
+        XCTAssertTrue(try repository.outdentBlock(blockID: secondBlockID))
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertNil(reloadedSnapshot.blocks.first { $0.id == secondBlockID }?.parentBlockID)
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "block", entityID: secondBlockID, changeType: "update")
+        )
+    }
+
     func testAppendParagraphBlockPersistsAtEnd() throws {
         let database = try migratedDatabase()
         defer { database.close() }
