@@ -536,6 +536,49 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testManualConflictMergeRefreshesBlockAndKeepsPendingSync() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Local edit")
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: blockID,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote edit",
+                payloadJSON: "{\"text\":\"Remote edit\"}",
+                revision: 2
+            )
+        )
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            conflictRepository: ConflictRepository(database: database)
+        )
+        try viewModel.load()
+        let conflict = try XCTUnwrap(viewModel.selectedPageConflicts.first)
+
+        XCTAssertEqual(conflict.localTextPlain, "Local edit")
+        XCTAssertEqual(conflict.remoteTextPlain, "Remote edit")
+
+        try viewModel.resolveConflictManually(id: conflict.id, text: "Merged edit")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Merged edit")
+        XCTAssertEqual(viewModel.selectedPageConflicts, [])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+            )
+        )
+    }
+
+    @MainActor
     func testSelectBacklinkNavigatesToSourcePage() throws {
         let database = try migratedDatabase()
         defer { database.close() }

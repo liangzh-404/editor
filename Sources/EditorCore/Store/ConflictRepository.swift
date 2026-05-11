@@ -10,8 +10,13 @@ struct ConflictVersion: Equatable, Sendable {
 struct ConflictSnapshot: Identifiable, Equatable, Sendable {
     let id: String
     let blockID: String
-    let textPlain: String
+    let localTextPlain: String
+    let remoteTextPlain: String
     let remoteRevision: Int
+
+    var textPlain: String {
+        remoteTextPlain
+    }
 }
 
 final class ConflictRepository {
@@ -50,6 +55,7 @@ final class ConflictRepository {
             """
             SELECT conflict_versions.id,
                    conflict_versions.block_id,
+                   blocks.text_plain AS local_text_plain,
                    conflict_versions.text_plain,
                    conflict_versions.remote_revision
             FROM conflict_versions
@@ -63,7 +69,8 @@ final class ConflictRepository {
             ConflictSnapshot(
                 id: row["id"] ?? "",
                 blockID: row["block_id"] ?? "",
-                textPlain: row["text_plain"] ?? "",
+                localTextPlain: row["local_text_plain"] ?? "",
+                remoteTextPlain: row["text_plain"] ?? "",
                 remoteRevision: Int(row["remote_revision"] ?? "") ?? 0
             )
         }
@@ -85,7 +92,8 @@ final class ConflictRepository {
         let snapshot = ConflictSnapshot(
             id: row["id"] ?? "",
             blockID: row["block_id"] ?? "",
-            textPlain: row["text_plain"] ?? "",
+            localTextPlain: "",
+            remoteTextPlain: row["text_plain"] ?? "",
             remoteRevision: Int(row["remote_revision"] ?? "") ?? 0
         )
         let payloadJSON = row["payload_json"] ?? ""
@@ -142,6 +150,81 @@ final class ConflictRepository {
         return snapshot
     }
 
+    func resolveManually(conflictID: String, text: String) throws -> ConflictSnapshot {
+        guard let row = try database.query(
+            """
+            SELECT conflict_versions.id,
+                   conflict_versions.block_id,
+                   blocks.text_plain AS local_text_plain,
+                   conflict_versions.text_plain,
+                   conflict_versions.remote_revision
+            FROM conflict_versions
+            INNER JOIN blocks ON blocks.id = conflict_versions.block_id
+            WHERE conflict_versions.id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(conflictID)]
+        ).first else {
+            throw ConflictRepositoryError.conflictNotFound
+        }
+
+        let snapshot = ConflictSnapshot(
+            id: row["id"] ?? "",
+            blockID: row["block_id"] ?? "",
+            localTextPlain: row["local_text_plain"] ?? "",
+            remoteTextPlain: row["text_plain"] ?? "",
+            remoteRevision: Int(row["remote_revision"] ?? "") ?? 0
+        )
+        let payloadJSON = try blockPayloadJSON(text: text)
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        try database.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try database.execute(
+                """
+                UPDATE blocks
+                SET payload_json = ?,
+                    text_plain = ?,
+                    revision = revision + 1,
+                    sync_state = ?,
+                    updated_at = ?
+                WHERE id = ? AND is_deleted = 0
+                """,
+                bindings: [
+                    .text(payloadJSON),
+                    .text(text),
+                    .text("local"),
+                    .text(now),
+                    .text(snapshot.blockID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM conflict_versions
+                WHERE block_id = ?
+                """,
+                bindings: [.text(snapshot.blockID)]
+            )
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: snapshot.blockID,
+                text: text
+            )
+            if try !hasPendingBlockUpdate(blockID: snapshot.blockID) {
+                try SyncRepository(database: database).enqueue(
+                    entityType: "block",
+                    entityID: snapshot.blockID,
+                    changeType: "update"
+                )
+            }
+            try database.execute("COMMIT")
+        } catch {
+            try? database.execute("ROLLBACK")
+            throw error
+        }
+
+        return snapshot
+    }
+
     func conflicts(blockID: String) throws -> [ConflictVersion] {
         try database.query(
             """
@@ -160,6 +243,38 @@ final class ConflictRepository {
             )
         }
     }
+
+    private func hasPendingBlockUpdate(blockID: String) throws -> Bool {
+        let rows = try database.query(
+            """
+            SELECT id
+            FROM sync_changes
+            WHERE entity_type = ?
+              AND entity_id = ?
+              AND change_type = ?
+            LIMIT 1
+            """,
+            bindings: [
+                .text("block"),
+                .text(blockID),
+                .text("update")
+            ]
+        )
+        return rows.first != nil
+    }
+}
+
+private func blockPayloadJSON(text: String) throws -> String {
+    let data = try JSONSerialization.data(
+        withJSONObject: ["text": text],
+        options: [.sortedKeys]
+    )
+
+    guard let payload = String(data: data, encoding: .utf8) else {
+        throw PageRepositoryError.invalidPayloadEncoding
+    }
+
+    return payload
 }
 
 enum ConflictRepositoryError: Error, Equatable {

@@ -694,6 +694,33 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func resolveConflictManually(id conflictID: String, text: String) throws {
+        guard let conflictRepository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let previousNotebookID = selectedNotebookID
+        let previousPageID = selectedPageID
+        let resolved = try conflictRepository.resolveManually(conflictID: conflictID, text: text)
+        try load()
+        restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+        pendingFocusBlockID = resolved.blockID
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(resolved.blockID, privacy: .public) source=conflict_manual_merge"
+        )
+    }
+
+    func resolveConflictManuallyForUI(id conflictID: String, text: String) {
+        do {
+            try resolveConflictManually(id: conflictID, text: text)
+            EditorLog.sync.debug("sync_conflict_manual_resolved conflict_id=\(conflictID, privacy: .public)")
+        } catch {
+            EditorLog.sync.error(
+                "sync_conflict_manual_resolve_failed conflict_id=\(conflictID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     func deleteBlockFromCurrentPage(blockID: String) {
         do {
             try deleteBlock(blockID: blockID)

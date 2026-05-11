@@ -90,6 +90,9 @@ private struct ThreeColumnEditorShell: View {
                 onAcceptConflict: { conflict in
                     viewModel.acceptRemoteConflictForUI(id: conflict.id)
                 },
+                onResolveConflictManually: { conflict, text in
+                    viewModel.resolveConflictManuallyForUI(id: conflict.id, text: text)
+                },
                 onPageTitleChange: { title in
                     viewModel.editSelectedPageTitle(title)
                 },
@@ -207,6 +210,9 @@ private struct CompactPageDestination: View {
                 },
                 onAcceptConflict: { conflict in
                     viewModel.acceptRemoteConflictForUI(id: conflict.id)
+                },
+                onResolveConflictManually: { conflict, text in
+                    viewModel.resolveConflictManuallyForUI(id: conflict.id, text: text)
                 },
                 onPageTitleChange: { title in
                     viewModel.editSelectedPageTitle(title)
@@ -718,6 +724,7 @@ private struct EditorCanvasView: View {
     let onDeleteBlock: (String) -> Void
     let onSelectBacklink: (Backlink) -> Void
     let onAcceptConflict: (ConflictSnapshot) -> Void
+    let onResolveConflictManually: (ConflictSnapshot, String) -> Void
     let onPageTitleChange: (String) -> Void
     let onImportMarkdown: (URL) -> Void
     let onExportMarkdown: () -> String
@@ -835,7 +842,11 @@ private struct EditorCanvasView: View {
                 }
 
                 if !conflicts.isEmpty {
-                    ConflictPanel(conflicts: conflicts, onAcceptConflict: onAcceptConflict)
+                    ConflictPanel(
+                        conflicts: conflicts,
+                        onAcceptConflict: onAcceptConflict,
+                        onResolveManually: onResolveConflictManually
+                    )
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -976,6 +987,7 @@ private struct BacklinksPanel: View {
 private struct ConflictPanel: View {
     let conflicts: [ConflictSnapshot]
     let onAcceptConflict: (ConflictSnapshot) -> Void
+    let onResolveManually: (ConflictSnapshot, String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -984,37 +996,90 @@ private struct ConflictPanel: View {
                 .foregroundStyle(.secondary)
 
             ForEach(conflicts) { conflict in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .frame(width: 16)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(conflict.textPlain)
-                            .font(.callout)
-                            .lineLimit(2)
-
-                        HStack(spacing: 8) {
-                            Text("Remote revision \(conflict.remoteRevision)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Button {
-                                onAcceptConflict(conflict)
-                            } label: {
-                                Label("Use Remote", systemImage: "arrow.down.doc")
-                            }
-                            .buttonStyle(.borderless)
-                            .accessibilityIdentifier("editor.conflict.\(conflict.id).accept-remote")
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-                .accessibilityIdentifier("editor.conflict.\(conflict.id)")
+                ConflictResolutionRow(
+                    conflict: conflict,
+                    onAcceptConflict: onAcceptConflict,
+                    onResolveManually: onResolveManually
+                )
             }
         }
         .padding(.top, 10)
+    }
+}
+
+private struct ConflictResolutionRow: View {
+    let conflict: ConflictSnapshot
+    let onAcceptConflict: (ConflictSnapshot) -> Void
+    let onResolveManually: (ConflictSnapshot, String) -> Void
+    @State private var mergedText: String
+
+    init(
+        conflict: ConflictSnapshot,
+        onAcceptConflict: @escaping (ConflictSnapshot) -> Void,
+        onResolveManually: @escaping (ConflictSnapshot, String) -> Void
+    ) {
+        self.conflict = conflict
+        self.onAcceptConflict = onAcceptConflict
+        self.onResolveManually = onResolveManually
+        _mergedText = State(initialValue: conflict.localTextPlain)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(width: 16)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 12) {
+                        conflictTextColumn(title: "Local", text: conflict.localTextPlain)
+                        conflictTextColumn(
+                            title: "Remote r\(conflict.remoteRevision)",
+                            text: conflict.remoteTextPlain
+                        )
+                    }
+
+                    TextEditor(text: $mergedText)
+                        .font(.callout)
+                        .frame(minHeight: 72)
+                        .accessibilityIdentifier("editor.conflict.\(conflict.id).merge-text")
+
+                    HStack(spacing: 8) {
+                        Button {
+                            onResolveManually(conflict, mergedText)
+                        } label: {
+                            Label("Apply Merge", systemImage: "checkmark.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("editor.conflict.\(conflict.id).apply-merge")
+
+                        Button {
+                            onAcceptConflict(conflict)
+                        } label: {
+                            Label("Use Remote", systemImage: "arrow.down.doc")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("editor.conflict.\(conflict.id).accept-remote")
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 6)
+        .accessibilityIdentifier("editor.conflict.\(conflict.id)")
+    }
+
+    private func conflictTextColumn(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(text.isEmpty ? " " : text)
+                .font(.caption)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
     }
 }
 
