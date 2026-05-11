@@ -37,7 +37,7 @@ Implement the approved editor architecture so the app supports the full requeste
 | TextKit 2 wrappers | `NativeTextBlockEditor` uses AppKit/UIKit native text views; macOS runtime log check shows no `textkit2_unavailable` errors | Partial; needs richer sizing, selection persistence, and focused UI tests |
 | editor session state | `EditorSessionTests` and `EditorSession` cover focused block, focus reason, draft text, dirty blocks, and commit clearing | Partial; undo scope, selection/caret metadata, composition state, and drag reorder state remain |
 | advanced blocks | paragraph only | Missing implementation |
-| search/backlinks | `links` table exists only | Missing implementation |
+| search/backlinks | `search_index` FTS5 table plus `SearchRepositoryTests` and `SearchRepository` cover page title, block text, and attachment filename search | Partial; backlinks table maintenance and UI search views remain |
 | sync conflicts | `conflict_versions` table exists only | Missing implementation |
 | verification | repository/view-model tests and app builds | Partial |
 
@@ -51,4 +51,4 @@ The completed attachment slice proves:
 4. Reloading the repository returns the attachment block and metadata.
 5. The app exposes an insertion command and renders image, video, and file attachment rows.
 
-The next concrete gaps are adding Markdown import/export UI, search/backlink indexes, CloudKit adapter behavior, native protection, and advanced block interactions.
+The next concrete gaps are adding Markdown import/export UI, backlink maintenance, CloudKit adapter behavior, native protection, and advanced block interactions.

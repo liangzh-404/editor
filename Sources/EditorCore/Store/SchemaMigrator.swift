@@ -136,10 +136,22 @@ enum SchemaMigrator {
 
         try database.execute(
             """
+            CREATE VIRTUAL TABLE IF NOT EXISTS search_index
+            USING fts5(
+                entity_type UNINDEXED,
+                entity_id UNINDEXED,
+                title,
+                body,
+                tokenize = 'unicode61'
+            );
+            """
+        )
+
+        try database.execute(
+            """
             INSERT OR IGNORE INTO schema_migrations (version, applied_at)
             VALUES (\(currentVersion), datetime('now'));
             """
         )
     }
 }
-

@@ -31,6 +31,7 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(tableNames.contains("sync_changes"))
         XCTAssertTrue(tableNames.contains("sync_records"))
         XCTAssertTrue(tableNames.contains("conflict_versions"))
+        XCTAssertTrue(tableNames.contains("search_index"))
     }
 
     func testMigrationRecordsSchemaVersionOne() throws {
@@ -56,4 +57,3 @@ final class SchemaMigratorTests: XCTestCase {
         return directory.appendingPathComponent("editor.sqlite").path
     }
 }
-
