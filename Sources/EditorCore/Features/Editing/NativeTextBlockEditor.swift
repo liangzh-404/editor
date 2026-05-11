@@ -28,16 +28,41 @@ struct NativeTextBlockEditor: View {
     }
 
     var body: some View {
-        PlatformNativeTextView(
-            blockID: blockID,
-            text: text,
-            blockType: blockType,
-            session: session,
-            focusRequestID: focusRequestID,
-            onFocusRequestHandled: onFocusRequestHandled,
-            onTextChange: onTextChange
-        )
+        ZStack(alignment: .topLeading) {
+            PlatformNativeTextView(
+                blockID: blockID,
+                text: text,
+                blockType: blockType,
+                session: session,
+                focusRequestID: focusRequestID,
+                onFocusRequestHandled: onFocusRequestHandled,
+                onTextChange: onTextChange
+            )
+
+            if showsPlaceholder {
+                Text("Start writing...")
+                    .font(placeholderFont)
+                    .foregroundStyle(.secondary.opacity(0.72))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .frame(minHeight: minimumHeight)
+    }
+
+    var showsPlaceholder: Bool {
+        text.isEmpty && session.focusedBlockID != blockID
+    }
+
+    private var placeholderFont: Font {
+        switch blockType {
+        case .heading1:
+            return .title2.weight(.semibold)
+        case .codeBlock, .table:
+            return .system(.body, design: .monospaced)
+        default:
+            return .body
+        }
     }
 
     private var minimumHeight: CGFloat {

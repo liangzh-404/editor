@@ -10,6 +10,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var selectedPageBacklinks: [Backlink] = []
     @Published private(set) var cloudKitAccountStatus: CloudKitAccountAvailability?
     @Published private(set) var syncStatusText = "Sync Idle"
+    @Published private(set) var pendingFocusBlockID: String?
 
     private let repository: PageRepository?
     private let attachmentRepository: AttachmentRepository?
@@ -66,6 +67,7 @@ final class WorkspaceViewModel: ObservableObject {
         snapshot = .empty
         selectedWorkspaceID = nil
         selectedPageID = nil
+        pendingFocusBlockID = nil
     }
 
     init(snapshot: WorkspaceSnapshot) {
@@ -78,6 +80,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedPageID = snapshot.selectedPageID
+        pendingFocusBlockID = nil
     }
 
     func load() throws {
@@ -117,11 +120,15 @@ final class WorkspaceViewModel: ObservableObject {
 
         do {
             let summary = try syncEngine.uploadPendingChanges()
+            let fetchSummary = try syncEngine.fetchRemoteChanges()
             if summary.failedCount > 0 {
                 syncStatusText = "Sync Retry Scheduled"
+            } else if fetchSummary.appliedCount > 0 {
+                syncStatusText = "Synced \(fetchSummary.appliedCount) remote \(fetchSummary.appliedCount == 1 ? "change" : "changes")"
             } else {
                 syncStatusText = "Synced \(summary.uploadedCount) \(summary.uploadedCount == 1 ? "change" : "changes")"
             }
+            try load()
         } catch {
             syncStatusText = "Sync Failed"
             EditorLog.sync.error(
@@ -154,6 +161,14 @@ final class WorkspaceViewModel: ObservableObject {
         EditorLog.render.debug(
             "backlink_selected source_page_id=\(backlink.sourcePageID, privacy: .public)"
         )
+    }
+
+    @discardableResult
+    func consumePendingFocusBlockID() -> String? {
+        defer {
+            pendingFocusBlockID = nil
+        }
+        return pendingFocusBlockID
     }
 
     func updateBlockText(blockID: String, text: String) throws {
@@ -245,6 +260,7 @@ final class WorkspaceViewModel: ObservableObject {
         let page = try repository.createPage(workspaceID: selectedWorkspaceID, title: title)
         try load()
         selectPage(id: page.id)
+        requestFocusForInitialEmptyBlockIfNeeded(source: "page_create")
         return page
     }
 
@@ -359,6 +375,20 @@ final class WorkspaceViewModel: ObservableObject {
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedPageID = snapshot.selectedPageID
+    }
+
+    private func requestFocusForInitialEmptyBlockIfNeeded(source: String) {
+        guard visibleBlocks.count == 1,
+              let block = visibleBlocks.first,
+              block.type.isTextEditable,
+              block.textPlain.isEmpty else {
+            return
+        }
+
+        pendingFocusBlockID = block.id
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=\(source, privacy: .public)"
+        )
     }
 
     private func refreshDerivedState(rebuildSearchIndex: Bool) throws {

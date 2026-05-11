@@ -99,6 +99,38 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try syncRepository.pendingChanges(), [change])
     }
 
+    func testFetchRemoteChangesAppliesRemoteBlockUpdates() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            changes: [
+                RemoteBlockChange(
+                    blockID: blockID,
+                    pageID: pageID,
+                    type: .paragraph,
+                    textPlain: "Remote fetched text",
+                    payloadJSON: "{\"text\":\"Remote fetched text\"}",
+                    revision: 3
+                )
+            ]
+        )
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+
+        XCTAssertEqual(result.appliedCount, 1)
+        XCTAssertEqual(try pageRepository.loadWorkspaceSnapshot().blocks.first?.textPlain, "Remote fetched text")
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsBlockChangeToRecord() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -171,6 +203,18 @@ final class FailingOnceCloudKitSyncAdapter: CloudKitSyncAdapter {
             recordName: "\(change.entityType)-\(change.entityID)",
             changeTag: "tag-\(change.entityID)"
         )
+    }
+}
+
+final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
+    let changes: [RemoteBlockChange]
+
+    init(changes: [RemoteBlockChange]) {
+        self.changes = changes
+    }
+
+    func fetchRemoteBlockChanges() throws -> [RemoteBlockChange] {
+        changes
     }
 }
 

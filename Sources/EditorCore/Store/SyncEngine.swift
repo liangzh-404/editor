@@ -10,8 +10,16 @@ protocol CloudKitSyncAdapter {
     func upload(change: SyncChange) throws -> CloudKitUploadResult
 }
 
+protocol CloudKitRemoteChangeFetching {
+    func fetchRemoteBlockChanges() throws -> [RemoteBlockChange]
+}
+
 protocol CloudKitRecordSaving {
     func save(record: CKRecord) throws -> CKRecord
+}
+
+protocol CloudKitRecordFetching {
+    func fetchRecords(recordType: String) throws -> [CKRecord]
 }
 
 final class LiveCloudKitRecordSaver: CloudKitRecordSaving {
@@ -46,16 +54,60 @@ final class LiveCloudKitRecordSaver: CloudKitRecordSaving {
     }
 }
 
-final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter {
+final class LiveCloudKitRecordFetcher: CloudKitRecordFetching {
+    private let database: CKDatabase
+
+    init(database: CKDatabase = CKContainer.default().privateCloudDatabase) {
+        self.database = database
+    }
+
+    func fetchRecords(recordType: String) throws -> [CKRecord] {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class FetchBox: @unchecked Sendable {
+            var result: Result<[CKRecord], Error>?
+        }
+        let fetchBox = FetchBox()
+        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+
+        database.fetch(withQuery: query, inZoneWith: nil) { result in
+            switch result {
+            case .success(let response):
+                var records: [CKRecord] = []
+                for (_, recordResult) in response.matchResults {
+                    switch recordResult {
+                    case .success(let record):
+                        records.append(record)
+                    case .failure(let error):
+                        fetchBox.result = .failure(error)
+                        semaphore.signal()
+                        return
+                    }
+                }
+                fetchBox.result = .success(records)
+            case .failure(let error):
+                fetchBox.result = .failure(error)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        return try fetchBox.result?.get() ?? []
+    }
+}
+
+final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteChangeFetching {
     private let database: SQLiteDatabase
     private let recordSaver: CloudKitRecordSaving
+    private let recordFetcher: CloudKitRecordFetching?
 
     init(
         database: SQLiteDatabase,
-        recordSaver: CloudKitRecordSaving = LiveCloudKitRecordSaver()
+        recordSaver: CloudKitRecordSaving = LiveCloudKitRecordSaver(),
+        recordFetcher: CloudKitRecordFetching? = nil
     ) {
         self.database = database
         self.recordSaver = recordSaver
+        self.recordFetcher = recordFetcher
     }
 
     func upload(change: SyncChange) throws -> CloudKitUploadResult {
@@ -65,6 +117,14 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter {
             recordName: savedRecord.recordID.recordName,
             changeTag: savedRecord.recordChangeTag
         )
+    }
+
+    func fetchRemoteBlockChanges() throws -> [RemoteBlockChange] {
+        guard let recordFetcher else {
+            throw CloudKitPrivateDatabaseAdapterError.remoteFetchUnavailable
+        }
+
+        return try recordFetcher.fetchRecords(recordType: "BlockRecord").compactMap(remoteBlockChange)
     }
 
     private func record(for change: SyncChange) throws -> CKRecord {
@@ -184,6 +244,27 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter {
         return record
     }
 
+    private func remoteBlockChange(record: CKRecord) -> RemoteBlockChange? {
+        guard let blockID = record["entityID"] as? String,
+              let pageID = record["pageID"] as? String,
+              let rawType = record["type"] as? String,
+              let type = BlockType(rawValue: rawType),
+              let textPlain = record["textPlain"] as? String,
+              let payloadJSON = record["payloadJSON"] as? String else {
+            return nil
+        }
+
+        let revision = (record["revision"] as? NSNumber)?.intValue ?? 0
+        return RemoteBlockChange(
+            blockID: blockID,
+            pageID: pageID,
+            type: type,
+            textPlain: textPlain,
+            payloadJSON: payloadJSON,
+            revision: revision
+        )
+    }
+
     private func makeRecord(type: String, entityType: String, entityID: String) -> CKRecord {
         let recordID = CKRecord.ID(recordName: "\(entityType)-\(entityID)")
         let record = CKRecord(recordType: type, recordID: recordID)
@@ -203,6 +284,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter {
 enum CloudKitPrivateDatabaseAdapterError: Error, Equatable {
     case entityNotFound(String)
     case missingSavedRecord
+    case remoteFetchUnavailable
     case unsupportedEntityType(String)
 }
 
@@ -227,22 +309,44 @@ struct SyncUploadSummary: Equatable, Sendable {
     let failedCount: Int
 }
 
+struct SyncFetchSummary: Equatable, Sendable {
+    let appliedCount: Int
+}
+
 final class SyncEngine {
     private let syncRepository: SyncRepository
     private let adapter: CloudKitSyncAdapter
+    private let remoteChangeFetcher: CloudKitRemoteChangeFetching?
+    private let mergeEngine: SyncMergeEngine?
     private let retryPolicy: SyncRetryPolicy
     private let now: () -> Date
 
     init(
         syncRepository: SyncRepository,
         adapter: CloudKitSyncAdapter,
+        remoteChangeFetcher: CloudKitRemoteChangeFetching? = nil,
+        mergeEngine: SyncMergeEngine? = nil,
         retryPolicy: SyncRetryPolicy = SyncRetryPolicy(),
         now: @escaping () -> Date = Date.init
     ) {
         self.syncRepository = syncRepository
         self.adapter = adapter
+        self.remoteChangeFetcher = remoteChangeFetcher
+        self.mergeEngine = mergeEngine
         self.retryPolicy = retryPolicy
         self.now = now
+    }
+
+    func fetchRemoteChanges() throws -> SyncFetchSummary {
+        guard let remoteChangeFetcher, let mergeEngine else {
+            return SyncFetchSummary(appliedCount: 0)
+        }
+
+        let changes = try remoteChangeFetcher.fetchRemoteBlockChanges()
+        for change in changes {
+            try mergeEngine.applyRemoteBlock(change)
+        }
+        return SyncFetchSummary(appliedCount: changes.count)
     }
 
     @discardableResult

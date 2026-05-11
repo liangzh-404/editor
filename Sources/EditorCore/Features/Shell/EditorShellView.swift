@@ -50,6 +50,7 @@ private struct ThreeColumnEditorShell: View {
                 page: viewModel.selectedPage,
                 blocks: viewModel.visibleBlocks,
                 backlinks: viewModel.selectedPageBacklinks,
+                pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
                 },
@@ -73,6 +74,9 @@ private struct ThreeColumnEditorShell: View {
                 },
                 onImportAttachment: { sourceURL in
                     viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+                },
+                onPendingBlockFocusHandled: {
+                    _ = viewModel.consumePendingFocusBlockID()
                 }
             )
         }
@@ -241,6 +245,7 @@ private struct CompactPageListView: View {
                             page: page,
                             blocks: viewModel.snapshot.blocks.filter { $0.pageID == page.id },
                             backlinks: viewModel.selectedPageBacklinks,
+                            pendingFocusBlockID: viewModel.pendingFocusBlockID,
                             onAddParagraphBlock: {
                                 viewModel.addParagraphBlockToCurrentPage()
                             },
@@ -264,6 +269,9 @@ private struct CompactPageListView: View {
                             },
                             onImportAttachment: { sourceURL in
                                 viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+                            },
+                            onPendingBlockFocusHandled: {
+                                _ = viewModel.consumePendingFocusBlockID()
                             }
                         )
                         .onAppear {
@@ -388,6 +396,7 @@ private struct EditorCanvasView: View {
     let page: PageSummary?
     let blocks: [BlockSnapshot]
     let backlinks: [Backlink]
+    let pendingFocusBlockID: String?
     let onAddParagraphBlock: () -> String?
     let onMoveBlock: (String, Int) -> Void
     let onSelectBacklink: (Backlink) -> Void
@@ -396,6 +405,7 @@ private struct EditorCanvasView: View {
     let onExportMarkdown: () -> String
     let onBlockTextChange: (String, String) -> Void
     let onImportAttachment: (URL) -> Void
+    let onPendingBlockFocusHandled: () -> Void
     @State private var isAttachmentImporterPresented = false
     @State private var isMarkdownImporterPresented = false
     @State private var isMarkdownExporterPresented = false
@@ -475,6 +485,9 @@ private struct EditorCanvasView: View {
                             if pendingFocusRequest?.blockID == block.id {
                                 pendingFocusRequest = nil
                             }
+                            if pendingFocusBlockID == block.id {
+                                onPendingBlockFocusHandled()
+                            }
                         }
                     ) { text in
                         onBlockTextChange(block.id, text)
@@ -491,6 +504,12 @@ private struct EditorCanvasView: View {
         }
         .background(Color.white)
         .navigationTitle(page?.title ?? "Editor")
+        .onAppear {
+            schedulePendingFocusIfNeeded(pendingFocusBlockID)
+        }
+        .onChange(of: pendingFocusBlockID) { _, blockID in
+            schedulePendingFocusIfNeeded(blockID)
+        }
         .fileImporter(
             isPresented: $isMarkdownImporterPresented,
             allowedContentTypes: MarkdownFileDocument.readableContentTypes,
@@ -541,6 +560,17 @@ private struct EditorCanvasView: View {
         } set: { title in
             onPageTitleChange(title)
         }
+    }
+
+    private func schedulePendingFocusIfNeeded(_ blockID: String?) {
+        guard let blockID else {
+            return
+        }
+
+        pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+        EditorLog.focus.debug(
+            "editor_focus_request_scheduled block_id=\(blockID, privacy: .public) source=view_model"
+        )
     }
 }
 

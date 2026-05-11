@@ -17,4 +17,37 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(editor.text, "Hello")
         XCTAssertEqual(editor.blockType, .paragraph)
     }
+
+    @MainActor
+    func testNativeTextBlockEditorShowsPlaceholderForEmptyUnfocusedBlock() {
+        let session = EditorSession()
+        let editor = NativeTextBlockEditor(
+            blockID: "block-1",
+            text: "",
+            blockType: .paragraph,
+            session: session,
+            onTextChange: { _ in }
+        )
+
+        XCTAssertTrue(editor.showsPlaceholder)
+
+        session.beginEditing(blockID: "block-1", reason: .programmatic)
+        let focusedEditor = NativeTextBlockEditor(
+            blockID: "block-1",
+            text: "",
+            blockType: .paragraph,
+            session: session,
+            onTextChange: { _ in }
+        )
+        XCTAssertFalse(focusedEditor.showsPlaceholder)
+
+        let editorWithText = NativeTextBlockEditor(
+            blockID: "block-1",
+            text: "Already editable",
+            blockType: .paragraph,
+            session: session,
+            onTextChange: { _ in }
+        )
+        XCTAssertFalse(editorWithText.showsPlaceholder)
+    }
 }

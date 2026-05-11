@@ -156,6 +156,25 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCreatePageRequestsFocusForInitialEmptyBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        _ = try viewModel.createPageInSelectedWorkspace(title: "Untitled")
+        let initialBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        XCTAssertEqual(viewModel.pendingFocusBlockID, initialBlockID)
+        XCTAssertEqual(viewModel.consumePendingFocusBlockID(), initialBlockID)
+        XCTAssertNil(viewModel.pendingFocusBlockID)
+    }
+
+    @MainActor
     func testExportCurrentPageMarkdownUsesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -407,6 +426,45 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
         XCTAssertEqual(viewModel.syncStatusText, "Synced 1 change")
+    }
+
+    @MainActor
+    func testSyncNowFetchesRemoteChangesAndRefreshesVisibleBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let syncRepository = SyncRepository(database: database)
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: RecordingCloudKitSyncAdapter(),
+                remoteChangeFetcher: StaticRemoteBlockChangeFetcher(
+                    changes: [
+                        RemoteBlockChange(
+                            blockID: blockID,
+                            pageID: pageID,
+                            type: .paragraph,
+                            textPlain: "Fetched into UI",
+                            payloadJSON: "{\"text\":\"Fetched into UI\"}",
+                            revision: 4
+                        )
+                    ]
+                ),
+                mergeEngine: SyncMergeEngine(database: database)
+            )
+        )
+        try viewModel.load()
+
+        viewModel.syncNow()
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Fetched into UI")
+        XCTAssertEqual(viewModel.syncStatusText, "Synced 1 remote change")
     }
 
     private func migratedDatabase() throws -> SQLiteDatabase {

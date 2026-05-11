@@ -53,9 +53,15 @@ enum AppEnvironment {
             return nil
         }
 
+        let adapter = CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: LiveCloudKitRecordFetcher()
+        )
         return SyncEngine(
             syncRepository: SyncRepository(database: database),
-            adapter: CloudKitPrivateDatabaseAdapter(database: database)
+            adapter: adapter,
+            remoteChangeFetcher: adapter,
+            mergeEngine: SyncMergeEngine(database: database)
         )
     }
 
