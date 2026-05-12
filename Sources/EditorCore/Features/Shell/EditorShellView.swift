@@ -842,6 +842,9 @@ private struct EditorCanvasView: View {
                     ) { text in
                         onBlockTextChange(block.id, text)
                     }
+                    .dropDestination(for: String.self) { draggedBlockIDs, _ in
+                        moveDroppedBlocks(draggedBlockIDs, destinationBlockID: block.id)
+                    }
                 }
 
                 if !backlinks.isEmpty {
@@ -861,6 +864,9 @@ private struct EditorCanvasView: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         focusCanvas()
+                    }
+                    .dropDestination(for: String.self) { draggedBlockIDs, _ in
+                        moveDroppedBlocksToEnd(draggedBlockIDs)
                     }
                     .accessibilityIdentifier("editor.canvas-edit-region")
             }
@@ -945,6 +951,33 @@ private struct EditorCanvasView: View {
         }
 
         pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+    }
+
+    private func moveDroppedBlocks(_ draggedBlockIDs: [String], destinationBlockID: String) -> Bool {
+        guard let draggedBlockID = draggedBlockIDs.first,
+              let targetIndex = BlockDragReorderResolver.targetIndex(
+                draggedBlockID: draggedBlockID,
+                destinationBlockID: destinationBlockID,
+                visibleBlockIDs: blocks.map(\.id)
+              ) else {
+            return false
+        }
+
+        onMoveBlock(draggedBlockID, targetIndex)
+        return true
+    }
+
+    private func moveDroppedBlocksToEnd(_ draggedBlockIDs: [String]) -> Bool {
+        guard let draggedBlockID = draggedBlockIDs.first,
+              let targetIndex = BlockDragReorderResolver.endTargetIndex(
+                draggedBlockID: draggedBlockID,
+                visibleBlockIDs: blocks.map(\.id)
+              ) else {
+            return false
+        }
+
+        onMoveBlock(draggedBlockID, targetIndex)
+        return true
     }
 
     private func attachment(for block: BlockSnapshot) -> AttachmentSnapshot? {
@@ -1199,6 +1232,8 @@ private struct BlockRowView: View {
                 Image(systemName: "circle.grid.2x2")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .draggable(block.id)
+                    .accessibilityIdentifier("editor.block.\(block.id).drag-handle")
 
                 if block.type.isTextEditable {
                     Menu {

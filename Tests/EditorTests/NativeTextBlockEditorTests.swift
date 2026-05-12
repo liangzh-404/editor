@@ -99,4 +99,50 @@ final class NativeTextBlockEditorTests: XCTestCase {
             )
         )
     }
+
+    func testBlockDragReorderResolverMovesBeforeDestinationBlock() {
+        let visibleBlockIDs = ["a", "b", "c"]
+
+        XCTAssertEqual(
+            BlockDragReorderResolver.targetIndex(
+                draggedBlockID: "a",
+                destinationBlockID: "c",
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            1
+        )
+        XCTAssertEqual(
+            BlockDragReorderResolver.targetIndex(
+                draggedBlockID: "c",
+                destinationBlockID: "a",
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            0
+        )
+        XCTAssertNil(
+            BlockDragReorderResolver.targetIndex(
+                draggedBlockID: "b",
+                destinationBlockID: "c",
+                visibleBlockIDs: visibleBlockIDs
+            )
+        )
+    }
+
+    func testBlockDragReorderResolverMovesToEndRegion() {
+        let visibleBlockIDs = ["a", "b", "c"]
+
+        XCTAssertEqual(
+            BlockDragReorderResolver.endTargetIndex(
+                draggedBlockID: "a",
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            2
+        )
+        XCTAssertNil(
+            BlockDragReorderResolver.endTargetIndex(
+                draggedBlockID: "c",
+                visibleBlockIDs: visibleBlockIDs
+            )
+        )
+    }
 }

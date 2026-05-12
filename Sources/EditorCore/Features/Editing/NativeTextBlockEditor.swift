@@ -34,6 +34,41 @@ enum BlockKeyboardShortcutResolver {
     }
 }
 
+enum BlockDragReorderResolver {
+    static func targetIndex(
+        draggedBlockID: String,
+        destinationBlockID: String,
+        visibleBlockIDs: [String]
+    ) -> Int? {
+        guard draggedBlockID != destinationBlockID,
+              let currentIndex = visibleBlockIDs.firstIndex(of: draggedBlockID),
+              let destinationIndex = visibleBlockIDs.firstIndex(of: destinationBlockID) else {
+            return nil
+        }
+
+        let adjustedTargetIndex = destinationIndex - (currentIndex < destinationIndex ? 1 : 0)
+        guard adjustedTargetIndex != currentIndex else {
+            return nil
+        }
+        return adjustedTargetIndex
+    }
+
+    static func endTargetIndex(
+        draggedBlockID: String,
+        visibleBlockIDs: [String]
+    ) -> Int? {
+        guard let currentIndex = visibleBlockIDs.firstIndex(of: draggedBlockID) else {
+            return nil
+        }
+
+        let targetIndex = visibleBlockIDs.count - 1
+        guard currentIndex != targetIndex else {
+            return nil
+        }
+        return targetIndex
+    }
+}
+
 struct NativeTextFocusRequestState {
     private var handledFocusRequestID: UUID?
     private var scheduledFocusRequestID: UUID?
