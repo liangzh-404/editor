@@ -1304,7 +1304,15 @@ private struct BlockRowView: View {
             .frame(width: 24)
             .padding(.top, 1)
 
-            if block.type.isTextEditable {
+            if block.type == .table {
+                StructuredTableBlockEditor(
+                    blockID: block.id,
+                    text: block.textPlain,
+                    onTextChange: onTextChange
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("editor.block.\(block.id)")
+            } else if block.type.isTextEditable {
                 NativeTextBlockEditor(
                     blockID: block.id,
                     text: block.textPlain,
@@ -1347,6 +1355,7 @@ private struct BlockRowView: View {
         .taskItem,
         .quote,
         .codeBlock,
+        .table,
         .callout,
         .toggle
     ]
@@ -1367,6 +1376,71 @@ private struct BlockRowView: View {
             rowFocusRequest = nil
         }
         onFocusRequestHandled()
+    }
+}
+
+private struct StructuredTableBlockEditor: View {
+    let blockID: String
+    let text: String
+    let onTextChange: (String) -> Void
+
+    private var table: MarkdownTableDocument {
+        MarkdownTableDocument(markdown: text)
+    }
+
+    var body: some View {
+        let rows = editableRows
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
+                ForEach(rows.indices, id: \.self) { rowIndex in
+                    GridRow {
+                        ForEach(rows[rowIndex].indices, id: \.self) { columnIndex in
+                            TextField(
+                                "",
+                                text: cellBinding(row: rowIndex, column: columnIndex)
+                            )
+                            .textFieldStyle(.plain)
+                            .font(rowIndex == 0 ? .callout.weight(.semibold) : .callout)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .frame(minWidth: 96, alignment: .leading)
+                            .background(rowIndex == 0 ? Color.secondary.opacity(0.08) : Color.white)
+                            .overlay(
+                                Rectangle()
+                                    .stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
+                            )
+                            .accessibilityIdentifier("editor.table.\(blockID).cell.\(rowIndex).\(columnIndex)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var editableRows: [[String]] {
+        if !table.rows.isEmpty {
+            return table.rows
+        }
+
+        return [[text]]
+    }
+
+    private func cellBinding(row rowIndex: Int, column columnIndex: Int) -> Binding<String> {
+        Binding {
+            let rows = editableRows
+            guard rows.indices.contains(rowIndex),
+                  rows[rowIndex].indices.contains(columnIndex) else {
+                return ""
+            }
+            return rows[rowIndex][columnIndex]
+        } set: { value in
+            var updatedTable = table
+            if updatedTable.rows.isEmpty {
+                updatedTable = MarkdownTableDocument(markdown: "| \(text) |\n| --- |")
+            }
+            updatedTable.updateCell(row: rowIndex, column: columnIndex, text: value)
+            onTextChange(updatedTable.markdown)
+        }
     }
 }
 

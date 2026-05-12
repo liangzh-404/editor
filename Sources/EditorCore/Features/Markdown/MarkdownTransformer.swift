@@ -10,6 +10,85 @@ struct MarkdownBlockDraft: Equatable, Sendable {
     let textPlain: String
 }
 
+struct MarkdownTableDocument: Equatable, Sendable {
+    private(set) var rows: [[String]]
+
+    init(markdown: String) {
+        rows = markdown
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .compactMap(Self.cells(from:))
+            .filter { !Self.isSeparatorRow($0) }
+
+        let columnCount = rows.map(\.count).max() ?? 0
+        if columnCount > 0 {
+            rows = rows.map { row in
+                row + Array(repeating: "", count: max(columnCount - row.count, 0))
+            }
+        }
+    }
+
+    var columnCount: Int {
+        rows.map(\.count).max() ?? 0
+    }
+
+    var markdown: String {
+        guard !rows.isEmpty else {
+            return ""
+        }
+
+        var lines: [String] = []
+        for (index, row) in rows.enumerated() {
+            lines.append(markdownLine(cells: row))
+            if index == 0 {
+                lines.append(markdownLine(cells: Array(repeating: "---", count: max(row.count, 1))))
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    mutating func updateCell(row rowIndex: Int, column columnIndex: Int, text: String) {
+        guard rows.indices.contains(rowIndex),
+              rows[rowIndex].indices.contains(columnIndex) else {
+            return
+        }
+
+        rows[rowIndex][columnIndex] = text
+    }
+
+    private static func cells(from line: String) -> [String]? {
+        guard line.contains("|") else {
+            return nil
+        }
+
+        var content = line
+        if content.hasPrefix("|") {
+            content.removeFirst()
+        }
+        if content.hasSuffix("|") {
+            content.removeLast()
+        }
+
+        return content
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    private static func isSeparatorRow(_ cells: [String]) -> Bool {
+        !cells.isEmpty && cells.allSatisfy { cell in
+            let trimmed = cell.trimmingCharacters(in: .whitespaces)
+            return !trimmed.isEmpty && trimmed.allSatisfy { character in
+                character == "-" || character == ":"
+            }
+        }
+    }
+
+    private func markdownLine(cells: [String]) -> String {
+        "| \(cells.joined(separator: " | ")) |"
+    }
+}
+
 enum MarkdownTransformer {
     static func shortcutTransform(for text: String) -> MarkdownShortcutTransform? {
         switch text {

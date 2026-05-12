@@ -178,6 +178,45 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testMarkdownTableDocumentParsesRowsWithoutSeparator() {
+        let table = MarkdownTableDocument(
+            markdown:
+                """
+                | Name | Status |
+                | --- | --- |
+                | Editor | Local |
+                """
+        )
+
+        XCTAssertEqual(table.rows, [
+            ["Name", "Status"],
+            ["Editor", "Local"]
+        ])
+        XCTAssertEqual(table.columnCount, 2)
+    }
+
+    func testMarkdownTableDocumentUpdatesCellAndExportsMarkdownTable() {
+        var table = MarkdownTableDocument(
+            markdown:
+                """
+                | Name | Status |
+                | --- | --- |
+                | Editor | Local |
+                """
+        )
+
+        table.updateCell(row: 1, column: 1, text: "Synced")
+
+        XCTAssertEqual(
+            table.markdown,
+            """
+            | Name | Status |
+            | --- | --- |
+            | Editor | Synced |
+            """
+        )
+    }
+
     private func block(type: BlockType, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: UUID().uuidString,
