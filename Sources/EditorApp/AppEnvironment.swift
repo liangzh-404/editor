@@ -13,6 +13,31 @@ enum AppEnvironment {
         }
     }
 
+    static func handleRemoteNotificationSync() -> RemoteNotificationSyncResult {
+        do {
+            let databasePath = try databasePath()
+            let database = try SQLiteDatabase.open(path: databasePath)
+            defer { database.close() }
+
+            try SchemaMigrator.migrate(database: database)
+            try DataProtectionService.applyNativeProtection(to: URL(fileURLWithPath: databasePath))
+            _ = try PageRepository(database: database).bootstrapWorkspaceIfNeeded()
+
+            let attachmentsDirectory = try attachmentsDirectory()
+            try DataProtectionService.applyNativeProtectionRecursively(to: attachmentsDirectory)
+            let syncEngine = makeCloudKitSyncEngine(
+                database: database,
+                attachmentsDirectory: attachmentsDirectory
+            )
+            return RemoteNotificationSyncHandler(syncer: syncEngine).handleRemoteNotification()
+        } catch {
+            EditorLog.sync.error(
+                "remote_notification_environment_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return .failed
+        }
+    }
+
     @MainActor
     private static func makeWorkspaceViewModel() throws -> WorkspaceViewModel {
         let databasePath = try databasePath()

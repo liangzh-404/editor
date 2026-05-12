@@ -781,6 +781,52 @@ struct SyncFetchSummary: Equatable, Sendable {
     let appliedCount: Int
 }
 
+protocol RemoteNotificationSyncing {
+    func ensureRemoteChangeSubscription() throws
+    func uploadPendingChanges() throws -> SyncUploadSummary
+    func fetchRemoteChanges() throws -> SyncFetchSummary
+}
+
+enum RemoteNotificationSyncResult: Equatable, Sendable {
+    case newData
+    case noData
+    case failed
+}
+
+struct RemoteNotificationSyncHandler {
+    let syncer: RemoteNotificationSyncing?
+
+    func handleRemoteNotification() -> RemoteNotificationSyncResult {
+        guard let syncer else {
+            EditorLog.sync.debug("remote_notification_sync_unavailable")
+            return .noData
+        }
+
+        do {
+            try syncer.ensureRemoteChangeSubscription()
+            let uploadSummary = try syncer.uploadPendingChanges()
+            guard uploadSummary.failedCount == 0 else {
+                EditorLog.sync.error(
+                    "remote_notification_sync_failed failed_uploads=\(uploadSummary.failedCount, privacy: .public)"
+                )
+                return .failed
+            }
+
+            let fetchSummary = try syncer.fetchRemoteChanges()
+            let hasChanges = uploadSummary.uploadedCount > 0 || fetchSummary.appliedCount > 0
+            EditorLog.sync.debug(
+                "remote_notification_sync_completed uploaded=\(uploadSummary.uploadedCount, privacy: .public) fetched=\(fetchSummary.appliedCount, privacy: .public)"
+            )
+            return hasChanges ? .newData : .noData
+        } catch {
+            EditorLog.sync.error(
+                "remote_notification_sync_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return .failed
+        }
+    }
+}
+
 final class SyncEngine {
     private static let serverChangeTokenScope = "privateDatabase"
 
@@ -897,3 +943,5 @@ final class SyncEngine {
         return SyncUploadSummary(uploadedCount: uploadedCount, failedCount: failedCount)
     }
 }
+
+extension SyncEngine: RemoteNotificationSyncing {}

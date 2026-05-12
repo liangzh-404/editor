@@ -186,6 +186,37 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(ensurer.ensureCallCount, 1)
     }
 
+    func testRemoteNotificationSyncHandlerReturnsNewDataWhenRemoteChangesApply() {
+        let syncer = RecordingRemoteNotificationSyncer(
+            uploadSummary: SyncUploadSummary(uploadedCount: 0, failedCount: 0),
+            fetchSummary: SyncFetchSummary(appliedCount: 2)
+        )
+
+        let result = RemoteNotificationSyncHandler(syncer: syncer).handleRemoteNotification()
+
+        XCTAssertEqual(result, .newData)
+        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
+    }
+
+    func testRemoteNotificationSyncHandlerReturnsNoDataWithoutSyncEngine() {
+        let result = RemoteNotificationSyncHandler(syncer: nil).handleRemoteNotification()
+
+        XCTAssertEqual(result, .noData)
+    }
+
+    func testRemoteNotificationSyncHandlerReturnsFailedWhenSyncThrows() {
+        let syncer = RecordingRemoteNotificationSyncer(
+            uploadSummary: SyncUploadSummary(uploadedCount: 0, failedCount: 0),
+            fetchSummary: SyncFetchSummary(appliedCount: 0),
+            errorAfterCall: .fetchRemoteChanges
+        )
+
+        let result = RemoteNotificationSyncHandler(syncer: syncer).handleRemoteNotification()
+
+        XCTAssertEqual(result, .failed)
+        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
+    }
+
     func testFetchRemoteChangesAppliesRemoteBlockDeletion() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -802,6 +833,52 @@ final class RecordingCloudKitSubscriptionEnsurer: CloudKitSubscriptionEnsuring {
 
     func ensureRemoteChangeSubscription() throws {
         ensureCallCount += 1
+    }
+}
+
+enum RemoteNotificationSyncCall: Equatable {
+    case ensureRemoteChangeSubscription
+    case uploadPendingChanges
+    case fetchRemoteChanges
+}
+
+final class RecordingRemoteNotificationSyncer: RemoteNotificationSyncing {
+    private let uploadSummary: SyncUploadSummary
+    private let fetchSummary: SyncFetchSummary
+    private let errorAfterCall: RemoteNotificationSyncCall?
+    private(set) var calls: [RemoteNotificationSyncCall] = []
+
+    init(
+        uploadSummary: SyncUploadSummary,
+        fetchSummary: SyncFetchSummary,
+        errorAfterCall: RemoteNotificationSyncCall? = nil
+    ) {
+        self.uploadSummary = uploadSummary
+        self.fetchSummary = fetchSummary
+        self.errorAfterCall = errorAfterCall
+    }
+
+    func ensureRemoteChangeSubscription() throws {
+        calls.append(.ensureRemoteChangeSubscription)
+        if errorAfterCall == .ensureRemoteChangeSubscription {
+            throw SyncEngineTestError.temporaryUnavailable
+        }
+    }
+
+    func uploadPendingChanges() throws -> SyncUploadSummary {
+        calls.append(.uploadPendingChanges)
+        if errorAfterCall == .uploadPendingChanges {
+            throw SyncEngineTestError.temporaryUnavailable
+        }
+        return uploadSummary
+    }
+
+    func fetchRemoteChanges() throws -> SyncFetchSummary {
+        calls.append(.fetchRemoteChanges)
+        if errorAfterCall == .fetchRemoteChanges {
+            throw SyncEngineTestError.temporaryUnavailable
+        }
+        return fetchSummary
     }
 }
 
