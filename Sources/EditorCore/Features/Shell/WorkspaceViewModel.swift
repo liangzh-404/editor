@@ -727,6 +727,38 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func acceptAllRemoteConflictsForSelectedPage() throws {
+        guard let conflictRepository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedPageID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        let previousNotebookID = selectedNotebookID
+        let previousPageID = self.selectedPageID
+        let accepted = try conflictRepository.acceptRemoteVersions(pageID: selectedPageID)
+        try load()
+        restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+        if let firstAccepted = accepted.first {
+            pendingFocusBlockID = firstAccepted.blockID
+            EditorLog.focus.debug(
+                "editor_focus_request_queued block_id=\(firstAccepted.blockID, privacy: .public) source=conflict_accept_all"
+            )
+        }
+    }
+
+    func acceptAllRemoteConflictsForSelectedPageForUI() {
+        do {
+            try acceptAllRemoteConflictsForSelectedPage()
+            EditorLog.sync.debug("sync_conflict_all_remote_accepted")
+        } catch {
+            EditorLog.sync.error(
+                "sync_conflict_accept_all_failed error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     func resolveConflictManually(id conflictID: String, text: String) throws {
         guard let conflictRepository else {
             throw WorkspaceViewModelError.missingRepository

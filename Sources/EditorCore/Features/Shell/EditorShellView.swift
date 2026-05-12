@@ -93,6 +93,9 @@ private struct ThreeColumnEditorShell: View {
                 onAcceptConflict: { conflict in
                     viewModel.acceptRemoteConflictForUI(id: conflict.id)
                 },
+                onAcceptAllConflicts: {
+                    viewModel.acceptAllRemoteConflictsForSelectedPageForUI()
+                },
                 onResolveConflictManually: { conflict, text in
                     viewModel.resolveConflictManuallyForUI(id: conflict.id, text: text)
                 },
@@ -216,6 +219,9 @@ private struct CompactPageDestination: View {
                 },
                 onAcceptConflict: { conflict in
                     viewModel.acceptRemoteConflictForUI(id: conflict.id)
+                },
+                onAcceptAllConflicts: {
+                    viewModel.acceptAllRemoteConflictsForSelectedPageForUI()
                 },
                 onResolveConflictManually: { conflict, text in
                     viewModel.resolveConflictManuallyForUI(id: conflict.id, text: text)
@@ -731,6 +737,7 @@ private struct EditorCanvasView: View {
     let onDeleteBlock: (String) -> Void
     let onSelectBacklink: (Backlink) -> Void
     let onAcceptConflict: (ConflictSnapshot) -> Void
+    let onAcceptAllConflicts: () -> Void
     let onResolveConflictManually: (ConflictSnapshot, String) -> Void
     let onPageTitleChange: (String) -> Void
     let onImportMarkdown: (URL) -> Void
@@ -855,6 +862,7 @@ private struct EditorCanvasView: View {
                     ConflictPanel(
                         conflicts: conflicts,
                         onAcceptConflict: onAcceptConflict,
+                        onAcceptAllConflicts: onAcceptAllConflicts,
                         onResolveManually: onResolveConflictManually
                     )
                 }
@@ -1043,13 +1051,27 @@ private struct BacklinksPanel: View {
 private struct ConflictPanel: View {
     let conflicts: [ConflictSnapshot]
     let onAcceptConflict: (ConflictSnapshot) -> Void
+    let onAcceptAllConflicts: () -> Void
     let onResolveManually: (ConflictSnapshot, String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Sync Conflicts")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text("Sync Conflicts")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    onAcceptAllConflicts()
+                } label: {
+                    Label("Use All Remote", systemImage: "arrow.down.doc")
+                }
+                .buttonStyle(.borderless)
+                .disabled(conflicts.isEmpty)
+                .accessibilityIdentifier("editor.conflict.accept-all-remote")
+            }
 
             ForEach(conflicts) { conflict in
                 ConflictResolutionRow(

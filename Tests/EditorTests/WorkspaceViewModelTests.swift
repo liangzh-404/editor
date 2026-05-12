@@ -577,6 +577,57 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAcceptAllRemoteConflictsForSelectedPageRefreshesAllBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let firstBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let secondBlock = try repository.appendBlock(
+            pageID: pageID,
+            type: .paragraph,
+            text: "Second"
+        )
+        try repository.updateBlockText(blockID: firstBlockID, text: "Local one")
+        try repository.updateBlockText(blockID: secondBlock.id, text: "Local two")
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: firstBlockID,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote one",
+                payloadJSON: "{\"text\":\"Remote one\"}",
+                revision: 2
+            )
+        )
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: secondBlock.id,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote two",
+                payloadJSON: "{\"text\":\"Remote two\"}",
+                revision: 2
+            )
+        )
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            conflictRepository: ConflictRepository(database: database)
+        )
+        try viewModel.load()
+        XCTAssertEqual(viewModel.selectedPageConflicts.count, 2)
+
+        try viewModel.acceptAllRemoteConflictsForSelectedPage()
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Remote one", "Remote two"])
+        XCTAssertEqual(viewModel.selectedPageConflicts, [])
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
+    }
+
+    @MainActor
     func testManualConflictMergeRefreshesBlockAndKeepsPendingSync() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -210,6 +210,19 @@ final class ConflictRepository {
         return snapshot
     }
 
+    func acceptRemoteVersions(pageID: String) throws -> [ConflictSnapshot] {
+        let pageConflicts = try conflicts(pageID: pageID)
+        var accepted: [ConflictSnapshot] = []
+        var acceptedBlockIDs: Set<String> = []
+
+        for conflict in pageConflicts where !acceptedBlockIDs.contains(conflict.blockID) {
+            accepted.append(try acceptRemoteVersion(conflictID: conflict.id))
+            acceptedBlockIDs.insert(conflict.blockID)
+        }
+
+        return accepted
+    }
+
     func resolveManually(conflictID: String, text: String) throws -> ConflictSnapshot {
         guard let row = try database.query(
             """
