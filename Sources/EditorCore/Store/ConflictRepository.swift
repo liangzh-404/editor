@@ -159,8 +159,7 @@ final class ConflictRepository {
         let payloadJSON = row["payload_json"] ?? ""
         let now = ISO8601DateFormatter().string(from: Date())
 
-        try database.execute("BEGIN IMMEDIATE TRANSACTION")
-        do {
+        try database.withImmediateTransaction("accept_remote_conflict") {
             try database.execute(
                 """
                 UPDATE blocks
@@ -201,10 +200,6 @@ final class ConflictRepository {
                 blockID: snapshot.blockID,
                 text: snapshot.textPlain
             )
-            try database.execute("COMMIT")
-        } catch {
-            try? database.execute("ROLLBACK")
-            throw error
         }
 
         return snapshot
@@ -217,6 +212,79 @@ final class ConflictRepository {
 
         for conflict in pageConflicts where !acceptedBlockIDs.contains(conflict.blockID) {
             accepted.append(try acceptRemoteVersion(conflictID: conflict.id))
+            acceptedBlockIDs.insert(conflict.blockID)
+        }
+
+        return accepted
+    }
+
+    func acceptLocalVersion(conflictID: String) throws -> ConflictSnapshot {
+        guard let row = try database.query(
+            """
+            SELECT conflict_versions.id,
+                   conflict_versions.block_id,
+                   blocks.text_plain AS local_text_plain,
+                   conflict_versions.text_plain,
+                   conflict_versions.remote_revision
+            FROM conflict_versions
+            INNER JOIN blocks ON blocks.id = conflict_versions.block_id
+            WHERE conflict_versions.id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(conflictID)]
+        ).first else {
+            throw ConflictRepositoryError.conflictNotFound
+        }
+
+        let snapshot = ConflictSnapshot(
+            id: row["id"] ?? "",
+            blockID: row["block_id"] ?? "",
+            localTextPlain: row["local_text_plain"] ?? "",
+            remoteTextPlain: row["text_plain"] ?? "",
+            remoteRevision: Int(row["remote_revision"] ?? "") ?? 0
+        )
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        try database.withImmediateTransaction("accept_local_conflict") {
+            try database.execute(
+                """
+                UPDATE blocks
+                SET sync_state = ?,
+                    updated_at = ?
+                WHERE id = ? AND is_deleted = 0
+                """,
+                bindings: [
+                    .text("local"),
+                    .text(now),
+                    .text(snapshot.blockID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM conflict_versions
+                WHERE block_id = ?
+                """,
+                bindings: [.text(snapshot.blockID)]
+            )
+            if try !hasPendingBlockUpdate(blockID: snapshot.blockID) {
+                try SyncRepository(database: database).enqueue(
+                    entityType: "block",
+                    entityID: snapshot.blockID,
+                    changeType: "update"
+                )
+            }
+        }
+
+        return snapshot
+    }
+
+    func acceptLocalVersions(pageID: String) throws -> [ConflictSnapshot] {
+        let pageConflicts = try conflicts(pageID: pageID)
+        var accepted: [ConflictSnapshot] = []
+        var acceptedBlockIDs: Set<String> = []
+
+        for conflict in pageConflicts where !acceptedBlockIDs.contains(conflict.blockID) {
+            accepted.append(try acceptLocalVersion(conflictID: conflict.id))
             acceptedBlockIDs.insert(conflict.blockID)
         }
 
@@ -251,8 +319,7 @@ final class ConflictRepository {
         let payloadJSON = try blockPayloadJSON(text: text)
         let now = ISO8601DateFormatter().string(from: Date())
 
-        try database.execute("BEGIN IMMEDIATE TRANSACTION")
-        do {
+        try database.withImmediateTransaction("resolve_manual_conflict") {
             try database.execute(
                 """
                 UPDATE blocks
@@ -289,13 +356,21 @@ final class ConflictRepository {
                     changeType: "update"
                 )
             }
-            try database.execute("COMMIT")
-        } catch {
-            try? database.execute("ROLLBACK")
-            throw error
         }
 
         return snapshot
+    }
+
+    func resolveManualConflicts(_ merges: [(conflictID: String, text: String)]) throws -> [ConflictSnapshot] {
+        var resolved: [ConflictSnapshot] = []
+
+        for merge in merges {
+            resolved.append(
+                try resolveManually(conflictID: merge.conflictID, text: merge.text)
+            )
+        }
+
+        return resolved
     }
 
     func conflicts(blockID: String) throws -> [ConflictVersion] {

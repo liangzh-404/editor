@@ -459,7 +459,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
     private func notebookRecord(entityID: String) throws -> CKRecord {
         let row = try requiredRow(
             """
-            SELECT id, workspace_id, name, order_key, updated_at
+            SELECT id, workspace_id, parent_notebook_id, name, order_key, updated_at
             FROM notebooks
             WHERE id = ?
             LIMIT 1
@@ -468,6 +468,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         )
         let record = makeRecord(type: "NotebookRecord", entityType: "notebook", entityID: entityID)
         record["workspaceID"] = row["workspace_id"] as CKRecordValue?
+        record["parentNotebookID"] = row["parent_notebook_id"] as CKRecordValue?
         record["name"] = row["name"] as CKRecordValue?
         record["orderKey"] = row["order_key"] as CKRecordValue?
         record["updatedAt"] = row["updated_at"] as CKRecordValue?
@@ -581,6 +582,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         return RemoteNotebookChange(
             notebookID: notebookID,
             workspaceID: workspaceID,
+            parentNotebookID: record["parentNotebookID"] as? String,
             name: name,
             orderKey: orderKey
         )

@@ -19,6 +19,33 @@ struct Backlink: Identifiable, Equatable, Sendable {
     }
 }
 
+struct ExternalLink: Identifiable, Equatable, Sendable {
+    let sourcePageID: String
+    let sourcePageTitle: String
+    let sourceBlockID: String?
+    let targetURL: String
+    let linkText: String
+
+    var id: String {
+        [
+            sourcePageID,
+            sourceBlockID ?? "",
+            targetURL,
+            linkText
+        ].joined(separator: ":")
+    }
+
+    var destinationURL: URL? {
+        guard let url = URL(string: targetURL),
+              let scheme = url.scheme,
+              !scheme.isEmpty else {
+            return nil
+        }
+
+        return url
+    }
+}
+
 final class BacklinkRepository {
     private let database: SQLiteDatabase
 
@@ -26,7 +53,12 @@ final class BacklinkRepository {
         self.database = database
     }
 
-    func rebuildLinksForBlock(blockID: String, text: String) throws {
+    func rebuildLinksForBlock(
+        blockID: String,
+        text: String,
+        pageReferenceTargetPageID: String? = nil,
+        blockReferenceTargetBlockID: String? = nil
+    ) throws {
         try database.execute(
             """
             DELETE FROM links
@@ -48,30 +80,38 @@ final class BacklinkRepository {
             return
         }
 
+        if let pageReferenceTargetPageID {
+            try insertLink(
+                sourcePageID: sourcePageID,
+                sourceBlockID: blockID,
+                targetPageID: pageReferenceTargetPageID,
+                targetBlockID: blockReferenceTargetBlockID,
+                targetURL: nil,
+                linkText: text
+            )
+            return
+        }
+
         for linkText in Self.pageReferenceTexts(in: text) {
             let targetPageID = try targetPageID(forTitle: linkText)
-            try database.execute(
-                """
-                INSERT INTO links (
-                    id,
-                    source_page_id,
-                    source_block_id,
-                    target_page_id,
-                    target_block_id,
-                    link_text,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                bindings: [
-                    .text("link-\(UUID().uuidString.lowercased())"),
-                    .text(sourcePageID),
-                    .text(blockID),
-                    targetPageID.map(SQLiteValue.text) ?? .null,
-                    .null,
-                    .text(linkText),
-                    .text(ISO8601DateFormatter().string(from: Date()))
-                ]
+            try insertLink(
+                sourcePageID: sourcePageID,
+                sourceBlockID: blockID,
+                targetPageID: targetPageID,
+                targetBlockID: nil,
+                targetURL: nil,
+                linkText: linkText
+            )
+        }
+
+        for externalLink in Self.externalMarkdownLinks(in: text) {
+            try insertLink(
+                sourcePageID: sourcePageID,
+                sourceBlockID: blockID,
+                targetPageID: nil,
+                targetBlockID: nil,
+                targetURL: externalLink.url,
+                linkText: externalLink.text
             )
         }
     }
@@ -103,6 +143,35 @@ final class BacklinkRepository {
         }
     }
 
+    func externalLinks(sourcePageID: String) throws -> [ExternalLink] {
+        try database.query(
+            """
+            SELECT source_page_id,
+                   source_pages.title AS source_page_title,
+                   source_block_id,
+                   target_url,
+                   link_text
+            FROM links
+            INNER JOIN pages AS source_pages ON source_pages.id = links.source_page_id
+            WHERE source_page_id = ? AND target_url IS NOT NULL
+            ORDER BY links.created_at ASC
+            """,
+            bindings: [.text(sourcePageID)]
+        ).compactMap { row in
+            guard let targetURL = row["target_url"], !targetURL.isEmpty else {
+                return nil
+            }
+
+            return ExternalLink(
+                sourcePageID: row["source_page_id"] ?? "",
+                sourcePageTitle: row["source_page_title"] ?? "",
+                sourceBlockID: row["source_block_id"] ?? nil,
+                targetURL: targetURL,
+                linkText: row["link_text"] ?? ""
+            )
+        }
+    }
+
     private func targetPageID(forTitle title: String) throws -> String? {
         try database.query(
             """
@@ -114,6 +183,41 @@ final class BacklinkRepository {
             """,
             bindings: [.text(title)]
         ).first?["id"] ?? nil
+    }
+
+    private func insertLink(
+        sourcePageID: String,
+        sourceBlockID: String,
+        targetPageID: String?,
+        targetBlockID: String?,
+        targetURL: String?,
+        linkText: String
+    ) throws {
+        try database.execute(
+            """
+            INSERT INTO links (
+                id,
+                source_page_id,
+                source_block_id,
+                target_page_id,
+                target_block_id,
+                target_url,
+                link_text,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text("link-\(UUID().uuidString.lowercased())"),
+                .text(sourcePageID),
+                .text(sourceBlockID),
+                targetPageID.map(SQLiteValue.text) ?? .null,
+                targetBlockID.map(SQLiteValue.text) ?? .null,
+                targetURL.map(SQLiteValue.text) ?? .null,
+                .text(linkText),
+                .text(ISO8601DateFormatter().string(from: Date()))
+            ]
+        )
     }
 
     static func pageReferenceTexts(in text: String) -> [String] {
@@ -133,5 +237,52 @@ final class BacklinkRepository {
         }
 
         return references
+    }
+
+    static func externalMarkdownLinks(in text: String) -> [(text: String, url: String)] {
+        var links: [(text: String, url: String)] = []
+        var remaining = text[...]
+
+        while let labelStart = remaining.range(of: "[") {
+            guard labelStart.lowerBound == remaining.startIndex || remaining[remaining.index(before: labelStart.lowerBound)] != "!" else {
+                remaining = remaining[labelStart.upperBound...]
+                continue
+            }
+
+            let afterLabelStart = remaining[labelStart.upperBound...]
+            guard let labelEnd = afterLabelStart.range(of: "]"),
+                  labelEnd.upperBound < remaining.endIndex,
+                  remaining[labelEnd.upperBound] == "(" else {
+                remaining = afterLabelStart
+                continue
+            }
+
+            let afterURLStartIndex = remaining.index(after: labelEnd.upperBound)
+            let afterURLStart = remaining[afterURLStartIndex...]
+            guard let urlEnd = afterURLStart.range(of: ")") else {
+                break
+            }
+
+            let label = afterLabelStart[..<labelEnd.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = afterURLStart[..<urlEnd.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !label.isEmpty, Self.isExternalURL(url) {
+                links.append((text: label, url: url))
+            }
+            remaining = afterURLStart[urlEnd.upperBound...]
+        }
+
+        return links
+    }
+
+    private static func isExternalURL(_ url: String) -> Bool {
+        guard !url.isEmpty,
+              let schemeEnd = url.firstIndex(of: ":"),
+              schemeEnd > url.startIndex else {
+            return false
+        }
+
+        return url[..<schemeEnd].allSatisfy { character in
+            character.isLetter || character.isNumber || character == "+" || character == "-" || character == "."
+        }
     }
 }

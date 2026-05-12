@@ -20,6 +20,10 @@ final class MarkdownTransformerTests: XCTestCase {
             MarkdownShortcutTransform(type: .taskItem, textPlain: "")
         )
         XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "- [x] "),
+            MarkdownShortcutTransform(type: .taskItem, textPlain: "", taskItemIsCompleted: true)
+        )
+        XCTAssertEqual(
             MarkdownTransformer.shortcutTransform(for: "---"),
             MarkdownShortcutTransform(type: .divider, textPlain: "")
         )
@@ -75,6 +79,23 @@ final class MarkdownTransformerTests: XCTestCase {
                 MarkdownBlockDraft(type: .taskItem, textPlain: "Task"),
                 MarkdownBlockDraft(type: .quote, textPlain: "Quote"),
                 MarkdownBlockDraft(type: .divider, textPlain: "")
+            ]
+        )
+    }
+
+    func testImportMarkdownSupportsCompletedTaskItems() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    - [x] Done
+
+                    - [ ] Todo
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .taskItem, textPlain: "Done", taskItemIsCompleted: true),
+                MarkdownBlockDraft(type: .taskItem, textPlain: "Todo", taskItemIsCompleted: false)
             ]
         )
     }
@@ -157,6 +178,197 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testMarkdownInlineLinkComposerTrimsLabelAndRequiresSchemeURL() {
+        XCTAssertEqual(
+            MarkdownInlineLinkComposer.markdown(label: " Swift ", url: " https://swift.org "),
+            "[Swift](https://swift.org)"
+        )
+        XCTAssertNil(MarkdownInlineLinkComposer.markdown(label: "", url: "https://swift.org"))
+        XCTAssertNil(MarkdownInlineLinkComposer.markdown(label: "Swift", url: "swift.org"))
+    }
+
+    func testMarkdownInlineLinkInserterReplacesSelectionAndSelectsLabel() throws {
+        let result = try XCTUnwrap(
+            MarkdownInlineLinkInserter.apply(
+                label: "Swift",
+                url: "https://swift.org",
+                to: "Read docs today",
+                selection: EditorTextSelection(blockID: "block-1", location: 5, length: 4)
+            )
+        )
+
+        XCTAssertEqual(result.text, "Read [Swift](https://swift.org) today")
+        XCTAssertEqual(
+            result.selection,
+            EditorTextSelection(blockID: "block-1", location: 6, length: 5)
+        )
+    }
+
+    func testMarkdownInlineLinkInserterRejectsInvalidSelectionOrURL() {
+        XCTAssertNil(
+            MarkdownInlineLinkInserter.apply(
+                label: "Swift",
+                url: "swift.org",
+                to: "Read docs",
+                selection: EditorTextSelection(blockID: "block-1", location: 5, length: 4)
+            )
+        )
+        XCTAssertNil(
+            MarkdownInlineLinkInserter.apply(
+                label: "Swift",
+                url: "https://swift.org",
+                to: "Read docs",
+                selection: EditorTextSelection(blockID: "block-1", location: 40, length: 4)
+            )
+        )
+    }
+
+    func testMarkdownInlineStyleScannerFindsBoldCodeAndLinkLabelRanges() {
+        let text = "Use **bold** and `code` from [Swift](https://swift.org)."
+
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text),
+            [
+                MarkdownInlineStyleRun(
+                    kind: .bold,
+                    range: NSRange(location: ("Use **" as NSString).length, length: 4)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .code,
+                    range: NSRange(location: ("Use **bold** and `" as NSString).length, length: 4)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .link,
+                    range: NSRange(location: ("Use **bold** and `code` from [" as NSString).length, length: 5)
+                )
+            ]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerFindsItalicRange() {
+        let text = "Use *italic* and **bold**."
+
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text),
+            [
+                MarkdownInlineStyleRun(
+                    kind: .italic,
+                    range: NSRange(location: ("Use *" as NSString).length, length: 6)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .bold,
+                    range: NSRange(location: ("Use *italic* and **" as NSString).length, length: 4)
+                )
+            ]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerDoesNotStyleMarkersInsideCodeSpan() {
+        let text = "Literal `**not bold**` then **bold**"
+
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text),
+            [
+                MarkdownInlineStyleRun(
+                    kind: .code,
+                    range: NSRange(location: ("Literal `" as NSString).length, length: 12)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .bold,
+                    range: NSRange(location: ("Literal `**not bold**` then **" as NSString).length, length: 4)
+                )
+            ]
+        )
+    }
+
+    func testMarkdownInlineFormatterWrapsSelectionUsingTextViewRange() {
+        let text = "Hi 🧠 Swift"
+        let location = ("Hi 🧠 " as NSString).length
+        let selection = EditorTextSelection(blockID: "block-1", location: location, length: 5)
+
+        XCTAssertEqual(
+            MarkdownInlineFormatter.apply(.bold, to: text, selection: selection),
+            "Hi 🧠 **Swift**"
+        )
+        XCTAssertEqual(
+            MarkdownInlineFormatter.apply(
+                .code,
+                to: "print value",
+                selection: EditorTextSelection(blockID: "block-1", location: 0, length: 5)
+            ),
+            "`print` value"
+        )
+        XCTAssertEqual(
+            MarkdownInlineFormatter.apply(
+                .italic,
+                to: "Make text stand out",
+                selection: EditorTextSelection(blockID: "block-1", location: 5, length: 4)
+            ),
+            "Make *text* stand out"
+        )
+    }
+
+    func testMarkdownInlineFormatterReturnsSelectionInsideInsertedMarkers() throws {
+        let result = try XCTUnwrap(
+            MarkdownInlineFormatter.applyResult(
+                .bold,
+                to: "Start writing",
+                selection: EditorTextSelection(blockID: "block-1", location: 6, length: 7)
+            )
+        )
+
+        XCTAssertEqual(result.text, "Start **writing**")
+        XCTAssertEqual(
+            result.selection,
+            EditorTextSelection(blockID: "block-1", location: 8, length: 7)
+        )
+    }
+
+    func testMarkdownInlineFormatterInsertsPlaceholderAtEmptySelection() {
+        XCTAssertEqual(
+            MarkdownInlineFormatter.apply(
+                .bold,
+                to: "Start ",
+                selection: EditorTextSelection(blockID: "block-1", location: 6, length: 0)
+            ),
+            "Start **bold**"
+        )
+        XCTAssertEqual(
+            MarkdownInlineFormatter.apply(
+                .code,
+                to: "",
+                selection: EditorTextSelection(blockID: "block-1", location: 0, length: 0)
+            ),
+            "`code`"
+        )
+    }
+
+    func testMarkdownInlineFormatterSelectsPlaceholderAfterEmptySelection() throws {
+        let result = try XCTUnwrap(
+            MarkdownInlineFormatter.applyResult(
+                .code,
+                to: "Use ",
+                selection: EditorTextSelection(blockID: "block-1", location: 4, length: 0)
+            )
+        )
+
+        XCTAssertEqual(result.text, "Use `code`")
+        XCTAssertEqual(
+            result.selection,
+            EditorTextSelection(blockID: "block-1", location: 5, length: 4)
+        )
+    }
+
+    func testMarkdownInlineFormatterRejectsInvalidSelectionRange() {
+        XCTAssertNil(
+            MarkdownInlineFormatter.apply(
+                .bold,
+                to: "Short",
+                selection: EditorTextSelection(blockID: "block-1", location: 6, length: 1)
+            )
+        )
+    }
+
     func testExportAdvancedBlocksToMarkdownFallbackSyntax() {
         let blocks = [
             block(type: .table, text: "| A | B |\n| --- | --- |\n| 1 | 2 |"),
@@ -174,6 +386,22 @@ final class MarkdownTransformerTests: XCTestCase {
             > [!NOTE] Important
 
             <details><summary>Details</summary></details>
+            """
+        )
+    }
+
+    func testExportCompletedTaskItemToMarkdown() {
+        XCTAssertEqual(
+            MarkdownTransformer.export(
+                blocks: [
+                    block(type: .taskItem, text: "Done", taskItemIsCompleted: true),
+                    block(type: .taskItem, text: "Todo", taskItemIsCompleted: false)
+                ]
+            ),
+            """
+            - [x] Done
+
+            - [ ] Todo
             """
         )
     }
@@ -278,14 +506,48 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
-    private func block(type: BlockType, text: String) -> BlockSnapshot {
+    func testExportPageReferenceBlockAsWikiLink() {
+        let block = BlockSnapshot(
+            id: UUID().uuidString,
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "000001",
+            type: .pageReference,
+            textPlain: "Specs",
+            pageReferenceTargetPageID: "page-specs"
+        )
+
+        XCTAssertEqual(MarkdownTransformer.export(blocks: [block]), "[[Specs]]")
+    }
+
+    func testExportBlockReferenceBlockAsWikiBlockLink() {
+        let block = BlockSnapshot(
+            id: UUID().uuidString,
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "000001",
+            type: .blockReference,
+            textPlain: "API contract",
+            pageReferenceTargetPageID: "page-specs",
+            blockReferenceTargetBlockID: "block-specs"
+        )
+
+        XCTAssertEqual(MarkdownTransformer.export(blocks: [block]), "[[#API contract]]")
+    }
+
+    private func block(
+        type: BlockType,
+        text: String,
+        taskItemIsCompleted: Bool = false
+    ) -> BlockSnapshot {
         BlockSnapshot(
             id: UUID().uuidString,
             pageID: "page",
             parentBlockID: nil,
             orderKey: "000001",
             type: type,
-            textPlain: text
+            textPlain: text,
+            taskItemIsCompleted: taskItemIsCompleted
         )
     }
 }

@@ -46,12 +46,18 @@ enum AppEnvironment {
         try DataProtectionService.applyNativeProtection(to: URL(fileURLWithPath: databasePath))
 
         let repository = PageRepository(database: database)
-        try repository.bootstrapWorkspaceIfNeeded()
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try seedLargePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
+        try seedReferenceTargetsForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         let attachmentsDirectory = try attachmentsDirectory()
         try DataProtectionService.applyNativeProtectionRecursively(to: attachmentsDirectory)
         let attachmentRepository = AttachmentRepository(
             database: database,
             attachmentsDirectory: attachmentsDirectory
+        )
+        try seedAttachmentForUITestingIfNeeded(
+            attachmentRepository: attachmentRepository,
+            snapshot: snapshot
         )
 
         let viewModel = WorkspaceViewModel(
@@ -134,6 +140,88 @@ enum AppEnvironment {
             for: .applicationSupportDirectory,
             in: .userDomainMask
         )[0]
+    }
+
+    private static func seedLargePageForUITestingIfNeeded(
+        repository: PageRepository,
+        snapshot: WorkspaceSnapshot
+    ) throws {
+#if DEBUG
+        guard let rawBlockCount = ProcessInfo.processInfo.environment["EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT"],
+              let blockCount = Int(rawBlockCount),
+              blockCount > 0,
+              let pageID = snapshot.selectedPageID else {
+            return
+        }
+
+        try repository.updatePageTitle(pageID: pageID, title: "Large Page")
+        try repository.replacePageWithUITestLargePage(pageID: pageID, blockCount: blockCount)
+#else
+        _ = repository
+        _ = snapshot
+#endif
+    }
+
+    private static func seedReferenceTargetsForUITestingIfNeeded(
+        repository: PageRepository,
+        snapshot: WorkspaceSnapshot
+    ) throws {
+#if DEBUG
+        guard ProcessInfo.processInfo.environment["EDITOR_UI_TEST_REFERENCE_TARGETS"] == "1",
+              let workspaceID = snapshot.selectedWorkspaceID else {
+            return
+        }
+
+        let targetPage = try repository.createPage(
+            workspaceID: workspaceID,
+            title: "Reference Target",
+            notebookID: snapshot.selectedNotebookID
+        )
+        _ = try repository.appendBlock(
+            pageID: targetPage.id,
+            type: .paragraph,
+            text: "Reference target block"
+        )
+#else
+        _ = repository
+        _ = snapshot
+#endif
+    }
+
+    private static func seedAttachmentForUITestingIfNeeded(
+        attachmentRepository: AttachmentRepository,
+        snapshot: WorkspaceSnapshot
+    ) throws {
+#if DEBUG
+        guard let filename = ProcessInfo.processInfo.environment["EDITOR_UI_TEST_ATTACHMENT_FILENAME"],
+              !filename.isEmpty,
+              let workspaceID = snapshot.selectedWorkspaceID,
+              let pageID = snapshot.selectedPageID else {
+            return
+        }
+
+        let safeFilename = URL(fileURLWithPath: filename).lastPathComponent
+        let fixtureDirectory = applicationSupportRoot()
+            .appendingPathComponent("EditorUITestFixtures", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: fixtureDirectory,
+            withIntermediateDirectories: true
+        )
+        let sourceURL = fixtureDirectory.appendingPathComponent(safeFilename)
+        if !FileManager.default.fileExists(atPath: sourceURL.path) {
+            try "Attachment fixture from macOS UI automation"
+                .write(to: sourceURL, atomically: true, encoding: .utf8)
+        }
+
+        _ = try attachmentRepository.importAttachment(
+            sourceURL: sourceURL,
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+#else
+        _ = attachmentRepository
+        _ = snapshot
+#endif
     }
 }
 

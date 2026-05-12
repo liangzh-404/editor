@@ -8,8 +8,23 @@ struct RemoteWorkspaceChange: Equatable, Sendable {
 struct RemoteNotebookChange: Equatable, Sendable {
     let notebookID: String
     let workspaceID: String
+    let parentNotebookID: String?
     let name: String
     let orderKey: String
+
+    init(
+        notebookID: String,
+        workspaceID: String,
+        parentNotebookID: String? = nil,
+        name: String,
+        orderKey: String
+    ) {
+        self.notebookID = notebookID
+        self.workspaceID = workspaceID
+        self.parentNotebookID = parentNotebookID
+        self.name = name
+        self.orderKey = orderKey
+    }
 }
 
 struct RemotePageChange: Equatable, Sendable {
@@ -109,10 +124,11 @@ final class SyncMergeEngine {
         let now = ISO8601DateFormatter().string(from: Date())
         try database.execute(
             """
-            INSERT INTO notebooks (id, workspace_id, name, order_key, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO notebooks (id, workspace_id, parent_notebook_id, name, order_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
+                parent_notebook_id = excluded.parent_notebook_id,
                 name = excluded.name,
                 order_key = excluded.order_key,
                 updated_at = excluded.updated_at
@@ -120,6 +136,7 @@ final class SyncMergeEngine {
             bindings: [
                 .text(remote.notebookID),
                 .text(remote.workspaceID),
+                remote.parentNotebookID.map(SQLiteValue.text) ?? .null,
                 .text(remote.name),
                 .text(remote.orderKey),
                 .text(now),
@@ -234,7 +251,13 @@ final class SyncMergeEngine {
         } else {
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: remote.blockID,
-                text: remote.textPlain
+                text: remote.textPlain,
+                pageReferenceTargetPageID: remote.type == .pageReference || remote.type == .blockReference
+                    ? Self.pageReferenceTargetPageID(payloadJSON: remote.payloadJSON)
+                    : nil,
+                blockReferenceTargetBlockID: remote.type == .blockReference
+                    ? Self.blockReferenceTargetBlockID(payloadJSON: remote.payloadJSON)
+                    : nil
             )
         }
     }
@@ -326,8 +349,7 @@ final class SyncMergeEngine {
 
     private func applyRemotePageDeletion(pageID: String) throws {
         let now = ISO8601DateFormatter().string(from: Date())
-        try database.execute("BEGIN IMMEDIATE TRANSACTION")
-        do {
+        try database.withImmediateTransaction("apply_remote_page_deletion") {
             try database.execute(
                 """
                 UPDATE pages
@@ -377,10 +399,6 @@ final class SyncMergeEngine {
                     .text(pageID)
                 ]
             )
-            try database.execute("COMMIT")
-        } catch {
-            try? database.execute("ROLLBACK")
-            throw error
         }
 
         EditorLog.sync.debug(
@@ -390,8 +408,7 @@ final class SyncMergeEngine {
 
     private func applyRemoteNotebookDeletion(notebookID: String) throws {
         let now = ISO8601DateFormatter().string(from: Date())
-        try database.execute("BEGIN IMMEDIATE TRANSACTION")
-        do {
+        try database.withImmediateTransaction("apply_remote_notebook_deletion") {
             try database.execute(
                 """
                 UPDATE pages
@@ -411,10 +428,6 @@ final class SyncMergeEngine {
                 """,
                 bindings: [.text(notebookID)]
             )
-            try database.execute("COMMIT")
-        } catch {
-            try? database.execute("ROLLBACK")
-            throw error
         }
 
         EditorLog.sync.debug(
@@ -424,8 +437,7 @@ final class SyncMergeEngine {
 
     private func applyRemoteAttachmentDeletion(attachmentID: String) throws {
         let now = ISO8601DateFormatter().string(from: Date())
-        try database.execute("BEGIN IMMEDIATE TRANSACTION")
-        do {
+        try database.withImmediateTransaction("apply_remote_attachment_deletion") {
             try database.execute(
                 """
                 DELETE FROM links
@@ -474,10 +486,6 @@ final class SyncMergeEngine {
                 """,
                 bindings: [.text(attachmentID)]
             )
-            try database.execute("COMMIT")
-        } catch {
-            try? database.execute("ROLLBACK")
-            throw error
         }
 
         EditorLog.sync.debug(
@@ -487,8 +495,7 @@ final class SyncMergeEngine {
 
     private func applyRemoteBlockDeletion(blockID: String) throws {
         let now = ISO8601DateFormatter().string(from: Date())
-        try database.execute("BEGIN IMMEDIATE TRANSACTION")
-        do {
+        try database.withImmediateTransaction("apply_remote_block_deletion") {
             try database.execute(
                 """
                 UPDATE blocks
@@ -504,10 +511,6 @@ final class SyncMergeEngine {
                 ]
             )
             try deleteSourceLinks(blockID: blockID)
-            try database.execute("COMMIT")
-        } catch {
-            try? database.execute("ROLLBACK")
-            throw error
         }
 
         EditorLog.sync.debug(
@@ -523,5 +526,27 @@ final class SyncMergeEngine {
             """,
             bindings: [.text(blockID)]
         )
+    }
+
+    private static func pageReferenceTargetPageID(payloadJSON: String) -> String? {
+        guard let data = payloadJSON.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let targetPageID = payload["target_page_id"] as? String,
+              !targetPageID.isEmpty else {
+            return nil
+        }
+
+        return targetPageID
+    }
+
+    private static func blockReferenceTargetBlockID(payloadJSON: String) -> String? {
+        guard let data = payloadJSON.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let targetBlockID = payload["target_block_id"] as? String,
+              !targetBlockID.isEmpty else {
+            return nil
+        }
+
+        return targetBlockID
     }
 }

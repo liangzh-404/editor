@@ -107,6 +107,60 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUndoLastTextEditRestoresPreviousBlockTextAndKeepsFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertFalse(viewModel.canUndoTextEdit)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "First edit")
+
+        XCTAssertTrue(viewModel.canUndoTextEdit)
+
+        try viewModel.undoLastTextEdit()
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .paragraph)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertFalse(viewModel.canUndoTextEdit)
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+            )
+        )
+    }
+
+    @MainActor
+    func testUndoLastTextEditCoalescesSequentialPlainTextEditsForSameBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        try viewModel.updateBlockText(blockID: blockID, text: "First edit")
+        try viewModel.updateBlockText(blockID: blockID, text: "Second edit")
+
+        try viewModel.undoLastTextEdit()
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .paragraph)
+        XCTAssertFalse(viewModel.canUndoTextEdit)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+    }
+
+    @MainActor
     func testUpdateSelectedPageTitleRefreshesSnapshotAndSearchResults() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -202,6 +256,49 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUndoLastTextEditRestoresBlockTypeAfterMarkdownShortcut() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "# ")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .heading1)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
+
+        try viewModel.undoLastTextEdit()
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .paragraph)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+    }
+
+    @MainActor
+    func testCompletedTaskMarkdownShortcutUpdatesBlockCompletion() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "- [x] ")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .taskItem)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.taskItemIsCompleted, true)
+    }
+
+    @MainActor
     func testChangeBlockTypeRefreshesVisibleBlockAndQueuesSyncChange() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -223,6 +320,26 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdateTaskItemCompletionRefreshesVisibleBlockAndKeepsFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let taskBlock = try repository.appendBlock(pageID: pageID, type: .taskItem, text: "Ship")
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        try viewModel.updateTaskItemCompletion(blockID: taskBlock.id, isCompleted: true)
+
+        let reloadedTask = try XCTUnwrap(viewModel.visibleBlocks.first { $0.id == taskBlock.id })
+        XCTAssertTrue(reloadedTask.taskItemIsCompleted)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, taskBlock.id)
+    }
+
+    @MainActor
     func testAppendParagraphBlockRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -237,6 +354,100 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph, .paragraph])
         XCTAssertEqual(viewModel.visibleBlocks.last?.textPlain, "")
+    }
+
+    @MainActor
+    func testAddParagraphBlockForUIQueuesFocusOnInsertedBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        let insertedBlockID = try XCTUnwrap(viewModel.addParagraphBlockToCurrentPage())
+
+        XCTAssertEqual(viewModel.visibleBlocks.last?.id, insertedBlockID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, insertedBlockID)
+    }
+
+    @MainActor
+    func testAppendPageReferenceToCurrentPageKeepsSelectionAndRefreshesBacklinks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+
+        let blockID = try viewModel.appendPageReferenceToCurrentPage(targetPageID: targetPage.id)
+
+        XCTAssertEqual(viewModel.selectedPageID, sourcePageID)
+        let pageReferenceBlock = try XCTUnwrap(viewModel.visibleBlocks.first { $0.id == blockID })
+        XCTAssertEqual(pageReferenceBlock.type, .pageReference)
+        XCTAssertEqual(pageReferenceBlock.textPlain, "Specs")
+        XCTAssertEqual(pageReferenceBlock.pageReferenceTargetPageID, targetPage.id)
+
+        viewModel.selectPage(id: targetPage.id)
+        XCTAssertEqual(
+            viewModel.selectedPageBacklinks,
+            [
+                Backlink(
+                    sourcePageID: sourcePageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: blockID,
+                    targetPageID: targetPage.id,
+                    targetBlockID: nil,
+                    linkText: "Specs"
+                )
+            ]
+        )
+    }
+
+    @MainActor
+    func testAppendBlockReferenceAndOpenItFocusesTargetBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let targetBlock = try repository.appendBlock(
+            pageID: targetPage.id,
+            type: .paragraph,
+            text: "API contract"
+        )
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+
+        let blockID = try viewModel.appendBlockReferenceToCurrentPage(targetBlockID: targetBlock.id)
+
+        XCTAssertEqual(viewModel.selectedPageID, sourcePageID)
+        let blockReference = try XCTUnwrap(viewModel.visibleBlocks.first { $0.id == blockID })
+        XCTAssertEqual(blockReference.type, .blockReference)
+        XCTAssertEqual(blockReference.pageReferenceTargetPageID, targetPage.id)
+        XCTAssertEqual(blockReference.blockReferenceTargetBlockID, targetBlock.id)
+
+        viewModel.openBlockReference(targetPageID: targetPage.id, targetBlockID: targetBlock.id)
+
+        XCTAssertEqual(viewModel.selectedPageID, targetPage.id)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, targetBlock.id)
     }
 
     @MainActor
@@ -274,6 +485,32 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["Notebook", "Projects"])
         XCTAssertEqual(viewModel.snapshot.notebooks.last, notebook)
+    }
+
+    @MainActor
+    func testCreateChildNotebookRefreshesSnapshotAndKeepsHierarchyOrder() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        let parent = try viewModel.createNotebookInSelectedWorkspace(name: "Projects")
+        _ = try viewModel.createNotebookInSelectedWorkspace(name: "Areas")
+        let child = try viewModel.createNotebookInSelectedWorkspace(
+            name: "Client A",
+            parentNotebookID: parent.id
+        )
+
+        XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["Notebook", "Projects", "Client A", "Areas"])
+        XCTAssertEqual(
+            viewModel.snapshot.notebooks.first { $0.id == child.id }?.parentNotebookID,
+            parent.id
+        )
+        XCTAssertEqual(viewModel.selectedNotebookID, child.id)
     }
 
     @MainActor
@@ -316,6 +553,62 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testNestAndOutdentNotebookRefreshesSnapshotAndKeepsSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let workspaceID = try XCTUnwrap(viewModel.selectedWorkspaceID)
+        let parent = try repository.createNotebook(workspaceID: workspaceID, name: "Projects")
+        let child = try repository.createNotebook(workspaceID: workspaceID, name: "Client A")
+        try viewModel.load()
+        viewModel.selectNotebook(id: child.id)
+
+        try viewModel.updateNotebookParent(id: child.id, parentNotebookID: parent.id)
+
+        XCTAssertEqual(
+            viewModel.snapshot.notebooks.first { $0.id == child.id }?.parentNotebookID,
+            parent.id
+        )
+        XCTAssertEqual(viewModel.selectedNotebookID, child.id)
+
+        try viewModel.updateNotebookParent(id: child.id, parentNotebookID: nil)
+
+        XCTAssertNil(viewModel.snapshot.notebooks.first { $0.id == child.id }?.parentNotebookID)
+        XCTAssertEqual(viewModel.selectedNotebookID, child.id)
+    }
+
+    @MainActor
+    func testIndentAndOutdentNotebookForUIUsePreviousSiblingAndKeepSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let workspaceID = try XCTUnwrap(viewModel.selectedWorkspaceID)
+        let parent = try repository.createNotebook(workspaceID: workspaceID, name: "Projects")
+        let child = try repository.createNotebook(workspaceID: workspaceID, name: "Client A")
+        try viewModel.load()
+        viewModel.selectNotebook(id: child.id)
+
+        XCTAssertTrue(viewModel.indentNotebookForUI(id: child.id))
+        XCTAssertEqual(
+            viewModel.snapshot.notebooks.first { $0.id == child.id }?.parentNotebookID,
+            parent.id
+        )
+        XCTAssertEqual(viewModel.selectedNotebookID, child.id)
+
+        XCTAssertTrue(viewModel.outdentNotebookForUI(id: child.id))
+        XCTAssertNil(viewModel.snapshot.notebooks.first { $0.id == child.id }?.parentNotebookID)
+        XCTAssertEqual(viewModel.selectedNotebookID, child.id)
+    }
+
+    @MainActor
     func testArchiveSelectedPageHidesPageAndSelectsRemainingPage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -333,6 +626,80 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome"])
         XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Start writing in blocks."])
+    }
+
+    @MainActor
+    func testArchivePageForUIKeepsCurrentSelectionWhenArchivingBackgroundPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let currentPage = try viewModel.createPageInSelectedWorkspace(title: "Current")
+        let scratchPage = try viewModel.createPageInSelectedWorkspace(title: "Scratch")
+        viewModel.selectPage(id: currentPage.id)
+
+        viewModel.archivePageForUI(id: scratchPage.id)
+
+        XCTAssertEqual(viewModel.snapshot.archivedPages.map(\.title), ["Scratch"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Current"])
+        XCTAssertEqual(viewModel.selectedPageID, currentPage.id)
+        XCTAssertEqual(viewModel.selectedPage?.title, "Current")
+    }
+
+    @MainActor
+    func testUndoLastPageArchiveRestoresBackgroundPageWithoutChangingCurrentSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let currentPage = try viewModel.createPageInSelectedWorkspace(title: "Current")
+        let scratchPage = try viewModel.createPageInSelectedWorkspace(title: "Scratch")
+        viewModel.selectPage(id: currentPage.id)
+        XCTAssertFalse(viewModel.canUndoPageArchive)
+
+        viewModel.archivePageForUI(id: scratchPage.id)
+
+        XCTAssertTrue(viewModel.canUndoPageArchive)
+        try viewModel.undoLastPageArchive()
+
+        XCTAssertEqual(viewModel.snapshot.archivedPages, [])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Current", "Scratch"])
+        XCTAssertEqual(viewModel.selectedPageID, currentPage.id)
+        XCTAssertFalse(viewModel.canUndoPageArchive)
+    }
+
+    @MainActor
+    func testUndoLastPageArchiveRestoresSelectedArchivedPageAndSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let scratchPage = try viewModel.createPageInSelectedWorkspace(title: "Scratch")
+
+        viewModel.archivePageForUI(id: scratchPage.id)
+
+        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
+        XCTAssertTrue(viewModel.canUndoPageArchive)
+
+        try viewModel.undoLastPageArchive()
+
+        XCTAssertEqual(viewModel.snapshot.archivedPages, [])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Scratch"])
+        XCTAssertEqual(viewModel.selectedPageID, scratchPage.id)
+        XCTAssertEqual(viewModel.selectedPage?.title, "Scratch")
+        XCTAssertFalse(viewModel.canUndoPageArchive)
     }
 
     @MainActor
@@ -452,6 +819,36 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectedPageOutlineTracksHeadingBlocksAndSelectionFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        try viewModel.importMarkdownToCurrentPage(
+            """
+            # Overview
+
+            Body
+
+            # Details
+            """
+        )
+
+        XCTAssertEqual(viewModel.selectedPageOutline.map(\.title), ["Overview", "Details"])
+
+        let overviewItem = try XCTUnwrap(viewModel.selectedPageOutline.first)
+        viewModel.selectOutlineItem(overviewItem)
+
+        XCTAssertEqual(viewModel.pendingFocusBlockID, overviewItem.blockID)
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, viewModel.selectedPageID)
+    }
+
+    @MainActor
     func testSearchQueryRefreshesResultsFromCurrentBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -542,6 +939,204 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectedPageExternalLinksRefreshAfterBlockEdit() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let pageID = try XCTUnwrap(viewModel.selectedPageID)
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "Read [Swift](https://swift.org)")
+
+        XCTAssertEqual(
+            viewModel.selectedPageExternalLinks,
+            [
+                ExternalLink(
+                    sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: blockID,
+                    targetURL: "https://swift.org",
+                    linkText: "Swift"
+                )
+            ]
+        )
+    }
+
+    @MainActor
+    func testInsertMarkdownLinkIntoTextBlockRefreshesExternalLinksAndFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let pageID = try XCTUnwrap(viewModel.selectedPageID)
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        XCTAssertTrue(
+            try viewModel.insertMarkdownLink(
+                blockID: blockID,
+                label: "Swift",
+                url: "https://swift.org"
+            )
+        )
+
+        XCTAssertEqual(
+            viewModel.visibleBlocks.first?.textPlain,
+            "Start writing in blocks. [Swift](https://swift.org)"
+        )
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertEqual(
+            viewModel.selectedPageExternalLinks,
+            [
+                ExternalLink(
+                    sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: blockID,
+                    targetURL: "https://swift.org",
+                    linkText: "Swift"
+                )
+            ]
+        )
+    }
+
+    @MainActor
+    func testInsertMarkdownLinkAtSelectionRefreshesExternalLinksAndReturnsLabelSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let pageID = try XCTUnwrap(viewModel.selectedPageID)
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        let nextSelection = try XCTUnwrap(
+            try viewModel.insertMarkdownLink(
+                blockID: blockID,
+                label: "Swift",
+                url: "https://swift.org",
+                selection: EditorTextSelection(blockID: blockID, location: 6, length: 7)
+            )
+        )
+
+        XCTAssertEqual(
+            viewModel.visibleBlocks.first?.textPlain,
+            "Start [Swift](https://swift.org) in blocks."
+        )
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 7, length: 5))
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertEqual(
+            viewModel.selectedPageExternalLinks,
+            [
+                ExternalLink(
+                    sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: blockID,
+                    targetURL: "https://swift.org",
+                    linkText: "Swift"
+                )
+            ]
+        )
+    }
+
+    @MainActor
+    func testApplyMarkdownInlineFormatWrapsSelectionAndQueuesFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        let nextSelection = try XCTUnwrap(
+            try viewModel.applyMarkdownInlineFormat(
+                blockID: blockID,
+                format: .bold,
+                selection: EditorTextSelection(blockID: blockID, location: 6, length: 7)
+            )
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start **writing** in blocks.")
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 8, length: 7))
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertTrue(viewModel.canUndoTextEdit)
+
+        try viewModel.undoLastTextEdit()
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+    }
+
+    @MainActor
+    func testApplyMarkdownInlineItalicFormatWrapsSelectionAndQueuesFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        let nextSelection = try XCTUnwrap(
+            try viewModel.applyMarkdownInlineFormat(
+                blockID: blockID,
+                format: .italic,
+                selection: EditorTextSelection(blockID: blockID, location: 6, length: 7)
+            )
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start *writing* in blocks.")
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 7, length: 7))
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertTrue(viewModel.canUndoTextEdit)
+    }
+
+    @MainActor
+    func testApplyMarkdownInlineFormatRejectsMismatchedSelectionBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        XCTAssertNil(
+            try viewModel.applyMarkdownInlineFormat(
+                blockID: blockID,
+                format: .code,
+                selection: EditorTextSelection(blockID: "other-block", location: 0, length: 5)
+            )
+        )
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertFalse(viewModel.canUndoTextEdit)
+    }
+
+    @MainActor
     func testSelectedPageConflictsRefreshAndAcceptRemoteVersion() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -628,6 +1223,61 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAcceptAllLocalConflictsForSelectedPageKeepsLocalBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let firstBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let secondBlock = try repository.appendBlock(
+            pageID: pageID,
+            type: .paragraph,
+            text: "Second"
+        )
+        try repository.updateBlockText(blockID: firstBlockID, text: "Local one")
+        try repository.updateBlockText(blockID: secondBlock.id, text: "Local two")
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: firstBlockID,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote one",
+                payloadJSON: "{\"text\":\"Remote one\"}",
+                revision: 2
+            )
+        )
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: secondBlock.id,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote two",
+                payloadJSON: "{\"text\":\"Remote two\"}",
+                revision: 2
+            )
+        )
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            conflictRepository: ConflictRepository(database: database)
+        )
+        try viewModel.load()
+        XCTAssertEqual(viewModel.selectedPageConflicts.count, 2)
+
+        try viewModel.acceptAllLocalConflictsForSelectedPage()
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Local one", "Local two"])
+        XCTAssertEqual(viewModel.selectedPageConflicts, [])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().filter { $0.changeType == "update" }.count,
+            2
+        )
+        XCTAssertEqual(viewModel.pendingFocusBlockID, firstBlockID)
+    }
+
+    @MainActor
     func testManualConflictMergeRefreshesBlockAndKeepsPendingSync() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -668,6 +1318,68 @@ final class WorkspaceViewModelTests: XCTestCase {
                 SyncChange(entityType: "block", entityID: blockID, changeType: "update")
             )
         )
+    }
+
+    @MainActor
+    func testResolveAllManualConflictsForSelectedPageAppliesMergedTexts() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let firstBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let secondBlock = try repository.appendBlock(
+            pageID: pageID,
+            type: .paragraph,
+            text: "Second"
+        )
+        try repository.updateBlockText(blockID: firstBlockID, text: "Local one")
+        try repository.updateBlockText(blockID: secondBlock.id, text: "Local two")
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: firstBlockID,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote one",
+                payloadJSON: "{\"text\":\"Remote one\"}",
+                revision: 2
+            )
+        )
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: secondBlock.id,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote two",
+                payloadJSON: "{\"text\":\"Remote two\"}",
+                revision: 2
+            )
+        )
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            conflictRepository: ConflictRepository(database: database)
+        )
+        try viewModel.load()
+        let conflicts = viewModel.selectedPageConflicts
+        XCTAssertEqual(conflicts.count, 2)
+
+        try viewModel.resolveAllManualConflictsForSelectedPage(
+            mergedTextsByConflictID: Dictionary(
+                uniqueKeysWithValues: conflicts.map { conflict in
+                    (conflict.id, "Merged \(conflict.blockID == firstBlockID ? "one" : "two")")
+                }
+            )
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Merged one", "Merged two"])
+        XCTAssertEqual(viewModel.selectedPageConflicts, [])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().filter { $0.changeType == "update" }.count,
+            2
+        )
+        XCTAssertEqual(viewModel.pendingFocusBlockID, firstBlockID)
     }
 
     @MainActor
@@ -788,6 +1500,33 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testInsertParagraphBlockAfterVisibleBlockKeepsFocusOnInsertedBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let firstBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        let insertedBlockID = try viewModel.insertParagraphBlock(after: firstBlockID)
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["First", "", "Second"])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, insertedBlockID)
+    }
+
+    @MainActor
     func testIndentVisibleBlockRefreshesParentAndKeepsFocusOnIndentedBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -841,6 +1580,76 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertNil(viewModel.visibleBlocks.first { $0.id == secondBlockID }?.parentBlockID)
         XCTAssertEqual(viewModel.pendingFocusBlockID, secondBlockID)
+    }
+
+    @MainActor
+    func testCollapsedToggleHidesDescendantBlocksFromEditorCanvasOnly() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                Toggle
+                Child
+                Outside
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let toggleBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        let childBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+        try viewModel.changeBlockType(blockID: toggleBlockID, type: .toggle)
+        XCTAssertTrue(try viewModel.indentBlock(blockID: childBlockID))
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Toggle", "Child", "Outside"])
+        XCTAssertEqual(viewModel.editorVisibleBlocks.map(\.textPlain), ["Toggle", "Child", "Outside"])
+        XCTAssertTrue(viewModel.isToggleBlockExpanded(blockID: toggleBlockID))
+
+        viewModel.toggleBlockExpansion(blockID: toggleBlockID)
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Toggle", "Child", "Outside"])
+        XCTAssertEqual(viewModel.editorVisibleBlocks.map(\.textPlain), ["Toggle", "Outside"])
+        XCTAssertFalse(viewModel.isToggleBlockExpanded(blockID: toggleBlockID))
+        XCTAssertEqual(viewModel.pendingFocusBlockID, toggleBlockID)
+
+        let reloadedViewModel = WorkspaceViewModel(repository: repository)
+        try reloadedViewModel.load()
+        XCTAssertFalse(reloadedViewModel.isToggleBlockExpanded(blockID: toggleBlockID))
+        XCTAssertEqual(reloadedViewModel.editorVisibleBlocks.map(\.textPlain), ["Toggle", "Outside"])
+
+        viewModel.toggleBlockExpansion(blockID: toggleBlockID)
+
+        XCTAssertEqual(viewModel.editorVisibleBlocks.map(\.textPlain), ["Toggle", "Child", "Outside"])
+        XCTAssertTrue(viewModel.isToggleBlockExpanded(blockID: toggleBlockID))
+    }
+
+    @MainActor
+    func testUpdateCodeBlockLineWrappingRefreshesVisibleBlockAndKeepsFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let block = try repository.appendBlock(pageID: pageID, type: .codeBlock, text: "let value = 1")
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertTrue(viewModel.isCodeBlockLineWrappingEnabled(blockID: block.id))
+
+        viewModel.updateCodeBlockLineWrapping(blockID: block.id, isWrapped: false)
+
+        let reloadedBlock = try XCTUnwrap(viewModel.visibleBlocks.first { $0.id == block.id })
+        XCTAssertFalse(reloadedBlock.codeBlockLineWrapping)
+        XCTAssertFalse(viewModel.isCodeBlockLineWrappingEnabled(blockID: block.id))
+        XCTAssertEqual(viewModel.pendingFocusBlockID, block.id)
     }
 
     @MainActor

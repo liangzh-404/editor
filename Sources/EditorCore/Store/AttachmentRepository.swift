@@ -117,8 +117,7 @@ final class AttachmentRepository {
             return 0
         }
 
-        try database.execute("BEGIN IMMEDIATE TRANSACTION")
-        do {
+        try database.withImmediateTransaction("purge_unreferenced_attachments") {
             for row in orphanedAttachments {
                 let attachmentID = row["id"] ?? ""
                 try database.execute(
@@ -136,10 +135,6 @@ final class AttachmentRepository {
                     bindings: [.text(attachmentID)]
                 )
             }
-            try database.execute("COMMIT")
-        } catch {
-            try? database.execute("ROLLBACK")
-            throw error
         }
 
         for row in orphanedAttachments {

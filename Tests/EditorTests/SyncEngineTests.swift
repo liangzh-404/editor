@@ -465,6 +465,46 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(snapshot.attachments.map(\.originalFilename), ["brief.pdf"])
     }
 
+    func testFetchRemoteChangesPersistsNestedNotebookParent() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            workspaceChanges: [
+                RemoteWorkspaceChange(workspaceID: "workspace-remote", name: "Remote")
+            ],
+            notebookChanges: [
+                RemoteNotebookChange(
+                    notebookID: "notebook-parent",
+                    workspaceID: "workspace-remote",
+                    name: "Projects",
+                    orderKey: "000001"
+                ),
+                RemoteNotebookChange(
+                    notebookID: "notebook-child",
+                    workspaceID: "workspace-remote",
+                    parentNotebookID: "notebook-parent",
+                    name: "Client A",
+                    orderKey: "000001"
+                )
+            ],
+            changes: []
+        )
+
+        _ = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let snapshot = try PageRepository(database: database).loadWorkspaceSnapshot()
+
+        XCTAssertEqual(
+            snapshot.notebooks.first { $0.id == "notebook-child" }?.parentNotebookID,
+            "notebook-parent"
+        )
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsRemoteRecordsToChangeSet() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -524,6 +564,30 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.attachmentChanges.map(\.attachmentID), ["attachment-remote"])
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
     }
+
+    func testCloudKitPrivateDatabaseAdapterMapsRemoteNotebookParentFromRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = StaticCloudKitRecordFetcher(recordsByType: [
+            "NotebookRecord": [
+                makeRecord(type: "NotebookRecord", entityType: "notebook", entityID: "notebook-child") {
+                    $0["workspaceID"] = "workspace-remote" as CKRecordValue
+                    $0["parentNotebookID"] = "notebook-parent" as CKRecordValue
+                    $0["name"] = "Client A" as CKRecordValue
+                    $0["orderKey"] = "000001" as CKRecordValue
+                }
+            ]
+        ])
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+
+        XCTAssertEqual(changeSet.notebookChanges.first?.parentNotebookID, "notebook-parent")
+    }
+
 
     func testCloudKitPrivateDatabaseAdapterDownloadsAttachmentAssets() throws {
         let database = try migratedDatabase()
@@ -674,6 +738,30 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(record["workspaceID"] as? String, workspaceID)
         XCTAssertEqual(record["name"] as? String, "Projects")
         XCTAssertEqual(result.recordName, "notebook-\(notebook.id)")
+    }
+
+    func testCloudKitPrivateDatabaseAdapterMapsNestedNotebookParentToRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let parent = try pageRepository.createNotebook(workspaceID: workspaceID, name: "Projects")
+        let child = try pageRepository.createNotebook(
+            workspaceID: workspaceID,
+            name: "Client A",
+            parentNotebookID: parent.id
+        )
+        let saver = CapturingCloudKitRecordSaver()
+
+        _ = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordSaver: saver
+        ).upload(change: SyncChange(entityType: "notebook", entityID: child.id, changeType: "create"))
+
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        XCTAssertEqual(record["parentNotebookID"] as? String, parent.id)
     }
 
     func testCloudKitPrivateDatabaseAdapterDeletesRecordForDeleteChange() throws {

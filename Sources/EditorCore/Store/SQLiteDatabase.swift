@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 import SQLite3
 
 enum SQLiteDatabaseError: Error, Equatable, CustomStringConvertible {
@@ -137,6 +138,29 @@ final class SQLiteDatabase {
         return Int(sqlite3_column_int64(statement, 0))
     }
 
+    @discardableResult
+    func withImmediateTransaction<T>(
+        _ label: String,
+        operation: () throws -> T
+    ) throws -> T {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        try execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            let result = try operation()
+            try execute("COMMIT")
+            EditorLog.store.debug(
+                "transaction_committed label=\(label, privacy: .public) duration_ms=\(durationMilliseconds(since: startedAt), privacy: .public)"
+            )
+            return result
+        } catch {
+            try? execute("ROLLBACK")
+            EditorLog.store.error(
+                "transaction_rolled_back label=\(label, privacy: .public) duration_ms=\(durationMilliseconds(since: startedAt), privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            throw error
+        }
+    }
+
     private func prepare(_ sql: String) throws -> OpaquePointer? {
         let handle = try requireHandle()
         var statement: OpaquePointer?
@@ -181,6 +205,11 @@ final class SQLiteDatabase {
             return "database is closed"
         }
         return String(cString: sqlite3_errmsg(handle))
+    }
+
+    private func durationMilliseconds(since startedAt: UInt64) -> Double {
+        let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds - startedAt
+        return Double(elapsedNanoseconds) / 1_000_000
     }
 }
 

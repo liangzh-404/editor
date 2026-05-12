@@ -85,6 +85,26 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertLessThan(result.snippet.count, longText.count)
     }
 
+    func testUpdateBlockIndexReplacesOnlyChangedBlockEntry() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Alpha searchable block")
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+        XCTAssertTrue(try repository.search("Alpha").contains { $0.entityType == "block" && $0.entityID == blockID })
+
+        try pageRepository.updateBlockText(blockID: blockID, text: "Beta searchable block")
+        try repository.updateBlockIndex(blockID: blockID)
+
+        XCTAssertFalse(try repository.search("Alpha").contains { $0.entityType == "block" && $0.entityID == blockID })
+        XCTAssertTrue(try repository.search("Beta").contains { $0.entityType == "block" && $0.entityID == blockID })
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

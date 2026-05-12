@@ -9,7 +9,15 @@ struct WorkspaceSummary: Identifiable, Equatable, Sendable {
 struct NotebookSummary: Identifiable, Equatable, Sendable {
     let id: String
     let workspaceID: String
+    let parentNotebookID: String?
     let name: String
+
+    init(id: String, workspaceID: String, parentNotebookID: String? = nil, name: String) {
+        self.id = id
+        self.workspaceID = workspaceID
+        self.parentNotebookID = parentNotebookID
+        self.name = name
+    }
 }
 
 struct PageSummary: Identifiable, Equatable, Sendable {
@@ -38,6 +46,8 @@ enum BlockType: String, Equatable, Sendable {
     case callout
     case toggle
     case divider
+    case pageReference
+    case blockReference
     case attachmentImage
     case attachmentVideo
     case attachmentFile
@@ -56,6 +66,31 @@ enum BlockType: String, Equatable, Sendable {
              .toggle:
             return true
         case .divider,
+             .pageReference,
+             .blockReference,
+             .attachmentImage,
+             .attachmentVideo,
+             .attachmentFile:
+            return false
+        }
+    }
+
+    var supportsInlineMarkdownStyling: Bool {
+        switch self {
+        case .paragraph,
+             .heading1,
+             .unorderedListItem,
+             .orderedListItem,
+             .taskItem,
+             .quote,
+             .callout,
+             .toggle:
+            return true
+        case .codeBlock,
+             .table,
+             .divider,
+             .pageReference,
+             .blockReference,
              .attachmentImage,
              .attachmentVideo,
              .attachmentFile:
@@ -103,6 +138,37 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
     let orderKey: String
     let type: BlockType
     let textPlain: String
+    let taskItemIsCompleted: Bool
+    let toggleIsExpanded: Bool
+    let codeBlockLineWrapping: Bool
+    let pageReferenceTargetPageID: String?
+    let blockReferenceTargetBlockID: String?
+
+    init(
+        id: String,
+        pageID: String,
+        parentBlockID: String?,
+        orderKey: String,
+        type: BlockType,
+        textPlain: String,
+        taskItemIsCompleted: Bool = false,
+        toggleIsExpanded: Bool = true,
+        codeBlockLineWrapping: Bool = true,
+        pageReferenceTargetPageID: String? = nil,
+        blockReferenceTargetBlockID: String? = nil
+    ) {
+        self.id = id
+        self.pageID = pageID
+        self.parentBlockID = parentBlockID
+        self.orderKey = orderKey
+        self.type = type
+        self.textPlain = textPlain
+        self.taskItemIsCompleted = taskItemIsCompleted
+        self.toggleIsExpanded = toggleIsExpanded
+        self.codeBlockLineWrapping = codeBlockLineWrapping
+        self.pageReferenceTargetPageID = pageReferenceTargetPageID
+        self.blockReferenceTargetBlockID = blockReferenceTargetBlockID
+    }
 
     func replacingText(_ text: String) -> BlockSnapshot {
         replacing(type: type, text: text)
@@ -115,7 +181,60 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             parentBlockID: parentBlockID,
             orderKey: orderKey,
             type: type,
-            textPlain: text
+            textPlain: text,
+            taskItemIsCompleted: type == .taskItem && self.type == .taskItem ? taskItemIsCompleted : false,
+            toggleIsExpanded: type == .toggle && self.type == .toggle ? toggleIsExpanded : true,
+            codeBlockLineWrapping: type == .codeBlock && self.type == .codeBlock ? codeBlockLineWrapping : true,
+            pageReferenceTargetPageID: type == .pageReference || type == .blockReference ? pageReferenceTargetPageID : nil,
+            blockReferenceTargetBlockID: type == .blockReference ? blockReferenceTargetBlockID : nil
+        )
+    }
+
+    func replacingTaskItemCompletion(_ isCompleted: Bool) -> BlockSnapshot {
+        BlockSnapshot(
+            id: id,
+            pageID: pageID,
+            parentBlockID: parentBlockID,
+            orderKey: orderKey,
+            type: type,
+            textPlain: textPlain,
+            taskItemIsCompleted: type == .taskItem ? isCompleted : false,
+            toggleIsExpanded: toggleIsExpanded,
+            codeBlockLineWrapping: codeBlockLineWrapping,
+            pageReferenceTargetPageID: pageReferenceTargetPageID,
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID
+        )
+    }
+
+    func replacingToggleExpansion(_ isExpanded: Bool) -> BlockSnapshot {
+        BlockSnapshot(
+            id: id,
+            pageID: pageID,
+            parentBlockID: parentBlockID,
+            orderKey: orderKey,
+            type: type,
+            textPlain: textPlain,
+            taskItemIsCompleted: taskItemIsCompleted,
+            toggleIsExpanded: type == .toggle ? isExpanded : true,
+            codeBlockLineWrapping: codeBlockLineWrapping,
+            pageReferenceTargetPageID: pageReferenceTargetPageID,
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID
+        )
+    }
+
+    func replacingCodeBlockLineWrapping(_ isWrapped: Bool) -> BlockSnapshot {
+        BlockSnapshot(
+            id: id,
+            pageID: pageID,
+            parentBlockID: parentBlockID,
+            orderKey: orderKey,
+            type: type,
+            textPlain: textPlain,
+            taskItemIsCompleted: taskItemIsCompleted,
+            toggleIsExpanded: toggleIsExpanded,
+            codeBlockLineWrapping: type == .codeBlock ? isWrapped : true,
+            pageReferenceTargetPageID: pageReferenceTargetPageID,
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID
         )
     }
 }
@@ -220,6 +339,54 @@ extension WorkspaceSnapshot {
         return replacingBlock(blockID: blockID, type: block.type, text: text)
     }
 
+    func replacingTaskItemCompletion(blockID: String, isCompleted: Bool) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages,
+            archivedPages: archivedPages,
+            blocks: blocks.map { block in
+                block.id == blockID ? block.replacingTaskItemCompletion(isCompleted) : block
+            },
+            attachments: attachments,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
+
+    func replacingToggleExpansion(blockID: String, isExpanded: Bool) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages,
+            archivedPages: archivedPages,
+            blocks: blocks.map { block in
+                block.id == blockID ? block.replacingToggleExpansion(isExpanded) : block
+            },
+            attachments: attachments,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
+
+    func replacingCodeBlockLineWrapping(blockID: String, isWrapped: Bool) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages,
+            archivedPages: archivedPages,
+            blocks: blocks.map { block in
+                block.id == blockID ? block.replacingCodeBlockLineWrapping(isWrapped) : block
+            },
+            attachments: attachments,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
+
     func replacingPageTitle(pageID: String, title: String) -> WorkspaceSnapshot {
         WorkspaceSnapshot(
             workspaces: workspaces,
@@ -251,6 +418,7 @@ extension WorkspaceSnapshot {
                     ? NotebookSummary(
                         id: notebook.id,
                         workspaceID: notebook.workspaceID,
+                        parentNotebookID: notebook.parentNotebookID,
                         name: name
                     )
                     : notebook

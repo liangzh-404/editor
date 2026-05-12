@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 4
+    static let currentVersion = 6
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -30,6 +30,7 @@ enum SchemaMigrator {
             CREATE TABLE IF NOT EXISTS notebooks (
                 id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL,
+                parent_notebook_id TEXT,
                 name TEXT NOT NULL,
                 order_key TEXT NOT NULL,
                 created_at TEXT NOT NULL,
@@ -54,6 +55,12 @@ enum SchemaMigrator {
                 FOREIGN KEY (notebook_id) REFERENCES notebooks(id) ON DELETE SET NULL
             );
             """
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "notebooks",
+            column: "parent_notebook_id",
+            definition: "TEXT"
         )
         try addColumnIfMissing(
             database: database,
@@ -110,11 +117,18 @@ enum SchemaMigrator {
                 source_block_id TEXT,
                 target_page_id TEXT,
                 target_block_id TEXT,
+                target_url TEXT,
                 link_text TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (source_page_id) REFERENCES pages(id) ON DELETE CASCADE
             );
             """
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "links",
+            column: "target_url",
+            definition: "TEXT"
         )
 
         try database.execute(
@@ -247,12 +261,13 @@ enum SchemaMigrator {
                 let notebookID = "notebook-\(workspaceID)"
                 try database.execute(
                     """
-                    INSERT INTO notebooks (id, workspace_id, name, order_key, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO notebooks (id, workspace_id, parent_notebook_id, name, order_key, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     bindings: [
                         .text(notebookID),
                         .text(workspaceID),
+                        .null,
                         .text("Notebook"),
                         .text("000001"),
                         .text(workspace["created_at"] ?? now),

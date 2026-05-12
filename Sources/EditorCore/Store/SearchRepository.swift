@@ -41,6 +41,37 @@ final class SearchRepository {
         EditorLog.render.debug("search_index_rebuilt")
     }
 
+    func updateBlockIndex(blockID: String) throws {
+        try database.withImmediateTransaction("search_index_block_update") {
+            try deleteIndex(entityType: "block", entityID: blockID)
+            let rows = try database.query(
+                """
+                SELECT blocks.id AS block_id,
+                       pages.title AS page_title,
+                       blocks.text_plain AS text_plain
+                FROM blocks
+                INNER JOIN pages ON pages.id = blocks.page_id
+                WHERE blocks.id = ?
+                  AND blocks.is_deleted = 0
+                  AND blocks.text_plain != ''
+                LIMIT 1
+                """,
+                bindings: [.text(blockID)]
+            )
+
+            if let row = rows.first {
+                try insertIndex(
+                    entityType: "block",
+                    entityID: row["block_id"] ?? "",
+                    title: row["page_title"] ?? "",
+                    body: row["text_plain"] ?? ""
+                )
+            }
+        }
+
+        EditorLog.render.debug("search_index_block_updated block_id=\(blockID, privacy: .public)")
+    }
+
     func search(_ query: String, limit: Int = 20) throws -> [SearchResult] {
         let tokens = searchTokens(for: query)
         guard let ftsQuery = ftsQuery(for: tokens) else {
@@ -193,6 +224,19 @@ final class SearchRepository {
                 .text(entityID),
                 .text(title),
                 .text(body)
+            ]
+        )
+    }
+
+    private func deleteIndex(entityType: String, entityID: String) throws {
+        try database.execute(
+            """
+            DELETE FROM search_index
+            WHERE entity_type = ? AND entity_id = ?
+            """,
+            bindings: [
+                .text(entityType),
+                .text(entityID)
             ]
         )
     }

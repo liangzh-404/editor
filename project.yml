@@ -69,6 +69,17 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.liangzhang.editor.mac.uitests
         GENERATE_INFOPLIST_FILE: "YES"
+  EditorIOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/EditorIOSUITests
+    dependencies:
+      - target: EditorIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.liangzhang.editor.ios.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
 schemes:
   EditorMac:
     build:
@@ -95,3 +106,12 @@ schemes:
       gatherCoverageData: false
       targets:
         - EditorMacUITests
+  EditorIOSUITests:
+    build:
+      targets:
+        EditorIOS: all
+        EditorIOSUITests: all
+    test:
+      gatherCoverageData: false
+      targets:
+        - EditorIOSUITests

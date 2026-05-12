@@ -19,6 +19,21 @@ final class NativeTextBlockEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeTextBlockEditorKeepsLineWrappingConfiguration() {
+        let session = EditorSession()
+        let editor = NativeTextBlockEditor(
+            blockID: "block-1",
+            text: "let value = 1",
+            blockType: .codeBlock,
+            session: session,
+            lineWrapping: false,
+            onTextChange: { _ in }
+        )
+
+        XCTAssertFalse(editor.lineWrapping)
+    }
+
+    @MainActor
     func testNativeTextBlockEditorShowsPlaceholderForEmptyUnfocusedBlock() {
         let session = EditorSession()
         let editor = NativeTextBlockEditor(
@@ -64,10 +79,64 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertNil(state.beginScheduling(requestID))
     }
 
+    func testNativeTextModelUpdateGuardSuppressesProgrammaticTextChangeForwarding() {
+        var guardState = NativeTextModelUpdateGuard()
+
+        XCTAssertTrue(guardState.shouldForwardTextChange)
+
+        guardState.beginApplyingModelText()
+        XCTAssertFalse(guardState.shouldForwardTextChange)
+
+        guardState.finishApplyingModelText()
+        XCTAssertTrue(guardState.shouldForwardTextChange)
+    }
+
+    func testNativeTextFocusSelectionUsesValidRequestedSelectionRange() {
+        let range = NativeTextFocusSelection.range(
+            from: EditorTextSelection(blockID: "block-1", location: 3, length: 2),
+            blockID: "block-1",
+            text: "Hello"
+        )
+
+        XCTAssertEqual(range, NSRange(location: 3, length: 2))
+    }
+
+    func testNativeTextFocusSelectionFallsBackToTextEndForInvalidSelection() {
+        XCTAssertEqual(
+            NativeTextFocusSelection.range(
+                from: EditorTextSelection(blockID: "other", location: 1, length: 1),
+                blockID: "block-1",
+                text: "Hi 🧠"
+            ),
+            NSRange(location: ("Hi 🧠" as NSString).length, length: 0)
+        )
+        XCTAssertEqual(
+            NativeTextFocusSelection.range(
+                from: EditorTextSelection(blockID: "block-1", location: 20, length: 1),
+                blockID: "block-1",
+                text: "Short"
+            ),
+            NSRange(location: 5, length: 0)
+        )
+    }
+
     @MainActor
     func testNativeTextBlockEditorAcceptsInactiveWindowFirstMouseOnMac() {
 #if os(macOS)
         XCTAssertTrue(NativeTextBlockEditor.acceptsInactiveWindowFirstMouse)
+#endif
+    }
+
+    func testNativeTextMouseFocusPolicyMakesWindowKeyBeforeFocusingTextViewOnMac() {
+#if os(macOS)
+        XCTAssertTrue(NativeTextMouseFocusPolicy.makesWindowKeyBeforeFirstResponder)
+#endif
+    }
+
+    func testMacWindowVisibilityPolicyRequestsMainWindowWhenNoneVisible() {
+#if os(macOS)
+        XCTAssertTrue(MacWindowVisibilityPolicy.shouldRequestMainWindow(hasVisibleWindows: false))
+        XCTAssertFalse(MacWindowVisibilityPolicy.shouldRequestMainWindow(hasVisibleWindows: true))
 #endif
     }
 
@@ -100,6 +169,56 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testBlockKeyboardShortcutResolverHandlesReturnAsInsertBlockOnlyWithoutModifiers() {
+        XCTAssertTrue(
+            BlockKeyboardShortcutResolver.insertsBlockAfter(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: []
+            )
+        )
+        XCTAssertFalse(
+            BlockKeyboardShortcutResolver.insertsBlockAfter(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: [.shift]
+            )
+        )
+        XCTAssertFalse(
+            BlockKeyboardShortcutResolver.insertsBlockAfter(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: [.command]
+            )
+        )
+    }
+
+    func testBlockKeyboardShortcutResolverHandlesTabIndentAndShiftTabOutdent() {
+        XCTAssertEqual(
+            BlockKeyboardShortcutResolver.indentationDirection(
+                keyCode: BlockKeyboardShortcutResolver.tabKeyCode,
+                modifiers: []
+            ),
+            .indent
+        )
+        XCTAssertEqual(
+            BlockKeyboardShortcutResolver.indentationDirection(
+                keyCode: BlockKeyboardShortcutResolver.tabKeyCode,
+                modifiers: [.shift]
+            ),
+            .outdent
+        )
+        XCTAssertNil(
+            BlockKeyboardShortcutResolver.indentationDirection(
+                keyCode: BlockKeyboardShortcutResolver.tabKeyCode,
+                modifiers: [.command]
+            )
+        )
+        XCTAssertNil(
+            BlockKeyboardShortcutResolver.indentationDirection(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: []
+            )
+        )
+    }
+
     func testBlockDragReorderResolverMovesBeforeDestinationBlock() {
         let visibleBlockIDs = ["a", "b", "c"]
 
@@ -128,6 +247,49 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testNotebookHierarchyComputesNestingAndSiblingMovePositions() {
+        let notebooks = [
+            NotebookSummary(id: "root-a", workspaceID: "workspace", name: "Root A"),
+            NotebookSummary(id: "parent", workspaceID: "workspace", name: "Parent"),
+            NotebookSummary(
+                id: "child-a",
+                workspaceID: "workspace",
+                parentNotebookID: "parent",
+                name: "Child A"
+            ),
+            NotebookSummary(
+                id: "child-b",
+                workspaceID: "workspace",
+                parentNotebookID: "parent",
+                name: "Child B"
+            ),
+            NotebookSummary(id: "root-b", workspaceID: "workspace", name: "Root B")
+        ]
+
+        XCTAssertEqual(
+            NotebookHierarchy.nestingLevel(for: notebooks[2], in: notebooks),
+            1
+        )
+        XCTAssertFalse(NotebookHierarchy.canMoveUp(notebook: notebooks[2], in: notebooks))
+        XCTAssertTrue(NotebookHierarchy.canMoveDown(notebook: notebooks[2], in: notebooks))
+        XCTAssertEqual(
+            NotebookHierarchy.siblingTargetIndex(
+                for: notebooks[3],
+                direction: .up,
+                in: notebooks
+            ),
+            0
+        )
+        XCTAssertEqual(
+            NotebookHierarchy.siblingTargetIndex(
+                for: notebooks[1],
+                direction: .down,
+                in: notebooks
+            ),
+            2
+        )
+    }
+
     func testBlockDragReorderResolverMovesToEndRegion() {
         let visibleBlockIDs = ["a", "b", "c"]
 
@@ -144,5 +306,43 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 visibleBlockIDs: visibleBlockIDs
             )
         )
+    }
+
+    func testEditorCanvasRenderMetricsSummarizeRenderWorkload() {
+        let metrics = EditorCanvasRenderMetrics(
+            pageID: "page-1",
+            blockCount: 1_000,
+            attachmentCount: 3,
+            backlinkCount: 2,
+            conflictCount: 1
+        )
+
+        XCTAssertEqual(metrics.pageID, "page-1")
+        XCTAssertEqual(metrics.blockCount, 1_000)
+        XCTAssertEqual(metrics.attachmentCount, 3)
+        XCTAssertEqual(metrics.backlinkCount, 2)
+        XCTAssertEqual(metrics.conflictCount, 1)
+        XCTAssertTrue(metrics.isLargePage)
+        XCTAssertTrue(EditorCanvasRenderPolicy.usesLazyBlockStack)
+    }
+
+    func testEditorCanvasScrollMetricsTrackVisibleBlocksAndLargePageState() {
+        var tracker = EditorCanvasScrollMetricsTracker(pageID: "page-1", blockCount: 1_000)
+
+        tracker.blockAppeared("a")
+        tracker.blockAppeared("b")
+        tracker.blockAppeared("b")
+        tracker.blockDisappeared("a")
+
+        XCTAssertEqual(
+            tracker.metrics,
+            EditorCanvasScrollMetrics(
+                pageID: "page-1",
+                blockCount: 1_000,
+                visibleBlockCount: 1,
+                peakVisibleBlockCount: 2
+            )
+        )
+        XCTAssertTrue(tracker.metrics.isLargePage)
     }
 }

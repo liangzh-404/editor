@@ -56,6 +56,73 @@ final class BacklinkRepositoryTests: XCTestCase {
         )
     }
 
+    func testBlockUpdateMaintainsExternalMarkdownLinksForSourcePage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        try pageRepository.updateBlockText(
+            blockID: blockID,
+            text: "Read [Swift](https://swift.org) and [Docs](x-editor://local)"
+        )
+
+        XCTAssertEqual(
+            try BacklinkRepository(database: database).externalLinks(sourcePageID: pageID),
+            [
+                ExternalLink(
+                    sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: blockID,
+                    targetURL: "https://swift.org",
+                    linkText: "Swift"
+                ),
+                ExternalLink(
+                    sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: blockID,
+                    targetURL: "x-editor://local",
+                    linkText: "Docs"
+                )
+            ]
+        )
+    }
+
+    func testExternalLinkDestinationURLRequiresScheme() throws {
+        XCTAssertEqual(
+            ExternalLink(
+                sourcePageID: "page",
+                sourcePageTitle: "Page",
+                sourceBlockID: "block",
+                targetURL: "https://swift.org",
+                linkText: "Swift"
+            ).destinationURL?.absoluteString,
+            "https://swift.org"
+        )
+
+        XCTAssertNil(
+            ExternalLink(
+                sourcePageID: "page",
+                sourcePageTitle: "Page",
+                sourceBlockID: "block",
+                targetURL: "not-a-url",
+                linkText: "Invalid"
+            ).destinationURL
+        )
+    }
+
+    func testExternalMarkdownLinksIgnoreImagesAndLocalTargets() throws {
+        XCTAssertEqual(
+            BacklinkRepository.externalMarkdownLinks(
+                in: "![Logo](https://example.com/logo.png) [Guide](README.md) [Swift](https://swift.org)"
+            ).map(\.url),
+            ["https://swift.org"]
+        )
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

@@ -60,8 +60,20 @@ final class SchemaMigratorTests: XCTestCase {
 
         XCTAssertTrue(pageColumns.contains("notebook_id"))
         XCTAssertTrue(notebookColumns.contains("workspace_id"))
+        XCTAssertTrue(notebookColumns.contains("parent_notebook_id"))
         XCTAssertTrue(notebookColumns.contains("name"))
         XCTAssertTrue(notebookColumns.contains("order_key"))
+    }
+
+    func testLinksTableTracksExternalTargets() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let linkColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('links')"))
+
+        XCTAssertTrue(linkColumns.contains("target_url"))
     }
 
     func testMigrationRecordsSchemaVersionOne() throws {
@@ -76,6 +88,39 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertEqual(version, SchemaMigrator.currentVersion)
     }
 
+    func testImmediateTransactionCommitsOperation() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try database.execute("CREATE TABLE items (id TEXT PRIMARY KEY)")
+        try database.withImmediateTransaction("test_commit") {
+            try database.execute(
+                "INSERT INTO items (id) VALUES (?)",
+                bindings: [.text("item-1")]
+            )
+        }
+
+        XCTAssertEqual(try database.queryInt("SELECT COUNT(*) FROM items"), 1)
+    }
+
+    func testImmediateTransactionRollsBackFailedOperation() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try database.execute("CREATE TABLE items (id TEXT PRIMARY KEY)")
+        XCTAssertThrowsError(
+            try database.withImmediateTransaction("test_rollback") {
+                try database.execute(
+                    "INSERT INTO items (id) VALUES (?)",
+                    bindings: [.text("item-1")]
+                )
+                throw SQLiteTransactionTestError.expectedFailure
+            }
+        )
+
+        XCTAssertEqual(try database.queryInt("SELECT COUNT(*) FROM items"), 0)
+    }
+
     private func temporaryDatabasePath() -> String {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -86,4 +131,8 @@ final class SchemaMigratorTests: XCTestCase {
         temporaryFiles.append(directory)
         return directory.appendingPathComponent("editor.sqlite").path
     }
+}
+
+private enum SQLiteTransactionTestError: Error {
+    case expectedFailure
 }
