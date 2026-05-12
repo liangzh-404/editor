@@ -57,6 +57,21 @@ struct MarkdownTableDocument: Equatable, Sendable {
         rows[rowIndex][columnIndex] = text
     }
 
+    mutating func appendRow() {
+        rows.append(Array(repeating: "", count: max(columnCount, 1)))
+    }
+
+    mutating func appendColumn() {
+        guard !rows.isEmpty else {
+            rows = [[""]]
+            return
+        }
+
+        rows = rows.map { row in
+            row + [""]
+        }
+    }
+
     private static func cells(from line: String) -> [String]? {
         guard line.contains("|") else {
             return nil

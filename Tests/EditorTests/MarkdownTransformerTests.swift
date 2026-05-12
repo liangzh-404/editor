@@ -217,6 +217,34 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testMarkdownTableDocumentAppendsRowAndColumn() {
+        var table = MarkdownTableDocument(
+            markdown:
+                """
+                | Name | Status |
+                | --- | --- |
+                | Editor | Local |
+                """
+        )
+
+        table.appendRow()
+        table.appendColumn()
+        table.updateCell(row: 0, column: 2, text: "Owner")
+        table.updateCell(row: 2, column: 0, text: "Notebook")
+        table.updateCell(row: 2, column: 1, text: "Draft")
+        table.updateCell(row: 2, column: 2, text: "Me")
+
+        XCTAssertEqual(
+            table.markdown,
+            """
+            | Name | Status | Owner |
+            | --- | --- | --- |
+            | Editor | Local |  |
+            | Notebook | Draft | Me |
+            """
+        )
+    }
+
     private func block(type: BlockType, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: UUID().uuidString,

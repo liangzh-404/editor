@@ -1390,26 +1390,48 @@ private struct StructuredTableBlockEditor: View {
 
     var body: some View {
         let rows = editableRows
-        ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
-                ForEach(rows.indices, id: \.self) { rowIndex in
-                    GridRow {
-                        ForEach(rows[rowIndex].indices, id: \.self) { columnIndex in
-                            TextField(
-                                "",
-                                text: cellBinding(row: rowIndex, column: columnIndex)
-                            )
-                            .textFieldStyle(.plain)
-                            .font(rowIndex == 0 ? .callout.weight(.semibold) : .callout)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .frame(minWidth: 96, alignment: .leading)
-                            .background(rowIndex == 0 ? Color.secondary.opacity(0.08) : Color.white)
-                            .overlay(
-                                Rectangle()
-                                    .stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
-                            )
-                            .accessibilityIdentifier("editor.table.\(blockID).cell.\(rowIndex).\(columnIndex)")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    appendRow()
+                } label: {
+                    Image(systemName: "plus.square")
+                }
+                .buttonStyle(.borderless)
+                .help("Add row")
+                .accessibilityIdentifier("editor.table.\(blockID).add-row")
+
+                Button {
+                    appendColumn()
+                } label: {
+                    Image(systemName: "plus.rectangle.portrait")
+                }
+                .buttonStyle(.borderless)
+                .help("Add column")
+                .accessibilityIdentifier("editor.table.\(blockID).add-column")
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
+                    ForEach(rows.indices, id: \.self) { rowIndex in
+                        GridRow {
+                            ForEach(rows[rowIndex].indices, id: \.self) { columnIndex in
+                                TextField(
+                                    "",
+                                    text: cellBinding(row: rowIndex, column: columnIndex)
+                                )
+                                .textFieldStyle(.plain)
+                                .font(rowIndex == 0 ? .callout.weight(.semibold) : .callout)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .frame(minWidth: 96, alignment: .leading)
+                                .background(rowIndex == 0 ? Color.secondary.opacity(0.08) : Color.white)
+                                .overlay(
+                                    Rectangle()
+                                        .stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
+                                )
+                                .accessibilityIdentifier("editor.table.\(blockID).cell.\(rowIndex).\(columnIndex)")
+                            }
                         }
                     }
                 }
@@ -1441,6 +1463,26 @@ private struct StructuredTableBlockEditor: View {
             updatedTable.updateCell(row: rowIndex, column: columnIndex, text: value)
             onTextChange(updatedTable.markdown)
         }
+    }
+
+    private func appendRow() {
+        var updatedTable = normalizedTable()
+        updatedTable.appendRow()
+        onTextChange(updatedTable.markdown)
+    }
+
+    private func appendColumn() {
+        var updatedTable = normalizedTable()
+        updatedTable.appendColumn()
+        onTextChange(updatedTable.markdown)
+    }
+
+    private func normalizedTable() -> MarkdownTableDocument {
+        if !table.rows.isEmpty {
+            return table
+        }
+
+        return MarkdownTableDocument(markdown: "| \(text) |\n| --- |")
     }
 }
 
