@@ -1097,6 +1097,14 @@ private struct ConflictResolutionRow: View {
                         )
                     }
 
+                    ConflictDiffView(
+                        segments: ConflictTextDiff.segments(
+                            local: conflict.localTextPlain,
+                            remote: conflict.remoteTextPlain
+                        )
+                    )
+                    .accessibilityIdentifier("editor.conflict.\(conflict.id).diff")
+
                     TextEditor(text: $mergedText)
                         .font(.callout)
                         .frame(minHeight: 72)
@@ -1135,6 +1143,65 @@ private struct ConflictResolutionRow: View {
                 .font(.caption)
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
+private struct ConflictDiffView: View {
+    let segments: [ConflictTextDiffSegment]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(prefix(for: segment.kind))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(foregroundColor(for: segment.kind))
+                        .frame(width: 14, alignment: .center)
+
+                    Text(segment.text.isEmpty ? " " : segment.text)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(backgroundColor(for: segment.kind))
+            }
+        }
+    }
+
+    private func prefix(for kind: ConflictTextDiffSegmentKind) -> String {
+        switch kind {
+        case .unchanged:
+            return " "
+        case .removed:
+            return "-"
+        case .added:
+            return "+"
+        }
+    }
+
+    private func foregroundColor(for kind: ConflictTextDiffSegmentKind) -> Color {
+        switch kind {
+        case .unchanged:
+            return .secondary
+        case .removed:
+            return .red
+        case .added:
+            return .green
+        }
+    }
+
+    private func backgroundColor(for kind: ConflictTextDiffSegmentKind) -> Color {
+        switch kind {
+        case .unchanged:
+            return Color.secondary.opacity(0.05)
+        case .removed:
+            return Color.red.opacity(0.10)
+        case .added:
+            return Color.green.opacity(0.12)
         }
     }
 }

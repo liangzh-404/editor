@@ -19,6 +19,66 @@ struct ConflictSnapshot: Identifiable, Equatable, Sendable {
     }
 }
 
+enum ConflictTextDiffSegmentKind: Equatable, Sendable {
+    case unchanged
+    case removed
+    case added
+}
+
+struct ConflictTextDiffSegment: Equatable, Sendable {
+    let kind: ConflictTextDiffSegmentKind
+    let text: String
+}
+
+enum ConflictTextDiff {
+    static func segments(local: String, remote: String) -> [ConflictTextDiffSegment] {
+        let localLines = local.components(separatedBy: .newlines)
+        let remoteLines = remote.components(separatedBy: .newlines)
+
+        var prefixCount = 0
+        while prefixCount < localLines.count,
+              prefixCount < remoteLines.count,
+              localLines[prefixCount] == remoteLines[prefixCount] {
+            prefixCount += 1
+        }
+
+        var suffixCount = 0
+        while suffixCount < localLines.count - prefixCount,
+              suffixCount < remoteLines.count - prefixCount,
+              localLines[localLines.count - 1 - suffixCount] == remoteLines[remoteLines.count - 1 - suffixCount] {
+            suffixCount += 1
+        }
+
+        var diffSegments: [ConflictTextDiffSegment] = []
+        diffSegments.append(
+            contentsOf: localLines.prefix(prefixCount).map {
+                ConflictTextDiffSegment(kind: .unchanged, text: $0)
+            }
+        )
+
+        let localChangedLines = localLines.dropFirst(prefixCount).dropLast(suffixCount)
+        diffSegments.append(
+            contentsOf: localChangedLines.map {
+                ConflictTextDiffSegment(kind: .removed, text: $0)
+            }
+        )
+
+        let remoteChangedLines = remoteLines.dropFirst(prefixCount).dropLast(suffixCount)
+        diffSegments.append(
+            contentsOf: remoteChangedLines.map {
+                ConflictTextDiffSegment(kind: .added, text: $0)
+            }
+        )
+
+        diffSegments.append(
+            contentsOf: localLines.suffix(suffixCount).map {
+                ConflictTextDiffSegment(kind: .unchanged, text: $0)
+            }
+        )
+        return diffSegments
+    }
+}
+
 final class ConflictRepository {
     private let database: SQLiteDatabase
 

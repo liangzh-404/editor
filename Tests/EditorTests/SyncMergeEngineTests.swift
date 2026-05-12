@@ -118,6 +118,34 @@ final class SyncMergeEngineTests: XCTestCase {
         )
     }
 
+    func testConflictTextDiffHighlightsChangedMiddleLine() {
+        XCTAssertEqual(
+            ConflictTextDiff.segments(
+                local: "Title\nLocal body\nShared",
+                remote: "Title\nRemote body\nShared"
+            ),
+            [
+                ConflictTextDiffSegment(kind: .unchanged, text: "Title"),
+                ConflictTextDiffSegment(kind: .removed, text: "Local body"),
+                ConflictTextDiffSegment(kind: .added, text: "Remote body"),
+                ConflictTextDiffSegment(kind: .unchanged, text: "Shared")
+            ]
+        )
+    }
+
+    func testConflictTextDiffHighlightsAddedTrailingLine() {
+        XCTAssertEqual(
+            ConflictTextDiff.segments(
+                local: "Title",
+                remote: "Title\nRemote tail"
+            ),
+            [
+                ConflictTextDiffSegment(kind: .unchanged, text: "Title"),
+                ConflictTextDiffSegment(kind: .added, text: "Remote tail")
+            ]
+        )
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)
