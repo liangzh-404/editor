@@ -72,6 +72,24 @@ struct MarkdownTableDocument: Equatable, Sendable {
         }
     }
 
+    mutating func removeLastRow() {
+        guard rows.count > 1 else {
+            return
+        }
+
+        rows.removeLast()
+    }
+
+    mutating func removeLastColumn() {
+        guard columnCount > 1 else {
+            return
+        }
+
+        rows = rows.map { row in
+            Array(row.dropLast())
+        }
+    }
+
     private static func cells(from line: String) -> [String]? {
         guard line.contains("|") else {
             return nil

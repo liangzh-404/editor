@@ -1476,6 +1476,24 @@ private struct StructuredTableBlockEditor: View {
                 .buttonStyle(.borderless)
                 .help("Add column")
                 .accessibilityIdentifier("editor.table.\(blockID).add-column")
+
+                Button {
+                    removeLastRow()
+                } label: {
+                    Image(systemName: "minus.square")
+                }
+                .buttonStyle(.borderless)
+                .help("Remove last row")
+                .accessibilityIdentifier("editor.table.\(blockID).remove-row")
+
+                Button {
+                    removeLastColumn()
+                } label: {
+                    Image(systemName: "minus.rectangle.portrait")
+                }
+                .buttonStyle(.borderless)
+                .help("Remove last column")
+                .accessibilityIdentifier("editor.table.\(blockID).remove-column")
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -1541,6 +1559,18 @@ private struct StructuredTableBlockEditor: View {
     private func appendColumn() {
         var updatedTable = normalizedTable()
         updatedTable.appendColumn()
+        onTextChange(updatedTable.markdown)
+    }
+
+    private func removeLastRow() {
+        var updatedTable = normalizedTable()
+        updatedTable.removeLastRow()
+        onTextChange(updatedTable.markdown)
+    }
+
+    private func removeLastColumn() {
+        var updatedTable = normalizedTable()
+        updatedTable.removeLastColumn()
         onTextChange(updatedTable.markdown)
     }
 

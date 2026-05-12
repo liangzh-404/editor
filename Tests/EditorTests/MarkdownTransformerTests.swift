@@ -245,6 +245,39 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testMarkdownTableDocumentRemovesRowAndColumnButKeepsMinimumCell() {
+        var table = MarkdownTableDocument(
+            markdown:
+                """
+                | Name | Status |
+                | --- | --- |
+                | Editor | Local |
+                """
+        )
+
+        table.removeLastRow()
+        table.removeLastColumn()
+
+        XCTAssertEqual(
+            table.markdown,
+            """
+            | Name |
+            | --- |
+            """
+        )
+
+        table.removeLastRow()
+        table.removeLastColumn()
+
+        XCTAssertEqual(
+            table.markdown,
+            """
+            | Name |
+            | --- |
+            """
+        )
+    }
+
     private func block(type: BlockType, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: UUID().uuidString,
