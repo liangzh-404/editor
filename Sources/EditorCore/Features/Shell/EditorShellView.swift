@@ -69,6 +69,9 @@ private struct ThreeColumnEditorShell: View {
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
                 },
+                onFocusCanvas: {
+                    viewModel.focusEditorCanvasForUI()
+                },
                 onMoveBlock: { blockID, targetIndex in
                     viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                 },
@@ -189,6 +192,9 @@ private struct CompactPageDestination: View {
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
+                },
+                onFocusCanvas: {
+                    viewModel.focusEditorCanvasForUI()
                 },
                 onMoveBlock: { blockID, targetIndex in
                     viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
@@ -717,6 +723,7 @@ private struct EditorCanvasView: View {
     let conflicts: [ConflictSnapshot]
     let pendingFocusBlockID: String?
     let onAddParagraphBlock: () -> String?
+    let onFocusCanvas: () -> String?
     let onMoveBlock: (String, Int) -> Void
     let onMoveBlockByKeyboard: (String, BlockKeyboardMoveDirection) -> Bool
     let onIndentBlock: (String) -> Bool
@@ -848,6 +855,14 @@ private struct EditorCanvasView: View {
                         onResolveManually: onResolveConflictManually
                     )
                 }
+
+                Color.clear
+                    .frame(maxWidth: .infinity, minHeight: 160)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        focusCanvas()
+                    }
+                    .accessibilityIdentifier("editor.canvas-edit-region")
             }
             .frame(maxWidth: 760, alignment: .leading)
             .padding(.horizontal, 40)
@@ -922,6 +937,14 @@ private struct EditorCanvasView: View {
         EditorLog.focus.debug(
             "editor_focus_request_scheduled block_id=\(blockID, privacy: .public) source=view_model"
         )
+    }
+
+    private func focusCanvas() {
+        guard let blockID = onFocusCanvas() else {
+            return
+        }
+
+        pendingFocusRequest = BlockFocusRequest(blockID: blockID)
     }
 
     private func attachment(for block: BlockSnapshot) -> AttachmentSnapshot? {

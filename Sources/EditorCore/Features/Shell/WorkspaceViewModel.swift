@@ -441,6 +441,39 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func focusEditorCanvas() throws -> String? {
+        guard selectedPageID != nil else {
+            return nil
+        }
+
+        if let editableBlock = visibleBlocks.last(where: { $0.type.isTextEditable }) {
+            pendingFocusBlockID = editableBlock.id
+            EditorLog.focus.debug(
+                "editor_focus_request_queued block_id=\(editableBlock.id, privacy: .public) source=canvas_tap"
+            )
+            return editableBlock.id
+        }
+
+        let block = try appendParagraphBlockToCurrentPage()
+        pendingFocusBlockID = block.id
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=canvas_tap_created_block"
+        )
+        return block.id
+    }
+
+    func focusEditorCanvasForUI() -> String? {
+        do {
+            return try focusEditorCanvas()
+        } catch {
+            EditorLog.focus.error(
+                "editor_canvas_focus_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
     func addPageToSelectedWorkspace(notebookID: String? = nil) -> String? {
         do {
             let page = try createPageInSelectedWorkspace(notebookID: notebookID)

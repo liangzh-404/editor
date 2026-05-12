@@ -64,6 +64,13 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertNil(state.beginScheduling(requestID))
     }
 
+    @MainActor
+    func testNativeTextBlockEditorAcceptsInactiveWindowFirstMouseOnMac() {
+#if os(macOS)
+        XCTAssertTrue(NativeTextBlockEditor.acceptsInactiveWindowFirstMouse)
+#endif
+    }
+
     func testBlockKeyboardShortcutResolverHandlesCommandOptionArrowsOnly() {
         XCTAssertEqual(
             BlockKeyboardShortcutResolver.moveDirection(

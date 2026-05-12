@@ -49,6 +49,47 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testFocusEditorCanvasRequestsExistingEditableBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let initialBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        XCTAssertEqual(viewModel.consumePendingFocusBlockID(), initialBlockID)
+
+        let focusedBlockID = try viewModel.focusEditorCanvas()
+
+        XCTAssertEqual(focusedBlockID, initialBlockID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, initialBlockID)
+    }
+
+    @MainActor
+    func testFocusEditorCanvasCreatesParagraphWhenPageHasNoEditableBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let initialBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.deleteBlock(blockID: initialBlockID)
+        XCTAssertEqual(viewModel.visibleBlocks, [])
+
+        let focusedBlockID = try viewModel.focusEditorCanvas()
+
+        XCTAssertEqual(viewModel.visibleBlocks.count, 1)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .paragraph)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, focusedBlockID)
+    }
+
+    @MainActor
     func testUpdateBlockTextRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

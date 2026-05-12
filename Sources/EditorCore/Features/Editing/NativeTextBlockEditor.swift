@@ -61,6 +61,8 @@ struct NativeTextFocusRequestState {
 }
 
 struct NativeTextBlockEditor: View {
+    static let acceptsInactiveWindowFirstMouse = true
+
     let blockID: String
     let text: String
     let blockType: BlockType
@@ -175,6 +177,11 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.onMouseDown = {
             EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
         }
+        textView.onMouseFocusResult = { didFocus in
+            EditorLog.focus.debug(
+                "editor_native_text_mouse_focus block_id=\(blockID, privacy: .public) did_focus=\(didFocus, privacy: .public)"
+            )
+        }
         textView.onKeyboardMove = onMoveByKeyboard
         textView.setAccessibilityIdentifier("editor.text.\(blockID)")
         textView.delegate = context.coordinator
@@ -204,6 +211,11 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         if let textView = textView as? EditorNSTextView {
             textView.onMouseDown = {
                 EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
+            }
+            textView.onMouseFocusResult = { didFocus in
+                EditorLog.focus.debug(
+                    "editor_native_text_mouse_focus block_id=\(blockID, privacy: .public) did_focus=\(didFocus, privacy: .public)"
+                )
             }
             textView.onKeyboardMove = onMoveByKeyboard
         }
@@ -320,7 +332,12 @@ private struct PlatformNativeTextView: NSViewRepresentable {
 
 private final class EditorNSTextView: NSTextView {
     var onMouseDown: (() -> Void)?
+    var onMouseFocusResult: ((Bool) -> Void)?
     var onKeyboardMove: ((BlockKeyboardMoveDirection) -> Bool)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        NativeTextBlockEditor.acceptsInactiveWindowFirstMouse
+    }
 
     override func mouseDown(with event: NSEvent) {
         onMouseDown?()
@@ -328,6 +345,7 @@ private final class EditorNSTextView: NSTextView {
             window.makeFirstResponder(self)
         }
         super.mouseDown(with: event)
+        onMouseFocusResult?(window?.firstResponder === self)
     }
 
     override func keyDown(with event: NSEvent) {
