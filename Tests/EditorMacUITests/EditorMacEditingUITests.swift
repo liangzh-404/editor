@@ -958,6 +958,49 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testToggleBlockTypeRendersToggleChromeAndKeepsTextEditable() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
+        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
+        blockTypeMenu.click()
+
+        let toggleMenuItem = app.menuItems["Toggle"]
+        XCTAssertTrue(toggleMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Toggle type")
+        toggleMenuItem.click()
+
+        let toggleBlock = app.element(identifier: "editor.toggle.block-welcome-001")
+        XCTAssertTrue(toggleBlock.waitForExistence(timeout: 5), "Changing a text block to Toggle should render visible toggle chrome")
+        XCTAssertTrue(
+            toggleBlock.waitForLabelOrValue(containing: "Toggle block", timeout: 5),
+            "Toggle chrome should expose a semantic container label"
+        )
+        XCTAssertTrue(
+            toggleBlock.waitForLabelOrValue(containing: "Expanded", timeout: 5),
+            "Toggle chrome should expose the initial expansion state"
+        )
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Toggle blocks should keep the native text editor")
+        textView.click()
+        XCTAssertTrue(textView.waitForKeyboardFocus(timeout: 5), "Toggle text should be directly editable")
+        app.typeText(" Details")
+        XCTAssertTrue(
+            textView.waitForValue(containing: "Details", timeout: 5),
+            "Typing in a toggle should still update the native text view"
+        )
+
+        let toggleButton = app.buttons["editor.block.block-welcome-001.toggle-expansion"]
+        toggleButton.click()
+        XCTAssertTrue(
+            toggleBlock.waitForLabelOrValue(containing: "Collapsed", timeout: 5),
+            "Collapsing the toggle should update the block chrome state"
+        )
+    }
+
+    @MainActor
     func testCodeBlockWrapButtonExposesAndUpdatesLineWrapState() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

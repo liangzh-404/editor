@@ -3125,6 +3125,25 @@ private struct BlockRowView: View {
             .accessibilityLabel(codeBlockAccessibilityLabel)
             .accessibilityValue(block.codeBlockLineWrapping ? "Line wrap enabled" : "Line wrap disabled")
             .accessibilityIdentifier("editor.code.\(block.id)")
+        } else if block.type == .toggle {
+            HStack(alignment: .top, spacing: 8) {
+                toggleBlockExpansionButton
+                    .padding(.top, 1)
+
+                nativeTextBlockEditor
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(Color.secondary.opacity(0.04))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(toggleBlockAccessibilityLabel)
+            .accessibilityValue(isToggleBlockExpanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("editor.toggle.\(block.id)")
         } else if block.type == .callout {
             HStack(alignment: .top, spacing: 8) {
                 RoundedRectangle(cornerRadius: 2)
@@ -3174,22 +3193,26 @@ private struct BlockRowView: View {
         }
 
         if block.type == .toggle {
-            Button {
-                onToggleBlockExpansion()
-            } label: {
-                Image(systemName: isToggleBlockExpanded ? "chevron.down" : "chevron.right")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
-            .help(isToggleBlockExpanded ? "Collapse" : "Expand")
-            .accessibilityLabel(isToggleBlockExpanded ? "Collapse toggle block" : "Expand toggle block")
-            .accessibilityValue(isToggleBlockExpanded ? "Expanded" : "Collapsed")
-            .accessibilityIdentifier("editor.block.\(block.id).toggle-expansion")
+            toggleBlockExpansionButton
         }
 
         if block.type == .codeBlock {
             codeBlockWrapButton
         }
+    }
+
+    private var toggleBlockExpansionButton: some View {
+        Button {
+            onToggleBlockExpansion()
+        } label: {
+            Image(systemName: isToggleBlockExpanded ? "chevron.down" : "chevron.right")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help(isToggleBlockExpanded ? "Collapse" : "Expand")
+        .accessibilityLabel(isToggleBlockExpanded ? "Collapse toggle block" : "Expand toggle block")
+        .accessibilityValue(isToggleBlockExpanded ? "Expanded" : "Collapsed")
+        .accessibilityIdentifier("editor.block.\(block.id).toggle-expansion")
     }
 
     private var codeBlockWrapButton: some View {
@@ -3208,6 +3231,10 @@ private struct BlockRowView: View {
 
     private var codeBlockAccessibilityLabel: String {
         block.codeBlockLineWrapping ? "Code block, Line wrap enabled" : "Code block, Line wrap disabled"
+    }
+
+    private var toggleBlockAccessibilityLabel: String {
+        isToggleBlockExpanded ? "Toggle block, Expanded" : "Toggle block, Collapsed"
     }
 
     private var nativeTextBlockEditor: some View {
