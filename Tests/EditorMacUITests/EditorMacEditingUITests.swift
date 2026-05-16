@@ -1,13 +1,16 @@
 import Darwin
-import AppKit
 import XCTest
 
 final class EditorMacEditingUITests: XCTestCase {
+    private static let editorMacBundleIdentifier = "com.liangzhang.editor.mac"
+
     private var appSupportDirectory: URL!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        Self.terminateRunningEditorMacApplications()
+        MainActor.assumeIsolated {
+            Self.terminateRunningEditorMacApplications()
+        }
         let appContainerApplicationSupport = try Self.currentUserHomeDirectory()
             .appendingPathComponent(
                 "Library/Containers/com.liangzhang.editor.mac/Data/Library/Application Support",
@@ -18,7 +21,9 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        Self.terminateRunningEditorMacApplications()
+        MainActor.assumeIsolated {
+            Self.terminateRunningEditorMacApplications()
+        }
         if let appSupportDirectory {
             try? FileManager.default.removeItem(at: appSupportDirectory)
         }
@@ -34,40 +39,25 @@ final class EditorMacEditingUITests: XCTestCase {
         return URL(fileURLWithPath: String(cString: homeDirectory), isDirectory: true)
     }
 
+    @MainActor
     private static func terminateRunningEditorMacApplications() {
-        let runningApplications = NSRunningApplication.runningApplications(withBundleIdentifier: "com.liangzhang.editor.mac")
-        guard !runningApplications.isEmpty else {
+        let application = XCUIApplication(bundleIdentifier: editorMacBundleIdentifier)
+        guard application.state != .notRunning && application.state != .unknown else {
             return
         }
 
-        runningApplications.forEach { application in
-            application.terminate()
-        }
-
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline {
-            let isStillRunning = NSRunningApplication
-                .runningApplications(withBundleIdentifier: "com.liangzhang.editor.mac")
-                .contains { !$0.isTerminated }
-            if !isStillRunning {
-                return
-            }
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
-        }
-
-        NSRunningApplication
-            .runningApplications(withBundleIdentifier: "com.liangzhang.editor.mac")
-            .forEach { $0.forceTerminate() }
-        waitForEditorMacTermination(until: Date().addingTimeInterval(3))
+        application.terminate()
+        _ = waitForEditorMacTermination(application, until: Date().addingTimeInterval(3))
     }
 
     @discardableResult
-    private static func waitForEditorMacTermination(until deadline: Date) -> Bool {
+    @MainActor
+    private static func waitForEditorMacTermination(
+        _ application: XCUIApplication,
+        until deadline: Date
+    ) -> Bool {
         while Date() < deadline {
-            let isStillRunning = NSRunningApplication
-                .runningApplications(withBundleIdentifier: "com.liangzhang.editor.mac")
-                .contains { !$0.isTerminated }
-            if !isStillRunning {
+            if application.state == .notRunning {
                 return true
             }
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
