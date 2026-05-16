@@ -126,6 +126,9 @@ private struct ThreeColumnEditorShell: View {
                 onInsertBlockAfter: { blockID in
                     viewModel.insertParagraphBlockAfterForUI(blockID: blockID)
                 },
+                onSplitTextBlockAtSelection: { blockID, selection in
+                    viewModel.splitTextBlockAtSelectionForUI(blockID: blockID, selection: selection)
+                },
                 onIndentBlock: { blockID in
                     viewModel.indentBlockForUI(blockID: blockID)
                 },
@@ -509,6 +512,9 @@ private struct CompactPageDestination: View {
                 },
                 onInsertBlockAfter: { blockID in
                     viewModel.insertParagraphBlockAfterForUI(blockID: blockID)
+                },
+                onSplitTextBlockAtSelection: { blockID, selection in
+                    viewModel.splitTextBlockAtSelectionForUI(blockID: blockID, selection: selection)
                 },
                 onIndentBlock: { blockID in
                     viewModel.indentBlockForUI(blockID: blockID)
@@ -1375,6 +1381,7 @@ private struct EditorCanvasView: View {
     let onMoveBlock: (String, Int) -> Void
     let onMoveBlockByKeyboard: (String, BlockKeyboardMoveDirection) -> Bool
     let onInsertBlockAfter: (String) -> Bool
+    let onSplitTextBlockAtSelection: (String, EditorTextSelection) -> EditorTextSelection?
     let onIndentBlock: (String) -> Bool
     let onOutdentBlock: (String) -> Bool
     let onDeleteBlock: (String) -> Void
@@ -1603,8 +1610,15 @@ private struct EditorCanvasView: View {
                         onInsertLinkByKeyboard: { selection in
                             presentInlineLinkInsertion(selection: selection)
                         },
-                        onInsertBlockAfter: {
-                            onInsertBlockAfter(block.id)
+                        onInsertBlockAfter: { selection in
+                            guard let nextSelection = onSplitTextBlockAtSelection(block.id, selection) else {
+                                return false
+                            }
+                            pendingFocusRequest = BlockFocusRequest(
+                                blockID: nextSelection.blockID,
+                                selection: nextSelection
+                            )
+                            return true
                         },
                         onIndent: {
                             onIndentBlock(block.id)
@@ -2820,7 +2834,7 @@ private struct BlockRowView: View {
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
-    let onInsertBlockAfter: () -> Bool
+    let onInsertBlockAfter: (EditorTextSelection) -> Bool
     let onIndent: () -> Bool
     let onOutdent: () -> Bool
     let onDelete: () -> Void
@@ -2850,7 +2864,7 @@ private struct BlockRowView: View {
         onMoveFocusByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
         onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
-        onInsertBlockAfter: @escaping () -> Bool = { false },
+        onInsertBlockAfter: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onIndent: @escaping () -> Bool = { false },
         onOutdent: @escaping () -> Bool = { false },
         onDelete: @escaping () -> Void = {},

@@ -1167,7 +1167,7 @@ final class PageRepository {
         )
     }
 
-    func insertParagraphBlock(after blockID: String) throws -> BlockSnapshot {
+    func insertParagraphBlock(after blockID: String, text: String = "") throws -> BlockSnapshot {
         let selectedRows = try database.query(
             """
             SELECT page_id, parent_block_id
@@ -1209,7 +1209,7 @@ final class PageRepository {
                 parentBlockID: parentBlockID,
                 orderKey: String(format: "%06d", currentIndex + 2),
                 type: .paragraph,
-                text: "",
+                text: text,
                 createdAt: now
             )
             for (index, reorderedBlockID) in reorderedBlockIDs.enumerated() {
@@ -1242,6 +1242,10 @@ final class PageRepository {
                 changeType: "update"
             )
         }
+        try BacklinkRepository(database: database).rebuildLinksForBlock(
+            blockID: insertedBlockID,
+            text: text
+        )
         EditorLog.store.debug(
             "block_inserted_after block_id=\(insertedBlockID, privacy: .public) previous_block_id=\(blockID, privacy: .public)"
         )
@@ -1252,7 +1256,7 @@ final class PageRepository {
             parentBlockID: parentBlockID,
             orderKey: String(format: "%06d", currentIndex + 2),
             type: .paragraph,
-            textPlain: ""
+            textPlain: text
         )
     }
 

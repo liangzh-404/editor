@@ -1165,6 +1165,49 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     @discardableResult
+    func splitTextBlockAtSelection(
+        blockID: String,
+        selection: EditorTextSelection
+    ) throws -> EditorTextSelection? {
+        guard selection.blockID == blockID,
+              let block = snapshot.blocks.first(where: { $0.id == blockID && $0.type.isTextEditable }) else {
+            return nil
+        }
+
+        let nsText = block.textPlain as NSString
+        guard selection.location >= 0,
+              selection.length >= 0,
+              selection.location <= nsText.length,
+              selection.length <= nsText.length - selection.location else {
+            return nil
+        }
+
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let selectedRange = NSRange(location: selection.location, length: selection.length)
+        let leadingText = nsText.substring(to: selectedRange.location)
+        let trailingText = nsText.substring(from: NSMaxRange(selectedRange))
+
+        try repository.updateBlock(
+            blockID: blockID,
+            type: block.type,
+            text: leadingText,
+            taskItemIsCompleted: block.taskItemIsCompleted,
+            toggleIsExpanded: block.toggleIsExpanded,
+            codeBlockLineWrapping: block.codeBlockLineWrapping
+        )
+        let insertedBlock = try repository.insertParagraphBlock(after: blockID, text: trailingText)
+        try load()
+        pendingFocusBlockID = insertedBlock.id
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(insertedBlock.id, privacy: .public) source=split_text_block"
+        )
+        return EditorTextSelection(blockID: insertedBlock.id, location: 0, length: 0)
+    }
+
+    @discardableResult
     func moveBlockByKeyboard(
         blockID: String,
         direction: BlockKeyboardMoveDirection
@@ -1262,6 +1305,26 @@ final class WorkspaceViewModel: ObservableObject {
                 "paragraph_block_insert_after_failed previous_block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return false
+        }
+    }
+
+    func splitTextBlockAtSelectionForUI(
+        blockID: String,
+        selection: EditorTextSelection
+    ) -> EditorTextSelection? {
+        do {
+            let nextSelection = try splitTextBlockAtSelection(blockID: blockID, selection: selection)
+            if let nextSelection {
+                EditorLog.input.debug(
+                    "text_block_split_at_selection previous_block_id=\(blockID, privacy: .public) inserted_block_id=\(nextSelection.blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public)"
+                )
+            }
+            return nextSelection
+        } catch {
+            EditorLog.input.error(
+                "text_block_split_at_selection_failed previous_block_id=\(blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
         }
     }
 

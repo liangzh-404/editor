@@ -1615,6 +1615,49 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSplitTextBlockAtSelectionMovesTrailingTextIntoFocusedInsertedBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(pageID: pageID, markdown: "Alpha[Swift](https://swift.org)")
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        let nextSelection = try viewModel.splitTextBlockAtSelection(
+            blockID: blockID,
+            selection: EditorTextSelection(blockID: blockID, location: 5, length: 0)
+        )
+
+        let insertedBlock = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Alpha", "[Swift](https://swift.org)"])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, insertedBlock.id)
+        XCTAssertEqual(
+            nextSelection,
+            EditorTextSelection(blockID: insertedBlock.id, location: 0, length: 0)
+        )
+        XCTAssertEqual(
+            viewModel.selectedPageExternalLinks,
+            [
+                ExternalLink(
+                    sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: insertedBlock.id,
+                    targetURL: "https://swift.org",
+                    linkText: "Swift"
+                )
+            ]
+        )
+    }
+
+    @MainActor
     func testIndentVisibleBlockRefreshesParentAndKeepsFocusOnIndentedBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }

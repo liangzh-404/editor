@@ -139,6 +139,51 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testReturnSplitsTextBlockAtCaretAndFocusesInsertedRemainder() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before splitting")
+        let initialTextViewCount = app.textViews.count
+
+        textView.click()
+        textView.typeKey("a", modifierFlags: [.command])
+        app.typeText("AlphaBeta")
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "AlphaBeta", timeout: 5),
+            "Test setup should replace the welcome text before moving the caret"
+        )
+
+        for _ in 0..<4 {
+            textView.typeKey(.leftArrow, modifierFlags: [])
+        }
+        textView.typeKey(.return, modifierFlags: [])
+
+        let insertedTextView = app.textViews.element(boundBy: initialTextViewCount)
+        XCTAssertTrue(insertedTextView.waitForExistence(timeout: 5), "Return should insert a text block for the trailing text")
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "Alpha", timeout: 5),
+            "The original block should keep text before the caret"
+        )
+        XCTAssertTrue(
+            insertedTextView.waitForValue(equalTo: "Beta", timeout: 5),
+            "The inserted block should receive text after the caret"
+        )
+        XCTAssertTrue(
+            insertedTextView.waitForKeyboardFocus(timeout: 5),
+            "The inserted remainder block should receive keyboard focus"
+        )
+
+        app.typeText("New ")
+        XCTAssertTrue(
+            insertedTextView.waitForValue(equalTo: "New Beta", timeout: 5),
+            "Typing after split should continue at the start of the inserted remainder"
+        )
+    }
+
+    @MainActor
     func testBoundaryArrowKeysMoveFocusBetweenTextBlocks() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
@@ -1251,6 +1296,18 @@ private extension XCUIElement {
                 return false
             }
             return value.contains(text)
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: self)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    func waitForValue(equalTo text: String, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate { element, _ in
+            guard let element = element as? XCUIElement,
+                  let value = element.value as? String else {
+                return false
+            }
+            return value == text
         }
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: self)
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed

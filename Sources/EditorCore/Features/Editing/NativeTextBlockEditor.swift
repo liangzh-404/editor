@@ -297,7 +297,7 @@ struct NativeTextBlockEditor: View {
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
-    let onInsertBlockAfter: () -> Bool
+    let onInsertBlockAfter: (EditorTextSelection) -> Bool
     let onTextChange: (String) -> Void
     @State private var measuredHeight: CGFloat = 0
 
@@ -315,7 +315,7 @@ struct NativeTextBlockEditor: View {
         onMoveFocusByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
         onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
-        onInsertBlockAfter: @escaping () -> Bool = { false },
+        onInsertBlockAfter: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onTextChange: @escaping (String) -> Void
     ) {
         self.blockID = blockID
@@ -442,7 +442,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
-    let onInsertBlockAfter: () -> Bool
+    let onInsertBlockAfter: (EditorTextSelection) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -498,7 +498,15 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                 )
             )
         }
-        textView.onInsertBlockAfter = onInsertBlockAfter
+        textView.onInsertBlockAfter = { selectedRange in
+            onInsertBlockAfter(
+                EditorTextSelection(
+                    blockID: blockID,
+                    location: selectedRange.location,
+                    length: selectedRange.length
+                )
+            )
+        }
         textView.setAccessibilityIdentifier("editor.text.\(blockID)")
         textView.delegate = context.coordinator
         context.coordinator.applyModelText(text, to: textView)
@@ -557,7 +565,15 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                     )
                 )
             }
-            textView.onInsertBlockAfter = onInsertBlockAfter
+            textView.onInsertBlockAfter = { selectedRange in
+                onInsertBlockAfter(
+                    EditorTextSelection(
+                        blockID: blockID,
+                        location: selectedRange.location,
+                        length: selectedRange.length
+                    )
+                )
+            }
         }
         if textView.string != text {
             context.coordinator.applyModelText(text, to: textView)
@@ -835,7 +851,7 @@ private final class EditorNSTextView: NSTextView {
     var onKeyboardFocusMove: ((BlockKeyboardFocusDirection) -> Bool)?
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
-    var onInsertBlockAfter: (() -> Bool)?
+    var onInsertBlockAfter: ((NSRange) -> Bool)?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         NativeTextBlockEditor.acceptsInactiveWindowFirstMouse
@@ -923,7 +939,7 @@ private final class EditorNSTextView: NSTextView {
     }
 
     override func insertNewline(_ sender: Any?) {
-        if onInsertBlockAfter?() == true {
+        if onInsertBlockAfter?(selectedRange()) == true {
             return
         }
 
@@ -966,7 +982,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
-    let onInsertBlockAfter: () -> Bool
+    let onInsertBlockAfter: (EditorTextSelection) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -999,7 +1015,15 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                 )
             )
         }
-        textView.onInsertBlockAfter = onInsertBlockAfter
+        textView.onInsertBlockAfter = { selectedRange in
+            onInsertBlockAfter(
+                EditorTextSelection(
+                    blockID: blockID,
+                    location: selectedRange.location,
+                    length: selectedRange.length
+                )
+            )
+        }
         textView.accessibilityIdentifier = "editor.text.\(blockID)"
         textView.delegate = context.coordinator
         context.coordinator.applyModelText(text, to: textView)
@@ -1043,7 +1067,15 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                     )
                 )
             }
-            textView.onInsertBlockAfter = onInsertBlockAfter
+            textView.onInsertBlockAfter = { selectedRange in
+                onInsertBlockAfter(
+                    EditorTextSelection(
+                        blockID: blockID,
+                        location: selectedRange.location,
+                        length: selectedRange.length
+                    )
+                )
+            }
         }
         if textView.text != text {
             context.coordinator.applyModelText(text, to: textView)
@@ -1200,7 +1232,13 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             guard text == "\n" else {
                 return true
             }
-            return !parent.onInsertBlockAfter()
+            return !parent.onInsertBlockAfter(
+                EditorTextSelection(
+                    blockID: parent.blockID,
+                    location: range.location,
+                    length: range.length
+                )
+            )
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
@@ -1312,7 +1350,7 @@ private final class EditorUITextView: UITextView {
     var onKeyboardFocusMove: ((BlockKeyboardFocusDirection) -> Bool)?
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
-    var onInsertBlockAfter: (() -> Bool)?
+    var onInsertBlockAfter: ((NSRange) -> Bool)?
 
     override var keyCommands: [UIKeyCommand]? {
         [
@@ -1378,7 +1416,7 @@ private final class EditorUITextView: UITextView {
     }
 
     @objc private func insertBlockAfter() {
-        _ = onInsertBlockAfter?()
+        _ = onInsertBlockAfter?(selectedRange)
     }
 
     @objc private func indentBlock() {
