@@ -28,7 +28,7 @@ Usage:
   scripts/block_first_final_regression.sh [all|non-ui|units|ui|builds|doctor|diff-check|help]
 
 Actions:
-  all         Run focused unit suite, focused macOS UI suite, app builds, and diff check.
+  all         Run focused unit suite, app builds, diff check, then focused macOS UI suite.
   non-ui      Run focused unit suite, app builds, and diff check without macOS UI tests.
   units       Run the focused block-first unit suite.
   ui          Run macOS UI readiness doctor, build-for-testing, then focused UI rerun.
@@ -78,19 +78,21 @@ run_diff_check() {
     git diff --check
 }
 
+run_non_ui() {
+    run_units
+    run_builds
+    run_diff_check
+}
+
 ACTION="${1:-all}"
 
 case "$ACTION" in
     all)
-        run_units
+        run_non_ui
         run_ui
-        run_builds
-        run_diff_check
         ;;
     non-ui)
-        run_units
-        run_builds
-        run_diff_check
+        run_non_ui
         ;;
     units)
         run_units

@@ -1213,7 +1213,7 @@ Current status: blocked locally before any business UI test case executes. `scri
 
 Supplemental manual observation: the same built Debug app was launched with isolated app-container support directories and inspected through Computer Use. Diary launch-to-type, All Documents/Welcome visibility, row favorite toggle/sidebar state, Markdown export capture, and `Command-]` diary promotion all produced the expected visible/accessibility state. This does not replace the required XCUITest suite PASS.
 
-Resume command after local authorization: `scripts/block_first_final_regression.sh ui` for the blocked UI step, or `scripts/block_first_final_regression.sh all` for the whole final sweep. While UIAutomation is still blocked, `scripts/block_first_final_regression.sh non-ui` refreshes the focused unit suite, app builds, and `git diff --check`. The runner has already been verified for `help`, `diff-check`, unauthorized `ui` fail-fast, `units`, `builds`, and `non-ui`.
+Resume command after local authorization: `scripts/block_first_final_regression.sh ui` for the blocked UI step, or `scripts/block_first_final_regression.sh all` for the whole final sweep. The `all` action refreshes the focused unit suite, app builds, and `git diff --check` before entering the focused macOS UI suite, so while UIAutomation is still blocked it still leaves fresh non-UI evidence before stopping at the local authorization doctor. The runner has already been verified for `help`, `diff-check`, unauthorized `ui` fail-fast, `units`, `builds`, `non-ui`, and unauthorized `all` ordering.
 
 - [x] **Step 4: Run app builds**
 
