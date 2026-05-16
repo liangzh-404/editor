@@ -1078,8 +1078,14 @@ enum MarkdownTransformer {
     }
 
     static func export(blocks: [BlockSnapshot]) -> String {
+        export(blocks: blocks, attachments: [])
+    }
+
+    static func export(blocks: [BlockSnapshot], attachments: [AttachmentSnapshot]) -> String {
         blocks
-            .map(markdownLine(for:))
+            .map { block in
+                markdownLine(for: block, attachments: attachments)
+            }
             .joined(separator: "\n\n")
     }
 
@@ -1158,7 +1164,7 @@ enum MarkdownTransformer {
         return drafts
     }
 
-    private static func markdownLine(for block: BlockSnapshot) -> String {
+    private static func markdownLine(for block: BlockSnapshot, attachments: [AttachmentSnapshot]) -> String {
         switch block.type {
         case .paragraph:
             return block.textPlain
@@ -1194,8 +1200,31 @@ enum MarkdownTransformer {
         case .blockReference:
             return "[[#\(block.textPlain)]]"
         case .attachmentImage, .attachmentVideo, .attachmentFile:
+            return attachmentMarkdown(for: block, attachments: attachments)
+        }
+    }
+
+    private static func attachmentMarkdown(for block: BlockSnapshot, attachments: [AttachmentSnapshot]) -> String {
+        guard let attachment = attachments.first(where: { $0.matches(block: block) }) else {
             return "[\(block.textPlain)](\(block.textPlain))"
         }
+
+        let path = [
+            "Attachments",
+            markdownPathComponent(attachment.id),
+            markdownPathComponent(attachment.originalFilename)
+        ].joined(separator: "/")
+        let label = attachment.originalFilename
+        if attachment.kind == .image {
+            return "![\(label)](\(path))"
+        }
+        return "[\(label)](\(path))"
+    }
+
+    private static func markdownPathComponent(_ component: String) -> String {
+        var allowedCharacters = CharacterSet.urlPathAllowed
+        allowedCharacters.remove(charactersIn: "()")
+        return component.addingPercentEncoding(withAllowedCharacters: allowedCharacters) ?? component
     }
 
     private static func importBlockDraft(for line: String) -> MarkdownBlockDraft {

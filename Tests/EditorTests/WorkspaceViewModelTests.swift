@@ -1006,6 +1006,37 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testExportCurrentPageMarkdownUsesAttachmentRelativePath() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            attachmentRepository: attachmentRepository
+        )
+        try viewModel.load()
+
+        let result = try viewModel.importAttachment(
+            sourceURL: makeSourceFile(name: "brief.txt", contents: "local attachment")
+        )
+
+        XCTAssertEqual(
+            viewModel.exportCurrentPageMarkdown(),
+            """
+            Start writing in blocks.
+
+            [brief.txt](Attachments/\(result.attachment.id)/brief.txt)
+            """
+        )
+    }
+
+    @MainActor
     func testImportMarkdownToCurrentPageRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -618,6 +618,30 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testExportAttachmentBlockUsesManagedRelativePathWhenAttachmentMetadataAvailable() {
+        let attachment = AttachmentSnapshot(
+            id: "attachment-photo",
+            workspaceID: "workspace-local",
+            originalFilename: "photo.png",
+            utiType: "public.png",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/photo.png",
+            thumbnailPath: nil,
+            kind: .image
+        )
+        let block = block(
+            type: .attachmentImage,
+            text: "photo.png",
+            attachmentID: attachment.id
+        )
+
+        XCTAssertEqual(
+            MarkdownTransformer.export(blocks: [block], attachments: [attachment]),
+            "![photo.png](Attachments/attachment-photo/photo.png)"
+        )
+    }
+
     func testExportCompletedTaskItemToMarkdown() {
         XCTAssertEqual(
             MarkdownTransformer.export(
@@ -767,7 +791,8 @@ final class MarkdownTransformerTests: XCTestCase {
         type: BlockType,
         text: String,
         taskItemIsCompleted: Bool = false,
-        tableRows: [[String]] = []
+        tableRows: [[String]] = [],
+        attachmentID: String? = nil
     ) -> BlockSnapshot {
         BlockSnapshot(
             id: UUID().uuidString,
@@ -777,7 +802,8 @@ final class MarkdownTransformerTests: XCTestCase {
             type: type,
             textPlain: text,
             taskItemIsCompleted: taskItemIsCompleted,
-            tableRows: tableRows
+            tableRows: tableRows,
+            attachmentID: attachmentID
         )
     }
 }

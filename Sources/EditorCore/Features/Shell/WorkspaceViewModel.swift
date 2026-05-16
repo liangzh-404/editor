@@ -1919,7 +1919,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func exportCurrentPageMarkdown() -> String {
-        MarkdownTransformer.export(blocks: visibleBlocks)
+        MarkdownTransformer.export(blocks: visibleBlocks, attachments: snapshot.attachments)
     }
 
     func importMarkdownToCurrentPage(_ markdown: String) throws {

@@ -2370,7 +2370,7 @@ private struct EditorCanvasView: View {
     }
 
     private func handleMarkdownExportButton() {
-        let markdown = MarkdownTransformer.export(blocks: blocks)
+        let markdown = onExportMarkdown()
 #if DEBUG
         if ProcessInfo.processInfo.environment["EDITOR_UI_TEST_MARKDOWN_EXPORT_CAPTURE"] == "1" {
             uiTestMarkdownExportOutput = markdown
