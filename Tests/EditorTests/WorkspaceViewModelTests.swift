@@ -1701,6 +1701,50 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testMergeTextBlockAtEndMovesNextTextIntoCurrentBlockAndFocusesJoinPoint() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(pageID: pageID, markdown: "Alpha\n\n[Swift](https://swift.org)")
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let firstBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        let secondBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+
+        let nextSelection = try viewModel.mergeTextBlockWithNextAtSelection(
+            blockID: firstBlockID,
+            selection: EditorTextSelection(blockID: firstBlockID, location: 5, length: 0)
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Alpha[Swift](https://swift.org)"])
+        XCTAssertNil(viewModel.visibleBlocks.first { $0.id == secondBlockID })
+        XCTAssertEqual(viewModel.pendingFocusBlockID, firstBlockID)
+        XCTAssertEqual(
+            nextSelection,
+            EditorTextSelection(blockID: firstBlockID, location: 5, length: 0)
+        )
+        XCTAssertEqual(
+            viewModel.selectedPageExternalLinks,
+            [
+                ExternalLink(
+                    sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: firstBlockID,
+                    targetURL: "https://swift.org",
+                    linkText: "Swift"
+                )
+            ]
+        )
+    }
+
+    @MainActor
     func testMergeTextBlockAtStartUsesPreviousEditorVisibleBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -299,6 +299,7 @@ struct NativeTextBlockEditor: View {
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
+    let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onTextChange: (String) -> Void
     @State private var measuredHeight: CGFloat = 0
 
@@ -318,6 +319,7 @@ struct NativeTextBlockEditor: View {
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onInsertBlockAfter: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onMergeBlockWithPrevious: @escaping (EditorTextSelection) -> Bool = { _ in false },
+        onMergeBlockWithNext: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onTextChange: @escaping (String) -> Void
     ) {
         self.blockID = blockID
@@ -335,6 +337,7 @@ struct NativeTextBlockEditor: View {
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
         self.onMergeBlockWithPrevious = onMergeBlockWithPrevious
+        self.onMergeBlockWithNext = onMergeBlockWithNext
         self.onTextChange = onTextChange
     }
 
@@ -356,6 +359,7 @@ struct NativeTextBlockEditor: View {
                 onInsertLinkByKeyboard: onInsertLinkByKeyboard,
                 onInsertBlockAfter: onInsertBlockAfter,
                 onMergeBlockWithPrevious: onMergeBlockWithPrevious,
+                onMergeBlockWithNext: onMergeBlockWithNext,
                 minimumHeight: minimumHeight,
                 onContentHeightChange: updateMeasuredHeight,
                 onTextChange: onTextChange
@@ -448,6 +452,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
+    let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -514,6 +519,15 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         }
         textView.onMergeBlockWithPrevious = { selectedRange in
             onMergeBlockWithPrevious(
+                EditorTextSelection(
+                    blockID: blockID,
+                    location: selectedRange.location,
+                    length: selectedRange.length
+                )
+            )
+        }
+        textView.onMergeBlockWithNext = { selectedRange in
+            onMergeBlockWithNext(
                 EditorTextSelection(
                     blockID: blockID,
                     location: selectedRange.location,
@@ -590,6 +604,15 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             }
             textView.onMergeBlockWithPrevious = { selectedRange in
                 onMergeBlockWithPrevious(
+                    EditorTextSelection(
+                        blockID: blockID,
+                        location: selectedRange.location,
+                        length: selectedRange.length
+                    )
+                )
+            }
+            textView.onMergeBlockWithNext = { selectedRange in
+                onMergeBlockWithNext(
                     EditorTextSelection(
                         blockID: blockID,
                         location: selectedRange.location,
@@ -876,6 +899,7 @@ private final class EditorNSTextView: NSTextView {
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
     var onInsertBlockAfter: ((NSRange) -> Bool)?
     var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
+    var onMergeBlockWithNext: ((NSRange) -> Bool)?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         NativeTextBlockEditor.acceptsInactiveWindowFirstMouse
@@ -977,6 +1001,14 @@ private final class EditorNSTextView: NSTextView {
 
         super.deleteBackward(sender)
     }
+
+    override func deleteForward(_ sender: Any?) {
+        if onMergeBlockWithNext?(selectedRange()) == true {
+            return
+        }
+
+        super.deleteForward(sender)
+    }
 }
 
 extension NSEvent {
@@ -1016,6 +1048,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
+    let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -1059,6 +1092,15 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
         textView.onMergeBlockWithPrevious = { selectedRange in
             onMergeBlockWithPrevious(
+                EditorTextSelection(
+                    blockID: blockID,
+                    location: selectedRange.location,
+                    length: selectedRange.length
+                )
+            )
+        }
+        textView.onMergeBlockWithNext = { selectedRange in
+            onMergeBlockWithNext(
                 EditorTextSelection(
                     blockID: blockID,
                     location: selectedRange.location,
@@ -1120,6 +1162,15 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             }
             textView.onMergeBlockWithPrevious = { selectedRange in
                 onMergeBlockWithPrevious(
+                    EditorTextSelection(
+                        blockID: blockID,
+                        location: selectedRange.location,
+                        length: selectedRange.length
+                    )
+                )
+            }
+            textView.onMergeBlockWithNext = { selectedRange in
+                onMergeBlockWithNext(
                     EditorTextSelection(
                         blockID: blockID,
                         location: selectedRange.location,
@@ -1412,6 +1463,7 @@ private final class EditorUITextView: UITextView {
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
     var onInsertBlockAfter: ((NSRange) -> Bool)?
     var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
+    var onMergeBlockWithNext: ((NSRange) -> Bool)?
 
     override var keyCommands: [UIKeyCommand]? {
         [
@@ -1488,6 +1540,40 @@ private final class EditorUITextView: UITextView {
         super.deleteBackward()
     }
 
+    private func isUnmodifiedForwardDeletePress(_ press: UIPress) -> Bool {
+        guard let key = press.key else {
+            return false
+        }
+
+        return key.keyCode == .keyboardDeleteForward && key.modifierFlags.isEmpty
+    }
+
+    private func deleteForwardInBlock() {
+        if onMergeBlockWithNext?(selectedRange) == true {
+            return
+        }
+
+        deleteForwardWithinText()
+    }
+
+    private func deleteForwardWithinText() {
+        let currentRange = selectedRange
+        let textLength = (text as NSString).length
+        guard currentRange.location < textLength || currentRange.length > 0 else {
+            return
+        }
+
+        let deleteLength = currentRange.length > 0 ? currentRange.length : 1
+        guard currentRange.location + deleteLength <= textLength,
+              let start = position(from: beginningOfDocument, offset: currentRange.location),
+              let end = position(from: start, offset: deleteLength),
+              let textRange = textRange(from: start, to: end) else {
+            return
+        }
+
+        replace(textRange, withText: "")
+    }
+
     @objc private func indentBlock() {
         _ = onKeyboardIndentation?(.indent)
     }
@@ -1521,6 +1607,11 @@ private final class EditorUITextView: UITextView {
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if presses.contains(where: isUnmodifiedForwardDeletePress) {
+            deleteForwardInBlock()
+            return
+        }
+
         guard let press = presses.first,
               let keyCode = press.key?.blockKeyboardArrowKeyCode else {
             super.pressesBegan(presses, with: event)

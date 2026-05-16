@@ -1254,6 +1254,52 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     @discardableResult
+    func mergeTextBlockWithNextAtSelection(
+        blockID: String,
+        selection: EditorTextSelection
+    ) throws -> EditorTextSelection? {
+        guard selection.blockID == blockID,
+              selection.length == 0 else {
+            return nil
+        }
+
+        let blocks = editorVisibleBlocks
+        guard let currentIndex = blocks.firstIndex(where: { $0.id == blockID }),
+              currentIndex < blocks.count - 1 else {
+            return nil
+        }
+
+        let currentBlock = blocks[currentIndex]
+        let nextBlock = blocks[currentIndex + 1]
+        let focusLocation = (currentBlock.textPlain as NSString).length
+        guard selection.location == focusLocation,
+              currentBlock.type.isTextEditable,
+              nextBlock.type.isTextEditable else {
+            return nil
+        }
+
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        try repository.updateBlock(
+            blockID: currentBlock.id,
+            type: currentBlock.type,
+            text: currentBlock.textPlain + nextBlock.textPlain,
+            taskItemIsCompleted: currentBlock.taskItemIsCompleted,
+            toggleIsExpanded: currentBlock.toggleIsExpanded,
+            codeBlockLineWrapping: currentBlock.codeBlockLineWrapping
+        )
+        try repository.deleteBlock(blockID: nextBlock.id)
+        try load()
+        pendingFocusBlockID = currentBlock.id
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(currentBlock.id, privacy: .public) source=merge_next_text_block"
+        )
+        return EditorTextSelection(blockID: currentBlock.id, location: focusLocation, length: 0)
+    }
+
+    @discardableResult
     func moveBlockByKeyboard(
         blockID: String,
         direction: BlockKeyboardMoveDirection
@@ -1389,6 +1435,26 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "text_block_merge_with_previous_failed current_block_id=\(blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func mergeTextBlockWithNextAtSelectionForUI(
+        blockID: String,
+        selection: EditorTextSelection
+    ) -> EditorTextSelection? {
+        do {
+            let nextSelection = try mergeTextBlockWithNextAtSelection(blockID: blockID, selection: selection)
+            if let nextSelection {
+                EditorLog.input.debug(
+                    "text_block_merged_with_next current_block_id=\(blockID, privacy: .public) next_focus_block_id=\(nextSelection.blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public)"
+                )
+            }
+            return nextSelection
+        } catch {
+            EditorLog.input.error(
+                "text_block_merge_with_next_failed current_block_id=\(blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return nil
         }

@@ -239,6 +239,63 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testForwardDeleteAtEndMergesTextBlockWithNextBlock() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before merging")
+        let initialTextViewCount = app.textViews.count
+
+        textView.click()
+        textView.typeKey("a", modifierFlags: [.command])
+        app.typeText("AlphaBeta")
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "AlphaBeta", timeout: 5),
+            "Test setup should replace the welcome text before splitting"
+        )
+
+        for _ in 0..<4 {
+            textView.typeKey(.leftArrow, modifierFlags: [])
+        }
+        textView.typeKey(.return, modifierFlags: [])
+
+        let insertedTextView = app.textViews.element(boundBy: initialTextViewCount)
+        XCTAssertTrue(insertedTextView.waitForExistence(timeout: 5), "Return should create the second block to merge")
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "Alpha", timeout: 5),
+            "The first block should contain the leading text before Forward Delete"
+        )
+        XCTAssertTrue(
+            insertedTextView.waitForValue(equalTo: "Beta", timeout: 5),
+            "The second block should contain the trailing text before Forward Delete"
+        )
+
+        textView.click()
+        textView.typeKey(.rightArrow, modifierFlags: [.command])
+        textView.typeKey(.forwardDelete, modifierFlags: [])
+
+        XCTAssertTrue(
+            app.waitForTextViewCount(initialTextViewCount, timeout: 5),
+            "Forward Delete at the end of the first block should remove the next block"
+        )
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "AlphaBeta", timeout: 5),
+            "Forward Delete at block end should merge the next block text into the current block"
+        )
+        XCTAssertTrue(
+            textView.waitForKeyboardFocus(timeout: 5),
+            "The merged first block should retain keyboard focus"
+        )
+        app.typeText(" Joined")
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "Alpha JoinedBeta", timeout: 5),
+            "Typing after merge should continue at the original join point"
+        )
+    }
+
+    @MainActor
     func testBoundaryArrowKeysMoveFocusBetweenTextBlocks() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
