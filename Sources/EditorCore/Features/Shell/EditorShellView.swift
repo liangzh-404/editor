@@ -228,6 +228,9 @@ private struct ThreeColumnEditorShell: View {
                     onExportMarkdown: {
                         viewModel.exportCurrentPageMarkdown()
                     },
+                    onExportMarkdownPackage: { destinationURL in
+                        viewModel.exportCurrentPageMarkdownPackageForUI(to: destinationURL)
+                    },
                     onBlockTextChange: { blockID, text in
                         viewModel.editBlockText(blockID: blockID, text: text)
                     },
@@ -631,6 +634,9 @@ private struct CompactPageDestination: View {
                 },
                 onExportMarkdown: {
                     viewModel.exportCurrentPageMarkdown()
+                },
+                onExportMarkdownPackage: { destinationURL in
+                    viewModel.exportCurrentPageMarkdownPackageForUI(to: destinationURL)
                 },
                 onBlockTextChange: { blockID, text in
                     viewModel.editBlockText(blockID: blockID, text: text)
@@ -1859,6 +1865,7 @@ private struct EditorCanvasView: View {
     let onPageTitleChange: (String) -> Void
     let onImportMarkdown: (URL) -> Void
     let onExportMarkdown: () -> String
+    let onExportMarkdownPackage: (URL) -> Void
     let onBlockTextChange: (String, String) -> Void
     let onTableRowsChange: (String, [[String]]) -> Void
     let onBlockTypeChange: (String, BlockType) -> Void
@@ -2250,7 +2257,10 @@ private struct EditorCanvasView: View {
             contentType: MarkdownFileDocument.markdownContentType,
             defaultFilename: "\(page?.title ?? "Page").md"
         ) { result in
-            if case .failure(let error) = result {
+            switch result {
+            case .success(let destinationURL):
+                onExportMarkdownPackage(destinationURL)
+            case .failure(let error):
                 EditorLog.markdown.error(
                     "markdown_file_export_failed error=\(String(describing: error), privacy: .public)"
                 )

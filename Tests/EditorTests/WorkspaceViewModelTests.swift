@@ -1037,6 +1037,48 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testExportCurrentPageMarkdownPackageWritesMarkdownAndCopiesAttachments() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            attachmentRepository: attachmentRepository
+        )
+        try viewModel.load()
+        let result = try viewModel.importAttachment(
+            sourceURL: makeSourceFile(name: "brief.txt", contents: "local attachment")
+        )
+        let exportDirectory = makeTemporaryDirectory()
+        let markdownURL = exportDirectory.appendingPathComponent("Welcome.md")
+
+        try viewModel.exportCurrentPageMarkdownPackage(to: markdownURL)
+
+        XCTAssertEqual(
+            try String(contentsOf: markdownURL, encoding: .utf8),
+            """
+            Start writing in blocks.
+
+            [brief.txt](Attachments/\(result.attachment.id)/brief.txt)
+            """
+        )
+        let copiedAttachmentURL = exportDirectory
+            .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent(result.attachment.id, isDirectory: true)
+            .appendingPathComponent("brief.txt")
+        XCTAssertEqual(
+            try String(contentsOf: copiedAttachmentURL, encoding: .utf8),
+            "local attachment"
+        )
+    }
+
+    @MainActor
     func testImportMarkdownToCurrentPageRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

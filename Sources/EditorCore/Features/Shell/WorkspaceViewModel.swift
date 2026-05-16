@@ -1922,6 +1922,48 @@ final class WorkspaceViewModel: ObservableObject {
         MarkdownTransformer.export(blocks: visibleBlocks, attachments: snapshot.attachments)
     }
 
+    func exportCurrentPageMarkdownPackage(to markdownURL: URL) throws {
+        let markdown = exportCurrentPageMarkdown()
+        let exportDirectory = markdownURL.deletingLastPathComponent()
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(
+            at: exportDirectory,
+            withIntermediateDirectories: true
+        )
+        try markdown.write(to: markdownURL, atomically: true, encoding: .utf8)
+
+        for attachment in visibleAttachmentSnapshots() {
+            let attachmentDirectory = exportDirectory
+                .appendingPathComponent("Attachments", isDirectory: true)
+                .appendingPathComponent(attachment.id, isDirectory: true)
+            try fileManager.createDirectory(
+                at: attachmentDirectory,
+                withIntermediateDirectories: true
+            )
+            let destinationURL = attachmentDirectory.appendingPathComponent(attachment.originalFilename)
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+            try fileManager.copyItem(
+                at: URL(fileURLWithPath: attachment.localPath),
+                to: destinationURL
+            )
+        }
+    }
+
+    func exportCurrentPageMarkdownPackageForUI(to markdownURL: URL) {
+        do {
+            try exportCurrentPageMarkdownPackage(to: markdownURL)
+            EditorLog.markdown.debug(
+                "markdown_package_exported destination=\(markdownURL.lastPathComponent, privacy: .public)"
+            )
+        } catch {
+            EditorLog.markdown.error(
+                "markdown_package_export_failed destination=\(markdownURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     func importMarkdownToCurrentPage(_ markdown: String) throws {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
@@ -2025,6 +2067,18 @@ final class WorkspaceViewModel: ObservableObject {
             EditorLog.attachment.error(
                 "attachment_import_failed source=\(sourceURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
+        }
+    }
+
+    private func visibleAttachmentSnapshots() -> [AttachmentSnapshot] {
+        var attachmentIDs: Set<String> = []
+        return visibleBlocks.compactMap { block in
+            guard let attachment = snapshot.attachments.first(where: { $0.matches(block: block) }),
+                  !attachmentIDs.contains(attachment.id) else {
+                return nil
+            }
+            attachmentIDs.insert(attachment.id)
+            return attachment
         }
     }
 
