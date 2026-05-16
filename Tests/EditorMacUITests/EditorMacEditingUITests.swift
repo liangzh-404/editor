@@ -1254,6 +1254,48 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testTableBlockTypeRendersTableChromeAndKeepsCellsEditable() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
+        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
+        blockTypeMenu.click()
+
+        let tableMenuItem = app.menuItems["Table"]
+        XCTAssertTrue(tableMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Table type")
+        tableMenuItem.click()
+
+        let tableBlock = app.element(identifier: "editor.table.block-welcome-001")
+        XCTAssertTrue(tableBlock.waitForExistence(timeout: 5), "Changing a text block to Table should render visible table chrome")
+        XCTAssertTrue(
+            tableBlock.waitForLabelOrValue(containing: "Table block", timeout: 5),
+            "Table chrome should expose a semantic container label"
+        )
+        XCTAssertTrue(
+            tableBlock.waitForLabelOrValue(containing: "1 row, 1 column", timeout: 5),
+            "Table chrome should expose its current dimensions"
+        )
+
+        let firstCell = app.textFields["editor.table.block-welcome-001.cell.0.0"]
+        XCTAssertTrue(firstCell.waitForExistence(timeout: 5), "Table blocks should expose editable cells")
+        firstCell.click()
+        app.typeText(" Cell")
+        XCTAssertTrue(
+            firstCell.waitForValue(containing: "Cell", timeout: 5),
+            "Typing in a table cell should update the cell text"
+        )
+
+        let addColumnButton = app.element(identifier: "editor.table.block-welcome-001.add-column")
+        addColumnButton.click()
+        XCTAssertTrue(
+            tableBlock.waitForLabelOrValue(containing: "1 row, 2 columns", timeout: 5),
+            "Table chrome should update dimensions after adding a column"
+        )
+    }
+
+    @MainActor
     func testReferenceMenusInsertPageAndBlockReferenceRows() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

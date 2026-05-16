@@ -3357,6 +3357,13 @@ private struct StructuredTableBlockEditor: View {
         let tableDimensions = tableDimensionAccessibilityValue(rows: rows)
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
+                Label("Table", systemImage: "tablecells")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+
+                Spacer(minLength: 8)
+
                 Button {
                     appendRow()
                 } label: {
@@ -3428,6 +3435,18 @@ private struct StructuredTableBlockEditor: View {
                 }
             }
         }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .background(Color.secondary.opacity(0.04))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Table block, \(tableDimensions)")
+        .accessibilityValue(tableDimensions)
+        .accessibilityIdentifier("editor.table.\(blockID)")
     }
 
     private var editableRows: [[String]] {
