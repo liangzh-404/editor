@@ -1265,6 +1265,12 @@ enum MarkdownTransformer {
         if line == "---" {
             return MarkdownBlockDraft(type: .divider, textPlain: "")
         }
+        if let pageReferenceText = pageReferenceText(for: line) {
+            return MarkdownBlockDraft(type: .pageReference, textPlain: pageReferenceText)
+        }
+        if let blockReferenceText = blockReferenceText(for: line) {
+            return MarkdownBlockDraft(type: .blockReference, textPlain: blockReferenceText)
+        }
 
         return MarkdownBlockDraft(type: .paragraph, textPlain: line)
     }
@@ -1338,5 +1344,30 @@ enum MarkdownTransformer {
         }
 
         return String(line.dropFirst(prefix.count).dropLast(suffix.count))
+    }
+
+    private static func pageReferenceText(for line: String) -> String? {
+        let prefix = "[["
+        let suffix = "]]"
+        guard line.hasPrefix(prefix),
+              line.hasSuffix(suffix),
+              !line.hasPrefix("[[#") else {
+            return nil
+        }
+
+        let text = String(line.dropFirst(prefix.count).dropLast(suffix.count))
+        return text.isEmpty ? nil : text
+    }
+
+    private static func blockReferenceText(for line: String) -> String? {
+        let prefix = "[[#"
+        let suffix = "]]"
+        guard line.hasPrefix(prefix),
+              line.hasSuffix(suffix) else {
+            return nil
+        }
+
+        let text = String(line.dropFirst(prefix.count).dropLast(suffix.count))
+        return text.isEmpty ? nil : text
     }
 }

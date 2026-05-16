@@ -460,6 +460,61 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.taskItemIsCompleted), [true, false])
     }
 
+    func testImportMarkdownResolvesPageAndBlockReferenceTargets() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let targetBlock = try repository.appendBlock(
+            pageID: targetPage.id,
+            type: .paragraph,
+            text: "API contract"
+        )
+
+        try repository.importMarkdown(
+            pageID: sourcePageID,
+            markdown:
+                """
+                [[Specs]]
+
+                [[#API contract]]
+                """
+        )
+
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let importedBlocks = reloadedSnapshot.blocks.filter { $0.pageID == sourcePageID }
+        XCTAssertEqual(importedBlocks.map(\.type), [.pageReference, .blockReference])
+        XCTAssertEqual(importedBlocks.map(\.textPlain), ["Specs", "API contract"])
+        XCTAssertEqual(importedBlocks.first?.pageReferenceTargetPageID, targetPage.id)
+        XCTAssertEqual(importedBlocks.last?.pageReferenceTargetPageID, targetPage.id)
+        XCTAssertEqual(importedBlocks.last?.blockReferenceTargetBlockID, targetBlock.id)
+        XCTAssertEqual(
+            try BacklinkRepository(database: database).backlinks(targetPageID: targetPage.id),
+            [
+                Backlink(
+                    sourcePageID: sourcePageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: importedBlocks[0].id,
+                    targetPageID: targetPage.id,
+                    targetBlockID: nil,
+                    linkText: "Specs"
+                ),
+                Backlink(
+                    sourcePageID: sourcePageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: importedBlocks[1].id,
+                    targetPageID: targetPage.id,
+                    targetBlockID: targetBlock.id,
+                    linkText: "API contract"
+                )
+            ]
+        )
+    }
+
     func testUpdateTaskItemCompletionPersistsAndQueuesSyncChange() throws {
         let database = try migratedDatabase()
         defer { database.close() }

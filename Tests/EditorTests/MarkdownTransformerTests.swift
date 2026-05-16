@@ -177,6 +177,23 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownSupportsPageAndBlockReferenceBlocks() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    [[Specs]]
+
+                    [[#API contract]]
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .pageReference, textPlain: "Specs"),
+                MarkdownBlockDraft(type: .blockReference, textPlain: "API contract")
+            ]
+        )
+    }
+
     func testImportMarkdownPreservesInlineSyntaxAcrossWrappedParagraphLines() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(

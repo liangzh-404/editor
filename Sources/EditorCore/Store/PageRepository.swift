@@ -971,6 +971,7 @@ final class PageRepository {
 
         for (index, draft) in drafts.enumerated() {
             let blockID = "block-\(UUID().uuidString.lowercased())"
+            let referenceTargets = try markdownReferenceTargets(for: draft)
             try insertBlock(
                 id: blockID,
                 pageID: pageID,
@@ -979,6 +980,8 @@ final class PageRepository {
                 type: draft.type,
                 text: draft.textPlain,
                 taskItemIsCompleted: draft.taskItemIsCompleted,
+                pageReferenceTargetPageID: referenceTargets.pageID,
+                blockReferenceTargetBlockID: referenceTargets.blockID,
                 createdAt: now
             )
             try SyncRepository(database: database).enqueue(
@@ -988,13 +991,58 @@ final class PageRepository {
             )
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: blockID,
-                text: draft.textPlain
+                text: draft.textPlain,
+                pageReferenceTargetPageID: referenceTargets.pageID,
+                blockReferenceTargetBlockID: referenceTargets.blockID
             )
         }
 
         EditorLog.markdown.debug(
             "markdown_imported page_id=\(pageID, privacy: .public) blocks=\(drafts.count, privacy: .public)"
         )
+    }
+
+    private func markdownReferenceTargets(
+        for draft: MarkdownBlockDraft
+    ) throws -> (pageID: String?, blockID: String?) {
+        switch draft.type {
+        case .pageReference:
+            return (try markdownPageReferenceTargetPageID(title: draft.textPlain), nil)
+        case .blockReference:
+            return try markdownBlockReferenceTargets(text: draft.textPlain)
+        default:
+            return (nil, nil)
+        }
+    }
+
+    private func markdownPageReferenceTargetPageID(title: String) throws -> String? {
+        try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE title = ? AND is_archived = 0
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            bindings: [.text(title)]
+        ).first?["id"] ?? nil
+    }
+
+    private func markdownBlockReferenceTargets(text: String) throws -> (pageID: String?, blockID: String?) {
+        guard let targetRow = try database.query(
+            """
+            SELECT id, page_id
+            FROM blocks
+            WHERE text_plain = ? AND is_deleted = 0
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            bindings: [.text(text)]
+        ).first else {
+            return (nil, nil)
+        }
+
+        return (targetRow["page_id"] ?? nil, targetRow["id"] ?? nil)
     }
 
 #if DEBUG
