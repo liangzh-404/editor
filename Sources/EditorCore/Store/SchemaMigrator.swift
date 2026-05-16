@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 7
+    static let currentVersion = 8
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -74,6 +74,60 @@ enum SchemaMigrator {
             table: "pages",
             column: "is_favorite",
             definition: "INTEGER NOT NULL DEFAULT 0"
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tags (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                parent_tag_id TEXT,
+                name TEXT NOT NULL,
+                order_key TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                FOREIGN KEY (parent_tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            );
+            """
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS page_tags (
+                page_id TEXT NOT NULL,
+                tag_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (page_id, tag_id),
+                FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            );
+            """
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS diary_entries (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                text_plain TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+            );
+            """
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS page_origin (
+                page_id TEXT PRIMARY KEY,
+                promoted_from_diary_entry_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE,
+                FOREIGN KEY (promoted_from_diary_entry_id) REFERENCES diary_entries(id) ON DELETE SET NULL
+            );
+            """
         )
 
         try database.execute(

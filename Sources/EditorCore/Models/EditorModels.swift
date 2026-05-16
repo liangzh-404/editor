@@ -42,6 +42,25 @@ struct PageSummary: Identifiable, Equatable, Sendable {
     }
 }
 
+struct TagSummary: Identifiable, Equatable, Sendable {
+    let id: String
+    let workspaceID: String
+    let parentTagID: String?
+    let name: String
+    let path: String
+}
+
+struct PageTagAssignment: Equatable, Sendable {
+    let pageID: String
+    let tagID: String
+}
+
+struct DiaryEntrySnapshot: Identifiable, Equatable, Sendable {
+    let id: String
+    let workspaceID: String
+    let textPlain: String
+}
+
 enum BlockType: String, Equatable, Sendable {
     case paragraph
     case heading1
@@ -289,6 +308,9 @@ struct WorkspaceSnapshot: Equatable, Sendable {
     let archivedPages: [PageSummary]
     let blocks: [BlockSnapshot]
     let attachments: [AttachmentSnapshot]
+    let tags: [TagSummary]
+    let pageTags: [PageTagAssignment]
+    let activeDiaryEntry: DiaryEntrySnapshot?
     let selectedWorkspaceID: String?
     let selectedNotebookID: String?
     let selectedPageID: String?
@@ -304,6 +326,9 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         archivedPages: [PageSummary] = [],
         blocks: [BlockSnapshot],
         attachments: [AttachmentSnapshot],
+        tags: [TagSummary] = [],
+        pageTags: [PageTagAssignment] = [],
+        activeDiaryEntry: DiaryEntrySnapshot? = nil,
         selectedWorkspaceID: String?,
         selectedNotebookID: String? = nil,
         selectedPageID: String?
@@ -314,6 +339,9 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         self.archivedPages = archivedPages
         self.blocks = blocks
         self.attachments = attachments
+        self.tags = tags
+        self.pageTags = pageTags
+        self.activeDiaryEntry = activeDiaryEntry
         self.selectedWorkspaceID = selectedWorkspaceID
         self.selectedNotebookID = selectedNotebookID
         self.selectedPageID = selectedPageID
@@ -343,6 +371,9 @@ extension WorkspaceSnapshot {
                 block.id == blockID ? block.replacing(type: type, text: text) : block
             },
             attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -367,6 +398,9 @@ extension WorkspaceSnapshot {
                 block.id == blockID ? block.replacingTaskItemCompletion(isCompleted) : block
             },
             attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -383,6 +417,9 @@ extension WorkspaceSnapshot {
                 block.id == blockID ? block.replacingToggleExpansion(isExpanded) : block
             },
             attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -399,6 +436,9 @@ extension WorkspaceSnapshot {
                 block.id == blockID ? block.replacingCodeBlockLineWrapping(isWrapped) : block
             },
             attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -423,6 +463,9 @@ extension WorkspaceSnapshot {
             archivedPages: archivedPages,
             blocks: blocks,
             attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -457,6 +500,9 @@ extension WorkspaceSnapshot {
             },
             blocks: blocks,
             attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -480,6 +526,9 @@ extension WorkspaceSnapshot {
             archivedPages: archivedPages,
             blocks: blocks,
             attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID

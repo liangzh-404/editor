@@ -65,6 +65,39 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(notebookColumns.contains("order_key"))
     }
 
+    func testMigrationCreatesTagAndDiaryTables() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let tableNames = Set(try database.queryStrings(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ))
+
+        XCTAssertTrue(tableNames.contains("tags"))
+        XCTAssertTrue(tableNames.contains("page_tags"))
+        XCTAssertTrue(tableNames.contains("diary_entries"))
+        XCTAssertTrue(tableNames.contains("page_origin"))
+    }
+
+    func testTagAndDiaryTablesExposeRequiredColumns() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let tagColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('tags')"))
+        let pageTagColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('page_tags')"))
+        let diaryColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('diary_entries')"))
+        let pageOriginColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('page_origin')"))
+
+        XCTAssertTrue(tagColumns.isSuperset(of: ["id", "workspace_id", "parent_tag_id", "name", "order_key", "created_at", "updated_at"]))
+        XCTAssertTrue(pageTagColumns.isSuperset(of: ["page_id", "tag_id", "created_at"]))
+        XCTAssertTrue(diaryColumns.isSuperset(of: ["id", "workspace_id", "text_plain", "created_at", "updated_at"]))
+        XCTAssertTrue(pageOriginColumns.isSuperset(of: ["page_id", "promoted_from_diary_entry_id", "created_at"]))
+    }
+
     func testLinksTableTracksExternalTargets() throws {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         defer { database.close() }

@@ -43,7 +43,7 @@
 - Modify: `Sources/EditorCore/Models/EditorModels.swift`
 - Test: `Tests/EditorTests/SchemaMigratorTests.swift`
 
-- [ ] **Step 1: Write failing schema tests**
+- [x] **Step 1: Write failing schema tests**
 
 Add these tests to `Tests/EditorTests/SchemaMigratorTests.swift`:
 
@@ -82,7 +82,7 @@ func testTagAndDiaryTablesExposeRequiredColumns() throws {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -92,7 +92,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: FAIL because `tags`, `page_tags`, `diary_entries`, and `page_origin` do not exist.
 
-- [ ] **Step 3: Implement schema migration**
+- [x] **Step 3: Implement schema migration**
 
 In `Sources/EditorCore/Store/SchemaMigrator.swift`:
 
@@ -175,7 +175,7 @@ let activeDiaryEntry: DiaryEntrySnapshot?
 
 Update all `WorkspaceSnapshot` initializers and replacement helpers to preserve the three new properties.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -185,7 +185,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: PASS with schema version equal to `8`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
