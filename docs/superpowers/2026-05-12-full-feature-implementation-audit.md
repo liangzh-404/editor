@@ -570,10 +570,16 @@ Implement the approved editor architecture so the app supports the full requeste
 - Launching with `EDITOR_UI_TEST_MARKDOWN_EXPORT_CAPTURE=1`, selecting `Welcome`, and clicking `editor.export-markdown` produced `editor.markdown-export-test-output` containing `Start writing in blocks.`.
 - Typing `Promote this text` in the diary, selecting it with `Command-A`, and pressing `Command-]` created and selected a normal page titled `Promote this text`, with the same text in the first editor block.
 
+## Recent Block-First Final Regression Runner
+
+- `scripts/block_first_final_regression.sh` now wraps the Task 10 final sweep into reusable actions: `units`, `ui`, `builds`, `doctor`, `diff-check`, and `all`.
+- The `ui` action runs `scripts/mac_ui_test.sh doctor` before `build`/`rerun`, so an unauthorized Mac fails fast with the UIAutomation diagnostic instead of entering the XCUITest runner timeout.
+- Verification: `bash -n scripts/block_first_final_regression.sh`, `help`, and `diff-check` passed; `ui` exited 65 at the expected local authorization doctor; `units` passed with xcodebuild reporting 9.035s; `builds` passed for both `EditorMac` macOS arm64 and `EditorIOS` generic iOS Simulator.
+
 ## Next Implementation Slice
 
 The block-first UI/UX path in `docs/superpowers/specs/2026-05-16-block-first-information-architecture-design.md` has landed through `docs/superpowers/plans/2026-05-16-block-first-information-architecture.md`. The next concrete gaps should stay in this order:
 
-1. Enable UI Automation on this Mac with local authentication, then rerun the focused macOS UI suite for launch-to-diary typing, All Documents ordering, diary promotion, favorite state, and Markdown export.
+1. Enable UI Automation on this Mac with local authentication, then run `scripts/block_first_final_regression.sh ui` or `scripts/block_first_final_regression.sh all` to finish the focused macOS UI suite for launch-to-diary typing, All Documents ordering, diary promotion, favorite state, and Markdown export.
 2. Use any UI failure evidence to make targeted fixes without broad refactors.
 3. Resume deeper performance optimization only after the final block-first UI regression pass is green.

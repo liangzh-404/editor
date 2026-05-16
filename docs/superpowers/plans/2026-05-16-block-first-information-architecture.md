@@ -1213,6 +1213,8 @@ Current status: blocked locally before any business UI test case executes. `scri
 
 Supplemental manual observation: the same built Debug app was launched with isolated app-container support directories and inspected through Computer Use. Diary launch-to-type, All Documents/Welcome visibility, row favorite toggle/sidebar state, Markdown export capture, and `Command-]` diary promotion all produced the expected visible/accessibility state. This does not replace the required XCUITest suite PASS.
 
+Resume command after local authorization: `scripts/block_first_final_regression.sh ui` for the blocked UI step, or `scripts/block_first_final_regression.sh all` for the whole final sweep. The runner has already been verified for `help`, `diff-check`, unauthorized `ui` fail-fast, `units`, and `builds`.
+
 - [x] **Step 4: Run app builds**
 
 Run:
