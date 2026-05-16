@@ -1177,7 +1177,7 @@ git commit -m "Expose document tags in shell"
 **Files:**
 - Modify: `docs/superpowers/2026-05-12-full-feature-implementation-audit.md`
 
-- [ ] **Step 1: Update audit evidence**
+- [x] **Step 1: Update audit evidence**
 
 Update the audit with:
 
@@ -1188,7 +1188,7 @@ Update the audit with:
 - Text-only diary promotion through `Cmd+]`.
 - Tag creation, nesting, assignment, and filtering.
 
-- [ ] **Step 2: Run focused unit suite**
+- [x] **Step 2: Run focused unit suite**
 
 Run:
 
@@ -1209,7 +1209,9 @@ scripts/mac_ui_test.sh rerun testLaunchStartsInBlankDiaryEditorForFastTyping tes
 
 Expected: PASS.
 
-- [ ] **Step 4: Run app builds**
+Current status: blocked locally before any business UI test case executes. `scripts/mac_ui_test.sh build` passed, but repeated `rerun` attempts failed at runner initialization with `Timed out while enabling automation mode`. System evidence shows UI Automation requires local authentication on this Mac (`DevToolsSecurity -status` reports Developer mode disabled, `System Events` UI elements are disabled, and unified logs report `Writer daemon requires authentication to enable automation mode`).
+
+- [x] **Step 4: Run app builds**
 
 Run:
 
