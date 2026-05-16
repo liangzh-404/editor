@@ -561,6 +561,15 @@ Implement the approved editor architecture so the app supports the full requeste
 - Verification: `bash -n scripts/mac_ui_test.sh` passed, unauthorized `scripts/mac_ui_test.sh doctor` exited 65 with actionable diagnostics and no xcodebuild launch, unauthorized `scripts/mac_ui_test.sh rerun testLaunchStartsInBlankDiaryEditorForFastTyping` exited 65 with the preflight message, `scripts/mac_ui_test.sh help` shows the `doctor` action and bypass variable, `EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT=1` bypassed the preflight and entered the xcodebuild path until an external 3s timeout, and `scripts/mac_ui_test.sh build` still passes. Latest `doctor` output shows `liangzhang` is already in `_developer`, `system.privilege.taskport` is scoped to `_developer`, and `taskport requires authentication: true`.
 - Latest authorization attempt: bounded `timeout 20s /usr/sbin/DevToolsSecurity -enable` did not complete; `scripts/mac_ui_test.sh doctor` still reports Developer mode disabled, System Events UI elements disabled, and the Automation Mode state file missing.
 
+## Recent Manual Block-First UI Observation
+
+- Because macOS UIAutomation remains blocked by local authentication, the focused XCUITest suite still cannot enter business test cases; this manual pass is supplemental evidence and does not replace the required `scripts/mac_ui_test.sh rerun ...` pass.
+- Launching the built Debug `EditorMac.app` with an app-container `EDITOR_APP_SUPPORT_DIR` showed `Diary` selected in the rail, exposed `editor.diary.text`, and accepted typed text with the accessibility value `Captured immediately`.
+- Selecting `Welcome` from All Documents exposed the page title `Welcome`, block text `Start writing in blocks.`, and row value `Not favorite, No tags`.
+- Clicking the page-row star changed the row value to `Favorite` and added a `Welcome` entry under Favorites.
+- Launching with `EDITOR_UI_TEST_MARKDOWN_EXPORT_CAPTURE=1`, selecting `Welcome`, and clicking `editor.export-markdown` produced `editor.markdown-export-test-output` containing `Start writing in blocks.`.
+- Typing `Promote this text` in the diary, selecting it with `Command-A`, and pressing `Command-]` created and selected a normal page titled `Promote this text`, with the same text in the first editor block.
+
 ## Next Implementation Slice
 
 The block-first UI/UX path in `docs/superpowers/specs/2026-05-16-block-first-information-architecture-design.md` has landed through `docs/superpowers/plans/2026-05-16-block-first-information-architecture.md`. The next concrete gaps should stay in this order:

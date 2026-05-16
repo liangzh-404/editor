@@ -1211,6 +1211,8 @@ Expected: PASS.
 
 Current status: blocked locally before any business UI test case executes. `scripts/mac_ui_test.sh build` passed, but repeated `rerun` attempts failed at runner initialization with `Timed out while enabling automation mode`. System evidence shows UI Automation requires local authentication on this Mac (`DevToolsSecurity -status` reports Developer mode disabled, `System Events` UI elements are disabled, and unified logs report `Writer daemon requires authentication to enable automation mode`). `scripts/mac_ui_test.sh` now has a fast authorization preflight for `test` and `rerun`, so this blocker exits immediately with the required local authorization command instead of spending 80s in the runner timeout. `scripts/mac_ui_test.sh doctor` prints the full local UI test readiness state without launching xcodebuild. A bounded `/usr/sbin/DevToolsSecurity -enable` attempt timed out without approval, no-interaction `sudo -n /usr/sbin/DevToolsSecurity -enable` reports that a password is required, and `doctor` still reports Developer mode disabled. The user is already in `_developer`, but `system.privilege.taskport` still has `authenticate-user=true`.
 
+Supplemental manual observation: the same built Debug app was launched with isolated app-container support directories and inspected through Computer Use. Diary launch-to-type, All Documents/Welcome visibility, row favorite toggle/sidebar state, Markdown export capture, and `Command-]` diary promotion all produced the expected visible/accessibility state. This does not replace the required XCUITest suite PASS.
+
 - [x] **Step 4: Run app builds**
 
 Run:
