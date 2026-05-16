@@ -559,6 +559,7 @@ Implement the approved editor architecture so the app supports the full requeste
 - `scripts/mac_ui_test.sh doctor` reports the macOS UI test environment without launching xcodebuild, including project, scheme, destination, DerivedData, cached `.xctestrun`, Developer Tools status, System Events UI-elements status, the Automation Mode state file, and `testmanagerd` PIDs.
 - The preflight prints the required local authorization command, `/usr/sbin/DevToolsSecurity -enable`, and can be bypassed with `EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT=1` when intentionally letting `xcodebuild` try to prompt.
 - Verification: `bash -n scripts/mac_ui_test.sh` passed, unauthorized `scripts/mac_ui_test.sh doctor` exited 65 with actionable diagnostics and no xcodebuild launch, unauthorized `scripts/mac_ui_test.sh rerun testLaunchStartsInBlankDiaryEditorForFastTyping` exited 65 with the preflight message, `scripts/mac_ui_test.sh help` shows the `doctor` action and bypass variable, `EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT=1` bypassed the preflight and entered the xcodebuild path until an external 3s timeout, and `scripts/mac_ui_test.sh build` still passes.
+- Latest authorization attempt: bounded `timeout 20s /usr/sbin/DevToolsSecurity -enable` did not complete; `scripts/mac_ui_test.sh doctor` still reports Developer mode disabled, System Events UI elements disabled, and the Automation Mode state file missing.
 
 ## Next Implementation Slice
 
