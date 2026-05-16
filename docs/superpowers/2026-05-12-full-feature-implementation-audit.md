@@ -572,9 +572,10 @@ Implement the approved editor architecture so the app supports the full requeste
 
 ## Recent Block-First Final Regression Runner
 
-- `scripts/block_first_final_regression.sh` now wraps the Task 10 final sweep into reusable actions: `units`, `ui`, `builds`, `doctor`, `diff-check`, and `all`.
+- `scripts/block_first_final_regression.sh` now wraps the Task 10 final sweep into reusable actions: `non-ui`, `units`, `ui`, `builds`, `doctor`, `diff-check`, and `all`.
 - The `ui` action runs `scripts/mac_ui_test.sh doctor` before `build`/`rerun`, so an unauthorized Mac fails fast with the UIAutomation diagnostic instead of entering the XCUITest runner timeout.
-- Verification: `bash -n scripts/block_first_final_regression.sh`, `help`, and `diff-check` passed; `ui` exited 65 at the expected local authorization doctor; `units` passed with xcodebuild reporting 9.035s; `builds` passed for both `EditorMac` macOS arm64 and `EditorIOS` generic iOS Simulator.
+- The `non-ui` action runs the focused unit suite, macOS/iOS app builds, and `git diff --check`, allowing the non-UI gates to be refreshed while UIAutomation is still blocked by local authentication.
+- Verification: `bash -n scripts/block_first_final_regression.sh`, `help`, and `diff-check` passed; `ui` exited 65 at the expected local authorization doctor; `units` passed with xcodebuild reporting 9.035s; `builds` passed for both `EditorMac` macOS arm64 and `EditorIOS` generic iOS Simulator; `non-ui` passed end-to-end with focused unit tests reporting 8.654s, then `EditorMac` build, `EditorIOS` build, and `git diff --check`.
 
 ## Next Implementation Slice
 
