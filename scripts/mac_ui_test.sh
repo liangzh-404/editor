@@ -36,6 +36,8 @@ Environment:
                                   Skip the macOS UI Automation authorization preflight.
   EDITOR_UI_TEST_AUTHORIZE_DRY_RUN=1
                                   Print the authorization command without running it.
+  EDITOR_UI_TEST_AUTHORIZE_TIMEOUT_SECONDS
+                                  Seconds to wait for local approval before failing. Defaults to 120.
 EOF
 }
 
@@ -253,11 +255,19 @@ EOF
 }
 
 run_authorize() {
+    local timeout_seconds="${EDITOR_UI_TEST_AUTHORIZE_TIMEOUT_SECONDS:-120}"
+    if [[ ! "$timeout_seconds" =~ ^[0-9]+$ || "$timeout_seconds" -le 0 ]]; then
+        echo "EDITOR_UI_TEST_AUTHORIZE_TIMEOUT_SECONDS must be a positive integer." >&2
+        return 2
+    fi
+
     cat <<EOF
 == macOS UI Automation authorization ==
 This command may prompt for local administrator approval:
 
   /usr/sbin/DevToolsSecurity -enable
+
+Waiting up to ${timeout_seconds}s for local approval.
 EOF
 
     if [[ "${EDITOR_UI_TEST_AUTHORIZE_DRY_RUN:-0}" == "1" ]]; then
@@ -266,7 +276,56 @@ EOF
         return 0
     fi
 
-    /usr/sbin/DevToolsSecurity -enable
+    local status_file
+    status_file="$(mktemp "${TMPDIR:-/tmp}/editor-ui-authorize-status.XXXXXX")"
+    rm -f "$status_file"
+
+    (
+        /usr/sbin/DevToolsSecurity -enable
+        printf '%s\n' "$?" >"$status_file"
+    ) &
+    local authorize_pid=$!
+    local elapsed=0
+
+    while [[ ! -e "$status_file" ]]; do
+        if ! kill -0 "$authorize_pid" 2>/dev/null; then
+            break
+        fi
+
+        if (( elapsed >= timeout_seconds )); then
+            pkill -TERM -P "$authorize_pid" 2>/dev/null || true
+            kill -TERM "$authorize_pid" 2>/dev/null || true
+            sleep 1
+            pkill -KILL -P "$authorize_pid" 2>/dev/null || true
+            kill -KILL "$authorize_pid" 2>/dev/null || true
+            wait "$authorize_pid" 2>/dev/null || true
+            rm -f "$status_file"
+            cat >&2 <<EOF
+
+macOS UI Automation authorization did not complete within ${timeout_seconds}s.
+Approve the local system prompt when it appears, then rerun:
+
+  scripts/mac_ui_test.sh authorize
+EOF
+            return 65
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    wait "$authorize_pid" 2>/dev/null || true
+    local authorize_status=1
+    if [[ -e "$status_file" ]]; then
+        authorize_status="$(cat "$status_file")"
+    fi
+    rm -f "$status_file"
+
+    if [[ "$authorize_status" -ne 0 ]]; then
+        echo "DevToolsSecurity authorization command exited with status $authorize_status." >&2
+        return "$authorize_status"
+    fi
+
     echo
     run_doctor
 }
