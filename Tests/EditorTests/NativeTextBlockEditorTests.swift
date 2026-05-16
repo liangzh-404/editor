@@ -444,6 +444,52 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertNil(ListBlockOrdinalResolver.ordinal(for: intro, at: 0, in: blocks))
     }
 
+    func testHeadingBlockChromeDescriptorExposesSemanticHeadingLevels() {
+        let heading1 = BlockSnapshot(
+            id: "heading-1",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .heading1,
+            textPlain: "Main heading"
+        )
+        let heading2 = BlockSnapshot(
+            id: "heading-2",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "b",
+            type: .heading2,
+            textPlain: ""
+        )
+        let heading3 = BlockSnapshot(
+            id: "heading-3",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "c",
+            type: .heading3,
+            textPlain: "Detail heading"
+        )
+
+        let heading1Descriptor = HeadingBlockChromeDescriptor(block: heading1)
+        let heading2Descriptor = HeadingBlockChromeDescriptor(block: heading2)
+        let heading3Descriptor = HeadingBlockChromeDescriptor(block: heading3)
+
+        XCTAssertEqual(heading1Descriptor.level, 1)
+        XCTAssertEqual(heading1Descriptor.accessibilityLabel, "Heading 1 block")
+        XCTAssertEqual(heading1Descriptor.accessibilityValue, "Main heading")
+        XCTAssertEqual(heading1Descriptor.accessibilityIdentifier, "editor.heading1.heading-1")
+
+        XCTAssertEqual(heading2Descriptor.level, 2)
+        XCTAssertEqual(heading2Descriptor.accessibilityLabel, "Heading 2 block")
+        XCTAssertEqual(heading2Descriptor.accessibilityValue, "Empty")
+        XCTAssertEqual(heading2Descriptor.accessibilityIdentifier, "editor.heading2.heading-2")
+
+        XCTAssertEqual(heading3Descriptor.level, 3)
+        XCTAssertEqual(heading3Descriptor.accessibilityLabel, "Heading 3 block")
+        XCTAssertEqual(heading3Descriptor.accessibilityValue, "Detail heading")
+        XCTAssertEqual(heading3Descriptor.accessibilityIdentifier, "editor.heading3.heading-3")
+    }
+
     func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicStrikethroughAndCodeShortcutsOnly() {
         XCTAssertEqual(
             MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command]),

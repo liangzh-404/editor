@@ -3360,6 +3360,35 @@ struct ListBlockOrdinalResolver: Equatable, Sendable {
     }
 }
 
+struct HeadingBlockChromeDescriptor: Equatable, Sendable {
+    let level: Int
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let accessibilityIdentifier: String
+
+    init(block: BlockSnapshot) {
+        switch block.type {
+        case .heading1:
+            level = 1
+            accessibilityLabel = "Heading 1 block"
+            accessibilityIdentifier = "editor.heading1.\(block.id)"
+        case .heading2:
+            level = 2
+            accessibilityLabel = "Heading 2 block"
+            accessibilityIdentifier = "editor.heading2.\(block.id)"
+        case .heading3:
+            level = 3
+            accessibilityLabel = "Heading 3 block"
+            accessibilityIdentifier = "editor.heading3.\(block.id)"
+        default:
+            level = 0
+            accessibilityLabel = "Text block"
+            accessibilityIdentifier = "editor.block.\(block.id)"
+        }
+        accessibilityValue = block.textPlain.isEmpty ? "Empty" : block.textPlain
+    }
+}
+
 private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
@@ -3617,7 +3646,16 @@ private struct BlockRowView: View {
 
     @ViewBuilder
     private var textEditableBlockContent: some View {
-        if block.type == .unorderedListItem || block.type == .orderedListItem {
+        if block.type == .heading1 || block.type == .heading2 || block.type == .heading3 {
+            let descriptor = HeadingBlockChromeDescriptor(block: block)
+            nativeTextBlockEditor
+                .padding(.vertical, descriptor.level == 1 ? 2 : 1)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(descriptor.accessibilityLabel)
+                .accessibilityValue(descriptor.accessibilityValue)
+                .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+                .accessibilityAddTraits(.isHeader)
+        } else if block.type == .unorderedListItem || block.type == .orderedListItem {
             let descriptor = ListBlockChromeDescriptor(block: block, ordinal: listOrdinal)
             HStack(alignment: .top, spacing: 8) {
                 Text(descriptor.marker)
