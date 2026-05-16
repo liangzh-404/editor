@@ -989,6 +989,42 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testCodeBlockTypeRendersCodeChromeAndKeepsTextEditable() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
+        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
+        blockTypeMenu.click()
+
+        let codeMenuItem = app.menuItems["Code"]
+        XCTAssertTrue(codeMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Code type")
+        codeMenuItem.click()
+
+        let codeBlock = app.element(identifier: "editor.code.block-welcome-001")
+        XCTAssertTrue(codeBlock.waitForExistence(timeout: 5), "Changing a text block to Code should render visible code chrome")
+        XCTAssertTrue(
+            codeBlock.waitForLabelOrValue(containing: "Code block", timeout: 5),
+            "Code chrome should expose a semantic container label"
+        )
+        XCTAssertTrue(
+            codeBlock.waitForLabelOrValue(containing: "Line wrap enabled", timeout: 5),
+            "Code chrome should expose the current line-wrap state"
+        )
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Code blocks should keep the native text editor")
+        textView.click()
+        XCTAssertTrue(textView.waitForKeyboardFocus(timeout: 5), "Code text should be directly editable")
+        app.typeText(" let value = 1")
+        XCTAssertTrue(
+            textView.waitForValue(containing: "let value = 1", timeout: 5),
+            "Typing in a code block should still update the native text view"
+        )
+    }
+
+    @MainActor
     func testBlockActionControlsExposeSemanticLabelsAndAvailability() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

@@ -3098,7 +3098,34 @@ private struct BlockRowView: View {
 
     @ViewBuilder
     private var textEditableBlockContent: some View {
-        if block.type == .callout {
+        if block.type == .codeBlock {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: block.type.editorMenuSystemImage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+
+                    Spacer(minLength: 8)
+
+                    codeBlockWrapButton
+                }
+
+                nativeTextBlockEditor
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(Color(red: 0.98, green: 0.98, blue: 0.96))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(codeBlockAccessibilityLabel)
+            .accessibilityValue(block.codeBlockLineWrapping ? "Line wrap enabled" : "Line wrap disabled")
+            .accessibilityIdentifier("editor.code.\(block.id)")
+        } else if block.type == .callout {
             HStack(alignment: .top, spacing: 8) {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Color.accentColor.opacity(0.35))
@@ -3161,18 +3188,26 @@ private struct BlockRowView: View {
         }
 
         if block.type == .codeBlock {
-            Button {
-                onCodeBlockLineWrappingChange(!block.codeBlockLineWrapping)
-            } label: {
-                Image(systemName: "text.alignleft")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(block.codeBlockLineWrapping ? .primary : .secondary)
-            .help(block.codeBlockLineWrapping ? "Disable line wrap" : "Enable line wrap")
-            .accessibilityLabel(block.codeBlockLineWrapping ? "Disable code line wrap" : "Enable code line wrap")
-            .accessibilityValue(block.codeBlockLineWrapping ? "Line wrap enabled" : "Line wrap disabled")
-            .accessibilityIdentifier("editor.block.\(block.id).code-wrap")
+            codeBlockWrapButton
         }
+    }
+
+    private var codeBlockWrapButton: some View {
+        Button {
+            onCodeBlockLineWrappingChange(!block.codeBlockLineWrapping)
+        } label: {
+            Image(systemName: "text.alignleft")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(block.codeBlockLineWrapping ? .primary : .secondary)
+        .help(block.codeBlockLineWrapping ? "Disable line wrap" : "Enable line wrap")
+        .accessibilityLabel(block.codeBlockLineWrapping ? "Disable code line wrap" : "Enable code line wrap")
+        .accessibilityValue(block.codeBlockLineWrapping ? "Line wrap enabled" : "Line wrap disabled")
+        .accessibilityIdentifier("editor.block.\(block.id).code-wrap")
+    }
+
+    private var codeBlockAccessibilityLabel: String {
+        block.codeBlockLineWrapping ? "Code block, Line wrap enabled" : "Code block, Line wrap disabled"
     }
 
     private var nativeTextBlockEditor: some View {
