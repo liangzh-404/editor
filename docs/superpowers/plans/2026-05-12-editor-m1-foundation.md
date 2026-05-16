@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Current planning note:** This M1 plan is historical and already executed. The active follow-on implementation plan for the restarted goal is `docs/superpowers/plans/2026-05-16-block-first-information-architecture.md`, based on `docs/superpowers/specs/2026-05-16-block-first-information-architecture-design.md`.
+
 **Goal:** Build the first runnable macOS and iOS foundation for the local-first block editor: project scaffold, clean three-column/mobile shell, SQLite schema, repositories, and basic local page rendering.
 
 **Architecture:** Use XcodeGen to create a small multi-target Xcode project with separate macOS and iOS app targets sharing Swift sources. SQLite is accessed through a focused database/migrator/repository layer. The app shows local repository data through a `WorkspaceViewModel` and does not depend on CloudKit in M1.

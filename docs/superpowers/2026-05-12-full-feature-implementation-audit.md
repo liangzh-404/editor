@@ -534,18 +534,18 @@ Implement the approved editor architecture so the app supports the full requeste
 
 ## Next Implementation Slice
 
-The completed attachment slice proves:
+The active product direction is now the block-first information architecture in `docs/superpowers/specs/2026-05-16-block-first-information-architecture-design.md`.
 
-1. Import copies a file into an app-managed attachments directory.
-2. Attachment metadata is stored in SQLite.
-3. An attachment block is inserted into the current page.
-4. Reloading the repository returns the attachment block and metadata.
-5. The app exposes an insertion command and renders image, video, and file attachment rows.
+The active implementation plan is `docs/superpowers/plans/2026-05-16-block-first-information-architecture.md`.
 
 The next concrete gaps should now be executed in user-visible order:
 
-1. Continue user-visible writing-flow polish after the Return-at-caret split, Backspace-at-start merge, Forward-Delete-at-end merge, Cmd-B same-format toggle-off, fully selected span toggle-off, and Cmd-E inline-code shortcut slices.
-2. Remaining advanced block UI polish for broader reference/backlink navigation polish.
-3. Richer conflict workflow polish, especially clearer manual merge and batch-resolution UX.
-4. Live iCloud validation of the zone-delta/silent-push path, on-device silent-push delivery proof, and macOS CloudKit target entitlement once Xcode account/provisioning is available.
-5. Performance optimization and deeper Instruments/signpost analysis after the user-facing feature/UI/UX slices above.
+1. Add tag and diary schema/model foundations while preserving existing pages, favorites, archive, search, sync, and Notebook compatibility data.
+2. Add All Documents as the visible middle-column default, sorted by `updated_at DESC`.
+3. Add diary storage and make app launch land in a blank, immediately editable diary surface.
+4. Include diary text in search while excluding it from All Documents and tag-filtered document lists.
+5. Add text-only diary promotion through `Cmd+]` and a visible Promote to Page action.
+6. Add nested tag creation, page tag assignment, tag filtering, and compact page-row tag display.
+7. Hide or de-emphasize Notebook navigation from the primary shell while keeping legacy data loadable.
+8. Re-run focused unit/UI/build verification, then update this audit with implementation evidence.
+9. Resume deeper performance work only after the block-first UI/UX path is implemented and verified.
