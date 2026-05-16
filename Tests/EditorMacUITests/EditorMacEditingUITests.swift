@@ -917,6 +917,49 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testTaskBlockTypeRendersTaskChromeAndKeepsTextEditable() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
+        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
+        blockTypeMenu.click()
+
+        let taskMenuItem = app.menuItems["Task"]
+        XCTAssertTrue(taskMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Task type")
+        taskMenuItem.click()
+
+        let taskBlock = app.element(identifier: "editor.task.block-welcome-001")
+        XCTAssertTrue(taskBlock.waitForExistence(timeout: 5), "Changing a text block to Task should render visible task chrome")
+        XCTAssertTrue(
+            taskBlock.waitForLabelOrValue(containing: "Task block", timeout: 5),
+            "Task chrome should expose a semantic container label"
+        )
+        XCTAssertTrue(
+            taskBlock.waitForLabelOrValue(containing: "Incomplete", timeout: 5),
+            "Task chrome should expose the initial completion state"
+        )
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Task blocks should keep the native text editor")
+        textView.click()
+        XCTAssertTrue(textView.waitForKeyboardFocus(timeout: 5), "Task text should be directly editable")
+        app.typeText(" Done")
+        XCTAssertTrue(
+            textView.waitForValue(containing: "Done", timeout: 5),
+            "Typing in a task should still update the native text view"
+        )
+
+        let taskToggle = app.buttons["editor.block.block-welcome-001.task-toggle"]
+        taskToggle.click()
+        XCTAssertTrue(
+            taskBlock.waitForLabelOrValue(containing: "Completed", timeout: 5),
+            "Completing the task should update the block chrome state"
+        )
+    }
+
+    @MainActor
     func testToggleBlockButtonExposesAndUpdatesExpansionState() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

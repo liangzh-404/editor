@@ -3106,7 +3106,26 @@ private struct BlockRowView: View {
 
     @ViewBuilder
     private var textEditableBlockContent: some View {
-        if block.type == .codeBlock {
+        if block.type == .taskItem {
+            HStack(alignment: .top, spacing: 8) {
+                taskItemCompletionButton
+                    .padding(.top, 1)
+
+                nativeTextBlockEditor
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(Color.green.opacity(0.04))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.green.opacity(0.18), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(taskBlockAccessibilityLabel)
+            .accessibilityValue(block.taskItemIsCompleted ? "Completed" : "Incomplete")
+            .accessibilityIdentifier("editor.task.\(block.id)")
+        } else if block.type == .codeBlock {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Image(systemName: block.type.editorMenuSystemImage)
@@ -3187,17 +3206,7 @@ private struct BlockRowView: View {
     @ViewBuilder
     private var textBlockLeadingControls: some View {
         if block.type == .taskItem {
-            Button {
-                onTaskItemCompletionChange(!block.taskItemIsCompleted)
-            } label: {
-                Image(systemName: block.taskItemIsCompleted ? "checkmark.circle.fill" : "circle")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(block.taskItemIsCompleted ? .green : .secondary)
-            .help(block.taskItemIsCompleted ? "Mark incomplete" : "Mark complete")
-            .accessibilityLabel(block.taskItemIsCompleted ? "Mark task incomplete" : "Mark task complete")
-            .accessibilityValue(block.taskItemIsCompleted ? "Completed" : "Incomplete")
-            .accessibilityIdentifier("editor.block.\(block.id).task-toggle")
+            taskItemCompletionButton
         }
 
         if block.type == .toggle {
@@ -3207,6 +3216,20 @@ private struct BlockRowView: View {
         if block.type == .codeBlock {
             codeBlockWrapButton
         }
+    }
+
+    private var taskItemCompletionButton: some View {
+        Button {
+            onTaskItemCompletionChange(!block.taskItemIsCompleted)
+        } label: {
+            Image(systemName: block.taskItemIsCompleted ? "checkmark.circle.fill" : "circle")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(block.taskItemIsCompleted ? .green : .secondary)
+        .help(block.taskItemIsCompleted ? "Mark incomplete" : "Mark complete")
+        .accessibilityLabel(block.taskItemIsCompleted ? "Mark task incomplete" : "Mark task complete")
+        .accessibilityValue(block.taskItemIsCompleted ? "Completed" : "Incomplete")
+        .accessibilityIdentifier("editor.block.\(block.id).task-toggle")
     }
 
     private var toggleBlockExpansionButton: some View {
@@ -3243,6 +3266,10 @@ private struct BlockRowView: View {
 
     private var toggleBlockAccessibilityLabel: String {
         isToggleBlockExpanded ? "Toggle block, Expanded" : "Toggle block, Collapsed"
+    }
+
+    private var taskBlockAccessibilityLabel: String {
+        block.taskItemIsCompleted ? "Task block, Completed" : "Task block, Incomplete"
     }
 
     private var nativeTextBlockEditor: some View {
