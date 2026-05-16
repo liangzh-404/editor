@@ -599,6 +599,25 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testExportTableBlockUsesStructuredRowsWhenAvailable() {
+        let blocks = [
+            block(
+                type: .table,
+                text: "stale table text",
+                tableRows: [["Name", "Status"], ["Editor", "Draft"]]
+            )
+        ]
+
+        XCTAssertEqual(
+            MarkdownTransformer.export(blocks: blocks),
+            """
+            | Name | Status |
+            | --- | --- |
+            | Editor | Draft |
+            """
+        )
+    }
+
     func testExportCompletedTaskItemToMarkdown() {
         XCTAssertEqual(
             MarkdownTransformer.export(
@@ -747,7 +766,8 @@ final class MarkdownTransformerTests: XCTestCase {
     private func block(
         type: BlockType,
         text: String,
-        taskItemIsCompleted: Bool = false
+        taskItemIsCompleted: Bool = false,
+        tableRows: [[String]] = []
     ) -> BlockSnapshot {
         BlockSnapshot(
             id: UUID().uuidString,
@@ -756,7 +776,8 @@ final class MarkdownTransformerTests: XCTestCase {
             orderKey: "000001",
             type: type,
             textPlain: text,
-            taskItemIsCompleted: taskItemIsCompleted
+            taskItemIsCompleted: taskItemIsCompleted,
+            tableRows: tableRows
         )
     }
 }

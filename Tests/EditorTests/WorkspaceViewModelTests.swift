@@ -1332,6 +1332,73 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdateTableRowsPersistsStructuredPayloadAndMarkdownExportText() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.changeBlockType(blockID: blockID, type: .table)
+        try viewModel.updateTableRows(
+            blockID: blockID,
+            rows: [["Name", "Status"], ["Editor", "Draft"]]
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.tableRows, [["Name", "Status"], ["Editor", "Draft"]])
+        XCTAssertEqual(
+            viewModel.visibleBlocks.first?.textPlain,
+            """
+            | Name | Status |
+            | --- | --- |
+            | Editor | Draft |
+            """
+        )
+
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.tableRows, [["Name", "Status"], ["Editor", "Draft"]])
+    }
+
+    @MainActor
+    func testUndoLastTextEditRestoresPreviousStructuredTableRows() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let initialRows = [["Name", "Status"], ["Editor", "Draft"]]
+        let initialTable = MarkdownTableDocument(rows: initialRows)
+        try repository.updateBlock(
+            blockID: blockID,
+            type: .table,
+            text: initialTable.markdown,
+            tableRows: initialRows
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        try viewModel.updateTableRows(
+            blockID: blockID,
+            rows: [["Name", "Status"], ["Editor", "Ready"]]
+        )
+        try viewModel.undoLastTextEdit()
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.tableRows, initialRows)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, initialTable.markdown)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.tableRows, initialRows)
+    }
+
+    @MainActor
     func testRemoveExistingMarkdownLinkAtSelectionRefreshesExternalLinksAndReturnsLabelSelection() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -58,6 +58,41 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "Edited locally")
     }
 
+    func testTableBlockPersistsStructuredRowsInPayload() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(initialSnapshot.blocks.first?.id)
+
+        try repository.updateBlock(
+            blockID: blockID,
+            type: .table,
+            text:
+                """
+                | Name | Status |
+                | --- | --- |
+                | Editor | Draft |
+                """
+        )
+
+        let payloadJSON = try XCTUnwrap(
+            try database.query(
+                "SELECT payload_json FROM blocks WHERE id = ? LIMIT 1",
+                bindings: [.text(blockID)]
+            ).first?["payload_json"]
+        )
+        let payload = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(payloadJSON.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(payload["rows"] as? [[String]], [["Name", "Status"], ["Editor", "Draft"]])
+
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.tableRows, [["Name", "Status"], ["Editor", "Draft"]])
+    }
+
     func testUpdatePageTitlePersistsAndQueuesSyncChange() throws {
         let database = try migratedDatabase()
         defer { database.close() }

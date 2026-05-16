@@ -176,6 +176,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
     let codeBlockLineWrapping: Bool
     let pageReferenceTargetPageID: String?
     let blockReferenceTargetBlockID: String?
+    let tableRows: [[String]]
 
     init(
         id: String,
@@ -188,7 +189,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
         toggleIsExpanded: Bool = true,
         codeBlockLineWrapping: Bool = true,
         pageReferenceTargetPageID: String? = nil,
-        blockReferenceTargetBlockID: String? = nil
+        blockReferenceTargetBlockID: String? = nil,
+        tableRows: [[String]] = []
     ) {
         self.id = id
         self.pageID = pageID
@@ -201,6 +203,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
         self.codeBlockLineWrapping = codeBlockLineWrapping
         self.pageReferenceTargetPageID = pageReferenceTargetPageID
         self.blockReferenceTargetBlockID = blockReferenceTargetBlockID
+        self.tableRows = Self.normalizedTableRows(type: type, text: textPlain, rows: tableRows)
     }
 
     func replacingText(_ text: String) -> BlockSnapshot {
@@ -219,7 +222,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             toggleIsExpanded: type == .toggle && self.type == .toggle ? toggleIsExpanded : true,
             codeBlockLineWrapping: type == .codeBlock && self.type == .codeBlock ? codeBlockLineWrapping : true,
             pageReferenceTargetPageID: type == .pageReference || type == .blockReference ? pageReferenceTargetPageID : nil,
-            blockReferenceTargetBlockID: type == .blockReference ? blockReferenceTargetBlockID : nil
+            blockReferenceTargetBlockID: type == .blockReference ? blockReferenceTargetBlockID : nil,
+            tableRows: type == .table && self.type == .table ? tableRows : []
         )
     }
 
@@ -235,7 +239,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             toggleIsExpanded: toggleIsExpanded,
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
-            blockReferenceTargetBlockID: blockReferenceTargetBlockID
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            tableRows: tableRows
         )
     }
 
@@ -251,7 +256,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             toggleIsExpanded: type == .toggle ? isExpanded : true,
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
-            blockReferenceTargetBlockID: blockReferenceTargetBlockID
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            tableRows: tableRows
         )
     }
 
@@ -267,8 +273,43 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             toggleIsExpanded: toggleIsExpanded,
             codeBlockLineWrapping: type == .codeBlock ? isWrapped : true,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
-            blockReferenceTargetBlockID: blockReferenceTargetBlockID
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            tableRows: tableRows
         )
+    }
+
+    func replacingTableRows(_ rows: [[String]], text: String) -> BlockSnapshot {
+        BlockSnapshot(
+            id: id,
+            pageID: pageID,
+            parentBlockID: parentBlockID,
+            orderKey: orderKey,
+            type: type,
+            textPlain: text,
+            taskItemIsCompleted: taskItemIsCompleted,
+            toggleIsExpanded: toggleIsExpanded,
+            codeBlockLineWrapping: codeBlockLineWrapping,
+            pageReferenceTargetPageID: pageReferenceTargetPageID,
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            tableRows: type == .table ? rows : []
+        )
+    }
+
+    private static func normalizedTableRows(type: BlockType, text: String, rows: [[String]]) -> [[String]] {
+        guard type == .table else {
+            return []
+        }
+
+        if !rows.isEmpty {
+            return MarkdownTableDocument(rows: rows).rows
+        }
+
+        let parsedRows = MarkdownTableDocument(markdown: text).rows
+        if !parsedRows.isEmpty {
+            return parsedRows
+        }
+
+        return [[text]]
     }
 }
 
@@ -403,6 +444,25 @@ extension WorkspaceSnapshot {
         }
 
         return replacingBlock(blockID: blockID, type: block.type, text: text)
+    }
+
+    func replacingTableRows(blockID: String, rows: [[String]], text: String) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages,
+            archivedPages: archivedPages,
+            blocks: blocks.map { block in
+                block.id == blockID ? block.replacingTableRows(rows, text: text) : block
+            },
+            attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
     }
 
     func replacingTaskItemCompletion(blockID: String, isCompleted: Bool) -> WorkspaceSnapshot {

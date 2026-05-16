@@ -43,6 +43,10 @@ struct MarkdownTableDocument: Equatable, Sendable {
         }
     }
 
+    init(rows: [[String]]) {
+        self.rows = Self.normalizedRows(rows)
+    }
+
     var columnCount: Int {
         rows.map(\.count).max() ?? 0
     }
@@ -128,6 +132,17 @@ struct MarkdownTableDocument: Equatable, Sendable {
             return !trimmed.isEmpty && trimmed.allSatisfy { character in
                 character == "-" || character == ":"
             }
+        }
+    }
+
+    private static func normalizedRows(_ rows: [[String]]) -> [[String]] {
+        let columnCount = rows.map(\.count).max() ?? 0
+        guard columnCount > 0 else {
+            return [[""]]
+        }
+
+        return rows.map { row in
+            row + Array(repeating: "", count: max(columnCount - row.count, 0))
         }
     }
 
@@ -1164,6 +1179,9 @@ enum MarkdownTransformer {
         case .codeBlock:
             return "```\n\(block.textPlain)\n```"
         case .table:
+            if !block.tableRows.isEmpty {
+                return MarkdownTableDocument(rows: block.tableRows).markdown
+            }
             return block.textPlain
         case .callout:
             return "> [!NOTE] \(block.textPlain)"

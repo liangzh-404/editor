@@ -699,7 +699,8 @@ final class WorkspaceViewModel: ObservableObject {
             try repository.updateBlock(
                 blockID: undoSnapshot.blockID,
                 type: undoSnapshot.previousType,
-                text: undoSnapshot.previousText
+                text: undoSnapshot.previousText,
+                tableRows: undoSnapshot.previousType == .table ? undoSnapshot.previousTableRows : nil
             )
         }
 
@@ -708,6 +709,13 @@ final class WorkspaceViewModel: ObservableObject {
             type: undoSnapshot.previousType,
             text: undoSnapshot.previousText
         )
+        if undoSnapshot.previousType == .table {
+            snapshot = snapshot.replacingTableRows(
+                blockID: undoSnapshot.blockID,
+                rows: undoSnapshot.previousTableRows,
+                text: undoSnapshot.previousText
+            )
+        }
         try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: undoSnapshot.blockID)
         _ = textEditUndoStack.popLast()
         refreshTextEditUndoAvailability()
@@ -747,6 +755,43 @@ final class WorkspaceViewModel: ObservableObject {
             text: block.textPlain
         )
         try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
+    }
+
+    func updateTableRows(blockID: String, rows: [[String]]) throws {
+        guard let currentBlock = snapshot.blocks.first(where: { $0.id == blockID }),
+              currentBlock.type == .table else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        let table = MarkdownTableDocument(rows: rows)
+        let undoSnapshot = makeTextEditUndoSnapshot(
+            blockID: blockID,
+            currentBlock: currentBlock,
+            nextType: .table,
+            nextText: table.markdown,
+            registerUndo: true
+        )
+
+        if let repository {
+            try repository.updateBlock(
+                blockID: blockID,
+                type: .table,
+                text: table.markdown,
+                tableRows: table.rows
+            )
+        }
+
+        snapshot = snapshot.replacingTableRows(blockID: blockID, rows: table.rows, text: table.markdown)
+        try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
+
+        if let undoSnapshot {
+            recordTextEditUndoSnapshot(
+                undoSnapshot,
+                currentBlock: currentBlock,
+                nextType: .table
+            )
+            refreshTextEditUndoAvailability()
+        }
     }
 
     func updateTaskItemCompletion(blockID: String, isCompleted: Bool) throws {
@@ -808,6 +853,17 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "block_type_change_failed id=\(blockID, privacy: .public) type=\(type.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func updateTableRowsForUI(blockID: String, rows: [[String]]) {
+        do {
+            try updateTableRows(blockID: blockID, rows: rows)
+            EditorLog.input.debug("table_rows_updated block_id=\(blockID, privacy: .public)")
+        } catch {
+            EditorLog.input.error(
+                "table_rows_update_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }
@@ -2237,7 +2293,8 @@ final class WorkspaceViewModel: ObservableObject {
         return TextEditUndoSnapshot(
             blockID: blockID,
             previousType: currentBlock.type,
-            previousText: currentBlock.textPlain
+            previousText: currentBlock.textPlain,
+            previousTableRows: currentBlock.tableRows
         )
     }
 
@@ -2299,6 +2356,7 @@ private struct TextEditUndoSnapshot {
     let blockID: String
     let previousType: BlockType
     let previousText: String
+    let previousTableRows: [[String]]
 }
 
 private struct PageArchiveUndoSnapshot {

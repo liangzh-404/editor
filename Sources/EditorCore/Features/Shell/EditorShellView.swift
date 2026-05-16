@@ -231,6 +231,9 @@ private struct ThreeColumnEditorShell: View {
                     onBlockTextChange: { blockID, text in
                         viewModel.editBlockText(blockID: blockID, text: text)
                     },
+                    onTableRowsChange: { blockID, rows in
+                        viewModel.updateTableRowsForUI(blockID: blockID, rows: rows)
+                    },
                     onBlockTypeChange: { blockID, type in
                         viewModel.changeBlockTypeForUI(blockID: blockID, type: type)
                     },
@@ -631,6 +634,9 @@ private struct CompactPageDestination: View {
                 },
                 onBlockTextChange: { blockID, text in
                     viewModel.editBlockText(blockID: blockID, text: text)
+                },
+                onTableRowsChange: { blockID, rows in
+                    viewModel.updateTableRowsForUI(blockID: blockID, rows: rows)
                 },
                 onBlockTypeChange: { blockID, type in
                     viewModel.changeBlockTypeForUI(blockID: blockID, type: type)
@@ -1854,6 +1860,7 @@ private struct EditorCanvasView: View {
     let onImportMarkdown: (URL) -> Void
     let onExportMarkdown: () -> String
     let onBlockTextChange: (String, String) -> Void
+    let onTableRowsChange: (String, [[String]]) -> Void
     let onBlockTypeChange: (String, BlockType) -> Void
     let onTaskItemCompletionChange: (String, Bool) -> Void
     let onCodeBlockLineWrappingChange: (String, Bool) -> Void
@@ -2137,6 +2144,9 @@ private struct EditorCanvasView: View {
                             if pendingFocusBlockID == block.id {
                                 onPendingBlockFocusHandled()
                             }
+                        },
+                        onTableRowsChange: { rows in
+                            onTableRowsChange(block.id, rows)
                         }
                     ) { text in
                         onBlockTextChange(block.id, text)
@@ -3529,6 +3539,7 @@ private struct BlockRowView: View {
     let focusRequestID: UUID?
     let focusSelection: EditorTextSelection?
     let onFocusRequestHandled: () -> Void
+    let onTableRowsChange: ([[String]]) -> Void
     let onTextChange: (String) -> Void
     @State private var rowFocusRequest: BlockFocusRequest?
 
@@ -3564,6 +3575,7 @@ private struct BlockRowView: View {
         focusRequestID: UUID? = nil,
         focusSelection: EditorTextSelection? = nil,
         onFocusRequestHandled: @escaping () -> Void = {},
+        onTableRowsChange: @escaping ([[String]]) -> Void = { _ in },
         onTextChange: @escaping (String) -> Void
     ) {
         self.block = block
@@ -3597,6 +3609,7 @@ private struct BlockRowView: View {
         self.focusRequestID = focusRequestID
         self.focusSelection = focusSelection
         self.onFocusRequestHandled = onFocusRequestHandled
+        self.onTableRowsChange = onTableRowsChange
         self.onTextChange = onTextChange
     }
 
@@ -3696,7 +3709,8 @@ private struct BlockRowView: View {
                 StructuredTableBlockEditor(
                     blockID: block.id,
                     text: block.textPlain,
-                    onTextChange: onTextChange
+                    rows: block.tableRows,
+                    onRowsChange: onTableRowsChange
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else if block.type.isTextEditable {
@@ -4052,10 +4066,11 @@ private struct BlockRowView: View {
 private struct StructuredTableBlockEditor: View {
     let blockID: String
     let text: String
-    let onTextChange: (String) -> Void
+    let rows: [[String]]
+    let onRowsChange: ([[String]]) -> Void
 
     private var table: MarkdownTableDocument {
-        MarkdownTableDocument(markdown: text)
+        MarkdownTableDocument(rows: editableRows)
     }
 
     var body: some View {
@@ -4156,8 +4171,13 @@ private struct StructuredTableBlockEditor: View {
     }
 
     private var editableRows: [[String]] {
-        if !table.rows.isEmpty {
-            return table.rows
+        if !rows.isEmpty {
+            return rows
+        }
+
+        let markdownRows = MarkdownTableDocument(markdown: text).rows
+        if !markdownRows.isEmpty {
+            return markdownRows
         }
 
         return [[text]]
@@ -4181,44 +4201,37 @@ private struct StructuredTableBlockEditor: View {
             return rows[rowIndex][columnIndex]
         } set: { value in
             var updatedTable = table
-            if updatedTable.rows.isEmpty {
-                updatedTable = MarkdownTableDocument(markdown: "| \(text) |\n| --- |")
-            }
             updatedTable.updateCell(row: rowIndex, column: columnIndex, text: value)
-            onTextChange(updatedTable.markdown)
+            onRowsChange(updatedTable.rows)
         }
     }
 
     private func appendRow() {
         var updatedTable = normalizedTable()
         updatedTable.appendRow()
-        onTextChange(updatedTable.markdown)
+        onRowsChange(updatedTable.rows)
     }
 
     private func appendColumn() {
         var updatedTable = normalizedTable()
         updatedTable.appendColumn()
-        onTextChange(updatedTable.markdown)
+        onRowsChange(updatedTable.rows)
     }
 
     private func removeLastRow() {
         var updatedTable = normalizedTable()
         updatedTable.removeLastRow()
-        onTextChange(updatedTable.markdown)
+        onRowsChange(updatedTable.rows)
     }
 
     private func removeLastColumn() {
         var updatedTable = normalizedTable()
         updatedTable.removeLastColumn()
-        onTextChange(updatedTable.markdown)
+        onRowsChange(updatedTable.rows)
     }
 
     private func normalizedTable() -> MarkdownTableDocument {
-        if !table.rows.isEmpty {
-            return table
-        }
-
-        return MarkdownTableDocument(markdown: "| \(text) |\n| --- |")
+        table
     }
 }
 

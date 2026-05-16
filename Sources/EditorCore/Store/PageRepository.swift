@@ -730,7 +730,8 @@ final class PageRepository {
         text: String,
         taskItemIsCompleted explicitTaskItemIsCompleted: Bool? = nil,
         toggleIsExpanded explicitToggleIsExpanded: Bool? = nil,
-        codeBlockLineWrapping explicitCodeBlockLineWrapping: Bool? = nil
+        codeBlockLineWrapping explicitCodeBlockLineWrapping: Bool? = nil,
+        tableRows explicitTableRows: [[String]]? = nil
     ) throws {
         let now = Self.timestamp()
         let taskItemIsCompleted: Bool
@@ -768,7 +769,8 @@ final class PageRepository {
             text: text,
             taskItemIsCompleted: taskItemIsCompleted,
             toggleIsExpanded: toggleIsExpanded,
-            codeBlockLineWrapping: codeBlockLineWrapping
+            codeBlockLineWrapping: codeBlockLineWrapping,
+            tableRows: explicitTableRows
         )
 
         try database.execute(
@@ -1169,7 +1171,8 @@ final class PageRepository {
             taskItemIsCompleted: taskItemIsCompleted,
             codeBlockLineWrapping: type == .codeBlock,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
-            blockReferenceTargetBlockID: blockReferenceTargetBlockID
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            tableRows: Self.tableRows(type: type, payloadJSON: "", text: text)
         )
     }
 
@@ -1532,12 +1535,13 @@ final class PageRepository {
             """,
             bindings: pageIDs.map(SQLiteValue.text)
         ).map { row in
-            BlockSnapshot(
+            let type = BlockType(rawValue: row["type"] ?? "") ?? .paragraph
+            return BlockSnapshot(
                 id: row["id"] ?? "",
                 pageID: row["page_id"] ?? "",
                 parentBlockID: row["parent_block_id"] ?? nil,
                 orderKey: row["order_key"] ?? "",
-                type: BlockType(rawValue: row["type"] ?? "") ?? .paragraph,
+                type: type,
                 textPlain: row["text_plain"] ?? "",
                 taskItemIsCompleted: Self.taskItemIsCompleted(
                     payloadJSON: row["payload_json"] ?? ""
@@ -1553,6 +1557,11 @@ final class PageRepository {
                 ),
                 blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(
                     payloadJSON: row["payload_json"] ?? ""
+                ),
+                tableRows: Self.tableRows(
+                    type: type,
+                    payloadJSON: row["payload_json"] ?? "",
+                    text: row["text_plain"] ?? ""
                 )
             )
         }
@@ -1772,7 +1781,8 @@ final class PageRepository {
         toggleIsExpanded: Bool = true,
         codeBlockLineWrapping: Bool = true,
         pageReferenceTargetPageID: String? = nil,
-        blockReferenceTargetBlockID: String? = nil
+        blockReferenceTargetBlockID: String? = nil,
+        tableRows explicitTableRows: [[String]]? = nil
     ) throws -> String {
         let payload: [String: Any]
         switch type {
@@ -1792,6 +1802,12 @@ final class PageRepository {
             payload = [
                 "line_wrapping": codeBlockLineWrapping,
                 "text": text
+            ]
+        case .table:
+            let tableRows = Self.normalizedTableRows(text: text, explicitRows: explicitTableRows)
+            payload = [
+                "rows": tableRows,
+                "text": MarkdownTableDocument(rows: tableRows).markdown
             ]
         case .pageReference:
             payload = [
@@ -1818,6 +1834,34 @@ final class PageRepository {
         }
 
         return payload
+    }
+
+    private static func normalizedTableRows(text: String, explicitRows: [[String]]?) -> [[String]] {
+        if let explicitRows, !explicitRows.isEmpty {
+            return MarkdownTableDocument(rows: explicitRows).rows
+        }
+
+        let parsedRows = MarkdownTableDocument(markdown: text).rows
+        if !parsedRows.isEmpty {
+            return parsedRows
+        }
+
+        return [[text]]
+    }
+
+    private static func tableRows(type: BlockType, payloadJSON: String, text: String) -> [[String]] {
+        guard type == .table else {
+            return []
+        }
+
+        if let data = payloadJSON.data(using: .utf8),
+           let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let rows = payload["rows"] as? [[String]],
+           !rows.isEmpty {
+            return MarkdownTableDocument(rows: rows).rows
+        }
+
+        return normalizedTableRows(text: text, explicitRows: nil)
     }
 
     private func currentTaskItemCompletion(blockID: String) throws -> Bool? {
