@@ -747,7 +747,7 @@ git commit -m "Index diary text in search"
 - Modify: `Sources/EditorApp/AppEnvironment.swift`
 - Test: `Tests/EditorTests/WorkspaceViewModelTests.swift`
 
-- [ ] **Step 1: Write failing view-model tests**
+- [x] **Step 1: Write failing view-model tests**
 
 Add to `WorkspaceViewModelTests`:
 
@@ -791,7 +791,7 @@ func testPromoteSelectedDiaryTextSelectsNewPageAndShowsAllDocuments() throws {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -801,7 +801,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: FAIL because `WorkspaceViewModel` has no diary collection state.
 
-- [ ] **Step 3: Implement view-model state**
+- [x] **Step 3: Implement view-model state**
 
 In `WorkspaceViewModel.swift`, add:
 
@@ -845,7 +845,7 @@ Rules:
 
 In `AppEnvironment.swift`, construct `DiaryRepository(database:)` and pass it into `WorkspaceViewModel`.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -855,7 +855,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 

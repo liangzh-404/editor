@@ -68,6 +68,7 @@ enum AppEnvironment {
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
+            diaryRepository: DiaryRepository(database: database),
             attachmentRepository: attachmentRepository,
             searchRepository: SearchRepository(database: database),
             backlinkRepository: BacklinkRepository(database: database),

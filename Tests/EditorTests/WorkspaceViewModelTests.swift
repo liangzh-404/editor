@@ -34,6 +34,44 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadStartsInDiaryModeWithActiveDiaryEntry() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database)
+        )
+
+        try viewModel.load()
+
+        XCTAssertEqual(viewModel.selectedCollection, .diary)
+        XCTAssertNotNil(viewModel.activeDiaryEntry)
+        XCTAssertNil(viewModel.selectedPageID)
+    }
+
+    @MainActor
+    func testPromoteSelectedDiaryTextSelectsNewPageAndShowsAllDocuments() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database)
+        )
+        try viewModel.load()
+        try viewModel.updateDiaryText("Promote me now")
+
+        try viewModel.promoteSelectedDiaryTextToPage("Promote me")
+
+        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+        XCTAssertEqual(viewModel.selectedPage?.title, "Promote me")
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Promote me"])
+    }
+
+    @MainActor
     func testLoadRequestsFocusForInitialEditableBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -463,7 +501,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let createdPage = try viewModel.createPageInSelectedWorkspace(title: "Untitled")
 
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Untitled"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Untitled", "Welcome"])
         XCTAssertEqual(viewModel.selectedPageID, createdPage.id)
         XCTAssertEqual(viewModel.selectedPage?.title, "Untitled")
         XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph])
@@ -645,7 +683,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.archivePageForUI(id: scratchPage.id)
 
         XCTAssertEqual(viewModel.snapshot.archivedPages.map(\.title), ["Scratch"])
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Current"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Current", "Welcome"])
         XCTAssertEqual(viewModel.selectedPageID, currentPage.id)
         XCTAssertEqual(viewModel.selectedPage?.title, "Current")
     }
@@ -696,7 +734,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.undoLastPageArchive()
 
         XCTAssertEqual(viewModel.snapshot.archivedPages, [])
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Current", "Scratch"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Scratch", "Current", "Welcome"])
         XCTAssertEqual(viewModel.selectedPageID, currentPage.id)
         XCTAssertFalse(viewModel.canUndoPageArchive)
     }
@@ -721,7 +759,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.undoLastPageArchive()
 
         XCTAssertEqual(viewModel.snapshot.archivedPages, [])
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Scratch"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Scratch", "Welcome"])
         XCTAssertEqual(viewModel.selectedPageID, scratchPage.id)
         XCTAssertEqual(viewModel.selectedPage?.title, "Scratch")
         XCTAssertFalse(viewModel.canUndoPageArchive)
@@ -745,7 +783,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.restoreArchivedPage(id: page.id)
 
         XCTAssertEqual(viewModel.snapshot.archivedPages, [])
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome", "Scratch"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Scratch", "Welcome"])
         XCTAssertEqual(viewModel.selectedPageID, page.id)
         XCTAssertEqual(viewModel.selectedPage?.title, "Scratch")
     }

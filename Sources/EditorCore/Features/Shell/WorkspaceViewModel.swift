@@ -10,12 +10,23 @@ struct PageOutlineItem: Identifiable, Equatable, Sendable {
     }
 }
 
+enum WorkspaceCollection: Equatable, Sendable {
+    case diary
+    case allDocuments
+    case favorites
+    case tag(String)
+    case search
+    case archive
+}
+
 @MainActor
 final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var snapshot: WorkspaceSnapshot
     @Published private(set) var selectedWorkspaceID: String?
     @Published private(set) var selectedNotebookID: String?
     @Published private(set) var selectedPageID: String?
+    @Published private(set) var selectedCollection: WorkspaceCollection = .diary
+    @Published private(set) var activeDiaryEntry: DiaryEntrySnapshot?
     @Published private(set) var searchQuery = ""
     @Published private(set) var searchResults: [SearchResult] = []
     @Published private(set) var selectedPageBacklinks: [Backlink] = []
@@ -29,6 +40,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var canUndoPageArchive = false
 
     private let repository: PageRepository?
+    private let diaryRepository: DiaryRepository?
     private let attachmentRepository: AttachmentRepository?
     private let searchRepository: SearchRepository?
     private let backlinkRepository: BacklinkRepository?
@@ -97,6 +109,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     init(
         repository: PageRepository,
+        diaryRepository: DiaryRepository? = nil,
         attachmentRepository: AttachmentRepository? = nil,
         searchRepository: SearchRepository? = nil,
         backlinkRepository: BacklinkRepository? = nil,
@@ -105,6 +118,7 @@ final class WorkspaceViewModel: ObservableObject {
         cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil
     ) {
         self.repository = repository
+        self.diaryRepository = diaryRepository
         self.attachmentRepository = attachmentRepository
         self.searchRepository = searchRepository
         self.backlinkRepository = backlinkRepository
@@ -115,6 +129,8 @@ final class WorkspaceViewModel: ObservableObject {
         selectedWorkspaceID = nil
         selectedNotebookID = nil
         selectedPageID = nil
+        selectedCollection = .diary
+        activeDiaryEntry = nil
         pendingFocusBlockID = nil
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
@@ -123,6 +139,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     init(snapshot: WorkspaceSnapshot) {
         repository = nil
+        diaryRepository = nil
         attachmentRepository = nil
         searchRepository = nil
         backlinkRepository = nil
@@ -133,6 +150,8 @@ final class WorkspaceViewModel: ObservableObject {
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
+        selectedCollection = snapshot.selectedPageID == nil ? .diary : .allDocuments
+        activeDiaryEntry = snapshot.activeDiaryEntry
         pendingFocusBlockID = nil
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
@@ -146,6 +165,7 @@ final class WorkspaceViewModel: ObservableObject {
 
         let loadedSnapshot = try repository.loadWorkspaceSnapshot()
         apply(snapshot: loadedSnapshot)
+        try applyDiaryLaunchStateIfAvailable()
         try refreshDerivedState(rebuildSearchIndex: true)
         requestInitialEditorFocusIfNeeded(source: "load")
     }
@@ -209,10 +229,55 @@ final class WorkspaceViewModel: ObservableObject {
 
     func selectPage(id: String) {
         selectedPageID = id
+        selectedCollection = .allDocuments
         selectedNotebookID = snapshot.pages.first { $0.id == id }?.notebookID ?? selectedNotebookID
         refreshBacklinksForSelectedPage()
         refreshExternalLinksForSelectedPage()
         refreshConflictsForSelectedPage()
+    }
+
+    func selectCollection(_ collection: WorkspaceCollection) {
+        selectedCollection = collection
+        if collection == .diary {
+            selectedPageID = nil
+            selectedPageBacklinks = []
+            selectedPageExternalLinks = []
+            selectedPageConflicts = []
+        }
+    }
+
+    func updateDiaryText(_ text: String) throws {
+        guard let diaryRepository else {
+            throw WorkspaceViewModelError.missingDiaryRepository
+        }
+        guard let activeDiaryEntry else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        try diaryRepository.updateEntryText(entryID: activeDiaryEntry.id, text: text)
+        self.activeDiaryEntry = DiaryEntrySnapshot(
+            id: activeDiaryEntry.id,
+            workspaceID: activeDiaryEntry.workspaceID,
+            textPlain: text
+        )
+        selectedCollection = .diary
+    }
+
+    func promoteSelectedDiaryTextToPage(_ selectedText: String) throws {
+        guard let diaryRepository else {
+            throw WorkspaceViewModelError.missingDiaryRepository
+        }
+        guard let activeDiaryEntry else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        let page = try diaryRepository.promoteTextToPage(
+            entryID: activeDiaryEntry.id,
+            selectedText: selectedText
+        )
+        try load()
+        selectPage(id: page.id)
+        requestFocusForInitialEmptyBlockIfNeeded(source: "diary_promote")
     }
 
     func selectSearchResult(_ result: SearchResult) {
@@ -1798,6 +1863,18 @@ final class WorkspaceViewModel: ObservableObject {
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
+        selectedCollection = selectedPageID == nil ? .diary : .allDocuments
+        activeDiaryEntry = snapshot.activeDiaryEntry
+    }
+
+    private func applyDiaryLaunchStateIfAvailable() throws {
+        guard let diaryRepository, let selectedWorkspaceID else {
+            return
+        }
+
+        activeDiaryEntry = try diaryRepository.activeEntry(workspaceID: selectedWorkspaceID)
+        selectedCollection = .diary
+        selectedPageID = nil
     }
 
     private func requestFocusForInitialEmptyBlockIfNeeded(source: String) {
@@ -2063,5 +2140,6 @@ private struct PageArchiveUndoSnapshot {
 
 enum WorkspaceViewModelError: Error, Equatable {
     case missingRepository
+    case missingDiaryRepository
     case missingSelection
 }
