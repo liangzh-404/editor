@@ -72,147 +72,164 @@ private struct ThreeColumnEditorShell: View {
         } content: {
             PageListView(viewModel: viewModel)
         } detail: {
-            EditorCanvasView(
-                page: viewModel.selectedPage,
-                pages: viewModel.snapshot.pages,
-                blocks: viewModel.editorVisibleBlocks,
-                allBlocks: viewModel.snapshot.blocks,
-                attachments: viewModel.snapshot.attachments,
-                backlinks: viewModel.selectedPageBacklinks,
-                externalLinks: viewModel.selectedPageExternalLinks,
-                conflicts: viewModel.selectedPageConflicts,
-                outlineItems: viewModel.selectedPageOutline,
-                pendingFocusBlockID: viewModel.pendingFocusBlockID,
-                canUndoTextEdit: viewModel.canUndoTextEdit,
-                onAddParagraphBlock: {
-                    viewModel.addParagraphBlockToCurrentPage()
-                },
-                onAddPageReference: { targetPageID in
-                    viewModel.appendPageReferenceToCurrentPageForUI(targetPageID: targetPageID)
-                },
-                onAddBlockReference: { targetBlockID in
-                    viewModel.appendBlockReferenceToCurrentPageForUI(targetBlockID: targetBlockID)
-                },
-                onInsertMarkdownLink: { blockID, label, url in
-                    viewModel.insertMarkdownLinkForUI(blockID: blockID, label: label, url: url)
-                },
-                onInsertMarkdownLinkAtSelection: { blockID, label, url, selection in
-                    viewModel.insertMarkdownLinkForUI(
-                        blockID: blockID,
-                        label: label,
-                        url: url,
-                        selection: selection
-                    )
-                },
-                onApplyMarkdownInlineFormat: { blockID, format, selection in
-                    viewModel.applyMarkdownInlineFormatForUI(
-                        blockID: blockID,
-                        format: format,
-                        selection: selection
-                    )
-                },
-                onUndoTextEdit: {
-                    viewModel.undoLastTextEditForUI()
-                },
-                onFocusCanvas: {
-                    viewModel.focusEditorCanvasForUI()
-                },
-                onMoveBlock: { blockID, targetIndex in
-                    viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
-                },
-                onMoveBlockByKeyboard: { blockID, direction in
-                    viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
-                },
-                onInsertBlockAfter: { blockID in
-                    viewModel.insertParagraphBlockAfterForUI(blockID: blockID)
-                },
-                onSplitTextBlockAtSelection: { blockID, selection in
-                    viewModel.splitTextBlockAtSelectionForUI(blockID: blockID, selection: selection)
-                },
-                onMergeTextBlockWithPrevious: { blockID, selection in
-                    viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
-                },
-                onMergeTextBlockWithNext: { blockID, selection in
-                    viewModel.mergeTextBlockWithNextAtSelectionForUI(blockID: blockID, selection: selection)
-                },
-                onIndentBlock: { blockID in
-                    viewModel.indentBlockForUI(blockID: blockID)
-                },
-                onOutdentBlock: { blockID in
-                    viewModel.outdentBlockForUI(blockID: blockID)
-                },
-                onDeleteBlock: { blockID in
-                    viewModel.deleteBlockFromCurrentPage(blockID: blockID)
-                },
-                onSelectBacklink: { backlink in
-                    viewModel.selectBacklink(backlink)
-                },
-                onSelectOutlineItem: { item in
-                    viewModel.selectOutlineItem(item)
-                },
-                onOpenPageReference: { targetPageID in
-                    viewModel.openPageReference(targetPageID: targetPageID)
-                },
-                onOpenBlockReference: { targetPageID, targetBlockID in
-                    viewModel.openBlockReference(targetPageID: targetPageID, targetBlockID: targetBlockID)
-                },
-                onAcceptConflict: { conflict in
-                    viewModel.acceptRemoteConflictForUI(id: conflict.id)
-                },
-                onAcceptAllConflicts: {
-                    viewModel.acceptAllRemoteConflictsForSelectedPageForUI()
-                },
-                onAcceptLocalConflict: { conflict in
-                    viewModel.acceptLocalConflictForUI(id: conflict.id)
-                },
-                onAcceptAllLocalConflicts: {
-                    viewModel.acceptAllLocalConflictsForSelectedPageForUI()
-                },
-                onResolveConflictManually: { conflict, text in
-                    viewModel.resolveConflictManuallyForUI(id: conflict.id, text: text)
-                },
-                onResolveAllConflictsManually: { mergedTextsByConflictID in
-                    viewModel.resolveAllManualConflictsForSelectedPageForUI(
-                        mergedTextsByConflictID: mergedTextsByConflictID
-                    )
-                },
-                onPageTitleChange: { title in
-                    viewModel.editSelectedPageTitle(title)
-                },
-                onImportMarkdown: { sourceURL in
-                    viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
-                },
-                onExportMarkdown: {
-                    viewModel.exportCurrentPageMarkdown()
-                },
-                onBlockTextChange: { blockID, text in
-                    viewModel.editBlockText(blockID: blockID, text: text)
-                },
-                onBlockTypeChange: { blockID, type in
-                    viewModel.changeBlockTypeForUI(blockID: blockID, type: type)
-                },
-                onTaskItemCompletionChange: { blockID, isCompleted in
-                    viewModel.updateTaskItemCompletionForUI(
-                        blockID: blockID,
-                        isCompleted: isCompleted
-                    )
-                },
-                onCodeBlockLineWrappingChange: { blockID, isWrapped in
-                    viewModel.updateCodeBlockLineWrapping(blockID: blockID, isWrapped: isWrapped)
-                },
-                onToggleBlockExpansion: { blockID in
-                    viewModel.toggleBlockExpansion(blockID: blockID)
-                },
-                isToggleBlockExpanded: { blockID in
-                    viewModel.isToggleBlockExpanded(blockID: blockID)
-                },
-                onImportAttachment: { sourceURL in
-                    viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
-                },
-                onPendingBlockFocusHandled: {
-                    _ = viewModel.consumePendingFocusBlockID()
+            if viewModel.selectedPage == nil {
+                if viewModel.activeDiaryEntry == nil {
+                    Color.white
+                        .navigationTitle("Diary")
+                } else {
+                    DiaryEditorView(entry: viewModel.activeDiaryEntry) { text in
+                        do {
+                            try viewModel.updateDiaryText(text)
+                        } catch {
+                            EditorLog.input.error(
+                                "diary_text_update_failed error=\(String(describing: error), privacy: .public)"
+                            )
+                        }
+                    }
                 }
-            )
+            } else {
+                EditorCanvasView(
+                    page: viewModel.selectedPage,
+                    pages: viewModel.snapshot.pages,
+                    blocks: viewModel.editorVisibleBlocks,
+                    allBlocks: viewModel.snapshot.blocks,
+                    attachments: viewModel.snapshot.attachments,
+                    backlinks: viewModel.selectedPageBacklinks,
+                    externalLinks: viewModel.selectedPageExternalLinks,
+                    conflicts: viewModel.selectedPageConflicts,
+                    outlineItems: viewModel.selectedPageOutline,
+                    pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                    canUndoTextEdit: viewModel.canUndoTextEdit,
+                    onAddParagraphBlock: {
+                        viewModel.addParagraphBlockToCurrentPage()
+                    },
+                    onAddPageReference: { targetPageID in
+                        viewModel.appendPageReferenceToCurrentPageForUI(targetPageID: targetPageID)
+                    },
+                    onAddBlockReference: { targetBlockID in
+                        viewModel.appendBlockReferenceToCurrentPageForUI(targetBlockID: targetBlockID)
+                    },
+                    onInsertMarkdownLink: { blockID, label, url in
+                        viewModel.insertMarkdownLinkForUI(blockID: blockID, label: label, url: url)
+                    },
+                    onInsertMarkdownLinkAtSelection: { blockID, label, url, selection in
+                        viewModel.insertMarkdownLinkForUI(
+                            blockID: blockID,
+                            label: label,
+                            url: url,
+                            selection: selection
+                        )
+                    },
+                    onApplyMarkdownInlineFormat: { blockID, format, selection in
+                        viewModel.applyMarkdownInlineFormatForUI(
+                            blockID: blockID,
+                            format: format,
+                            selection: selection
+                        )
+                    },
+                    onUndoTextEdit: {
+                        viewModel.undoLastTextEditForUI()
+                    },
+                    onFocusCanvas: {
+                        viewModel.focusEditorCanvasForUI()
+                    },
+                    onMoveBlock: { blockID, targetIndex in
+                        viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
+                    },
+                    onMoveBlockByKeyboard: { blockID, direction in
+                        viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
+                    },
+                    onInsertBlockAfter: { blockID in
+                        viewModel.insertParagraphBlockAfterForUI(blockID: blockID)
+                    },
+                    onSplitTextBlockAtSelection: { blockID, selection in
+                        viewModel.splitTextBlockAtSelectionForUI(blockID: blockID, selection: selection)
+                    },
+                    onMergeTextBlockWithPrevious: { blockID, selection in
+                        viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
+                    },
+                    onMergeTextBlockWithNext: { blockID, selection in
+                        viewModel.mergeTextBlockWithNextAtSelectionForUI(blockID: blockID, selection: selection)
+                    },
+                    onIndentBlock: { blockID in
+                        viewModel.indentBlockForUI(blockID: blockID)
+                    },
+                    onOutdentBlock: { blockID in
+                        viewModel.outdentBlockForUI(blockID: blockID)
+                    },
+                    onDeleteBlock: { blockID in
+                        viewModel.deleteBlockFromCurrentPage(blockID: blockID)
+                    },
+                    onSelectBacklink: { backlink in
+                        viewModel.selectBacklink(backlink)
+                    },
+                    onSelectOutlineItem: { item in
+                        viewModel.selectOutlineItem(item)
+                    },
+                    onOpenPageReference: { targetPageID in
+                        viewModel.openPageReference(targetPageID: targetPageID)
+                    },
+                    onOpenBlockReference: { targetPageID, targetBlockID in
+                        viewModel.openBlockReference(targetPageID: targetPageID, targetBlockID: targetBlockID)
+                    },
+                    onAcceptConflict: { conflict in
+                        viewModel.acceptRemoteConflictForUI(id: conflict.id)
+                    },
+                    onAcceptAllConflicts: {
+                        viewModel.acceptAllRemoteConflictsForSelectedPageForUI()
+                    },
+                    onAcceptLocalConflict: { conflict in
+                        viewModel.acceptLocalConflictForUI(id: conflict.id)
+                    },
+                    onAcceptAllLocalConflicts: {
+                        viewModel.acceptAllLocalConflictsForSelectedPageForUI()
+                    },
+                    onResolveConflictManually: { conflict, text in
+                        viewModel.resolveConflictManuallyForUI(id: conflict.id, text: text)
+                    },
+                    onResolveAllConflictsManually: { mergedTextsByConflictID in
+                        viewModel.resolveAllManualConflictsForSelectedPageForUI(
+                            mergedTextsByConflictID: mergedTextsByConflictID
+                        )
+                    },
+                    onPageTitleChange: { title in
+                        viewModel.editSelectedPageTitle(title)
+                    },
+                    onImportMarkdown: { sourceURL in
+                        viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
+                    },
+                    onExportMarkdown: {
+                        viewModel.exportCurrentPageMarkdown()
+                    },
+                    onBlockTextChange: { blockID, text in
+                        viewModel.editBlockText(blockID: blockID, text: text)
+                    },
+                    onBlockTypeChange: { blockID, type in
+                        viewModel.changeBlockTypeForUI(blockID: blockID, type: type)
+                    },
+                    onTaskItemCompletionChange: { blockID, isCompleted in
+                        viewModel.updateTaskItemCompletionForUI(
+                            blockID: blockID,
+                            isCompleted: isCompleted
+                        )
+                    },
+                    onCodeBlockLineWrappingChange: { blockID, isWrapped in
+                        viewModel.updateCodeBlockLineWrapping(blockID: blockID, isWrapped: isWrapped)
+                    },
+                    onToggleBlockExpansion: { blockID in
+                        viewModel.toggleBlockExpansion(blockID: blockID)
+                    },
+                    isToggleBlockExpanded: { blockID in
+                        viewModel.isToggleBlockExpanded(blockID: blockID)
+                    },
+                    onImportAttachment: { sourceURL in
+                        viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+                    },
+                    onPendingBlockFocusHandled: {
+                        _ = viewModel.consumePendingFocusBlockID()
+                    }
+                )
+            }
         }
     }
 }
@@ -621,36 +638,96 @@ private struct WorkspaceSidebar: View {
 
     var body: some View {
         List {
-            Section("Spaces") {
-                ForEach(viewModel.snapshot.workspaces) { workspace in
-                    Label(workspace.name, systemImage: "tray.full")
+            Section("Write") {
+                CollectionRailButton(
+                    title: "Diary",
+                    systemImage: "square.and.pencil",
+                    isSelected: viewModel.selectedCollection == .diary,
+                    identifier: "editor.collection.diary"
+                ) {
+                    viewModel.selectCollection(.diary)
+                }
+            }
+
+            Section("Browse") {
+                CollectionRailButton(
+                    title: "All Documents",
+                    systemImage: "doc.text",
+                    isSelected: viewModel.selectedCollection == .allDocuments,
+                    identifier: "editor.collection.all-documents"
+                ) {
+                    viewModel.selectCollection(.allDocuments)
+                }
+
+                CollectionRailButton(
+                    title: "Favorites",
+                    systemImage: "star",
+                    isSelected: viewModel.selectedCollection == .favorites,
+                    identifier: "editor.collection.favorites"
+                ) {
+                    viewModel.selectCollection(.favorites)
+                }
+
+                CollectionRailButton(
+                    title: "Tags",
+                    systemImage: "tag",
+                    isSelected: isTagsSelected,
+                    identifier: "editor.collection.tags"
+                ) {
+                    viewModel.selectCollection(.tag(""))
+                }
+
+                CollectionRailButton(
+                    title: "Search",
+                    systemImage: "magnifyingglass",
+                    isSelected: viewModel.selectedCollection == .search,
+                    identifier: "editor.collection.search"
+                ) {
+                    viewModel.selectCollection(.search)
+                }
+
+                CollectionRailButton(
+                    title: "Archive",
+                    systemImage: "archivebox",
+                    isSelected: viewModel.selectedCollection == .archive,
+                    identifier: "editor.collection.archive"
+                ) {
+                    viewModel.selectCollection(.archive)
                 }
             }
 
             CloudKitAccountStatusSection(viewModel: viewModel)
-
-            if !viewModel.snapshot.favoritePages.isEmpty {
-                Section("Favorites") {
-                    ForEach(viewModel.snapshot.favoritePages) { page in
-                        Button {
-                            viewModel.selectPage(id: page.id)
-                        } label: {
-                            Label(page.title, systemImage: "star.fill")
-                                .lineLimit(1)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("editor.favorite-page.\(page.id)")
-                    }
-                }
-            }
-
-            Section("Library") {
-                Label("Archive", systemImage: "archivebox")
-            }
         }
         .navigationTitle("Editor")
         .scrollContentBackground(.hidden)
         .background(Color(red: 0.98, green: 0.98, blue: 0.96))
+    }
+
+    private var isTagsSelected: Bool {
+        if case .tag = viewModel.selectedCollection {
+            return true
+        }
+        return false
+    }
+}
+
+private struct CollectionRailButton: View {
+    let title: String
+    let systemImage: String
+    let isSelected: Bool
+    let identifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(isSelected ? .body.weight(.semibold) : .body)
+                .lineLimit(1)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+        .accessibilityIdentifier(identifier)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
 }
 
@@ -734,139 +811,149 @@ private struct PageListView: View {
 
     var body: some View {
         List(selection: selectedPageBinding) {
-            SearchSectionView(viewModel: viewModel)
-
-            ForEach(Array(viewModel.snapshot.notebooks.enumerated()), id: \.element.id) { index, notebook in
-                Section {
-                    ForEach(pages(in: notebook)) { page in
-                        PageRow(
-                            page: page,
-                            isSelected: viewModel.selectedPageID == page.id,
-                            onFavoriteToggle: {
-                                viewModel.updatePageFavoriteForUI(
-                                    id: page.id,
-                                    isFavorite: !page.isFavorite
-                                )
-                            }
-                        )
-                            .tag(Optional(page.id))
-                            .contextMenu {
-                                Button {
-                                    viewModel.updatePageFavoriteForUI(
-                                        id: page.id,
-                                        isFavorite: !page.isFavorite
-                                    )
-                                } label: {
-                                    Label(
-                                        page.isFavorite ? "Remove from Favorites" : "Add to Favorites",
-                                        systemImage: page.isFavorite ? "star.slash" : "star"
-                                    )
-                                }
-
-                                Button {
-                                    viewModel.archivePageForUI(id: page.id)
-                                } label: {
-                                    Label("Archive", systemImage: "archivebox")
-                                }
-                            }
-                    }
-                } header: {
-                    NotebookSectionHeader(
-                        notebook: notebook,
-                        nestingLevel: nestingLevel(for: notebook),
-                        canMoveUp: NotebookHierarchy.canMoveUp(
-                            notebook: notebook,
-                            in: viewModel.snapshot.notebooks
-                        ),
-                        canMoveDown: NotebookHierarchy.canMoveDown(
-                            notebook: notebook,
-                            in: viewModel.snapshot.notebooks
-                        ),
-                        canIndent: index > 0,
-                        canOutdent: notebook.parentNotebookID != nil,
-                        onRename: { name in
-                            viewModel.renameNotebookForUI(id: notebook.id, name: name)
-                        },
-                        onMoveUp: {
-                            if let targetIndex = NotebookHierarchy.siblingTargetIndex(
-                                for: notebook,
-                                direction: .up,
-                                in: viewModel.snapshot.notebooks
-                            ) {
-                                viewModel.moveNotebookForUI(id: notebook.id, toIndex: targetIndex)
-                            }
-                        },
-                        onMoveDown: {
-                            if let targetIndex = NotebookHierarchy.siblingTargetIndex(
-                                for: notebook,
-                                direction: .down,
-                                in: viewModel.snapshot.notebooks
-                            ) {
-                                viewModel.moveNotebookForUI(id: notebook.id, toIndex: targetIndex)
-                            }
-                        },
-                        onIndent: {
-                            _ = viewModel.indentNotebookForUI(id: notebook.id)
-                        },
-                        onOutdent: {
-                            _ = viewModel.outdentNotebookForUI(id: notebook.id)
-                        },
-                        onAddChildNotebook: {
-                            _ = viewModel.addNotebookToSelectedWorkspace(parentNotebookID: notebook.id)
-                        },
-                        onAddPage: {
-                            _ = viewModel.addPageToSelectedWorkspace(notebookID: notebook.id)
-                        }
-                    )
-                }
+            switch viewModel.selectedCollection {
+            case .diary, .allDocuments:
+                pageRowsSection(title: "All Documents", pages: viewModel.snapshot.pages)
+            case .favorites:
+                pageRowsSection(title: "Favorites", pages: viewModel.snapshot.favoritePages)
+            case .tag(let tagID):
+                tagSection(tagID: tagID)
+            case .search:
+                SearchSectionView(viewModel: viewModel)
+            case .archive:
+                archiveSection
             }
 
-            Section {
-                Button {
-                    _ = viewModel.addNotebookToSelectedWorkspace()
-                } label: {
-                    Label("New Notebook", systemImage: "folder.badge.plus")
-                }
-            }
-
-            if viewModel.canUndoPageArchive {
-                Section {
-                    Button {
-                        viewModel.undoLastPageArchiveForUI()
-                    } label: {
-                        Label("Undo Archive", systemImage: "arrow.uturn.backward")
-                    }
-                    .accessibilityIdentifier("editor.undo-page-archive")
-                }
-            }
-
-            if !viewModel.snapshot.archivedPages.isEmpty {
-                Section("Archive") {
-                    ForEach(viewModel.snapshot.archivedPages) { page in
-                        ArchivedPageRow(
-                            page: page,
-                            onRestore: {
-                                viewModel.restoreArchivedPageForUI(id: page.id)
-                            },
-                            onDelete: {
-                                viewModel.permanentlyDeleteArchivedPageForUI(id: page.id)
-                            }
-                        )
-                    }
-                }
+            if viewModel.canUndoPageArchive && viewModel.selectedCollection != .archive {
+                undoArchiveSection
             }
         }
-        .navigationTitle("Pages")
+        .navigationTitle(navigationTitle)
         .scrollContentBackground(.hidden)
         .background(Color.white)
     }
 
-    private func pages(in notebook: NotebookSummary) -> [PageSummary] {
-        viewModel.snapshot.pages.filter { $0.notebookID == notebook.id }
+    @ViewBuilder
+    private func pageRowsSection(title: String, pages: [PageSummary]) -> some View {
+        Section(title) {
+            ForEach(pages) { page in
+                pageRow(page)
+            }
+        }
     }
 
-    private func nestingLevel(for notebook: NotebookSummary) -> Int {
-        NotebookHierarchy.nestingLevel(for: notebook, in: viewModel.snapshot.notebooks)
+    @ViewBuilder
+    private func tagSection(tagID: String) -> some View {
+        if tagID.isEmpty {
+            Section("Tags") {
+                ForEach(viewModel.snapshot.tags) { tag in
+                    Button {
+                        viewModel.selectCollection(.tag(tag.id))
+                    } label: {
+                        Label(tag.path, systemImage: "tag")
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("editor.tag-row.\(tag.id)")
+                }
+            }
+        } else {
+            pageRowsSection(title: tagName(for: tagID), pages: pages(taggedWith: tagID))
+        }
+    }
+
+    private var archiveSection: some View {
+        Group {
+            if viewModel.canUndoPageArchive {
+                undoArchiveSection
+            }
+
+            Section("Archive") {
+                ForEach(viewModel.snapshot.archivedPages) { page in
+                    ArchivedPageRow(
+                        page: page,
+                        onRestore: {
+                            viewModel.restoreArchivedPageForUI(id: page.id)
+                        },
+                        onDelete: {
+                            viewModel.permanentlyDeleteArchivedPageForUI(id: page.id)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    private var undoArchiveSection: some View {
+        Section {
+            Button {
+                viewModel.undoLastPageArchiveForUI()
+            } label: {
+                Label("Undo Archive", systemImage: "arrow.uturn.backward")
+            }
+            .accessibilityIdentifier("editor.undo-page-archive")
+        }
+    }
+
+    private func pageRow(_ page: PageSummary) -> some View {
+        PageRow(
+            page: page,
+            isSelected: viewModel.selectedPageID == page.id,
+            onFavoriteToggle: {
+                viewModel.updatePageFavoriteForUI(
+                    id: page.id,
+                    isFavorite: !page.isFavorite
+                )
+            }
+        )
+        .tag(Optional(page.id))
+        .contextMenu {
+            Button {
+                viewModel.updatePageFavoriteForUI(
+                    id: page.id,
+                    isFavorite: !page.isFavorite
+                )
+            } label: {
+                Label(
+                    page.isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                    systemImage: page.isFavorite ? "star.slash" : "star"
+                )
+            }
+
+            Button {
+                viewModel.archivePageForUI(id: page.id)
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+        }
+    }
+
+    private var navigationTitle: String {
+        switch viewModel.selectedCollection {
+        case .diary, .allDocuments:
+            return "All Documents"
+        case .favorites:
+            return "Favorites"
+        case .tag(let tagID):
+            return tagID.isEmpty ? "Tags" : tagName(for: tagID)
+        case .search:
+            return "Search"
+        case .archive:
+            return "Archive"
+        }
+    }
+
+    private func pages(taggedWith tagID: String) -> [PageSummary] {
+        let pageIDs = Set(
+            viewModel.snapshot.pageTags
+                .filter { $0.tagID == tagID }
+                .map(\.pageID)
+        )
+        return viewModel.snapshot.pages.filter { pageIDs.contains($0.id) }
+    }
+
+    private func tagName(for tagID: String) -> String {
+        viewModel.snapshot.tags.first { $0.id == tagID }?.path ?? "Tags"
     }
 
     private var selectedPageBinding: Binding<String?> {
@@ -877,6 +964,51 @@ private struct PageListView: View {
                 viewModel.selectPage(id: newValue)
             }
         }
+    }
+}
+
+private struct DiaryEditorView: View {
+    let entry: DiaryEntrySnapshot?
+    let onTextChange: (String) -> Void
+
+    @State private var text = ""
+    @State private var syncedEntryID: String?
+
+    var body: some View {
+        TextEditor(text: textBinding)
+            .font(.body)
+            .padding(.horizontal, 40)
+            .padding(.vertical, 36)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .scrollContentBackground(.hidden)
+            .background(Color.white)
+            .accessibilityLabel("Diary")
+            .accessibilityIdentifier("editor.diary.text")
+            .onAppear {
+                syncTextFromEntry(force: true)
+            }
+            .onChange(of: entry) { _, _ in
+                syncTextFromEntry(force: false)
+            }
+            .navigationTitle("Diary")
+    }
+
+    private var textBinding: Binding<String> {
+        Binding {
+            text
+        } set: { newText in
+            text = newText
+            onTextChange(newText)
+        }
+    }
+
+    private func syncTextFromEntry(force: Bool) {
+        let entryID = entry?.id
+        guard force || syncedEntryID != entryID else {
+            return
+        }
+        syncedEntryID = entryID
+        text = entry?.textPlain ?? ""
     }
 }
 

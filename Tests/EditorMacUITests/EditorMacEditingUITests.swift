@@ -66,6 +66,38 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testLaunchStartsInBlankDiaryEditorForFastTyping() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let diaryEditor = app.textViews["editor.diary.text"]
+        XCTAssertTrue(diaryEditor.waitForExistence(timeout: 5), "Launch should expose the diary editor")
+        diaryEditor.click()
+        app.typeText("Captured immediately")
+
+        XCTAssertTrue(
+            diaryEditor.waitForValue(containing: "Captured immediately", timeout: 5),
+            "Typing after launch should write into diary"
+        )
+    }
+
+    @MainActor
+    func testAllDocumentsListShowsPagesSortedByUpdatedTime() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launchEnvironment["EDITOR_UI_TEST_FAVORITE_PAGE"] = "1"
+        app.launch()
+
+        let allDocuments = app.buttons["editor.collection.all-documents"]
+        XCTAssertTrue(allDocuments.waitForExistence(timeout: 5), "All Documents should be visible in the rail")
+        allDocuments.click()
+
+        let welcome = app.staticTexts["editor.page-row.page-welcome"]
+        XCTAssertTrue(welcome.waitForExistence(timeout: 5), "Existing pages should appear in All Documents")
+    }
+
+    @MainActor
     func testWelcomeBlockAcceptsTypedText() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

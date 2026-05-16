@@ -870,7 +870,7 @@ git commit -m "Add diary-first workspace state"
 - Modify: `Sources/EditorCore/Features/Shell/EditorShellView.swift`
 - Test: `Tests/EditorMacUITests/EditorMacEditingUITests.swift`
 
-- [ ] **Step 1: Write failing macOS UI tests**
+- [x] **Step 1: Write failing macOS UI tests**
 
 Add to `EditorMacEditingUITests`:
 
@@ -908,7 +908,7 @@ func testAllDocumentsListShowsPagesSortedByUpdatedTime() {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -918,7 +918,7 @@ scripts/mac_ui_test.sh test testLaunchStartsInBlankDiaryEditorForFastTyping test
 
 Expected: FAIL because the shell still opens with Notebook page navigation and no diary editor.
 
-- [ ] **Step 3: Implement visible shell route**
+- [x] **Step 3: Implement visible shell route**
 
 In `EditorShellView.swift`:
 
@@ -936,7 +936,7 @@ In `EditorShellView.swift`:
 - Add `DiaryEditorView` with a text editor identifier `editor.diary.text`.
 - Use native text editing when practical; if reusing `NativeTextBlockEditor` requires a block-shaped adapter, create a local diary text wrapper view that preserves multiline typing and keyboard command forwarding.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -946,7 +946,7 @@ scripts/mac_ui_test.sh run testLaunchStartsInBlankDiaryEditorForFastTyping testA
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
