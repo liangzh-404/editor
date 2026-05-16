@@ -13,10 +13,19 @@ struct EditorInsertMarkdownLinkActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct EditorPromoteDiarySelectionActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var insertMarkdownLinkAction: (() -> Void)? {
         get { self[EditorInsertMarkdownLinkActionKey.self] }
         set { self[EditorInsertMarkdownLinkActionKey.self] = newValue }
+    }
+
+    var promoteDiarySelectionAction: (() -> Void)? {
+        get { self[EditorPromoteDiarySelectionActionKey.self] }
+        set { self[EditorPromoteDiarySelectionActionKey.self] = newValue }
     }
 }
 
@@ -77,15 +86,29 @@ private struct ThreeColumnEditorShell: View {
                     Color.white
                         .navigationTitle("Diary")
                 } else {
-                    DiaryEditorView(entry: viewModel.activeDiaryEntry) { text in
-                        do {
-                            try viewModel.updateDiaryText(text)
-                        } catch {
-                            EditorLog.input.error(
-                                "diary_text_update_failed error=\(String(describing: error), privacy: .public)"
-                            )
+                    DiaryEditorView(
+                        entry: viewModel.activeDiaryEntry,
+                        onTextChange: { text in
+                            do {
+                                try viewModel.updateDiaryText(text)
+                            } catch {
+                                EditorLog.input.error(
+                                    "diary_text_update_failed error=\(String(describing: error), privacy: .public)"
+                                )
+                            }
+                        },
+                        onPromoteSelection: { selectedText in
+                            do {
+                                try viewModel.promoteSelectedDiaryTextToPage(selectedText)
+                                return true
+                            } catch {
+                                EditorLog.input.error(
+                                    "diary_text_promote_failed error=\(String(describing: error), privacy: .public)"
+                                )
+                                return false
+                            }
                         }
-                    }
+                    )
                 }
             } else {
                 EditorCanvasView(
@@ -970,20 +993,27 @@ private struct PageListView: View {
 private struct DiaryEditorView: View {
     let entry: DiaryEntrySnapshot?
     let onTextChange: (String) -> Void
+    let onPromoteSelection: (String) -> Bool
 
     @State private var text = ""
+    @State private var selectedText = ""
     @State private var syncedEntryID: String?
 
     var body: some View {
-        TextEditor(text: textBinding)
-            .font(.body)
+        PlatformDiaryTextEditor(
+            text: textBinding,
+            onSelectedTextChange: { selectedText in
+                self.selectedText = selectedText
+            },
+            onPromoteSelection: promoteSelectedText
+        )
             .padding(.horizontal, 40)
             .padding(.vertical, 36)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .scrollContentBackground(.hidden)
             .background(Color.white)
             .accessibilityLabel("Diary")
             .accessibilityIdentifier("editor.diary.text")
+            .focusedValue(\.promoteDiarySelectionAction, promoteDiarySelectionAction)
             .onAppear {
                 syncTextFromEntry(force: true)
             }
@@ -991,6 +1021,16 @@ private struct DiaryEditorView: View {
                 syncTextFromEntry(force: false)
             }
             .navigationTitle("Diary")
+    }
+
+    private var promoteDiarySelectionAction: (() -> Void)? {
+        guard !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        return {
+            _ = promoteSelectedText(selectedText)
+        }
     }
 
     private var textBinding: Binding<String> {
@@ -1010,7 +1050,202 @@ private struct DiaryEditorView: View {
         syncedEntryID = entryID
         text = entry?.textPlain ?? ""
     }
+
+    private func promoteSelectedText(_ selectedText: String) -> Bool {
+        guard !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        return onPromoteSelection(selectedText)
+    }
 }
+
+#if os(macOS)
+private struct PlatformDiaryTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    let onSelectedTextChange: (String) -> Void
+    let onPromoteSelection: (String) -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+
+        let textView = DiaryNSTextView(frame: .zero)
+        textView.delegate = context.coordinator
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.textColor = .labelColor
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(
+            width: scrollView.contentSize.width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.setAccessibilityIdentifier("editor.diary.text")
+        textView.onPromoteSelection = { [weak coordinator = context.coordinator, weak textView] in
+            guard let coordinator, let textView else {
+                return false
+            }
+            return coordinator.promoteSelection(in: textView)
+        }
+
+        context.coordinator.applyModelText(text, to: textView)
+        scrollView.documentView = textView
+        scrollView.setAccessibilityIdentifier("editor.diary.container")
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let textView = scrollView.documentView as? DiaryNSTextView else {
+            return
+        }
+
+        textView.onPromoteSelection = { [weak coordinator = context.coordinator, weak textView] in
+            guard let coordinator, let textView else {
+                return false
+            }
+            return coordinator.promoteSelection(in: textView)
+        }
+        if textView.string != text {
+            context.coordinator.applyModelText(text, to: textView)
+        }
+        context.coordinator.publishSelectedText(in: textView)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: PlatformDiaryTextEditor
+        private var isApplyingModelText = false
+
+        init(parent: PlatformDiaryTextEditor) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isApplyingModelText,
+                  let textView = notification.object as? NSTextView else {
+                return
+            }
+
+            parent.text = textView.string
+            publishSelectedText(in: textView)
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else {
+                return
+            }
+
+            publishSelectedText(in: textView)
+        }
+
+        func applyModelText(_ text: String, to textView: NSTextView) {
+            isApplyingModelText = true
+            let currentRange = textView.selectedRange()
+            textView.string = text
+            textView.setSelectedRange(Self.clamped(range: currentRange, text: text))
+            isApplyingModelText = false
+            publishSelectedText(in: textView)
+        }
+
+        func promoteSelection(in textView: NSTextView) -> Bool {
+            let selectedText = Self.selectedText(in: textView)
+            guard parent.onPromoteSelection(selectedText) else {
+                return false
+            }
+            parent.onSelectedTextChange("")
+            return true
+        }
+
+        func publishSelectedText(in textView: NSTextView) {
+            parent.onSelectedTextChange(Self.selectedText(in: textView))
+        }
+
+        private static func selectedText(in textView: NSTextView) -> String {
+            let range = textView.selectedRange()
+            guard range.length > 0,
+                  let textRange = Range(range, in: textView.string) else {
+                return ""
+            }
+
+            return String(textView.string[textRange])
+        }
+
+        private static func clamped(range: NSRange, text: String) -> NSRange {
+            let length = (text as NSString).length
+            let location = min(range.location, length)
+            let selectedLength = min(range.length, length - location)
+            return NSRange(location: location, length: selectedLength)
+        }
+    }
+}
+
+private final class DiaryNSTextView: NSTextView {
+    var onPromoteSelection: (() -> Bool)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        NativeTextBlockEditor.acceptsInactiveWindowFirstMouse
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if DiaryPromotionKeyboardResolver.requestsPromotion(
+            input: event.charactersIgnoringModifiers,
+            modifiers: event.blockKeyboardShortcutModifiers
+        ), onPromoteSelection?() == true {
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if DiaryPromotionKeyboardResolver.requestsPromotion(
+            input: event.charactersIgnoringModifiers,
+            modifiers: event.blockKeyboardShortcutModifiers
+        ), onPromoteSelection?() == true {
+            return true
+        }
+
+        return super.performKeyEquivalent(with: event)
+    }
+}
+#else
+private struct PlatformDiaryTextEditor: View {
+    @Binding var text: String
+    let onSelectedTextChange: (String) -> Void
+    let onPromoteSelection: (String) -> Bool
+
+    var body: some View {
+        TextEditor(text: $text)
+            .font(.body)
+            .scrollContentBackground(.hidden)
+            .onChange(of: text) { _, _ in
+                onSelectedTextChange("")
+            }
+    }
+}
+#endif
 
 private struct CompactPageListView: View {
     @ObservedObject var viewModel: WorkspaceViewModel

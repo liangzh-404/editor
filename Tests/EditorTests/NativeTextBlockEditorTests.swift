@@ -398,6 +398,27 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testDiaryPromotionKeyboardResolverHandlesCommandRightBracketOnly() {
+        XCTAssertTrue(
+            DiaryPromotionKeyboardResolver.requestsPromotion(
+                input: "]",
+                modifiers: [.command]
+            )
+        )
+        XCTAssertFalse(
+            DiaryPromotionKeyboardResolver.requestsPromotion(
+                input: "]",
+                modifiers: []
+            )
+        )
+        XCTAssertFalse(
+            DiaryPromotionKeyboardResolver.requestsPromotion(
+                input: "[",
+                modifiers: [.command]
+            )
+        )
+    }
+
     func testBlockDragReorderResolverMovesBeforeDestinationBlock() {
         let visibleBlockIDs = ["a", "b", "c"]
 

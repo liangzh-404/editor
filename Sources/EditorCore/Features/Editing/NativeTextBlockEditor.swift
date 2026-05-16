@@ -125,6 +125,15 @@ enum MarkdownInlineLinkKeyboardResolver {
     }
 }
 
+enum DiaryPromotionKeyboardResolver {
+    static func requestsPromotion(
+        input: String?,
+        modifiers: Set<BlockKeyboardShortcutModifier>
+    ) -> Bool {
+        modifiers == [.command] && input == "]"
+    }
+}
+
 enum BlockKeyboardFocusResolver {
     static func focusDirection(
         keyCode: UInt16,

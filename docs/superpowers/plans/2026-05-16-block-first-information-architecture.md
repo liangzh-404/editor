@@ -964,7 +964,7 @@ git commit -m "Show diary-first shell"
 - Test: `Tests/EditorTests/NativeTextBlockEditorTests.swift`
 - Test: `Tests/EditorMacUITests/EditorMacEditingUITests.swift`
 
-- [ ] **Step 1: Write failing command resolver test**
+- [x] **Step 1: Write failing command resolver test**
 
 Add to `NativeTextBlockEditorTests`:
 
@@ -1020,7 +1020,7 @@ func testCommandRightBracketPromotesSelectedDiaryTextToPage() {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -1031,7 +1031,7 @@ scripts/mac_ui_test.sh test testCommandRightBracketPromotesSelectedDiaryTextToPa
 
 Expected: FAIL because `DiaryPromotionKeyboardResolver` and UI promotion route do not exist.
 
-- [ ] **Step 3: Implement promotion command path**
+- [x] **Step 3: Implement promotion command path**
 
 Add resolver near other keyboard resolvers:
 
@@ -1055,7 +1055,7 @@ In the diary editor key handling path:
 
 In `EditorApp.swift`, add a menu command labeled `Promote to Page` with `.keyboardShortcut("]", modifiers: [.command])` that calls the same focused diary action.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -1066,7 +1066,7 @@ scripts/mac_ui_test.sh run testCommandRightBracketPromotesSelectedDiaryTextToPag
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 

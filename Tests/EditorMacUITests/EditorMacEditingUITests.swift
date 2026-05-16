@@ -98,6 +98,31 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testCommandRightBracketPromotesSelectedDiaryTextToPage() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let diaryEditor = app.textViews["editor.diary.text"]
+        XCTAssertTrue(diaryEditor.waitForExistence(timeout: 5), "Diary editor should be visible at launch")
+        diaryEditor.click()
+        app.typeText("Promote this text")
+        diaryEditor.typeKey("a", modifierFlags: [.command])
+        diaryEditor.typeKey("]", modifierFlags: [.command])
+
+        let pageTitle = app.textFields["editor.page-title"]
+        XCTAssertTrue(
+            pageTitle.waitForValue(equalTo: "Promote this text", timeout: 5),
+            "Cmd+] should create and open a page from selected diary text"
+        )
+
+        let promotedBlock = app.textViews
+            .matching(NSPredicate(format: "value CONTAINS %@", "Promote this text"))
+            .firstMatch
+        XCTAssertTrue(promotedBlock.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testWelcomeBlockAcceptsTypedText() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

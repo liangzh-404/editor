@@ -27,6 +27,7 @@ struct EditorApp: App {
 
 private struct EditorEditingCommands: Commands {
     @FocusedValue(\.insertMarkdownLinkAction) private var insertMarkdownLinkAction
+    @FocusedValue(\.promoteDiarySelectionAction) private var promoteDiarySelectionAction
 
     var body: some Commands {
         CommandGroup(after: .textEditing) {
@@ -35,6 +36,12 @@ private struct EditorEditingCommands: Commands {
             }
             .keyboardShortcut("k", modifiers: .command)
             .disabled(insertMarkdownLinkAction == nil)
+
+            Button("Promote to Page") {
+                promoteDiarySelectionAction?()
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(promoteDiarySelectionAction == nil)
         }
     }
 }
