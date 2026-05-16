@@ -114,6 +114,43 @@ final class AttachmentRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedAttachment.thumbnailPath, thumbnailPath)
     }
 
+    func testImportImageCanDeferThumbnailAndGenerateItLater() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let repository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+
+        let result = try repository.importAttachment(
+            sourceURL: try makeSourceFile(name: "photo.png", data: Self.onePixelPNGData),
+            workspaceID: workspaceID,
+            pageID: pageID,
+            thumbnailPolicy: .deferred
+        )
+
+        XCTAssertNil(result.attachment.thumbnailPath)
+        XCTAssertNil(
+            try pageRepository.loadWorkspaceSnapshot().attachments.first { $0.id == result.attachment.id }?.thumbnailPath
+        )
+
+        let generatedThumbnailPath = try XCTUnwrap(
+            try repository.generateMissingThumbnail(attachmentID: result.attachment.id)
+        )
+        let reloadedAttachment = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().attachments.first { $0.id == result.attachment.id }
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: generatedThumbnailPath))
+        XCTAssertNotEqual(generatedThumbnailPath, result.attachment.localPath)
+        XCTAssertEqual(reloadedAttachment.thumbnailPath, generatedThumbnailPath)
+    }
+
     func testImportVideoCreatesAndPersistsThumbnail() throws {
         let database = try migratedDatabase()
         defer { database.close() }

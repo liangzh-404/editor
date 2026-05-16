@@ -9,6 +9,11 @@ struct AttachmentImportResult: Equatable {
     let block: BlockSnapshot
 }
 
+enum AttachmentThumbnailPolicy: Equatable {
+    case immediate
+    case deferred
+}
+
 final class AttachmentRepository {
     private let database: SQLiteDatabase
     private let attachmentsDirectory: URL
@@ -27,7 +32,8 @@ final class AttachmentRepository {
     func importAttachment(
         sourceURL: URL,
         workspaceID: String,
-        pageID: String
+        pageID: String,
+        thumbnailPolicy: AttachmentThumbnailPolicy = .immediate
     ) throws -> AttachmentImportResult {
         let data = try Data(contentsOf: sourceURL)
         let now = ISO8601DateFormatter().string(from: Date())
@@ -46,11 +52,13 @@ final class AttachmentRepository {
             withIntermediateDirectories: true
         )
         try fileManager.copyItem(at: sourceURL, to: targetURL)
-        let thumbnailPath = try makeThumbnailIfNeeded(
-            sourceURL: targetURL,
-            kind: kind,
-            targetDirectory: targetDirectory
-        )
+        let thumbnailPath = try thumbnailPolicy == .immediate
+            ? makeThumbnailIfNeeded(
+                sourceURL: targetURL,
+                kind: kind,
+                targetDirectory: targetDirectory
+            )
+            : nil
 
         let attachment = AttachmentSnapshot(
             id: attachmentID,
@@ -95,6 +103,66 @@ final class AttachmentRepository {
             "attachment_imported id=\(attachmentID, privacy: .public) kind=\(kind.rawValue, privacy: .public) bytes=\(data.count, privacy: .public)"
         )
         return AttachmentImportResult(attachment: attachment, block: block)
+    }
+
+    @discardableResult
+    func generateMissingThumbnail(attachmentID: String) throws -> String? {
+        let rows = try database.query(
+            """
+            SELECT id,
+                   uti_type,
+                   local_path,
+                   thumbnail_path
+            FROM attachments
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(attachmentID)]
+        )
+        guard let row = rows.first else {
+            throw AttachmentRepositoryError.attachmentNotFound(attachmentID)
+        }
+
+        if let existingThumbnailPath = row["thumbnail_path"] ?? nil,
+           fileManager.fileExists(atPath: existingThumbnailPath) {
+            return existingThumbnailPath
+        }
+
+        let utiType = row["uti_type"] ?? UTType.data.identifier
+        let kind = AttachmentKind(utiType: utiType)
+        guard kind != .file else {
+            return nil
+        }
+
+        let localPath = row["local_path"] ?? ""
+        let sourceURL = URL(fileURLWithPath: localPath)
+        let targetDirectory = sourceURL.deletingLastPathComponent()
+        guard let thumbnailPath = try makeThumbnailIfNeeded(
+            sourceURL: sourceURL,
+            kind: kind,
+            targetDirectory: targetDirectory
+        ) else {
+            return nil
+        }
+
+        try database.execute(
+            """
+            UPDATE attachments
+            SET thumbnail_path = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .text(thumbnailPath),
+                .text(ISO8601DateFormatter().string(from: Date())),
+                .text(attachmentID)
+            ]
+        )
+
+        EditorLog.attachment.debug(
+            "attachment_thumbnail_generated id=\(attachmentID, privacy: .public) kind=\(kind.rawValue, privacy: .public)"
+        )
+        return thumbnailPath
     }
 
     @discardableResult
@@ -380,6 +448,7 @@ final class AttachmentRepository {
 }
 
 enum AttachmentRepositoryError: Error, Equatable {
+    case attachmentNotFound(String)
     case invalidPayloadEncoding
     case thumbnailGenerationFailed
 }

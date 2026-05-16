@@ -265,6 +265,39 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUIAttachmentImportDefersThumbnailAndCanGeneratePreviewLater() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let sourceURL = try makeSourceFile(name: "screen.png", data: Self.onePixelPNGData)
+
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository
+        )
+        try viewModel.load()
+
+        viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+        let importedAttachmentID = try XCTUnwrap(viewModel.snapshot.attachments.first?.id)
+
+        XCTAssertEqual(viewModel.visibleBlocks.last?.type, .attachmentImage)
+        XCTAssertNil(viewModel.snapshot.attachments.first?.thumbnailPath)
+
+        let thumbnailPath = try XCTUnwrap(
+            try viewModel.generateMissingAttachmentThumbnail(attachmentID: importedAttachmentID)
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: thumbnailPath))
+        XCTAssertEqual(viewModel.snapshot.attachments.first?.thumbnailPath, thumbnailPath)
+    }
+
+    @MainActor
     func testPurgeUnreferencedAttachmentsRefreshesSnapshot() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -2143,6 +2176,13 @@ final class WorkspaceViewModelTests: XCTestCase {
         return fileURL
     }
 
+    private func makeSourceFile(name: String, data: Data) throws -> URL {
+        let directory = makeTemporaryDirectory()
+        let fileURL = directory.appendingPathComponent(name)
+        try data.write(to: fileURL)
+        return fileURL
+    }
+
     private func insertPage(
         database: SQLiteDatabase,
         id: String,
@@ -2176,6 +2216,10 @@ final class WorkspaceViewModelTests: XCTestCase {
         temporaryFiles.append(directory)
         return directory
     }
+
+    private static let onePixelPNGData = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )!
 }
 
 private struct WorkspaceStaticCloudKitAccountStatusProvider: CloudKitAccountStatusProviding {

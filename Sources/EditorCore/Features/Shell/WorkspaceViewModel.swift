@@ -1846,7 +1846,10 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    func importAttachment(sourceURL: URL) throws {
+    func importAttachment(
+        sourceURL: URL,
+        thumbnailPolicy: AttachmentThumbnailPolicy = .immediate
+    ) throws {
         guard repository != nil, let attachmentRepository else {
             throw WorkspaceViewModelError.missingRepository
         }
@@ -1857,9 +1860,23 @@ final class WorkspaceViewModel: ObservableObject {
         _ = try attachmentRepository.importAttachment(
             sourceURL: sourceURL,
             workspaceID: selectedWorkspaceID,
-            pageID: selectedPageID
+            pageID: selectedPageID,
+            thumbnailPolicy: thumbnailPolicy
         )
         try load()
+    }
+
+    @discardableResult
+    func generateMissingAttachmentThumbnail(attachmentID: String) throws -> String? {
+        guard let attachmentRepository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let thumbnailPath = try attachmentRepository.generateMissingThumbnail(
+            attachmentID: attachmentID
+        )
+        try load()
+        return thumbnailPath
     }
 
     @discardableResult
@@ -1885,7 +1902,10 @@ final class WorkspaceViewModel: ObservableObject {
 
     func importAttachmentForCurrentPage(sourceURL: URL) {
         do {
-            try importAttachment(sourceURL: sourceURL)
+            try importAttachment(
+                sourceURL: sourceURL,
+                thumbnailPolicy: .deferred
+            )
             EditorLog.attachment.debug("attachment_import_visible source=\(sourceURL.lastPathComponent, privacy: .public)")
         } catch {
             EditorLog.attachment.error(
