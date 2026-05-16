@@ -201,7 +201,7 @@ git commit -m "Add block-first schema models"
 - Modify: `Sources/EditorCore/Models/EditorModels.swift`
 - Test: `Tests/EditorTests/TagRepositoryTests.swift`
 
-- [ ] **Step 1: Write failing tag repository tests**
+- [x] **Step 1: Write failing tag repository tests**
 
 Create `Tests/EditorTests/TagRepositoryTests.swift`:
 
@@ -265,7 +265,7 @@ final class TagRepositoryTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -275,7 +275,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: FAIL because `TagRepository` is not implemented.
 
-- [ ] **Step 3: Implement TagRepository**
+- [x] **Step 3: Implement TagRepository**
 
 Create `Sources/EditorCore/Store/TagRepository.swift` with:
 
@@ -409,7 +409,7 @@ final class TagRepository {
 }
 ```
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -419,7 +419,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 

@@ -33,7 +33,9 @@
 		3985E53DC8AF5E84FB2C5250 /* EditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */; };
 		3C93E4F9F743D69CA90FEC98 /* WorkspaceViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21375FFD71ADABE73FEA867C /* WorkspaceViewModel.swift */; };
 		46B14E454EBFA01097FE244B /* SyncRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E5987A98D4AEC7981273C41 /* SyncRepository.swift */; };
+		4AF31E328578DE8862DFAAF5 /* TagRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6545BCA3A1142552BBE909FC /* TagRepository.swift */; };
 		4F4123269A16D4618CA56BD2 /* EditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */; };
+		50A269642333A392D734DFD4 /* TagRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6545BCA3A1142552BBE909FC /* TagRepository.swift */; };
 		5141220B3C572A4DE2860C28 /* SyncMergeEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55E61FF9F0A5301402101E40 /* SyncMergeEngineTests.swift */; };
 		5879BDF8333F324C85EDF287 /* NativeTextBlockEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B305E7542E1D1459C797CE /* NativeTextBlockEditor.swift */; };
 		58B01E21F4BF19B7CE6CB6A7 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED15DB1BFFA5B14D21B49851 /* SyncEngine.swift */; };
@@ -59,6 +61,7 @@
 		7F9B997D95099BF35D291D2D /* EditorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B5B868AE25C29EA7A31C8A /* EditorApp.swift */; };
 		8A525D5BB973025C3CB43C21 /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
 		8C91ABADEB2F8674C8A8BB79 /* EditorMacEditingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830B98899C8D1F1F4FF0083E /* EditorMacEditingUITests.swift */; };
+		9CCE0838A058C2C62211C96C /* TagRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6545BCA3A1142552BBE909FC /* TagRepository.swift */; };
 		9F6522F31BB2558F8858A5FD /* SearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCF64425F694601BF7DC842 /* SearchRepository.swift */; };
 		A10CB67698B1FCCF81CE837A /* EditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */; };
 		A418DA90E22E8111FC906101 /* NativeTextBlockEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B305E7542E1D1459C797CE /* NativeTextBlockEditor.swift */; };
@@ -66,6 +69,7 @@
 		A71E6C145467696785F16C68 /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
 		A94BCFD1FAB72981D2ABA60E /* NativeTextBlockEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B305E7542E1D1459C797CE /* NativeTextBlockEditor.swift */; };
 		B314C4800CB52538C63604C6 /* EditorIOS-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = BE299953F1B4500B81B093A6 /* EditorIOS-Info.plist */; };
+		BD5D4967A28608F792BE033D /* TagRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 781D821462B3C5971EAAE009 /* TagRepositoryTests.swift */; };
 		BE8D6775DA5E9F581EDCD86E /* SyncMergeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9020679BDD2802585CAFFF9A /* SyncMergeEngine.swift */; };
 		C2EB3CA38DD087183990B22D /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED15DB1BFFA5B14D21B49851 /* SyncEngine.swift */; };
 		CD88B386243D25D829DA765D /* ConflictRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4214430A753C37880763D5D8 /* ConflictRepository.swift */; };
@@ -121,10 +125,12 @@
 		4E383776DEFCB6F2C1BE89EC /* EditorModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorModels.swift; sourceTree = "<group>"; };
 		4FCF64425F694601BF7DC842 /* SearchRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchRepository.swift; sourceTree = "<group>"; };
 		55E61FF9F0A5301402101E40 /* SyncMergeEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncMergeEngineTests.swift; sourceTree = "<group>"; };
+		6545BCA3A1142552BBE909FC /* TagRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagRepository.swift; sourceTree = "<group>"; };
 		6A9FAF141FE59264E99BD29F /* EditorIOSEditingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorIOSEditingUITests.swift; sourceTree = "<group>"; };
 		6BCEEC54CE3487C39364879C /* EditorSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSessionTests.swift; sourceTree = "<group>"; };
 		721AB2B9FBD1E62EB105C77B /* BacklinkRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BacklinkRepository.swift; sourceTree = "<group>"; };
 		74204D7572275A5FE96AABBC /* MarkdownTransformer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTransformer.swift; sourceTree = "<group>"; };
+		781D821462B3C5971EAAE009 /* TagRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagRepositoryTests.swift; sourceTree = "<group>"; };
 		830B98899C8D1F1F4FF0083E /* EditorMacEditingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorMacEditingUITests.swift; sourceTree = "<group>"; };
 		87174FBC64830887961BD6C0 /* EditorMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EditorMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8A367F12EB4E9E770B0ACA8E /* EditorMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EditorMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -261,6 +267,7 @@
 				ED15DB1BFFA5B14D21B49851 /* SyncEngine.swift */,
 				9020679BDD2802585CAFFF9A /* SyncMergeEngine.swift */,
 				9E5987A98D4AEC7981273C41 /* SyncRepository.swift */,
+				6545BCA3A1142552BBE909FC /* TagRepository.swift */,
 			);
 			path = Store;
 			sourceTree = "<group>";
@@ -309,6 +316,7 @@
 				FD68E48C0F2260B332722AA9 /* SyncEngineTests.swift */,
 				55E61FF9F0A5301402101E40 /* SyncMergeEngineTests.swift */,
 				21C821093352B684252705EC /* SyncRepositoryTests.swift */,
+				781D821462B3C5971EAAE009 /* TagRepositoryTests.swift */,
 				199BD1746B6CDF8429B282CD /* WorkspaceViewModelTests.swift */,
 			);
 			name = EditorTests;
@@ -505,6 +513,8 @@
 				5141220B3C572A4DE2860C28 /* SyncMergeEngineTests.swift in Sources */,
 				680FA555099757D0954DBFF7 /* SyncRepository.swift in Sources */,
 				6861322C7C6B927B36EB0D01 /* SyncRepositoryTests.swift in Sources */,
+				9CCE0838A058C2C62211C96C /* TagRepository.swift in Sources */,
+				BD5D4967A28608F792BE033D /* TagRepositoryTests.swift in Sources */,
 				78B01CD737100B6614E6E8A2 /* WorkspaceViewModel.swift in Sources */,
 				09BB0A14C4C2ACE82E7B8514 /* WorkspaceViewModelTests.swift in Sources */,
 			);
@@ -533,6 +543,7 @@
 				58B01E21F4BF19B7CE6CB6A7 /* SyncEngine.swift in Sources */,
 				33844EA317B147AFBA7BC67E /* SyncMergeEngine.swift in Sources */,
 				46B14E454EBFA01097FE244B /* SyncRepository.swift in Sources */,
+				50A269642333A392D734DFD4 /* TagRepository.swift in Sources */,
 				3C93E4F9F743D69CA90FEC98 /* WorkspaceViewModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -560,6 +571,7 @@
 				C2EB3CA38DD087183990B22D /* SyncEngine.swift in Sources */,
 				759142683B1FFFBA3AA6D67C /* SyncMergeEngine.swift in Sources */,
 				770292503CFC7E982D73DEBA /* SyncRepository.swift in Sources */,
+				4AF31E328578DE8862DFAAF5 /* TagRepository.swift in Sources */,
 				7C0A1A9E3A837DBCD1EA2C74 /* WorkspaceViewModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
