@@ -203,6 +203,32 @@ enum MarkdownInlineLinkInserter {
     }
 }
 
+enum MarkdownInlineLinkRemover {
+    static func apply(to text: String, target: MarkdownInlineLinkEditTarget) -> MarkdownInlineFormatResult? {
+        let selection = target.replacementSelection
+        guard selection.location >= 0,
+              selection.length >= 0 else {
+            return nil
+        }
+
+        let nsText = text as NSString
+        guard selection.location <= nsText.length,
+              selection.length <= nsText.length - selection.location else {
+            return nil
+        }
+
+        let range = NSRange(location: selection.location, length: selection.length)
+        let formattedText = nsText.replacingCharacters(in: range, with: target.label)
+        let nextSelection = EditorTextSelection(
+            blockID: selection.blockID,
+            location: selection.location,
+            length: (target.label as NSString).length
+        )
+
+        return MarkdownInlineFormatResult(text: formattedText, selection: nextSelection)
+    }
+}
+
 struct MarkdownInlineLinkEditTarget: Equatable, Sendable {
     let label: String
     let url: String

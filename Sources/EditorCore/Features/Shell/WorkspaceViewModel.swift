@@ -533,6 +533,24 @@ final class WorkspaceViewModel: ObservableObject {
         return linkResult.selection
     }
 
+    @discardableResult
+    func removeMarkdownLink(blockID: String, selection: EditorTextSelection) throws -> EditorTextSelection? {
+        guard selection.blockID == blockID,
+              let block = snapshot.blocks.first(where: { $0.id == blockID }),
+              block.type.isTextEditable,
+              let linkTarget = MarkdownInlineLinkEditTarget.target(in: block.textPlain, selection: selection),
+              let linkResult = MarkdownInlineLinkRemover.apply(to: block.textPlain, target: linkTarget) else {
+            return nil
+        }
+
+        try updateBlockText(blockID: blockID, text: linkResult.text)
+        pendingFocusBlockID = blockID
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=inline_link_remove_selection"
+        )
+        return linkResult.selection
+    }
+
     func insertMarkdownLinkForUI(blockID: String, label: String, url: String) -> Bool {
         do {
             let didInsert = try insertMarkdownLink(blockID: blockID, label: label, url: url)
@@ -568,6 +586,21 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "markdown_inline_link_insert_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func removeMarkdownLinkForUI(blockID: String, selection: EditorTextSelection) -> EditorTextSelection? {
+        do {
+            let nextSelection = try removeMarkdownLink(blockID: blockID, selection: selection)
+            if nextSelection != nil {
+                EditorLog.input.debug("markdown_inline_link_removed block_id=\(blockID, privacy: .public)")
+            }
+            return nextSelection
+        } catch {
+            EditorLog.input.error(
+                "markdown_inline_link_remove_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return nil
         }

@@ -1332,6 +1332,43 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRemoveExistingMarkdownLinkAtSelectionRefreshesExternalLinksAndReturnsLabelSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.updateBlockText(
+            blockID: blockID,
+            text: "Read [Swift](https://swift.org) today"
+        )
+        XCTAssertEqual(viewModel.selectedPageExternalLinks.count, 1)
+
+        let nextSelection = try XCTUnwrap(
+            try viewModel.removeMarkdownLink(
+                blockID: blockID,
+                selection: EditorTextSelection(
+                    blockID: blockID,
+                    location: ("Read [Swift](https://swift" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Read Swift today")
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 5, length: 5))
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertTrue(viewModel.selectedPageExternalLinks.isEmpty)
+    }
+
+    @MainActor
     func testApplyMarkdownInlineFormatWrapsSelectionAndQueuesFocus() throws {
         let database = try migratedDatabase()
         defer { database.close() }

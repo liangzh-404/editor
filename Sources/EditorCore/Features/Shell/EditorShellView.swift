@@ -144,6 +144,9 @@ private struct ThreeColumnEditorShell: View {
                             selection: selection
                         )
                     },
+                    onRemoveMarkdownLinkAtSelection: { blockID, selection in
+                        viewModel.removeMarkdownLinkForUI(blockID: blockID, selection: selection)
+                    },
                     onApplyMarkdownInlineFormat: { blockID, format, selection in
                         viewModel.applyMarkdownInlineFormatForUI(
                             blockID: blockID,
@@ -541,6 +544,9 @@ private struct CompactPageDestination: View {
                         url: url,
                         selection: selection
                     )
+                },
+                onRemoveMarkdownLinkAtSelection: { blockID, selection in
+                    viewModel.removeMarkdownLinkForUI(blockID: blockID, selection: selection)
                 },
                 onApplyMarkdownInlineFormat: { blockID, format, selection in
                     viewModel.applyMarkdownInlineFormatForUI(
@@ -1821,6 +1827,7 @@ private struct EditorCanvasView: View {
     let onAddBlockReference: (String) -> Void
     let onInsertMarkdownLink: (String, String, String) -> Bool
     let onInsertMarkdownLinkAtSelection: (String, String, String, EditorTextSelection) -> EditorTextSelection?
+    let onRemoveMarkdownLinkAtSelection: (String, EditorTextSelection) -> EditorTextSelection?
     let onApplyMarkdownInlineFormat: (String, MarkdownInlineFormat, EditorTextSelection) -> EditorTextSelection?
     let onUndoTextEdit: () -> Void
     let onFocusCanvas: () -> String?
@@ -1928,8 +1935,7 @@ private struct EditorCanvasView: View {
                     .disabled(blockReferenceTargets.isEmpty)
 
                     Button {
-                        activeInlineLinkTarget = inlineLinkTarget
-                        isInlineLinkPopoverPresented = activeInlineLinkTarget != nil
+                        _ = presentInlineLinkInsertionFromCurrentTarget()
                     } label: {
                         Image(systemName: "link.badge.plus")
                     }
@@ -2446,6 +2452,17 @@ private struct EditorCanvasView: View {
                 .help("Cancel")
                 .accessibilityIdentifier("editor.insert-markdown-link.cancel")
 
+                if isEditingInlineLink {
+                    Button(role: .destructive) {
+                        removeInlineLink()
+                    } label: {
+                        Label("Remove Link", systemImage: "link.badge.minus")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Remove link")
+                    .accessibilityIdentifier("editor.insert-markdown-link.remove")
+                }
+
                 Spacer()
                 Button {
                     insertInlineLink()
@@ -2486,6 +2503,21 @@ private struct EditorCanvasView: View {
             pendingFocusRequest = BlockFocusRequest(blockID: target.blockID)
         }
 
+        inlineLinkLabel = ""
+        inlineLinkURL = ""
+        isEditingInlineLink = false
+        isInlineLinkPopoverPresented = false
+        activeInlineLinkTarget = nil
+    }
+
+    private func removeInlineLink() {
+        guard let target = activeInlineLinkTarget,
+              let selection = target.selection,
+              let nextSelection = onRemoveMarkdownLinkAtSelection(target.blockID, selection) else {
+            return
+        }
+
+        pendingFocusRequest = BlockFocusRequest(blockID: target.blockID, selection: nextSelection)
         inlineLinkLabel = ""
         inlineLinkURL = ""
         isEditingInlineLink = false

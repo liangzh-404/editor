@@ -243,6 +243,28 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testMarkdownInlineLinkRemoverReplacesLinkWithLabelAndSelectsText() throws {
+        let text = "Read [Swift](https://swift.org) today"
+        let target = try XCTUnwrap(
+            MarkdownInlineLinkEditTarget.target(
+                in: text,
+                selection: EditorTextSelection(
+                    blockID: "block-1",
+                    location: ("Read [Swift](https://swift" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+
+        let result = try XCTUnwrap(MarkdownInlineLinkRemover.apply(to: text, target: target))
+
+        XCTAssertEqual(result.text, "Read Swift today")
+        XCTAssertEqual(
+            result.selection,
+            EditorTextSelection(blockID: "block-1", location: 5, length: 5)
+        )
+    }
+
     func testMarkdownInlineLinkEditTargetFindsExistingLinkAroundSelection() throws {
         let text = "Read [Swift](https://swift.org) today"
         let labelSelection = EditorTextSelection(

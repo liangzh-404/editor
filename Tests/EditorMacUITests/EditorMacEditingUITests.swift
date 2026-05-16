@@ -922,6 +922,55 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testCommandKRemovesExistingInlineLinkUnderSelection() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 10), "Welcome text block should be visible before link removal")
+
+        textView.click()
+        textView.typeKey("a", modifierFlags: [.command])
+
+        let linkButton = app.buttons["editor.insert-markdown-link"]
+        XCTAssertTrue(linkButton.waitForExistence(timeout: 5), "Inline link toolbar button should be visible")
+        linkButton.click()
+
+        let labelField = app.textFields["editor.insert-markdown-link.label"]
+        XCTAssertTrue(labelField.waitForExistence(timeout: 5), "Inline link panel should expose a label field")
+        labelField.click()
+        labelField.typeText("Swift")
+
+        let urlField = app.textFields["editor.insert-markdown-link.url"]
+        XCTAssertTrue(urlField.waitForExistence(timeout: 5), "Inline link panel should expose a URL field")
+        urlField.click()
+        urlField.typeText("https://swift.org")
+
+        let confirmButton = app.buttons["editor.insert-markdown-link.confirm"]
+        XCTAssertTrue(confirmButton.waitForExistence(timeout: 5), "Inline link panel should expose a confirm button")
+        confirmButton.click()
+
+        XCTAssertTrue(
+            textView.waitForValue(containing: "[Swift](https://swift.org)", timeout: 5),
+            "Initial link insertion should place an editable inline Markdown link"
+        )
+
+        textView.typeKey("k", modifierFlags: [.command])
+
+        let removeButton = app.buttons["editor.insert-markdown-link.remove"]
+        XCTAssertTrue(removeButton.waitForExistence(timeout: 5), "Editing an existing inline link should expose Remove Link")
+        removeButton.click()
+
+        let didRemoveExistingLink = textView.waitForValue(equalTo: "Swift", timeout: 5)
+        let value = textView.value as? String ?? ""
+        XCTAssertTrue(
+            didRemoveExistingLink,
+            "Removing from the prefilled link panel should preserve only the label text; value=\(value)"
+        )
+    }
+
+    @MainActor
     func testPastedMultilineTextExpandsNativeTextViewHeight() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
