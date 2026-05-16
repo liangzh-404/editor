@@ -2040,6 +2040,7 @@ private struct EditorCanvasView: View {
                         attachmentPreviewGenerationStatus: attachmentPreviewGenerationStatus(for: block),
                         editorSession: editorSession,
                         nestingLevel: nestingLevel(for: block),
+                        listOrdinal: ListBlockOrdinalResolver.ordinal(for: block, at: index, in: blocks),
                         canMoveUp: index > 0,
                         canMoveDown: index < blocks.count - 1,
                         onMoveUp: {
@@ -3314,12 +3315,58 @@ struct QuoteBlockChromeDescriptor: Equatable, Sendable {
     }
 }
 
+struct ListBlockChromeDescriptor: Equatable, Sendable {
+    let marker: String
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let accessibilityIdentifier: String
+
+    init(block: BlockSnapshot, ordinal: Int?) {
+        accessibilityValue = block.textPlain.isEmpty ? "Empty" : block.textPlain
+
+        if block.type == .orderedListItem {
+            marker = "\(max(ordinal ?? 1, 1))."
+            accessibilityLabel = "Numbered list block"
+            accessibilityIdentifier = "editor.ordered-list.\(block.id)"
+        } else {
+            marker = "\u{2022}"
+            accessibilityLabel = "Bulleted list block"
+            accessibilityIdentifier = "editor.unordered-list.\(block.id)"
+        }
+    }
+}
+
+struct ListBlockOrdinalResolver: Equatable, Sendable {
+    static func ordinal(for block: BlockSnapshot, at index: Int, in blocks: [BlockSnapshot]) -> Int? {
+        guard block.type == .orderedListItem,
+              blocks.indices.contains(index),
+              blocks[index].id == block.id else {
+            return nil
+        }
+
+        var ordinal = 1
+        var candidateIndex = index - 1
+        while candidateIndex >= 0 {
+            let candidate = blocks[candidateIndex]
+            if candidate.parentBlockID == block.parentBlockID {
+                guard candidate.type == .orderedListItem else {
+                    break
+                }
+                ordinal += 1
+            }
+            candidateIndex -= 1
+        }
+        return ordinal
+    }
+}
+
 private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
     let attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus
     @ObservedObject var editorSession: EditorSession
     let nestingLevel: Int
+    let listOrdinal: Int?
     let canMoveUp: Bool
     let canMoveDown: Bool
     let onMoveUp: () -> Void
@@ -3354,6 +3401,7 @@ private struct BlockRowView: View {
         attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus = .idle,
         editorSession: EditorSession,
         nestingLevel: Int = 0,
+        listOrdinal: Int? = nil,
         canMoveUp: Bool = false,
         canMoveDown: Bool = false,
         onMoveUp: @escaping () -> Void = {},
@@ -3386,6 +3434,7 @@ private struct BlockRowView: View {
         self.attachmentPreviewGenerationStatus = attachmentPreviewGenerationStatus
         self.editorSession = editorSession
         self.nestingLevel = nestingLevel
+        self.listOrdinal = listOrdinal
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
         self.onMoveUp = onMoveUp
@@ -3568,7 +3617,28 @@ private struct BlockRowView: View {
 
     @ViewBuilder
     private var textEditableBlockContent: some View {
-        if block.type == .taskItem {
+        if block.type == .unorderedListItem || block.type == .orderedListItem {
+            let descriptor = ListBlockChromeDescriptor(block: block, ordinal: listOrdinal)
+            HStack(alignment: .top, spacing: 8) {
+                Text(descriptor.marker)
+                    .font(.callout.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, alignment: .trailing)
+                    .padding(.top, 2)
+                    .accessibilityHidden(true)
+
+                nativeTextBlockEditor
+            }
+            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .background(Color.secondary.opacity(0.03))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(descriptor.accessibilityLabel)
+            .accessibilityValue(descriptor.accessibilityValue)
+            .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+        } else if block.type == .taskItem {
             HStack(alignment: .top, spacing: 8) {
                 taskItemCompletionButton
                     .padding(.top, 1)

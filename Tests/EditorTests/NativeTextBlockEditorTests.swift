@@ -355,6 +355,95 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(descriptor.accessibilityIdentifier, "editor.quote.quote-1")
     }
 
+    func testListBlockChromeDescriptorExposesSemanticContainersAndMarkers() {
+        let unorderedBlock = BlockSnapshot(
+            id: "unordered-1",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .unorderedListItem,
+            textPlain: "Bulleted text"
+        )
+        let orderedBlock = BlockSnapshot(
+            id: "ordered-3",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "b",
+            type: .orderedListItem,
+            textPlain: "Numbered text"
+        )
+
+        let unorderedDescriptor = ListBlockChromeDescriptor(block: unorderedBlock, ordinal: nil)
+        let orderedDescriptor = ListBlockChromeDescriptor(block: orderedBlock, ordinal: 3)
+
+        XCTAssertEqual(unorderedDescriptor.marker, "•")
+        XCTAssertEqual(unorderedDescriptor.accessibilityLabel, "Bulleted list block")
+        XCTAssertEqual(unorderedDescriptor.accessibilityValue, "Bulleted text")
+        XCTAssertEqual(unorderedDescriptor.accessibilityIdentifier, "editor.unordered-list.unordered-1")
+
+        XCTAssertEqual(orderedDescriptor.marker, "3.")
+        XCTAssertEqual(orderedDescriptor.accessibilityLabel, "Numbered list block")
+        XCTAssertEqual(orderedDescriptor.accessibilityValue, "Numbered text")
+        XCTAssertEqual(orderedDescriptor.accessibilityIdentifier, "editor.ordered-list.ordered-3")
+    }
+
+    func testOrderedListOrdinalResolverCountsContiguousSameParentItems() {
+        let intro = BlockSnapshot(
+            id: "intro",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .paragraph,
+            textPlain: "Intro"
+        )
+        let first = BlockSnapshot(
+            id: "ordered-1",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "b",
+            type: .orderedListItem,
+            textPlain: "First"
+        )
+        let firstChild = BlockSnapshot(
+            id: "ordered-1-child",
+            pageID: "page",
+            parentBlockID: "ordered-1",
+            orderKey: "c",
+            type: .paragraph,
+            textPlain: "Nested detail"
+        )
+        let second = BlockSnapshot(
+            id: "ordered-2",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "d",
+            type: .orderedListItem,
+            textPlain: "Second"
+        )
+        let breakBlock = BlockSnapshot(
+            id: "break",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "e",
+            type: .paragraph,
+            textPlain: "Break"
+        )
+        let restarted = BlockSnapshot(
+            id: "ordered-restart",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "f",
+            type: .orderedListItem,
+            textPlain: "Restart"
+        )
+        let blocks = [intro, first, firstChild, second, breakBlock, restarted]
+
+        XCTAssertEqual(ListBlockOrdinalResolver.ordinal(for: first, at: 1, in: blocks), 1)
+        XCTAssertEqual(ListBlockOrdinalResolver.ordinal(for: second, at: 3, in: blocks), 2)
+        XCTAssertEqual(ListBlockOrdinalResolver.ordinal(for: restarted, at: 5, in: blocks), 1)
+        XCTAssertNil(ListBlockOrdinalResolver.ordinal(for: intro, at: 0, in: blocks))
+    }
+
     func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicStrikethroughAndCodeShortcutsOnly() {
         XCTAssertEqual(
             MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command]),
