@@ -3389,6 +3389,18 @@ struct HeadingBlockChromeDescriptor: Equatable, Sendable {
     }
 }
 
+struct DividerBlockChromeDescriptor: Equatable, Sendable {
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let accessibilityIdentifier: String
+
+    init(block: BlockSnapshot) {
+        accessibilityLabel = "Divider block"
+        accessibilityValue = "Separator"
+        accessibilityIdentifier = "editor.divider.\(block.id)"
+    }
+}
+
 private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
@@ -3601,9 +3613,12 @@ private struct BlockRowView: View {
                 BlockReferenceBlockRow(block: block, onOpenBlockReference: onOpenBlockReference)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if block.type == .divider {
+                let descriptor = DividerBlockChromeDescriptor(block: block)
                 Divider()
                     .padding(.vertical, 10)
-                    .accessibilityIdentifier("editor.divider.\(block.id)")
+                    .accessibilityLabel(descriptor.accessibilityLabel)
+                    .accessibilityValue(descriptor.accessibilityValue)
+                    .accessibilityIdentifier(descriptor.accessibilityIdentifier)
             } else {
                 AttachmentBlockRow(
                     block: block,

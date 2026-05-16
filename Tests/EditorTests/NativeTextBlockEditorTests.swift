@@ -490,6 +490,23 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(heading3Descriptor.accessibilityIdentifier, "editor.heading3.heading-3")
     }
 
+    func testDividerBlockChromeDescriptorExposesSemanticSeparator() {
+        let divider = BlockSnapshot(
+            id: "divider-1",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .divider,
+            textPlain: ""
+        )
+
+        let descriptor = DividerBlockChromeDescriptor(block: divider)
+
+        XCTAssertEqual(descriptor.accessibilityLabel, "Divider block")
+        XCTAssertEqual(descriptor.accessibilityValue, "Separator")
+        XCTAssertEqual(descriptor.accessibilityIdentifier, "editor.divider.divider-1")
+    }
+
     func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicStrikethroughAndCodeShortcutsOnly() {
         XCTAssertEqual(
             MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command]),
