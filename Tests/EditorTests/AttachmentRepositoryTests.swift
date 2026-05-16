@@ -274,6 +274,71 @@ final class AttachmentRepositoryTests: XCTestCase {
         )))
     }
 
+    func testAttachmentPreviewStateShowsPendingForMediaWithoutThumbnail() {
+        let imageBlock = BlockSnapshot(
+            id: "block-photo",
+            pageID: "page-local",
+            parentBlockID: nil,
+            orderKey: "000001",
+            type: .attachmentImage,
+            textPlain: "photo.png"
+        )
+        let videoBlock = BlockSnapshot(
+            id: "block-video",
+            pageID: "page-local",
+            parentBlockID: nil,
+            orderKey: "000002",
+            type: .attachmentVideo,
+            textPlain: "clip.mov"
+        )
+        let fileBlock = BlockSnapshot(
+            id: "block-file",
+            pageID: "page-local",
+            parentBlockID: nil,
+            orderKey: "000003",
+            type: .attachmentFile,
+            textPlain: "brief.txt"
+        )
+        let imageAttachment = AttachmentSnapshot(
+            id: "attachment-photo",
+            workspaceID: "workspace-local",
+            originalFilename: "photo.png",
+            utiType: "public.png",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/photo.png",
+            thumbnailPath: nil,
+            kind: .image
+        )
+        let videoAttachment = AttachmentSnapshot(
+            id: "attachment-video",
+            workspaceID: "workspace-local",
+            originalFilename: "clip.mov",
+            utiType: "com.apple.quicktime-movie",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/clip.mov",
+            thumbnailPath: nil,
+            kind: .video
+        )
+        let fileAttachment = AttachmentSnapshot(
+            id: "attachment-file",
+            workspaceID: "workspace-local",
+            originalFilename: "brief.txt",
+            utiType: "public.plain-text",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/brief.txt",
+            thumbnailPath: nil,
+            kind: .file
+        )
+
+        XCTAssertEqual(imageAttachment.previewState(for: imageBlock), .pending)
+        XCTAssertEqual(videoAttachment.previewState(for: videoBlock), .pending)
+        XCTAssertEqual(fileAttachment.previewState(for: fileBlock), .unavailable)
+        XCTAssertNil(imageAttachment.previewPath(for: imageBlock))
+    }
+
     func testDeletingAttachmentBlockRemovesReferenceButKeepsAttachmentMetadata() throws {
         let database = try migratedDatabase()
         defer { database.close() }

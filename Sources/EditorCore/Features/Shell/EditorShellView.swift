@@ -4143,6 +4143,14 @@ private struct AttachmentBlockRow: View {
                     .frame(width: 52, height: 40)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .accessibilityHidden(true)
+            } else if isPreviewPending {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 52, height: 40)
+                    .background(Color.white.opacity(0.65))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .accessibilityLabel("Generating attachment preview")
+                    .accessibilityIdentifier("editor.attachment.\(block.id).preview-pending")
             } else {
                 Image(systemName: iconName)
                     .font(.title3)
@@ -4172,7 +4180,7 @@ private struct AttachmentBlockRow: View {
     }
 
     private var thumbnailImage: Image? {
-        guard let path = attachment?.previewPath(for: block) else {
+        guard case .thumbnail(let path) = previewState else {
             return nil
         }
 
@@ -4191,6 +4199,14 @@ private struct AttachmentBlockRow: View {
 #endif
     }
 
+    private var previewState: AttachmentPreviewState {
+        attachment?.previewState(for: block) ?? .unavailable
+    }
+
+    private var isPreviewPending: Bool {
+        previewState == .pending
+    }
+
     private var iconName: String {
         switch block.type {
         case .attachmentImage:
@@ -4207,9 +4223,9 @@ private struct AttachmentBlockRow: View {
     private var kindLabel: String {
         switch block.type {
         case .attachmentImage:
-            return "Image"
+            return isPreviewPending ? "Image, generating preview" : "Image"
         case .attachmentVideo:
-            return "Video"
+            return isPreviewPending ? "Video, generating preview" : "Video"
         case .attachmentFile:
             return "File"
         default:

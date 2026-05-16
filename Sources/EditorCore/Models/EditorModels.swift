@@ -272,6 +272,12 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
     }
 }
 
+enum AttachmentPreviewState: Equatable, Sendable {
+    case thumbnail(String)
+    case pending
+    case unavailable
+}
+
 struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
     let id: String
     let workspaceID: String
@@ -288,15 +294,26 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
     }
 
     func previewPath(for block: BlockSnapshot) -> String? {
-        guard matches(block: block) else {
+        guard case .thumbnail(let path) = previewState(for: block) else {
             return nil
+        }
+
+        return path
+    }
+
+    func previewState(for block: BlockSnapshot) -> AttachmentPreviewState {
+        guard matches(block: block) else {
+            return .unavailable
         }
 
         switch kind {
         case .image, .video:
-            return thumbnailPath ?? localPath
+            if let thumbnailPath {
+                return .thumbnail(thumbnailPath)
+            }
+            return .pending
         case .file:
-            return nil
+            return .unavailable
         }
     }
 }
