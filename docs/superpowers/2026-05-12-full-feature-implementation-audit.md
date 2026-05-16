@@ -553,6 +553,12 @@ Implement the approved editor architecture so the app supports the full requeste
 - System evidence for the UI blocker: `osascript` reported `System Events` UI elements disabled, `DevToolsSecurity -status` reported Developer mode disabled, `/var/db/com.apple.dt.automationmode/automation-enabled` did not exist, and unified logs showed `Writer daemon requires authentication to enable automation mode` before the runner timeout.
 - App build gates passed: `EditorMac` built for `platform=macOS,arch=arm64`, and `EditorIOS` built for `generic/platform=iOS Simulator`.
 
+## Recent macOS UI Automation Preflight
+
+- `scripts/mac_ui_test.sh` now checks `DevToolsSecurity -status` before `test` and `rerun` actions so missing local UI Automation authorization fails fast instead of waiting for an 80s runner initialization timeout.
+- The preflight prints the required local authorization command, `/usr/sbin/DevToolsSecurity -enable`, and can be bypassed with `EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT=1` when intentionally letting `xcodebuild` try to prompt.
+- Verification: `bash -n scripts/mac_ui_test.sh` passed, unauthorized `scripts/mac_ui_test.sh rerun testLaunchStartsInBlankDiaryEditorForFastTyping` exited 65 in 0.173s with the preflight message, `scripts/mac_ui_test.sh help` shows the bypass variable, `EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT=1` bypassed the preflight and entered the xcodebuild path until an external 3s timeout, and `scripts/mac_ui_test.sh build` still passes.
+
 ## Next Implementation Slice
 
 The block-first UI/UX path in `docs/superpowers/specs/2026-05-16-block-first-information-architecture-design.md` has landed through `docs/superpowers/plans/2026-05-16-block-first-information-architecture.md`. The next concrete gaps should stay in this order:

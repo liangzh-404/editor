@@ -30,6 +30,8 @@ Environment:
   EDITOR_UI_TEST_DERIVED_DATA   Override the cached DerivedData path.
   EDITOR_UI_TEST_DESTINATION    Override the xcodebuild destination.
   EDITOR_UI_TEST_VERBOSE=1      Show full xcodebuild output.
+  EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT=1
+                                  Skip the macOS UI Automation authorization preflight.
 EOF
 }
 
@@ -121,6 +123,39 @@ run_build_for_testing() {
     run_xcodebuild build-for-testing
 }
 
+ensure_ui_automation_authorized() {
+    if [[ "${EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT:-0}" == "1" ]]; then
+        return
+    fi
+
+    local devtools_status
+    if ! devtools_status="$(/usr/sbin/DevToolsSecurity -status 2>&1)"; then
+        echo "Unable to read macOS Developer Tools security status:" >&2
+        echo "$devtools_status" >&2
+        echo "Set EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT=1 to bypass this preflight." >&2
+        exit 65
+    fi
+
+    if [[ "$devtools_status" == *"currently enabled"* ]]; then
+        return
+    fi
+
+    cat >&2 <<EOF
+macOS UI Automation is not authorized for this user.
+
+$devtools_status
+
+UI tests will time out while enabling automation mode until this Mac is
+authorized. Run the following command locally and approve the system prompt:
+
+  /usr/sbin/DevToolsSecurity -enable
+
+Then rerun this script. To intentionally let xcodebuild attempt the prompt,
+set EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT=1.
+EOF
+    exit 65
+}
+
 ensure_build_for_testing() {
     local cached_xctestrun
     cached_xctestrun="$(xctestrun_path)"
@@ -141,6 +176,8 @@ ensure_build_for_testing() {
 }
 
 run_test_without_building() {
+    ensure_ui_automation_authorized
+
     local args=("test-without-building")
     if ((${#only_testing_args[@]})); then
         args+=("${only_testing_args[@]}")
@@ -149,6 +186,8 @@ run_test_without_building() {
 }
 
 run_standard_test() {
+    ensure_ui_automation_authorized
+
     local args=("test")
     if ((${#only_testing_args[@]})); then
         args+=("${only_testing_args[@]}")
