@@ -85,6 +85,42 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertLessThan(result.snippet.count, longText.count)
     }
 
+    func testSearchFindsDiaryEntriesWithDiaryResultType() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let diaryRepository = DiaryRepository(database: database)
+        let entry = try diaryRepository.activeEntry(workspaceID: workspaceID)
+        try diaryRepository.updateEntryText(entryID: entry.id, text: "Private searchable diary capture")
+
+        let results = try SearchRepository(database: database).search("private searchable")
+
+        XCTAssertEqual(results.first?.entityType, "diary")
+        XCTAssertEqual(results.first?.entityID, entry.id)
+        XCTAssertNil(results.first?.destinationPageID)
+    }
+
+    func testRebuildIndexFindsExistingDiaryEntries() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let diaryRepository = DiaryRepository(database: database)
+        let entry = try diaryRepository.activeEntry(workspaceID: workspaceID)
+        try diaryRepository.updateEntryText(entryID: entry.id, text: "Rebuild diary searchable")
+
+        let repository = SearchRepository(database: database)
+        try database.execute("DELETE FROM search_index")
+        try repository.rebuildIndex()
+
+        XCTAssertTrue(try repository.search("rebuild diary").contains { result in
+            result.entityType == "diary" && result.entityID == entry.id
+        })
+    }
+
     func testUpdateBlockIndexReplacesOnlyChangedBlockEntry() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -38,6 +38,7 @@ final class SearchRepository {
         try indexPages()
         try indexBlocks()
         try indexAttachments()
+        try indexDiaryEntries()
         EditorLog.render.debug("search_index_rebuilt")
     }
 
@@ -70,6 +71,33 @@ final class SearchRepository {
         }
 
         EditorLog.render.debug("search_index_block_updated block_id=\(blockID, privacy: .public)")
+    }
+
+    func updateDiaryEntryIndex(entryID: String) throws {
+        try database.withImmediateTransaction("search_index_diary_update") {
+            try deleteIndex(entityType: "diary", entityID: entryID)
+            let rows = try database.query(
+                """
+                SELECT id, text_plain
+                FROM diary_entries
+                WHERE id = ?
+                  AND text_plain != ''
+                LIMIT 1
+                """,
+                bindings: [.text(entryID)]
+            )
+
+            if let row = rows.first {
+                try insertIndex(
+                    entityType: "diary",
+                    entityID: row["id"] ?? "",
+                    title: "Diary",
+                    body: row["text_plain"] ?? ""
+                )
+            }
+        }
+
+        EditorLog.render.debug("search_index_diary_updated entry_id=\(entryID, privacy: .public)")
     }
 
     func search(_ query: String, limit: Int = 20) throws -> [SearchResult] {
@@ -204,6 +232,25 @@ final class SearchRepository {
                 entityID: attachment["id"] ?? "",
                 title: filename,
                 body: filename
+            )
+        }
+    }
+
+    private func indexDiaryEntries() throws {
+        let entries = try database.query(
+            """
+            SELECT id, text_plain
+            FROM diary_entries
+            WHERE text_plain != ''
+            """
+        )
+
+        for entry in entries {
+            try insertIndex(
+                entityType: "diary",
+                entityID: entry["id"] ?? "",
+                title: "Diary",
+                body: entry["text_plain"] ?? ""
             )
         }
     }

@@ -50,6 +50,7 @@ final class DiaryRepository {
                 .text(entryID)
             ]
         )
+        try SearchRepository(database: database).updateDiaryEntryIndex(entryID: entryID)
     }
 
     func promoteTextToPage(entryID: String, selectedText: String) throws -> PageSummary {

@@ -48,6 +48,22 @@ final class DiaryRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedEntry.textPlain, "Alpha capture Beta")
     }
 
+    func testDiaryTextDoesNotAppearInAllDocumentsAfterSearchIndexing() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let diaryRepository = DiaryRepository(database: database)
+        let entry = try diaryRepository.activeEntry(workspaceID: workspaceID)
+        try diaryRepository.updateEntryText(entryID: entry.id, text: "Diary-only text")
+
+        let reloaded = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertFalse(reloaded.pages.contains { $0.title.contains("Diary-only") })
+        XCTAssertFalse(reloaded.blocks.contains { $0.textPlain.contains("Diary-only") })
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)

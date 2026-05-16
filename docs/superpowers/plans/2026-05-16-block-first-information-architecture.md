@@ -658,7 +658,7 @@ git commit -m "Add diary repository"
 - Test: `Tests/EditorTests/SearchRepositoryTests.swift`
 - Test: `Tests/EditorTests/DiaryRepositoryTests.swift`
 
-- [ ] **Step 1: Write failing search tests**
+- [x] **Step 1: Write failing search tests**
 
 Add to `Tests/EditorTests/SearchRepositoryTests.swift`:
 
@@ -701,7 +701,7 @@ func testDiaryTextDoesNotAppearInAllDocumentsAfterSearchIndexing() throws {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -711,7 +711,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: FAIL because diary entries are not indexed.
 
-- [ ] **Step 3: Implement diary indexing**
+- [x] **Step 3: Implement diary indexing**
 
 In `SearchRepository`:
 
@@ -721,7 +721,7 @@ In `SearchRepository`:
 
 In `DiaryRepository.updateEntryText`, call `SearchRepository(database: database).updateDiaryEntryIndex(entryID:)` after the diary row update.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -731,7 +731,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
