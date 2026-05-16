@@ -338,7 +338,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
-    func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicAndStrikethroughShortcutsOnly() {
+    func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicStrikethroughAndCodeShortcutsOnly() {
         XCTAssertEqual(
             MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command]),
             .bold
@@ -355,11 +355,22 @@ final class NativeTextBlockEditorTests: XCTestCase {
             MarkdownInlineFormatKeyboardResolver.format(input: "x", modifiers: [.command, .shift]),
             .strikethrough
         )
+        XCTAssertEqual(
+            MarkdownInlineFormatKeyboardResolver.format(input: "e", modifiers: [.command]),
+            .code
+        )
+        XCTAssertEqual(
+            MarkdownInlineFormatKeyboardResolver.format(input: "E", modifiers: [.command]),
+            .code
+        )
         XCTAssertNil(
             MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command, .option])
         )
         XCTAssertNil(
             MarkdownInlineFormatKeyboardResolver.format(input: "x", modifiers: [.command])
+        )
+        XCTAssertNil(
+            MarkdownInlineFormatKeyboardResolver.format(input: "e", modifiers: [.command, .shift])
         )
         XCTAssertNil(
             MarkdownInlineFormatKeyboardResolver.format(input: "c", modifiers: [.command])

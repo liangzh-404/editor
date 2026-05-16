@@ -104,6 +104,9 @@ enum MarkdownInlineFormatKeyboardResolver {
         if modifiers == [.command, .shift], input == "x" {
             return .strikethrough
         }
+        if modifiers == [.command], input == "e" {
+            return .code
+        }
         return nil
     }
 }
@@ -894,6 +897,13 @@ private final class EditorNSTextView: NSTextView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let format = MarkdownInlineFormatKeyboardResolver.format(
+            input: event.charactersIgnoringModifiers,
+            modifiers: event.blockKeyboardShortcutModifiers
+        ), onKeyboardInlineFormat?(format, selectedRange()) == true {
+            return true
+        }
+
         if MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(
             input: event.charactersIgnoringModifiers,
             modifiers: event.blockKeyboardShortcutModifiers
@@ -1347,6 +1357,11 @@ private final class EditorUITextView: UITextView {
                 action: #selector(applyStrikethroughFormat)
             ),
             UIKeyCommand(
+                input: "e",
+                modifierFlags: [.command],
+                action: #selector(applyCodeFormat)
+            ),
+            UIKeyCommand(
                 input: "k",
                 modifierFlags: [.command],
                 action: #selector(insertLink)
@@ -1384,6 +1399,10 @@ private final class EditorUITextView: UITextView {
 
     @objc private func applyStrikethroughFormat() {
         applyInlineFormat(.strikethrough)
+    }
+
+    @objc private func applyCodeFormat() {
+        applyInlineFormat(.code)
     }
 
     private func applyInlineFormat(_ format: MarkdownInlineFormat) {

@@ -476,6 +476,34 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testCommandEFormatsSelectionAsInlineCodeAndKeepsSelectionInEditor() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before keyboard formatting")
+
+        textView.click()
+        textView.typeKey("a", modifierFlags: [.command])
+        textView.typeKey("e", modifierFlags: [.command])
+
+        XCTAssertTrue(
+            textView.waitForValue(containing: "`Start writing in blocks.`", timeout: 5),
+            "Cmd-E should wrap the selected block text in inline-code Markdown markers"
+        )
+
+        app.typeText("literal")
+
+        let didReplaceSelection = textView.waitForValue(containing: "`literal`", timeout: 5)
+        let value = textView.value as? String ?? ""
+        XCTAssertTrue(
+            didReplaceSelection,
+            "Typing after Cmd-E should replace the still-selected inline-code text; value=\(value)"
+        )
+    }
+
+    @MainActor
     func testStrikethroughToolbarInsertsPlaceholderAndKeepsTypingInEditor() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
