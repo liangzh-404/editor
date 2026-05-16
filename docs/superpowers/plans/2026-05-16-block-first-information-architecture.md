@@ -1083,7 +1083,7 @@ git commit -m "Promote diary text to page"
 - Test: `Tests/EditorTests/WorkspaceViewModelTests.swift`
 - Test: `Tests/EditorMacUITests/EditorMacEditingUITests.swift`
 
-- [ ] **Step 1: Write failing tag UI tests**
+- [x] **Step 1: Write failing tag UI tests**
 
 Add to `WorkspaceViewModelTests`:
 
@@ -1126,7 +1126,7 @@ func testPageRowsExposeTagChipsInAllDocuments() {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -1137,7 +1137,7 @@ scripts/mac_ui_test.sh test testPageRowsExposeTagChipsInAllDocuments
 
 Expected: FAIL because page tag assignment is not exposed through the view model or UI.
 
-- [ ] **Step 3: Implement tag view-model and row UI**
+- [x] **Step 3: Implement tag view-model and row UI**
 
 In `WorkspaceViewModel`:
 
@@ -1152,7 +1152,7 @@ In `EditorShellView`:
 - Show compact tag chips in `PageRow`.
 - Add DEBUG fixture seeding in `AppEnvironment` for `EDITOR_UI_TEST_TAGGED_PAGE=1`.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -1163,7 +1163,7 @@ scripts/mac_ui_test.sh run testPageRowsExposeTagChipsInAllDocuments
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 

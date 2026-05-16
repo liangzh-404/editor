@@ -72,6 +72,26 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAssignTagToSelectedPageFiltersAllDocumentsByTag() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let tag = try tagRepository.createTag(workspaceID: workspaceID, name: "Writing")
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+        viewModel.selectPage(id: pageID)
+
+        try viewModel.assignTagsToSelectedPage([tag.id])
+        viewModel.selectCollection(.tag(tag.id))
+
+        XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [pageID])
+    }
+
+    @MainActor
     func testLoadRequestsFocusForInitialEditableBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }

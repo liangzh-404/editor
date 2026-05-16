@@ -691,6 +691,20 @@ private struct WorkspaceSidebar: View {
                     viewModel.selectCollection(.favorites)
                 }
 
+                ForEach(viewModel.snapshot.favoritePages) { page in
+                    Button {
+                        viewModel.selectPage(id: page.id)
+                    } label: {
+                        Label(page.title, systemImage: "star.fill")
+                            .font(.callout)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.primary)
+                    .padding(.leading, 18)
+                    .accessibilityIdentifier("editor.favorite-page.\(page.id)")
+                }
+
                 CollectionRailButton(
                     title: "Tags",
                     systemImage: "tag",
@@ -698,6 +712,18 @@ private struct WorkspaceSidebar: View {
                     identifier: "editor.collection.tags"
                 ) {
                     viewModel.selectCollection(.tag(""))
+                }
+
+                ForEach(viewModel.snapshot.tags) { tag in
+                    CollectionRailButton(
+                        title: tag.path,
+                        systemImage: "tag",
+                        isSelected: viewModel.selectedCollection == .tag(tag.id),
+                        identifier: "editor.collection.tag.\(tag.id)"
+                    ) {
+                        viewModel.selectCollection(.tag(tag.id))
+                    }
+                    .padding(.leading, 18)
                 }
 
                 CollectionRailButton(
@@ -836,9 +862,9 @@ private struct PageListView: View {
         List(selection: selectedPageBinding) {
             switch viewModel.selectedCollection {
             case .diary, .allDocuments:
-                pageRowsSection(title: "All Documents", pages: viewModel.snapshot.pages)
+                pageRowsSection(title: "All Documents", pages: viewModel.visibleDocumentPages)
             case .favorites:
-                pageRowsSection(title: "Favorites", pages: viewModel.snapshot.favoritePages)
+                pageRowsSection(title: "Favorites", pages: viewModel.visibleDocumentPages)
             case .tag(let tagID):
                 tagSection(tagID: tagID)
             case .search:
@@ -881,7 +907,7 @@ private struct PageListView: View {
                 }
             }
         } else {
-            pageRowsSection(title: tagName(for: tagID), pages: pages(taggedWith: tagID))
+            pageRowsSection(title: tagName(for: tagID), pages: viewModel.visibleDocumentPages)
         }
     }
 
@@ -922,6 +948,7 @@ private struct PageListView: View {
         PageRow(
             page: page,
             isSelected: viewModel.selectedPageID == page.id,
+            tagNames: tagNames(for: page),
             onFavoriteToggle: {
                 viewModel.updatePageFavoriteForUI(
                     id: page.id,
@@ -966,17 +993,19 @@ private struct PageListView: View {
         }
     }
 
-    private func pages(taggedWith tagID: String) -> [PageSummary] {
-        let pageIDs = Set(
-            viewModel.snapshot.pageTags
-                .filter { $0.tagID == tagID }
-                .map(\.pageID)
-        )
-        return viewModel.snapshot.pages.filter { pageIDs.contains($0.id) }
-    }
-
     private func tagName(for tagID: String) -> String {
         viewModel.snapshot.tags.first { $0.id == tagID }?.path ?? "Tags"
+    }
+
+    private func tagNames(for page: PageSummary) -> [String] {
+        let tagIDs = Set(
+            viewModel.snapshot.pageTags
+                .filter { $0.pageID == page.id }
+                .map(\.tagID)
+        )
+        return viewModel.snapshot.tags
+            .filter { tagIDs.contains($0.id) }
+            .map(\.name)
     }
 
     private var selectedPageBinding: Binding<String?> {
@@ -1662,6 +1691,7 @@ private struct SearchResultRow: View {
 private struct PageRow: View {
     let page: PageSummary
     var isSelected = false
+    var tagNames: [String] = []
     var onFavoriteToggle: (() -> Void)? = nil
 
     var body: some View {
@@ -1669,12 +1699,31 @@ private struct PageRow: View {
             Image(systemName: isSelected ? "doc.text.fill" : "doc.text")
                 .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                 .accessibilityHidden(true)
-            Text(page.title)
-                .font(isSelected ? .body.weight(.semibold) : .body)
-                .lineLimit(1)
-                .accessibilityLabel(page.title)
-                .accessibilityValue(pageRowAccessibilityValue)
-                .accessibilityIdentifier("editor.page-row.\(page.id)")
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(page.title)
+                    .font(isSelected ? .body.weight(.semibold) : .body)
+                    .lineLimit(1)
+                    .accessibilityLabel(page.title)
+                    .accessibilityValue(pageRowAccessibilityValue)
+                    .accessibilityIdentifier("editor.page-row.\(page.id)")
+
+                if !tagNames.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(tagNames, id: \.self) { tagName in
+                            Text(tagName)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.secondary.opacity(0.10))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        }
+                    }
+                    .accessibilityHidden(true)
+                }
+            }
+
             Spacer(minLength: 8)
 
             if let onFavoriteToggle {
@@ -1701,7 +1750,8 @@ private struct PageRow: View {
     private var pageRowAccessibilityValue: String {
         let selection = isSelected ? "Selected" : "Not selected"
         let favorite = page.isFavorite ? "Favorite" : "Not favorite"
-        return "\(selection), \(favorite)"
+        let tags = tagNames.isEmpty ? "No tags" : "Tags: \(tagNames.joined(separator: ", "))"
+        return "\(selection), \(favorite), \(tags)"
     }
 }
 

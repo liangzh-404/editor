@@ -123,6 +123,19 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testPageRowsExposeTagChipsInAllDocuments() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launchEnvironment["EDITOR_UI_TEST_TAGGED_PAGE"] = "1"
+        app.launch()
+
+        app.buttons["editor.collection.all-documents"].click()
+        let pageRow = app.staticTexts["editor.page-row.page-welcome"]
+        XCTAssertTrue(pageRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(pageRow.waitForLabelOrValue(containing: "Writing", timeout: 5))
+    }
+
+    @MainActor
     func testWelcomeBlockAcceptsTypedText() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

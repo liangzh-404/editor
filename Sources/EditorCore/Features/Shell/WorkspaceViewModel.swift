@@ -41,6 +41,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     private let repository: PageRepository?
     private let diaryRepository: DiaryRepository?
+    private let tagRepository: TagRepository?
     private let attachmentRepository: AttachmentRepository?
     private let searchRepository: SearchRepository?
     private let backlinkRepository: BacklinkRepository?
@@ -79,6 +80,29 @@ final class WorkspaceViewModel: ObservableObject {
         return editorVisibleBlocks(for: selectedPageID)
     }
 
+    var visibleDocumentPages: [PageSummary] {
+        switch selectedCollection {
+        case .diary, .allDocuments:
+            return snapshot.pages
+        case .favorites:
+            return snapshot.favoritePages
+        case .tag(let tagID):
+            guard !tagID.isEmpty else {
+                return []
+            }
+            let pageIDs = Set(
+                snapshot.pageTags
+                    .filter { $0.tagID == tagID }
+                    .map(\.pageID)
+            )
+            return snapshot.pages.filter { pageIDs.contains($0.id) }
+        case .search:
+            return []
+        case .archive:
+            return snapshot.archivedPages
+        }
+    }
+
     var selectedPageOutline: [PageOutlineItem] {
         visibleBlocks.compactMap { block in
             let title = block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -110,6 +134,7 @@ final class WorkspaceViewModel: ObservableObject {
     init(
         repository: PageRepository,
         diaryRepository: DiaryRepository? = nil,
+        tagRepository: TagRepository? = nil,
         attachmentRepository: AttachmentRepository? = nil,
         searchRepository: SearchRepository? = nil,
         backlinkRepository: BacklinkRepository? = nil,
@@ -119,6 +144,7 @@ final class WorkspaceViewModel: ObservableObject {
     ) {
         self.repository = repository
         self.diaryRepository = diaryRepository
+        self.tagRepository = tagRepository
         self.attachmentRepository = attachmentRepository
         self.searchRepository = searchRepository
         self.backlinkRepository = backlinkRepository
@@ -140,6 +166,7 @@ final class WorkspaceViewModel: ObservableObject {
     init(snapshot: WorkspaceSnapshot) {
         repository = nil
         diaryRepository = nil
+        tagRepository = nil
         attachmentRepository = nil
         searchRepository = nil
         backlinkRepository = nil
@@ -278,6 +305,28 @@ final class WorkspaceViewModel: ObservableObject {
         try load()
         selectPage(id: page.id)
         requestFocusForInitialEmptyBlockIfNeeded(source: "diary_promote")
+    }
+
+    func assignTagsToSelectedPage(_ tagIDs: [String]) throws {
+        guard let repository, let tagRepository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedPageID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        let previousSelectedPageID = selectedPageID
+        let previousSelectedCollection = selectedCollection
+        try tagRepository.assignTags(pageID: selectedPageID, tagIDs: tagIDs)
+        let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+        apply(snapshot: loadedSnapshot)
+        if snapshot.pages.contains(where: { $0.id == previousSelectedPageID }) {
+            self.selectedPageID = previousSelectedPageID
+        }
+        selectedCollection = previousSelectedCollection
+        refreshBacklinksForSelectedPage()
+        refreshExternalLinksForSelectedPage()
+        refreshConflictsForSelectedPage()
     }
 
     func selectSearchResult(_ result: SearchResult) {

@@ -50,6 +50,7 @@ enum AppEnvironment {
         try seedLargePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         try seedReferenceTargetsForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         try seedFavoritePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
+        try seedTaggedPageForUITestingIfNeeded(snapshot: snapshot, tagRepository: TagRepository(database: database))
         let attachmentsDirectory = try attachmentsDirectory()
         try DataProtectionService.applyNativeProtectionRecursively(to: attachmentsDirectory)
         let attachmentRepository = AttachmentRepository(
@@ -69,6 +70,7 @@ enum AppEnvironment {
         let viewModel = WorkspaceViewModel(
             repository: repository,
             diaryRepository: DiaryRepository(database: database),
+            tagRepository: TagRepository(database: database),
             attachmentRepository: attachmentRepository,
             searchRepository: SearchRepository(database: database),
             backlinkRepository: BacklinkRepository(database: database),
@@ -209,6 +211,25 @@ enum AppEnvironment {
 #else
         _ = repository
         _ = snapshot
+#endif
+    }
+
+    private static func seedTaggedPageForUITestingIfNeeded(
+        snapshot: WorkspaceSnapshot,
+        tagRepository: TagRepository
+    ) throws {
+#if DEBUG
+        guard ProcessInfo.processInfo.environment["EDITOR_UI_TEST_TAGGED_PAGE"] == "1",
+              let workspaceID = snapshot.selectedWorkspaceID,
+              let pageID = snapshot.selectedPageID else {
+            return
+        }
+
+        let tag = try tagRepository.createTag(workspaceID: workspaceID, name: "Writing")
+        try tagRepository.assignTags(pageID: pageID, tagIDs: [tag.id])
+#else
+        _ = snapshot
+        _ = tagRepository
 #endif
     }
 
