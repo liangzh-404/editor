@@ -526,7 +526,7 @@ git commit -m "Load all documents by update time"
 - Modify: `Sources/EditorCore/Models/EditorModels.swift`
 - Test: `Tests/EditorTests/DiaryRepositoryTests.swift`
 
-- [ ] **Step 1: Write failing diary tests**
+- [x] **Step 1: Write failing diary tests**
 
 Create `Tests/EditorTests/DiaryRepositoryTests.swift`:
 
@@ -596,7 +596,7 @@ final class DiaryRepositoryTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -606,7 +606,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: FAIL because `DiaryRepository` is not implemented.
 
-- [ ] **Step 3: Implement DiaryRepository**
+- [x] **Step 3: Implement DiaryRepository**
 
 Create `Sources/EditorCore/Store/DiaryRepository.swift` with methods:
 
@@ -631,7 +631,7 @@ Implementation rules:
 - `promoteTextToPage(entryID:selectedText:)` trims selected text, creates a page through `PageRepository.createPage`, replaces the page's initial empty block text with the selected text, writes `page_origin`, and preserves the diary entry text.
 - Empty selected text throws `PageRepositoryError.emptyTitle` if that error exists; otherwise introduce `DiaryRepositoryError.emptySelection`.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -641,7 +641,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
