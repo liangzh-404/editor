@@ -255,7 +255,8 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let viewModel = WorkspaceViewModel(
             repository: pageRepository,
-            attachmentRepository: attachmentRepository
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil
         )
         try viewModel.load()
         try viewModel.importAttachment(sourceURL: sourceURL)
@@ -279,7 +280,8 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let viewModel = WorkspaceViewModel(
             repository: pageRepository,
-            attachmentRepository: attachmentRepository
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil
         )
         try viewModel.load()
 
@@ -295,6 +297,39 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: thumbnailPath))
         XCTAssertEqual(viewModel.snapshot.attachments.first?.thumbnailPath, thumbnailPath)
+    }
+
+    @MainActor
+    func testUIAttachmentImportSchedulesBackgroundThumbnailGeneration() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let thumbnailScheduler = CapturingAttachmentThumbnailScheduler()
+        let sourceURL = try makeSourceFile(name: "screen.png", data: Self.onePixelPNGData)
+
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: thumbnailScheduler
+        )
+        try viewModel.load()
+
+        viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+        let importedAttachmentID = try XCTUnwrap(viewModel.snapshot.attachments.first?.id)
+
+        XCTAssertEqual(thumbnailScheduler.scheduledAttachmentIDs, [importedAttachmentID])
+        XCTAssertNil(viewModel.snapshot.attachments.first?.thumbnailPath)
+
+        try thumbnailScheduler.runScheduledThumbnailGeneration(at: 0)
+
+        XCTAssertNotNil(viewModel.snapshot.attachments.first?.thumbnailPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(viewModel.snapshot.attachments.first?.thumbnailPath)))
     }
 
     @MainActor
@@ -2227,5 +2262,43 @@ private struct WorkspaceStaticCloudKitAccountStatusProvider: CloudKitAccountStat
 
     func accountStatus() throws -> CKAccountStatus {
         status
+    }
+}
+
+private final class CapturingAttachmentThumbnailScheduler: AttachmentThumbnailScheduling {
+    private struct ScheduledThumbnailGeneration {
+        let attachmentID: String
+        let generate: () throws -> String?
+        let completion: @MainActor (Result<String?, Error>) -> Void
+    }
+
+    private var scheduledThumbnailGenerations: [ScheduledThumbnailGeneration] = []
+
+    var scheduledAttachmentIDs: [String] {
+        scheduledThumbnailGenerations.map(\.attachmentID)
+    }
+
+    func scheduleThumbnailGeneration(
+        attachmentID: String,
+        generate: @escaping @Sendable () throws -> String?,
+        completion: @MainActor @escaping @Sendable (Result<String?, Error>) -> Void
+    ) {
+        scheduledThumbnailGenerations.append(
+            ScheduledThumbnailGeneration(
+                attachmentID: attachmentID,
+                generate: generate,
+                completion: completion
+            )
+        )
+    }
+
+    @MainActor
+    func runScheduledThumbnailGeneration(at index: Int) throws {
+        let scheduledThumbnailGeneration = scheduledThumbnailGenerations[index]
+        scheduledThumbnailGeneration.completion(
+            Result {
+                try scheduledThumbnailGeneration.generate()
+            }
+        )
     }
 }

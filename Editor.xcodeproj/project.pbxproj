@@ -19,6 +19,7 @@
 		0D011D03EDC571638D1AFC39 /* DiaryRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0642335E4D879DE20001FC35 /* DiaryRepository.swift */; };
 		12017FEFC29019F7885E9A8B /* SchemaMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1775693501BBE99927D7F07C /* SchemaMigrator.swift */; };
 		14615EF0D0385EC1544687A5 /* PageRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99D2978B31BEE2E16B778433 /* PageRepository.swift */; };
+		167DBF02105B2340CADF7B04 /* AttachmentThumbnailScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2B4D890F84CA04F7C8018A /* AttachmentThumbnailScheduler.swift */; };
 		1EAAFC236BE79CD235D0BAEC /* DiaryRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83E314E1BD6803FBAA36C92C /* DiaryRepositoryTests.swift */; };
 		203C8C57D64D5D4A849EF8AA /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC9BD3D38C16BD85AE9DB4C /* AppEnvironment.swift */; };
 		203D2AF728ACA0CB9FB6EB64 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED15DB1BFFA5B14D21B49851 /* SyncEngine.swift */; };
@@ -71,7 +72,9 @@
 		A418DA90E22E8111FC906101 /* NativeTextBlockEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B305E7542E1D1459C797CE /* NativeTextBlockEditor.swift */; };
 		A54C11EF0D68422276A9E23A /* NativeTextBlockEditorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC06280694090DAA0387F96 /* NativeTextBlockEditorTests.swift */; };
 		A71E6C145467696785F16C68 /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
+		A7B1BDA57CB45D268633A59C /* AttachmentThumbnailScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2B4D890F84CA04F7C8018A /* AttachmentThumbnailScheduler.swift */; };
 		A94BCFD1FAB72981D2ABA60E /* NativeTextBlockEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B305E7542E1D1459C797CE /* NativeTextBlockEditor.swift */; };
+		AC5465204820AECB2AEDBDB4 /* AttachmentThumbnailScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2B4D890F84CA04F7C8018A /* AttachmentThumbnailScheduler.swift */; };
 		B314C4800CB52538C63604C6 /* EditorIOS-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = BE299953F1B4500B81B093A6 /* EditorIOS-Info.plist */; };
 		BD5D4967A28608F792BE033D /* TagRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 781D821462B3C5971EAAE009 /* TagRepositoryTests.swift */; };
 		BE8D6775DA5E9F581EDCD86E /* SyncMergeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9020679BDD2802585CAFFF9A /* SyncMergeEngine.swift */; };
@@ -149,6 +152,7 @@
 		BA04F3B5378D60E40322DFDE /* DataProtectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataProtectionService.swift; sourceTree = "<group>"; };
 		BE22D36D2A1E20D4EF5DC1C6 /* EditorMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EditorMac.entitlements; sourceTree = "<group>"; };
 		BE299953F1B4500B81B093A6 /* EditorIOS-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "EditorIOS-Info.plist"; sourceTree = "<group>"; };
+		BF2B4D890F84CA04F7C8018A /* AttachmentThumbnailScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentThumbnailScheduler.swift; sourceTree = "<group>"; };
 		CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorShellView.swift; sourceTree = "<group>"; };
 		D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteDatabase.swift; sourceTree = "<group>"; };
 		D40CF7A6C22692BF36767B56 /* AttachmentRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentRepositoryTests.swift; sourceTree = "<group>"; };
@@ -264,6 +268,7 @@
 			isa = PBXGroup;
 			children = (
 				1927809A95C559A7342DE2D0 /* AttachmentRepository.swift */,
+				BF2B4D890F84CA04F7C8018A /* AttachmentThumbnailScheduler.swift */,
 				721AB2B9FBD1E62EB105C77B /* BacklinkRepository.swift */,
 				4214430A753C37880763D5D8 /* ConflictRepository.swift */,
 				0642335E4D879DE20001FC35 /* DiaryRepository.swift */,
@@ -494,6 +499,7 @@
 			files = (
 				0974C8550941134BA36D7147 /* AttachmentRepository.swift in Sources */,
 				330DE8B1EA9F4976ACB74DE0 /* AttachmentRepositoryTests.swift in Sources */,
+				AC5465204820AECB2AEDBDB4 /* AttachmentThumbnailScheduler.swift in Sources */,
 				09989A13D18438B9220A91CD /* BacklinkRepository.swift in Sources */,
 				5A0D1FB6346FAAD0FB0C2EDE /* BacklinkRepositoryTests.swift in Sources */,
 				CD88B386243D25D829DA765D /* ConflictRepository.swift in Sources */,
@@ -536,6 +542,7 @@
 			files = (
 				203C8C57D64D5D4A849EF8AA /* AppEnvironment.swift in Sources */,
 				EE128CFD6F34622441D84ECC /* AttachmentRepository.swift in Sources */,
+				167DBF02105B2340CADF7B04 /* AttachmentThumbnailScheduler.swift in Sources */,
 				6C2EEADF704236F0270EC19B /* BacklinkRepository.swift in Sources */,
 				391A2479C2F146CBF091E691 /* ConflictRepository.swift in Sources */,
 				7F3274622A5EBEC25A0042FB /* DataProtectionService.swift in Sources */,
@@ -565,6 +572,7 @@
 			files = (
 				30761AF9DB95A5C98582DB35 /* AppEnvironment.swift in Sources */,
 				FE6EAB327B1CFEEF7F9914A3 /* AttachmentRepository.swift in Sources */,
+				A7B1BDA57CB45D268633A59C /* AttachmentThumbnailScheduler.swift in Sources */,
 				5CD6CB8BB8A235C13E7F795C /* BacklinkRepository.swift in Sources */,
 				E77AC7E35D5BE557E9CFD3D0 /* ConflictRepository.swift in Sources */,
 				7E12A9744DD490C10F4DDB2A /* DataProtectionService.swift in Sources */,

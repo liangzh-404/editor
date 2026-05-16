@@ -43,6 +43,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let diaryRepository: DiaryRepository?
     private let tagRepository: TagRepository?
     private let attachmentRepository: AttachmentRepository?
+    private let attachmentThumbnailScheduler: AttachmentThumbnailScheduling?
     private let searchRepository: SearchRepository?
     private let backlinkRepository: BacklinkRepository?
     private let conflictRepository: ConflictRepository?
@@ -136,6 +137,7 @@ final class WorkspaceViewModel: ObservableObject {
         diaryRepository: DiaryRepository? = nil,
         tagRepository: TagRepository? = nil,
         attachmentRepository: AttachmentRepository? = nil,
+        attachmentThumbnailScheduler: AttachmentThumbnailScheduling? = DispatchAttachmentThumbnailScheduler(),
         searchRepository: SearchRepository? = nil,
         backlinkRepository: BacklinkRepository? = nil,
         conflictRepository: ConflictRepository? = nil,
@@ -146,6 +148,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.diaryRepository = diaryRepository
         self.tagRepository = tagRepository
         self.attachmentRepository = attachmentRepository
+        self.attachmentThumbnailScheduler = attachmentThumbnailScheduler
         self.searchRepository = searchRepository
         self.backlinkRepository = backlinkRepository
         self.conflictRepository = conflictRepository
@@ -168,6 +171,7 @@ final class WorkspaceViewModel: ObservableObject {
         diaryRepository = nil
         tagRepository = nil
         attachmentRepository = nil
+        attachmentThumbnailScheduler = nil
         searchRepository = nil
         backlinkRepository = nil
         conflictRepository = nil
@@ -1846,10 +1850,11 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    @discardableResult
     func importAttachment(
         sourceURL: URL,
         thumbnailPolicy: AttachmentThumbnailPolicy = .immediate
-    ) throws {
+    ) throws -> AttachmentImportResult {
         guard repository != nil, let attachmentRepository else {
             throw WorkspaceViewModelError.missingRepository
         }
@@ -1857,13 +1862,14 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingSelection
         }
 
-        _ = try attachmentRepository.importAttachment(
+        let result = try attachmentRepository.importAttachment(
             sourceURL: sourceURL,
             workspaceID: selectedWorkspaceID,
             pageID: selectedPageID,
             thumbnailPolicy: thumbnailPolicy
         )
         try load()
+        return result
     }
 
     @discardableResult
@@ -1902,16 +1908,56 @@ final class WorkspaceViewModel: ObservableObject {
 
     func importAttachmentForCurrentPage(sourceURL: URL) {
         do {
-            try importAttachment(
+            let result = try importAttachment(
                 sourceURL: sourceURL,
                 thumbnailPolicy: .deferred
             )
+            scheduleMissingAttachmentThumbnail(attachmentID: result.attachment.id)
             EditorLog.attachment.debug("attachment_import_visible source=\(sourceURL.lastPathComponent, privacy: .public)")
         } catch {
             EditorLog.attachment.error(
                 "attachment_import_failed source=\(sourceURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
+    }
+
+    private func scheduleMissingAttachmentThumbnail(attachmentID: String) {
+        guard let attachmentRepository, let attachmentThumbnailScheduler else {
+            return
+        }
+
+        attachmentThumbnailScheduler.scheduleThumbnailGeneration(
+            attachmentID: attachmentID,
+            generate: {
+                try attachmentRepository.generateMissingThumbnail(attachmentID: attachmentID)
+            },
+            completion: { [weak self] result in
+                guard let self else {
+                    return
+                }
+
+                switch result {
+                case .success(let thumbnailPath):
+                    if thumbnailPath != nil {
+                        EditorLog.attachment.debug(
+                            "attachment_thumbnail_visible id=\(attachmentID, privacy: .public)"
+                        )
+                    }
+                case .failure(let error):
+                    EditorLog.attachment.error(
+                        "attachment_thumbnail_failed id=\(attachmentID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    )
+                }
+
+                do {
+                    try self.load()
+                } catch {
+                    EditorLog.attachment.error(
+                        "attachment_thumbnail_refresh_failed id=\(attachmentID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
+        )
     }
 
     func purgeUnreferencedAttachmentsForUI() {

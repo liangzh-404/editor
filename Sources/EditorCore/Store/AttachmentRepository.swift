@@ -14,7 +14,7 @@ enum AttachmentThumbnailPolicy: Equatable {
     case deferred
 }
 
-final class AttachmentRepository {
+final class AttachmentRepository: @unchecked Sendable {
     private let database: SQLiteDatabase
     private let attachmentsDirectory: URL
     private let fileManager: FileManager
