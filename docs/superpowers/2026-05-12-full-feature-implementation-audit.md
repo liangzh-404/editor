@@ -525,6 +525,13 @@ Implement the approved editor architecture so the app supports the full requeste
 - macOS `NSTextView` and iOS `UITextView` route those hardware-keyboard commands into the existing block nesting actions.
 - Regression coverage: `testBlockKeyboardShortcutResolverHandlesTabIndentAndShiftTabOutdent` plus the existing native-editor shortcut resolver tests.
 
+## Recent UI Automation Loop Speedup
+
+- `scripts/mac_ui_test.sh` provides a fast macOS UI verification loop with a stable arm64 destination and cached `build-for-testing` output under `EDITOR_UI_TEST_DERIVED_DATA` or the system temp directory.
+- The default `run` action rebuilds only when Swift/project inputs are newer than the cached `.xctestrun`; `rerun` forces `test-without-building` for the tightest repeat loop while tuning UI behavior.
+- Timing evidence on `testWelcomeBlockAcceptsTypedText`: ordinary `xcodebuild test` baseline `real 11.25s`; cached script reruns `real 8.20s` to `8.94s`; default cache build `real 27.46s` once before repeated runs.
+- Recommended UI loop: `scripts/mac_ui_test.sh build` after source edits, then `scripts/mac_ui_test.sh rerun <testName>` while iterating on the exact UI scenario.
+
 ## Next Implementation Slice
 
 The completed attachment slice proves:
