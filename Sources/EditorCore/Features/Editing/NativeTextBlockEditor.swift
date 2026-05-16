@@ -298,6 +298,7 @@ struct NativeTextBlockEditor: View {
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
+    let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onTextChange: (String) -> Void
     @State private var measuredHeight: CGFloat = 0
 
@@ -316,6 +317,7 @@ struct NativeTextBlockEditor: View {
         onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onInsertBlockAfter: @escaping (EditorTextSelection) -> Bool = { _ in false },
+        onMergeBlockWithPrevious: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onTextChange: @escaping (String) -> Void
     ) {
         self.blockID = blockID
@@ -332,6 +334,7 @@ struct NativeTextBlockEditor: View {
         self.onApplyInlineFormatByKeyboard = onApplyInlineFormatByKeyboard
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
+        self.onMergeBlockWithPrevious = onMergeBlockWithPrevious
         self.onTextChange = onTextChange
     }
 
@@ -352,6 +355,7 @@ struct NativeTextBlockEditor: View {
                 onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
                 onInsertLinkByKeyboard: onInsertLinkByKeyboard,
                 onInsertBlockAfter: onInsertBlockAfter,
+                onMergeBlockWithPrevious: onMergeBlockWithPrevious,
                 minimumHeight: minimumHeight,
                 onContentHeightChange: updateMeasuredHeight,
                 onTextChange: onTextChange
@@ -443,6 +447,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
+    let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -500,6 +505,15 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         }
         textView.onInsertBlockAfter = { selectedRange in
             onInsertBlockAfter(
+                EditorTextSelection(
+                    blockID: blockID,
+                    location: selectedRange.location,
+                    length: selectedRange.length
+                )
+            )
+        }
+        textView.onMergeBlockWithPrevious = { selectedRange in
+            onMergeBlockWithPrevious(
                 EditorTextSelection(
                     blockID: blockID,
                     location: selectedRange.location,
@@ -567,6 +581,15 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             }
             textView.onInsertBlockAfter = { selectedRange in
                 onInsertBlockAfter(
+                    EditorTextSelection(
+                        blockID: blockID,
+                        location: selectedRange.location,
+                        length: selectedRange.length
+                    )
+                )
+            }
+            textView.onMergeBlockWithPrevious = { selectedRange in
+                onMergeBlockWithPrevious(
                     EditorTextSelection(
                         blockID: blockID,
                         location: selectedRange.location,
@@ -852,6 +875,7 @@ private final class EditorNSTextView: NSTextView {
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
     var onInsertBlockAfter: ((NSRange) -> Bool)?
+    var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         NativeTextBlockEditor.acceptsInactiveWindowFirstMouse
@@ -945,6 +969,14 @@ private final class EditorNSTextView: NSTextView {
 
         super.insertNewline(sender)
     }
+
+    override func deleteBackward(_ sender: Any?) {
+        if onMergeBlockWithPrevious?(selectedRange()) == true {
+            return
+        }
+
+        super.deleteBackward(sender)
+    }
 }
 
 extension NSEvent {
@@ -983,6 +1015,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
+    let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -1017,6 +1050,15 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
         textView.onInsertBlockAfter = { selectedRange in
             onInsertBlockAfter(
+                EditorTextSelection(
+                    blockID: blockID,
+                    location: selectedRange.location,
+                    length: selectedRange.length
+                )
+            )
+        }
+        textView.onMergeBlockWithPrevious = { selectedRange in
+            onMergeBlockWithPrevious(
                 EditorTextSelection(
                     blockID: blockID,
                     location: selectedRange.location,
@@ -1069,6 +1111,15 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             }
             textView.onInsertBlockAfter = { selectedRange in
                 onInsertBlockAfter(
+                    EditorTextSelection(
+                        blockID: blockID,
+                        location: selectedRange.location,
+                        length: selectedRange.length
+                    )
+                )
+            }
+            textView.onMergeBlockWithPrevious = { selectedRange in
+                onMergeBlockWithPrevious(
                     EditorTextSelection(
                         blockID: blockID,
                         location: selectedRange.location,
@@ -1230,6 +1281,15 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             replacementText text: String
         ) -> Bool {
             guard text == "\n" else {
+                if text.isEmpty, range.location == 0, range.length == 0 {
+                    return !parent.onMergeBlockWithPrevious(
+                        EditorTextSelection(
+                            blockID: parent.blockID,
+                            location: range.location,
+                            length: range.length
+                        )
+                    )
+                }
                 return true
             }
             return !parent.onInsertBlockAfter(
@@ -1351,6 +1411,7 @@ private final class EditorUITextView: UITextView {
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
     var onInsertBlockAfter: ((NSRange) -> Bool)?
+    var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
 
     override var keyCommands: [UIKeyCommand]? {
         [
@@ -1417,6 +1478,14 @@ private final class EditorUITextView: UITextView {
 
     @objc private func insertBlockAfter() {
         _ = onInsertBlockAfter?(selectedRange)
+    }
+
+    override func deleteBackward() {
+        if onMergeBlockWithPrevious?(selectedRange) == true {
+            return
+        }
+
+        super.deleteBackward()
     }
 
     @objc private func indentBlock() {

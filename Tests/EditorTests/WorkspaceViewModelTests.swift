@@ -1658,6 +1658,91 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testMergeTextBlockAtStartMovesTextIntoPreviousBlockAndFocusesJoinPoint() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(pageID: pageID, markdown: "Alpha\n\n[Swift](https://swift.org)")
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let firstBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        let secondBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+
+        let nextSelection = try viewModel.mergeTextBlockWithPreviousAtSelection(
+            blockID: secondBlockID,
+            selection: EditorTextSelection(blockID: secondBlockID, location: 0, length: 0)
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Alpha[Swift](https://swift.org)"])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, firstBlockID)
+        XCTAssertEqual(
+            nextSelection,
+            EditorTextSelection(blockID: firstBlockID, location: 5, length: 0)
+        )
+        XCTAssertEqual(
+            viewModel.selectedPageExternalLinks,
+            [
+                ExternalLink(
+                    sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: firstBlockID,
+                    targetURL: "https://swift.org",
+                    linkText: "Swift"
+                )
+            ]
+        )
+    }
+
+    @MainActor
+    func testMergeTextBlockAtStartUsesPreviousEditorVisibleBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                Toggle
+                Child
+                Outside
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let toggleBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        let childBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+        let outsideBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst(2).first?.id)
+        try viewModel.changeBlockType(blockID: toggleBlockID, type: .toggle)
+        XCTAssertTrue(try viewModel.indentBlock(blockID: childBlockID))
+        viewModel.toggleBlockExpansion(blockID: toggleBlockID)
+        XCTAssertEqual(viewModel.editorVisibleBlocks.map(\.textPlain), ["Toggle", "Outside"])
+
+        let nextSelection = try viewModel.mergeTextBlockWithPreviousAtSelection(
+            blockID: outsideBlockID,
+            selection: EditorTextSelection(blockID: outsideBlockID, location: 0, length: 0)
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["ToggleOutside", "Child"])
+        XCTAssertEqual(viewModel.editorVisibleBlocks.map(\.textPlain), ["ToggleOutside"])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, toggleBlockID)
+        XCTAssertEqual(
+            nextSelection,
+            EditorTextSelection(blockID: toggleBlockID, location: 6, length: 0)
+        )
+    }
+
+    @MainActor
     func testIndentVisibleBlockRefreshesParentAndKeepsFocusOnIndentedBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -129,6 +129,9 @@ private struct ThreeColumnEditorShell: View {
                 onSplitTextBlockAtSelection: { blockID, selection in
                     viewModel.splitTextBlockAtSelectionForUI(blockID: blockID, selection: selection)
                 },
+                onMergeTextBlockWithPrevious: { blockID, selection in
+                    viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
+                },
                 onIndentBlock: { blockID in
                     viewModel.indentBlockForUI(blockID: blockID)
                 },
@@ -515,6 +518,9 @@ private struct CompactPageDestination: View {
                 },
                 onSplitTextBlockAtSelection: { blockID, selection in
                     viewModel.splitTextBlockAtSelectionForUI(blockID: blockID, selection: selection)
+                },
+                onMergeTextBlockWithPrevious: { blockID, selection in
+                    viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
                 },
                 onIndentBlock: { blockID in
                     viewModel.indentBlockForUI(blockID: blockID)
@@ -1382,6 +1388,7 @@ private struct EditorCanvasView: View {
     let onMoveBlockByKeyboard: (String, BlockKeyboardMoveDirection) -> Bool
     let onInsertBlockAfter: (String) -> Bool
     let onSplitTextBlockAtSelection: (String, EditorTextSelection) -> EditorTextSelection?
+    let onMergeTextBlockWithPrevious: (String, EditorTextSelection) -> EditorTextSelection?
     let onIndentBlock: (String) -> Bool
     let onOutdentBlock: (String) -> Bool
     let onDeleteBlock: (String) -> Void
@@ -1612,6 +1619,16 @@ private struct EditorCanvasView: View {
                         },
                         onInsertBlockAfter: { selection in
                             guard let nextSelection = onSplitTextBlockAtSelection(block.id, selection) else {
+                                return false
+                            }
+                            pendingFocusRequest = BlockFocusRequest(
+                                blockID: nextSelection.blockID,
+                                selection: nextSelection
+                            )
+                            return true
+                        },
+                        onMergeBlockWithPrevious: { selection in
+                            guard let nextSelection = onMergeTextBlockWithPrevious(block.id, selection) else {
                                 return false
                             }
                             pendingFocusRequest = BlockFocusRequest(
@@ -2835,6 +2852,7 @@ private struct BlockRowView: View {
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
+    let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onIndent: () -> Bool
     let onOutdent: () -> Bool
     let onDelete: () -> Void
@@ -2865,6 +2883,7 @@ private struct BlockRowView: View {
         onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onInsertBlockAfter: @escaping (EditorTextSelection) -> Bool = { _ in false },
+        onMergeBlockWithPrevious: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onIndent: @escaping () -> Bool = { false },
         onOutdent: @escaping () -> Bool = { false },
         onDelete: @escaping () -> Void = {},
@@ -2893,6 +2912,7 @@ private struct BlockRowView: View {
         self.onApplyInlineFormatByKeyboard = onApplyInlineFormatByKeyboard
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
+        self.onMergeBlockWithPrevious = onMergeBlockWithPrevious
         self.onIndent = onIndent
         self.onOutdent = onOutdent
         self.onDelete = onDelete
@@ -3067,6 +3087,7 @@ private struct BlockRowView: View {
                         onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
                         onInsertLinkByKeyboard: onInsertLinkByKeyboard,
                         onInsertBlockAfter: onInsertBlockAfter,
+                        onMergeBlockWithPrevious: onMergeBlockWithPrevious,
                         onTextChange: onTextChange
                     )
                     .accessibilityIdentifier("editor.text.\(block.id)")

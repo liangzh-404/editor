@@ -184,6 +184,61 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testBackspaceAtStartMergesTextBlockWithPreviousBlock() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before merging")
+        let initialTextViewCount = app.textViews.count
+
+        textView.click()
+        textView.typeKey("a", modifierFlags: [.command])
+        app.typeText("AlphaBeta")
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "AlphaBeta", timeout: 5),
+            "Test setup should replace the welcome text before splitting"
+        )
+
+        for _ in 0..<4 {
+            textView.typeKey(.leftArrow, modifierFlags: [])
+        }
+        textView.typeKey(.return, modifierFlags: [])
+
+        let insertedTextView = app.textViews.element(boundBy: initialTextViewCount)
+        XCTAssertTrue(insertedTextView.waitForExistence(timeout: 5), "Return should create the second block to merge")
+        XCTAssertTrue(
+            insertedTextView.waitForValue(equalTo: "Beta", timeout: 5),
+            "The second block should contain the trailing text before Backspace"
+        )
+        XCTAssertTrue(
+            insertedTextView.waitForKeyboardFocus(timeout: 5),
+            "The second block should be focused at its start before Backspace"
+        )
+
+        insertedTextView.typeKey(.delete, modifierFlags: [])
+
+        XCTAssertTrue(
+            app.waitForTextViewCount(initialTextViewCount, timeout: 5),
+            "Backspace at the start of the second block should remove that block"
+        )
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "AlphaBeta", timeout: 5),
+            "Backspace at block start should merge the second block text into the first block"
+        )
+        XCTAssertTrue(
+            textView.waitForKeyboardFocus(timeout: 5),
+            "The merged first block should regain keyboard focus"
+        )
+        app.typeText(" Joined")
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "Alpha JoinedBeta", timeout: 5),
+            "Typing after merge should continue at the original join point"
+        )
+    }
+
+    @MainActor
     func testBoundaryArrowKeysMoveFocusBetweenTextBlocks() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
@@ -1340,6 +1395,17 @@ private extension XCUIApplication {
         descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", identifierPrefix))
             .firstMatch
+    }
+
+    func waitForTextViewCount(_ count: Int, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate { application, _ in
+            guard let application = application as? XCUIApplication else {
+                return false
+            }
+            return application.textViews.count == count
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: self)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 }
 
