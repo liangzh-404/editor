@@ -149,13 +149,13 @@ final class SQLiteDatabase {
             let result = try operation()
             try execute("COMMIT")
             EditorLog.store.debug(
-                "transaction_committed label=\(label, privacy: .public) duration_ms=\(durationMilliseconds(since: startedAt), privacy: .public)"
+                "transaction_committed label=\(label, privacy: .public) duration_ms=\(self.durationMilliseconds(since: startedAt), privacy: .public)"
             )
             return result
         } catch {
             try? execute("ROLLBACK")
             EditorLog.store.error(
-                "transaction_rolled_back label=\(label, privacy: .public) duration_ms=\(durationMilliseconds(since: startedAt), privacy: .public) error=\(String(describing: error), privacy: .public)"
+                "transaction_rolled_back label=\(label, privacy: .public) duration_ms=\(self.durationMilliseconds(since: startedAt), privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             throw error
         }

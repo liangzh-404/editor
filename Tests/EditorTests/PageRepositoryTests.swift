@@ -74,6 +74,53 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityID, pageID)
     }
 
+    func testUpdatePageFavoritePersistsReloadsAndQueuesSyncChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+
+        try repository.updatePageFavorite(pageID: pageID, isFavorite: true)
+        let favoriteSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(favoriteSnapshot.pages.first?.isFavorite, true)
+        XCTAssertEqual(favoriteSnapshot.favoritePages.map(\.id), [pageID])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "page", entityID: pageID, changeType: "update")
+        )
+
+        try repository.updatePageFavorite(pageID: pageID, isFavorite: false)
+        let unfavoriteSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(unfavoriteSnapshot.pages.first?.isFavorite, false)
+        XCTAssertEqual(unfavoriteSnapshot.favoritePages, [])
+    }
+
+    func testArchivedFavoritePageHidesFromFavoritesUntilRestored() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let createdPage = try repository.createPage(workspaceID: workspaceID, title: "Scratch")
+
+        try repository.updatePageFavorite(pageID: createdPage.id, isFavorite: true)
+        try repository.archivePage(pageID: createdPage.id)
+        let archivedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(archivedSnapshot.favoritePages, [])
+        XCTAssertEqual(archivedSnapshot.archivedPages.first?.isFavorite, true)
+
+        try repository.restorePage(pageID: createdPage.id)
+        let restoredSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(restoredSnapshot.favoritePages.map(\.title), ["Scratch"])
+    }
+
     func testCreatePagePersistsEmptyEditablePageAtEnd() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -203,9 +203,161 @@ enum MarkdownInlineLinkInserter {
     }
 }
 
+struct MarkdownInlineLinkEditTarget: Equatable, Sendable {
+    let label: String
+    let url: String
+    let replacementSelection: EditorTextSelection
+
+    static func target(in text: String, selection: EditorTextSelection) -> MarkdownInlineLinkEditTarget? {
+        let nsText = text as NSString
+        guard selection.location >= 0,
+              selection.length >= 0,
+              selection.location <= nsText.length,
+              selection.length <= nsText.length - selection.location else {
+            return nil
+        }
+
+        let selectionRange = NSRange(location: selection.location, length: selection.length)
+        let codeRanges = MarkdownInlineStyleScanner.runs(in: text).compactMap { run in
+            run.kind == .code ? run.range : nil
+        }
+        var searchStart = text.startIndex
+
+        while let labelStart = nextUnescaped("[", in: text, from: searchStart) {
+            guard !isImageLink(labelStart: labelStart, in: text) else {
+                searchStart = text.index(after: labelStart)
+                continue
+            }
+
+            let labelContentStart = text.index(after: labelStart)
+            guard let labelEnd = nextUnescaped("]", in: text, from: labelContentStart) else {
+                break
+            }
+
+            let openingParenthesis = text.index(after: labelEnd)
+            guard openingParenthesis < text.endIndex,
+                  text[openingParenthesis] == "(" else {
+                searchStart = labelContentStart
+                continue
+            }
+
+            let urlContentStart = text.index(after: openingParenthesis)
+            guard let urlEnd = nextUnescaped(")", in: text, from: urlContentStart) else {
+                break
+            }
+
+            let fullRange = labelStart..<text.index(after: urlEnd)
+            let fullNSRange = NSRange(fullRange, in: text)
+            guard !codeRanges.contains(where: { NSIntersectionRange($0, fullNSRange).length > 0 }) else {
+                searchStart = text.index(after: urlEnd)
+                continue
+            }
+
+            if contains(selectionRange, in: fullNSRange) {
+                let label = unescapedMarkdownText(
+                    text[labelContentStart..<labelEnd],
+                    escapedCharacters: Set<Character>(["\\", "]"])
+                )
+                let url = unescapedMarkdownText(
+                    text[urlContentStart..<urlEnd],
+                    escapedCharacters: Set<Character>(["\\", ")"])
+                )
+                let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedLabel.isEmpty,
+                      !trimmedURL.isEmpty else {
+                    return nil
+                }
+
+                return MarkdownInlineLinkEditTarget(
+                    label: trimmedLabel,
+                    url: trimmedURL,
+                    replacementSelection: EditorTextSelection(
+                        blockID: selection.blockID,
+                        location: fullNSRange.location,
+                        length: fullNSRange.length
+                    )
+                )
+            }
+
+            searchStart = text.index(after: urlEnd)
+        }
+
+        return nil
+    }
+
+    private static func nextUnescaped(
+        _ target: Character,
+        in text: String,
+        from start: String.Index
+    ) -> String.Index? {
+        var index = start
+        var isEscaping = false
+
+        while index < text.endIndex {
+            let character = text[index]
+            if isEscaping {
+                isEscaping = false
+            } else if character == "\\" {
+                isEscaping = true
+            } else if character == target {
+                return index
+            }
+            index = text.index(after: index)
+        }
+
+        return nil
+    }
+
+    private static func isImageLink(labelStart: String.Index, in text: String) -> Bool {
+        guard labelStart > text.startIndex else {
+            return false
+        }
+
+        let previous = text.index(before: labelStart)
+        return text[previous] == "!"
+    }
+
+    private static func contains(_ selectionRange: NSRange, in fullRange: NSRange) -> Bool {
+        selectionRange.location >= fullRange.location &&
+            NSMaxRange(selectionRange) <= NSMaxRange(fullRange)
+    }
+
+    private static func unescapedMarkdownText(
+        _ text: Substring,
+        escapedCharacters: Set<Character>
+    ) -> String {
+        var result = ""
+        var isEscaping = false
+
+        for character in text {
+            if isEscaping {
+                if escapedCharacters.contains(character) || character == "\\" {
+                    result.append(character)
+                } else {
+                    result.append("\\")
+                    result.append(character)
+                }
+                isEscaping = false
+            } else if character == "\\" {
+                isEscaping = true
+            } else {
+                result.append(character)
+            }
+        }
+
+        if isEscaping {
+            result.append("\\")
+        }
+        return result
+    }
+}
+
 enum MarkdownInlineStyleKind: Equatable {
+    case syntax
     case bold
     case italic
+    case strikethrough
     case code
     case link
 }
@@ -216,14 +368,22 @@ struct MarkdownInlineStyleRun: Equatable {
 }
 
 enum MarkdownInlineStyleScanner {
-    static func runs(in text: String) -> [MarkdownInlineStyleRun] {
+    static func runs(in text: String, includingSyntaxMarkers: Bool = false) -> [MarkdownInlineStyleRun] {
         let nsText = text as NSString
         let codeRuns = codeStyleRuns(in: nsText)
         let codeRanges = codeRuns.map(\.range)
-        let runs = codeRuns +
+        var runs = codeRuns +
             boldStyleRuns(in: nsText, excluding: codeRanges) +
             italicStyleRuns(in: nsText, excluding: codeRanges) +
+            strikethroughStyleRuns(in: nsText, excluding: codeRanges) +
             linkStyleRuns(in: nsText, excluding: codeRanges)
+        if includingSyntaxMarkers {
+            runs += codeSyntaxRuns(in: nsText)
+            runs += pairedSyntaxRuns(marker: "**", in: nsText, excluding: codeRanges)
+            runs += italicSyntaxRuns(in: nsText, excluding: codeRanges)
+            runs += pairedSyntaxRuns(marker: "~~", in: nsText, excluding: codeRanges)
+            runs += linkSyntaxRuns(in: nsText, excluding: codeRanges)
+        }
         return runs.sorted { lhs, rhs in
             if lhs.range.location == rhs.range.location {
                 return lhs.range.length < rhs.range.length
@@ -253,6 +413,35 @@ enum MarkdownInlineStyleScanner {
             )
             if contentRange.length > 0 {
                 runs.append(MarkdownInlineStyleRun(kind: .code, range: contentRange))
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return runs
+    }
+
+    private static func codeSyntaxRuns(in text: NSString) -> [MarkdownInlineStyleRun] {
+        var runs: [MarkdownInlineStyleRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = range(of: "`", in: text, from: searchStart)
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let closing = range(of: "`", in: text, from: NSMaxRange(opening))
+            guard closing.location != NSNotFound else {
+                break
+            }
+
+            let contentRange = NSRange(
+                location: NSMaxRange(opening),
+                length: closing.location - NSMaxRange(opening)
+            )
+            if contentRange.length > 0 {
+                runs.append(MarkdownInlineStyleRun(kind: .syntax, range: opening))
+                runs.append(MarkdownInlineStyleRun(kind: .syntax, range: closing))
             }
             searchStart = NSMaxRange(closing)
         }
@@ -298,6 +487,49 @@ enum MarkdownInlineStyleScanner {
         return runs
     }
 
+    private static func pairedSyntaxRuns(
+        marker: String,
+        in text: NSString,
+        excluding excludedRanges: [NSRange]
+    ) -> [MarkdownInlineStyleRun] {
+        var runs: [MarkdownInlineStyleRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = nextRange(
+                of: marker,
+                in: text,
+                from: searchStart,
+                excluding: excludedRanges
+            )
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let closing = nextRange(
+                of: marker,
+                in: text,
+                from: NSMaxRange(opening),
+                excluding: excludedRanges
+            )
+            guard closing.location != NSNotFound else {
+                break
+            }
+
+            let contentRange = NSRange(
+                location: NSMaxRange(opening),
+                length: closing.location - NSMaxRange(opening)
+            )
+            if contentRange.length > 0 {
+                runs.append(MarkdownInlineStyleRun(kind: .syntax, range: opening))
+                runs.append(MarkdownInlineStyleRun(kind: .syntax, range: closing))
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return runs
+    }
+
     private static func italicStyleRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
         var runs: [MarkdownInlineStyleRun] = []
         var searchStart = 0
@@ -329,6 +561,73 @@ enum MarkdownInlineStyleScanner {
             )
             if contentRange.length > 0 {
                 runs.append(MarkdownInlineStyleRun(kind: .italic, range: contentRange))
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return runs
+    }
+
+    private static func italicSyntaxRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
+        var runs: [MarkdownInlineStyleRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = nextSingleAsteriskRange(in: text, from: searchStart, excluding: excludedRanges)
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let closing = nextSingleAsteriskRange(in: text, from: NSMaxRange(opening), excluding: excludedRanges)
+            guard closing.location != NSNotFound else {
+                break
+            }
+
+            let contentRange = NSRange(
+                location: NSMaxRange(opening),
+                length: closing.location - NSMaxRange(opening)
+            )
+            if contentRange.length > 0 {
+                runs.append(MarkdownInlineStyleRun(kind: .syntax, range: opening))
+                runs.append(MarkdownInlineStyleRun(kind: .syntax, range: closing))
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return runs
+    }
+
+    private static func strikethroughStyleRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
+        var runs: [MarkdownInlineStyleRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = nextRange(
+                of: "~~",
+                in: text,
+                from: searchStart,
+                excluding: excludedRanges
+            )
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let closing = nextRange(
+                of: "~~",
+                in: text,
+                from: NSMaxRange(opening),
+                excluding: excludedRanges
+            )
+            guard closing.location != NSNotFound else {
+                break
+            }
+
+            let contentRange = NSRange(
+                location: NSMaxRange(opening),
+                length: closing.location - NSMaxRange(opening)
+            )
+            if contentRange.length > 0 {
+                runs.append(MarkdownInlineStyleRun(kind: .strikethrough, range: contentRange))
             }
             searchStart = NSMaxRange(closing)
         }
@@ -381,6 +680,57 @@ enum MarkdownInlineStyleScanner {
         return runs
     }
 
+    private static func linkSyntaxRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
+        var runs: [MarkdownInlineStyleRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = nextRange(
+                of: "[",
+                in: text,
+                from: searchStart,
+                excluding: excludedRanges
+            )
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let labelEnd = range(of: "](", in: text, from: NSMaxRange(opening))
+            guard labelEnd.location != NSNotFound else {
+                searchStart = NSMaxRange(opening)
+                continue
+            }
+
+            let urlEnd = range(of: ")", in: text, from: NSMaxRange(labelEnd))
+            guard urlEnd.location != NSNotFound else {
+                searchStart = NSMaxRange(labelEnd)
+                continue
+            }
+
+            let labelRange = NSRange(
+                location: NSMaxRange(opening),
+                length: labelEnd.location - NSMaxRange(opening)
+            )
+            let urlLocation = NSMaxRange(labelEnd)
+            let urlRange = NSRange(location: urlLocation, length: urlEnd.location - urlLocation)
+            let url = text.substring(with: urlRange)
+            if labelRange.length > 0,
+               URLComponents(string: url)?.scheme != nil,
+               !overlapsAny(labelRange, excludedRanges) {
+                runs.append(MarkdownInlineStyleRun(kind: .syntax, range: opening))
+                runs.append(
+                    MarkdownInlineStyleRun(
+                        kind: .syntax,
+                        range: NSRange(location: labelEnd.location, length: NSMaxRange(urlEnd) - labelEnd.location)
+                    )
+                )
+            }
+            searchStart = NSMaxRange(urlEnd)
+        }
+
+        return runs
+    }
+
     private static func nextRange(
         of marker: String,
         in text: NSString,
@@ -394,6 +744,26 @@ enum MarkdownInlineStyleScanner {
                 return foundRange
             }
             if !overlapsAny(foundRange, excludedRanges) {
+                return foundRange
+            }
+            searchStart = NSMaxRange(foundRange)
+        }
+        return NSRange(location: NSNotFound, length: 0)
+    }
+
+    private static func nextSingleAsteriskRange(
+        in text: NSString,
+        from location: Int,
+        excluding excludedRanges: [NSRange]
+    ) -> NSRange {
+        var searchStart = location
+        while searchStart < text.length {
+            let foundRange = range(of: "*", in: text, from: searchStart)
+            guard foundRange.location != NSNotFound else {
+                return foundRange
+            }
+            if !overlapsAny(foundRange, excludedRanges),
+               !isAdjacentToAsterisk(foundRange, in: text) {
                 return foundRange
             }
             searchStart = NSMaxRange(foundRange)
@@ -415,11 +785,26 @@ enum MarkdownInlineStyleScanner {
     private static func overlapsAny(_ range: NSRange, _ ranges: [NSRange]) -> Bool {
         ranges.contains { NSIntersectionRange(range, $0).length > 0 }
     }
+
+    private static func isAdjacentToAsterisk(_ range: NSRange, in text: NSString) -> Bool {
+        let previousLocation = range.location - 1
+        if previousLocation >= 0,
+           text.substring(with: NSRange(location: previousLocation, length: 1)) == "*" {
+            return true
+        }
+        let nextLocation = NSMaxRange(range)
+        if nextLocation < text.length,
+           text.substring(with: NSRange(location: nextLocation, length: 1)) == "*" {
+            return true
+        }
+        return false
+    }
 }
 
 enum MarkdownInlineFormat: Equatable, Sendable {
     case bold
     case italic
+    case strikethrough
     case code
 
     var openingMarker: String {
@@ -428,6 +813,8 @@ enum MarkdownInlineFormat: Equatable, Sendable {
             return "**"
         case .italic:
             return "*"
+        case .strikethrough:
+            return "~~"
         case .code:
             return "`"
         }
@@ -443,6 +830,8 @@ enum MarkdownInlineFormat: Equatable, Sendable {
             return "bold"
         case .italic:
             return "italic"
+        case .strikethrough:
+            return "strikethrough"
         case .code:
             return "code"
         }
@@ -476,6 +865,20 @@ enum MarkdownInlineFormatter {
         }
 
         let range = NSRange(location: selection.location, length: selection.length)
+        if let toggledResult = toggleOffSelectedFormattedText(
+            format,
+            in: nsText,
+            selection: selection,
+            range: range
+        ) ?? toggleOffExistingMarkersAroundSelection(
+            format,
+            in: nsText,
+            selection: selection,
+            range: range
+        ) {
+            return toggledResult
+        }
+
         let selectedText = selection.length > 0 ? nsText.substring(with: range) : format.placeholder
         let formattedText = nsText.replacingCharacters(in: range, with: format.wrapped(selectedText))
         let nextSelection = EditorTextSelection(
@@ -490,6 +893,111 @@ enum MarkdownInlineFormatter {
     static func apply(_ format: MarkdownInlineFormat, to text: String, selection: EditorTextSelection) -> String? {
         applyResult(format, to: text, selection: selection)?.text
     }
+
+    private static func toggleOffSelectedFormattedText(
+        _ format: MarkdownInlineFormat,
+        in text: NSString,
+        selection: EditorTextSelection,
+        range: NSRange
+    ) -> MarkdownInlineFormatResult? {
+        guard range.length > 0 else {
+            return nil
+        }
+
+        let openingLength = (format.openingMarker as NSString).length
+        let closingLength = (format.closingMarker as NSString).length
+        guard range.length > openingLength + closingLength else {
+            return nil
+        }
+
+        let openingRange = NSRange(location: range.location, length: openingLength)
+        let closingRange = NSRange(location: NSMaxRange(range) - closingLength, length: closingLength)
+        guard text.substring(with: openingRange) == format.openingMarker,
+              text.substring(with: closingRange) == format.closingMarker,
+              isExactMarkerRun(format.openingMarker, in: text, range: openingRange),
+              isExactMarkerRun(format.closingMarker, in: text, range: closingRange) else {
+            return nil
+        }
+
+        let contentRange = NSRange(
+            location: NSMaxRange(openingRange),
+            length: range.length - openingLength - closingLength
+        )
+        let selectedText = text.substring(with: contentRange)
+        return MarkdownInlineFormatResult(
+            text: text.replacingCharacters(in: range, with: selectedText),
+            selection: EditorTextSelection(
+                blockID: selection.blockID,
+                location: range.location,
+                length: contentRange.length
+            )
+        )
+    }
+
+    private static func toggleOffExistingMarkersAroundSelection(
+        _ format: MarkdownInlineFormat,
+        in text: NSString,
+        selection: EditorTextSelection,
+        range: NSRange
+    ) -> MarkdownInlineFormatResult? {
+        guard range.length > 0 else {
+            return nil
+        }
+
+        let openingLength = (format.openingMarker as NSString).length
+        let closingLength = (format.closingMarker as NSString).length
+        let openingLocation = range.location - openingLength
+        let closingLocation = NSMaxRange(range)
+        guard openingLocation >= 0,
+              closingLocation + closingLength <= text.length else {
+            return nil
+        }
+
+        let openingRange = NSRange(location: openingLocation, length: openingLength)
+        let closingRange = NSRange(location: closingLocation, length: closingLength)
+        guard text.substring(with: openingRange) == format.openingMarker,
+              text.substring(with: closingRange) == format.closingMarker,
+              isExactMarkerRun(format.openingMarker, in: text, range: openingRange),
+              isExactMarkerRun(format.closingMarker, in: text, range: closingRange) else {
+            return nil
+        }
+
+        let selectedText = text.substring(with: range)
+        let fullRange = NSRange(
+            location: openingLocation,
+            length: openingLength + range.length + closingLength
+        )
+        return MarkdownInlineFormatResult(
+            text: text.replacingCharacters(in: fullRange, with: selectedText),
+            selection: EditorTextSelection(
+                blockID: selection.blockID,
+                location: openingLocation,
+                length: range.length
+            )
+        )
+    }
+
+    private static func isExactMarkerRun(_ marker: String, in text: NSString, range: NSRange) -> Bool {
+        guard let markerCharacter = marker.first,
+              marker.allSatisfy({ $0 == markerCharacter }) else {
+            return true
+        }
+
+        let markerUnit = String(markerCharacter)
+        let previousLocation = range.location - 1
+        if previousLocation >= 0,
+           text.substring(with: NSRange(location: previousLocation, length: 1)) == markerUnit {
+            return false
+        }
+
+        let nextLocation = NSMaxRange(range)
+        if nextLocation < text.length,
+           text.substring(with: NSRange(location: nextLocation, length: 1)) == markerUnit {
+            return false
+        }
+
+        return true
+    }
 }
 
 enum MarkdownTransformer {
@@ -497,6 +1005,10 @@ enum MarkdownTransformer {
         switch text {
         case "# ":
             return MarkdownShortcutTransform(type: .heading1, textPlain: "")
+        case "## ":
+            return MarkdownShortcutTransform(type: .heading2, textPlain: "")
+        case "### ":
+            return MarkdownShortcutTransform(type: .heading3, textPlain: "")
         case "- ":
             return MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
         case "1. ":
@@ -611,6 +1123,10 @@ enum MarkdownTransformer {
             return block.textPlain
         case .heading1:
             return "# \(block.textPlain)"
+        case .heading2:
+            return "## \(block.textPlain)"
+        case .heading3:
+            return "### \(block.textPlain)"
         case .unorderedListItem:
             return "- \(block.textPlain)"
         case .orderedListItem:
@@ -639,6 +1155,12 @@ enum MarkdownTransformer {
     }
 
     private static func importBlockDraft(for line: String) -> MarkdownBlockDraft {
+        if line.hasPrefix("### ") {
+            return MarkdownBlockDraft(type: .heading3, textPlain: String(line.dropFirst(4)))
+        }
+        if line.hasPrefix("## ") {
+            return MarkdownBlockDraft(type: .heading2, textPlain: String(line.dropFirst(3)))
+        }
         if line.hasPrefix("# ") {
             return MarkdownBlockDraft(type: .heading1, textPlain: String(line.dropFirst(2)))
         }

@@ -651,6 +651,31 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdatePageFavoriteRefreshesSnapshotAndKeepsSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let scratchPage = try viewModel.createPageInSelectedWorkspace(title: "Scratch")
+
+        try viewModel.updatePageFavorite(id: scratchPage.id, isFavorite: true)
+
+        XCTAssertEqual(viewModel.selectedPageID, scratchPage.id)
+        XCTAssertEqual(viewModel.selectedPage?.isFavorite, true)
+        XCTAssertEqual(viewModel.snapshot.favoritePages.map(\.title), ["Scratch"])
+
+        try viewModel.updatePageFavorite(id: scratchPage.id, isFavorite: false)
+
+        XCTAssertEqual(viewModel.selectedPageID, scratchPage.id)
+        XCTAssertEqual(viewModel.selectedPage?.isFavorite, false)
+        XCTAssertEqual(viewModel.snapshot.favoritePages, [])
+    }
+
+    @MainActor
     func testUndoLastPageArchiveRestoresBackgroundPageWithoutChangingCurrentSelection() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -833,13 +858,16 @@ final class WorkspaceViewModelTests: XCTestCase {
             """
             # Overview
 
+            ## Plan
+
             Body
 
-            # Details
+            ### Details
             """
         )
 
-        XCTAssertEqual(viewModel.selectedPageOutline.map(\.title), ["Overview", "Details"])
+        XCTAssertEqual(viewModel.selectedPageOutline.map(\.title), ["Overview", "Plan", "Details"])
+        XCTAssertEqual(viewModel.selectedPageOutline.map(\.level), [1, 2, 3])
 
         let overviewItem = try XCTUnwrap(viewModel.selectedPageOutline.first)
         viewModel.selectOutlineItem(overviewItem)
@@ -1053,6 +1081,66 @@ final class WorkspaceViewModelTests: XCTestCase {
                     sourceBlockID: blockID,
                     targetURL: "https://swift.org",
                     linkText: "Swift"
+                )
+            ]
+        )
+    }
+
+    @MainActor
+    func testUpdateExistingMarkdownLinkAtSelectionRefreshesExternalLinksAndReturnsLabelSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        let pageID = try XCTUnwrap(viewModel.selectedPageID)
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.updateBlockText(
+            blockID: blockID,
+            text: "Read [Swift](https://swift.org) today"
+        )
+
+        let editTarget = try XCTUnwrap(
+            MarkdownInlineLinkEditTarget.target(
+                in: try XCTUnwrap(viewModel.visibleBlocks.first?.textPlain),
+                selection: EditorTextSelection(
+                    blockID: blockID,
+                    location: ("Read [Swift](https://swift" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+
+        let nextSelection = try XCTUnwrap(
+            try viewModel.insertMarkdownLink(
+                blockID: blockID,
+                label: "Apple Docs",
+                url: "https://developer.apple.com",
+                selection: editTarget.replacementSelection
+            )
+        )
+
+        XCTAssertEqual(
+            viewModel.visibleBlocks.first?.textPlain,
+            "Read [Apple Docs](https://developer.apple.com) today"
+        )
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 6, length: 10))
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertEqual(
+            viewModel.selectedPageExternalLinks,
+            [
+                ExternalLink(
+                    sourcePageID: pageID,
+                    sourcePageTitle: "Welcome",
+                    sourceBlockID: blockID,
+                    targetURL: "https://developer.apple.com",
+                    linkText: "Apple Docs"
                 )
             ]
         )

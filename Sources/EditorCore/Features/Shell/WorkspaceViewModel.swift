@@ -70,11 +70,11 @@ final class WorkspaceViewModel: ObservableObject {
     var selectedPageOutline: [PageOutlineItem] {
         visibleBlocks.compactMap { block in
             let title = block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard block.type == .heading1, !title.isEmpty else {
+            guard let level = block.type.headingLevel, !title.isEmpty else {
                 return nil
             }
 
-            return PageOutlineItem(blockID: block.id, title: title, level: 1)
+            return PageOutlineItem(blockID: block.id, title: title, level: level)
         }
     }
 
@@ -616,6 +616,16 @@ final class WorkspaceViewModel: ObservableObject {
         try refreshDerivedState(rebuildSearchIndex: true)
     }
 
+    func updatePageFavorite(id pageID: String, isFavorite: Bool) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        try repository.updatePageFavorite(pageID: pageID, isFavorite: isFavorite)
+        snapshot = snapshot.replacingPageFavorite(pageID: pageID, isFavorite: isFavorite)
+        try refreshDerivedState(rebuildSearchIndex: false)
+    }
+
     func editBlockText(blockID: String, text: String) {
         do {
             try updateBlockText(blockID: blockID, text: text)
@@ -1080,6 +1090,19 @@ final class WorkspaceViewModel: ObservableObject {
             selectedPageID = previousSelection
             EditorLog.input.error(
                 "page_archive_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func updatePageFavoriteForUI(id pageID: String, isFavorite: Bool) {
+        do {
+            try updatePageFavorite(id: pageID, isFavorite: isFavorite)
+            EditorLog.input.debug(
+                "page_favorite_visible page_id=\(pageID, privacy: .public) is_favorite=\(isFavorite, privacy: .public)"
+            )
+        } catch {
+            EditorLog.input.error(
+                "page_favorite_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }
@@ -1813,6 +1836,21 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         return (currentType, text, nil)
+    }
+}
+
+private extension BlockType {
+    var headingLevel: Int? {
+        switch self {
+        case .heading1:
+            return 1
+        case .heading2:
+            return 2
+        case .heading3:
+            return 3
+        default:
+            return nil
+        }
     }
 }
 

@@ -34,6 +34,25 @@ struct RemotePageChange: Equatable, Sendable {
     let title: String
     let orderKey: String
     let isArchived: Bool
+    let isFavorite: Bool
+
+    init(
+        pageID: String,
+        workspaceID: String,
+        notebookID: String?,
+        title: String,
+        orderKey: String,
+        isArchived: Bool,
+        isFavorite: Bool = false
+    ) {
+        self.pageID = pageID
+        self.workspaceID = workspaceID
+        self.notebookID = notebookID
+        self.title = title
+        self.orderKey = orderKey
+        self.isArchived = isArchived
+        self.isFavorite = isFavorite
+    }
 }
 
 struct RemoteBlockChange: Equatable, Sendable {
@@ -160,16 +179,18 @@ final class SyncMergeEngine {
                 title,
                 order_key,
                 is_archived,
+                is_favorite,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
                 notebook_id = excluded.notebook_id,
                 title = excluded.title,
                 order_key = excluded.order_key,
                 is_archived = excluded.is_archived,
+                is_favorite = excluded.is_favorite,
                 updated_at = excluded.updated_at
             """,
             bindings: [
@@ -179,6 +200,7 @@ final class SyncMergeEngine {
                 .text(remote.title),
                 .text(remote.orderKey),
                 .integer(remote.isArchived ? 1 : 0),
+                .integer(remote.isFavorite ? 1 : 0),
                 .text(now),
                 .text(now)
             ]

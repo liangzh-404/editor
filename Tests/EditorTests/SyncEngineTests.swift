@@ -412,7 +412,8 @@ final class SyncEngineTests: XCTestCase {
                     notebookID: "notebook-remote",
                     title: "Roadmap",
                     orderKey: "000001",
-                    isArchived: false
+                    isArchived: false,
+                    isFavorite: true
                 )
             ],
             attachmentChanges: [
@@ -458,9 +459,11 @@ final class SyncEngineTests: XCTestCase {
                 id: "page-remote",
                 workspaceID: "workspace-remote",
                 notebookID: "notebook-remote",
-                title: "Roadmap"
+                title: "Roadmap",
+                isFavorite: true
             )
         ])
+        XCTAssertEqual(snapshot.favoritePages.map(\.id), ["page-remote"])
         XCTAssertEqual(snapshot.blocks.map(\.textPlain), ["Remote body"])
         XCTAssertEqual(snapshot.attachments.map(\.originalFilename), ["brief.pdf"])
     }
@@ -529,6 +532,7 @@ final class SyncEngineTests: XCTestCase {
                     $0["title"] = "Roadmap" as CKRecordValue
                     $0["orderKey"] = "000001" as CKRecordValue
                     $0["isArchived"] = NSNumber(value: false)
+                    $0["isFavorite"] = NSNumber(value: true)
                 }
             ],
             "AttachmentRecord": [
@@ -561,6 +565,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.workspaceChanges.map(\.workspaceID), ["workspace-remote"])
         XCTAssertEqual(changeSet.notebookChanges.map(\.notebookID), ["notebook-remote"])
         XCTAssertEqual(changeSet.pageChanges.map(\.pageID), ["page-remote"])
+        XCTAssertEqual(changeSet.pageChanges.first?.isFavorite, true)
         XCTAssertEqual(changeSet.attachmentChanges.map(\.attachmentID), ["attachment-remote"])
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
     }
@@ -762,6 +767,28 @@ final class SyncEngineTests: XCTestCase {
 
         let record = try XCTUnwrap(saver.savedRecords.first)
         XCTAssertEqual(record["parentNotebookID"] as? String, parent.id)
+    }
+
+    func testCloudKitPrivateDatabaseAdapterMapsPageFavoriteToRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try pageRepository.updatePageFavorite(pageID: pageID, isFavorite: true)
+        let saver = CapturingCloudKitRecordSaver()
+
+        _ = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordSaver: saver
+        ).upload(change: SyncChange(entityType: "page", entityID: pageID, changeType: "update"))
+
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        XCTAssertEqual(record.recordType, "PageRecord")
+        XCTAssertEqual(record["entityID"] as? String, pageID)
+        XCTAssertEqual((record["isFavorite"] as? NSNumber)?.boolValue, true)
+        XCTAssertEqual((record["isArchived"] as? NSNumber)?.boolValue, false)
     }
 
     func testCloudKitPrivateDatabaseAdapterDeletesRecordForDeleteChange() throws {

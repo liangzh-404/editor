@@ -49,6 +49,7 @@ enum AppEnvironment {
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
         try seedLargePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         try seedReferenceTargetsForUITestingIfNeeded(repository: repository, snapshot: snapshot)
+        try seedFavoritePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         let attachmentsDirectory = try attachmentsDirectory()
         try DataProtectionService.applyNativeProtectionRecursively(to: attachmentsDirectory)
         let attachmentRepository = AttachmentRepository(
@@ -57,6 +58,11 @@ enum AppEnvironment {
         )
         try seedAttachmentForUITestingIfNeeded(
             attachmentRepository: attachmentRepository,
+            snapshot: snapshot
+        )
+        try seedConflictForUITestingIfNeeded(
+            repository: repository,
+            conflictRepository: ConflictRepository(database: database),
             snapshot: snapshot
         )
 
@@ -188,6 +194,23 @@ enum AppEnvironment {
 #endif
     }
 
+    private static func seedFavoritePageForUITestingIfNeeded(
+        repository: PageRepository,
+        snapshot: WorkspaceSnapshot
+    ) throws {
+#if DEBUG
+        guard ProcessInfo.processInfo.environment["EDITOR_UI_TEST_FAVORITE_PAGE"] == "1",
+              let pageID = snapshot.selectedPageID else {
+            return
+        }
+
+        try repository.updatePageFavorite(pageID: pageID, isFavorite: true)
+#else
+        _ = repository
+        _ = snapshot
+#endif
+    }
+
     private static func seedAttachmentForUITestingIfNeeded(
         attachmentRepository: AttachmentRepository,
         snapshot: WorkspaceSnapshot
@@ -220,6 +243,50 @@ enum AppEnvironment {
         )
 #else
         _ = attachmentRepository
+        _ = snapshot
+#endif
+    }
+
+    private static func seedConflictForUITestingIfNeeded(
+        repository: PageRepository,
+        conflictRepository: ConflictRepository,
+        snapshot: WorkspaceSnapshot
+    ) throws {
+#if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["EDITOR_UI_TEST_CONFLICT"] == "1",
+              let pageID = snapshot.selectedPageID,
+              let firstBlockID = snapshot.blocks.first(where: { $0.pageID == pageID })?.id else {
+            return
+        }
+
+        let conflictCount = max(1, Int(environment["EDITOR_UI_TEST_CONFLICT_COUNT"] ?? "1") ?? 1)
+        for index in 1...conflictCount {
+            let localText = index == 1 ? "Local conflict draft" : "Local conflict draft \(index)"
+            let remoteText = index == 1 ? "Remote conflict draft" : "Remote conflict draft \(index)"
+            let blockID: String
+            if index == 1 {
+                blockID = firstBlockID
+                try repository.updateBlockText(blockID: blockID, text: localText)
+            } else {
+                blockID = try repository.appendBlock(pageID: pageID, type: .paragraph, text: localText).id
+            }
+            let payloadData = try JSONSerialization.data(withJSONObject: ["text": remoteText])
+            guard let payloadJSON = String(data: payloadData, encoding: .utf8) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            try conflictRepository.storeConflict(
+                ConflictVersion(
+                    blockID: blockID,
+                    payloadJSON: payloadJSON,
+                    textPlain: remoteText,
+                    remoteRevision: index + 1
+                )
+            )
+        }
+#else
+        _ = repository
+        _ = conflictRepository
         _ = snapshot
 #endif
     }

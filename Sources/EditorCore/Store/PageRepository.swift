@@ -67,7 +67,8 @@ final class PageRepository {
             SELECT pages.id,
                    pages.workspace_id,
                    pages.notebook_id,
-                   pages.title
+                   pages.title,
+                   pages.is_favorite
             FROM pages
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
             WHERE pages.workspace_id = ?
@@ -80,7 +81,8 @@ final class PageRepository {
                 id: row["id"] ?? "",
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
-                title: row["title"] ?? ""
+                title: row["title"] ?? "",
+                isFavorite: Self.sqliteBool(row["is_favorite"])
             )
         }
 
@@ -89,7 +91,8 @@ final class PageRepository {
             SELECT pages.id,
                    pages.workspace_id,
                    pages.notebook_id,
-                   pages.title
+                   pages.title,
+                   pages.is_favorite
             FROM pages
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
             WHERE pages.workspace_id = ?
@@ -102,7 +105,8 @@ final class PageRepository {
                 id: row["id"] ?? "",
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
-                title: row["title"] ?? ""
+                title: row["title"] ?? "",
+                isFavorite: Self.sqliteBool(row["is_favorite"])
             )
         }
 
@@ -206,6 +210,45 @@ final class PageRepository {
 
         EditorLog.store.debug(
             "page_title_updated page_id=\(pageID, privacy: .public) length=\(title.count, privacy: .public)"
+        )
+    }
+
+    func updatePageFavorite(pageID: String, isFavorite: Bool) throws {
+        let rows = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        guard rows.first != nil else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            UPDATE pages
+            SET is_favorite = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .integer(isFavorite ? 1 : 0),
+                .text(now),
+                .text(pageID)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "page",
+            entityID: pageID,
+            changeType: "update"
+        )
+
+        EditorLog.store.debug(
+            "page_favorite_updated page_id=\(pageID, privacy: .public) is_favorite=\(isFavorite, privacy: .public)"
         )
     }
 
@@ -551,7 +594,13 @@ final class PageRepository {
             "page_created page_id=\(pageID, privacy: .public) workspace_id=\(workspaceID, privacy: .public)"
         )
 
-        return PageSummary(id: pageID, workspaceID: workspaceID, notebookID: resolvedNotebookID, title: title)
+        return PageSummary(
+            id: pageID,
+            workspaceID: workspaceID,
+            notebookID: resolvedNotebookID,
+            title: title,
+            isFavorite: false
+        )
     }
 
     func archivePage(pageID: String) throws {
@@ -1877,6 +1926,10 @@ final class PageRepository {
         }
 
         return targetBlockID
+    }
+
+    private static func sqliteBool(_ value: String?) -> Bool {
+        value == "1" || value == "true"
     }
 
     private static func depthFirstNotebooks(_ notebooks: [OrderedNotebookSummary]) -> [NotebookSummary] {

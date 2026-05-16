@@ -19,6 +19,47 @@ struct ConflictSnapshot: Identifiable, Equatable, Sendable {
     }
 }
 
+struct ConflictMergeDrafts: Equatable, Sendable {
+    private var textsByConflictID: [String: String] = [:]
+
+    func text(for conflict: ConflictSnapshot) -> String {
+        textsByConflictID[conflict.id] ?? conflict.localTextPlain
+    }
+
+    mutating func setText(_ text: String, for conflict: ConflictSnapshot) {
+        textsByConflictID[conflict.id] = text
+    }
+
+    mutating func useLocalText(for conflict: ConflictSnapshot) {
+        setText(conflict.localTextPlain, for: conflict)
+    }
+
+    mutating func useLocalText(for conflicts: [ConflictSnapshot]) {
+        conflicts.forEach { useLocalText(for: $0) }
+    }
+
+    mutating func useRemoteText(for conflict: ConflictSnapshot) {
+        setText(conflict.remoteTextPlain, for: conflict)
+    }
+
+    mutating func useRemoteText(for conflicts: [ConflictSnapshot]) {
+        conflicts.forEach { useRemoteText(for: $0) }
+    }
+
+    mutating func prune(keeping conflictIDs: [String]) {
+        let validIDs = Set(conflictIDs)
+        textsByConflictID = textsByConflictID.filter { validIDs.contains($0.key) }
+    }
+
+    func mergedTexts(for conflicts: [ConflictSnapshot]) -> [String: String] {
+        Dictionary(
+            uniqueKeysWithValues: conflicts.map { conflict in
+                (conflict.id, text(for: conflict))
+            }
+        )
+    }
+}
+
 enum ConflictTextDiffSegmentKind: Equatable, Sendable {
     case unchanged
     case removed

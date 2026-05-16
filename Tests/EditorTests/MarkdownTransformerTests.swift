@@ -8,6 +8,14 @@ final class MarkdownTransformerTests: XCTestCase {
             MarkdownShortcutTransform(type: .heading1, textPlain: "")
         )
         XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "## "),
+            MarkdownShortcutTransform(type: .heading2, textPlain: "")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "### "),
+            MarkdownShortcutTransform(type: .heading3, textPlain: "")
+        )
+        XCTAssertEqual(
             MarkdownTransformer.shortcutTransform(for: "- "),
             MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
         )
@@ -32,6 +40,8 @@ final class MarkdownTransformerTests: XCTestCase {
     func testExportBlocksToMarkdown() {
         let blocks = [
             block(type: .heading1, text: "Title"),
+            block(type: .heading2, text: "Section"),
+            block(type: .heading3, text: "Detail"),
             block(type: .paragraph, text: "Body"),
             block(type: .unorderedListItem, text: "Item"),
             block(type: .quote, text: "Quoted"),
@@ -42,6 +52,10 @@ final class MarkdownTransformerTests: XCTestCase {
             MarkdownTransformer.export(blocks: blocks),
             """
             # Title
+
+            ## Section
+
+            ### Detail
 
             Body
 
@@ -61,6 +75,10 @@ final class MarkdownTransformerTests: XCTestCase {
                     """
                     # Title
 
+                    ## Section
+
+                    ### Detail
+
                     Body paragraph
 
                     - Item
@@ -74,6 +92,8 @@ final class MarkdownTransformerTests: XCTestCase {
             ),
             [
                 MarkdownBlockDraft(type: .heading1, textPlain: "Title"),
+                MarkdownBlockDraft(type: .heading2, textPlain: "Section"),
+                MarkdownBlockDraft(type: .heading3, textPlain: "Detail"),
                 MarkdownBlockDraft(type: .paragraph, textPlain: "Body paragraph"),
                 MarkdownBlockDraft(type: .unorderedListItem, textPlain: "Item"),
                 MarkdownBlockDraft(type: .taskItem, textPlain: "Task"),
@@ -223,6 +243,63 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testMarkdownInlineLinkEditTargetFindsExistingLinkAroundSelection() throws {
+        let text = "Read [Swift](https://swift.org) today"
+        let labelSelection = EditorTextSelection(
+            blockID: "block-1",
+            location: ("Read [Sw" as NSString).length,
+            length: 0
+        )
+        let urlSelection = EditorTextSelection(
+            blockID: "block-1",
+            location: ("Read [Swift](https://swift" as NSString).length,
+            length: 0
+        )
+
+        let labelTarget = try XCTUnwrap(
+            MarkdownInlineLinkEditTarget.target(in: text, selection: labelSelection)
+        )
+        let urlTarget = try XCTUnwrap(
+            MarkdownInlineLinkEditTarget.target(in: text, selection: urlSelection)
+        )
+
+        let expectedReplacementSelection = EditorTextSelection(
+            blockID: "block-1",
+            location: ("Read " as NSString).length,
+            length: ("[Swift](https://swift.org)" as NSString).length
+        )
+        XCTAssertEqual(labelTarget.label, "Swift")
+        XCTAssertEqual(labelTarget.url, "https://swift.org")
+        XCTAssertEqual(labelTarget.replacementSelection, expectedReplacementSelection)
+        XCTAssertEqual(urlTarget, labelTarget)
+    }
+
+    func testMarkdownInlineLinkEditTargetIgnoresImagesAndCodeSpans() {
+        let imageText = "Image ![Swift](https://swift.org)"
+        let codeText = "Literal `[Swift](https://swift.org)`"
+
+        XCTAssertNil(
+            MarkdownInlineLinkEditTarget.target(
+                in: imageText,
+                selection: EditorTextSelection(
+                    blockID: "block-1",
+                    location: ("Image ![Swift](https://swift" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+        XCTAssertNil(
+            MarkdownInlineLinkEditTarget.target(
+                in: codeText,
+                selection: EditorTextSelection(
+                    blockID: "block-1",
+                    location: ("Literal `[Swift](https://swift" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+    }
+
     func testMarkdownInlineStyleScannerFindsBoldCodeAndLinkLabelRanges() {
         let text = "Use **bold** and `code` from [Swift](https://swift.org)."
 
@@ -258,6 +335,84 @@ final class MarkdownTransformerTests: XCTestCase {
                 MarkdownInlineStyleRun(
                     kind: .bold,
                     range: NSRange(location: ("Use *italic* and **" as NSString).length, length: 4)
+                )
+            ]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerFindsStrikethroughRangeOutsideCodeSpan() {
+        let text = "Use ~~deleted~~ and `~~literal~~`."
+
+        let runs = MarkdownInlineStyleScanner.runs(in: text)
+
+        XCTAssertEqual(
+            runs.map { String(describing: $0.kind) },
+            ["strikethrough", "code"]
+        )
+        XCTAssertEqual(
+            runs.map(\.range),
+            [
+                NSRange(location: ("Use ~~" as NSString).length, length: 7),
+                NSRange(location: ("Use ~~deleted~~ and `" as NSString).length, length: 11)
+            ]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerCanIncludeSyntaxMarkerRangesForRenderingPolish() {
+        let text = "Use **bold**, ~~gone~~, `code`, and [Swift](https://swift.org)."
+
+        let runs = MarkdownInlineStyleScanner.runs(in: text, includingSyntaxMarkers: true)
+
+        XCTAssertEqual(
+            runs,
+            [
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Use " as NSString).length, length: 2)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .bold,
+                    range: NSRange(location: ("Use **" as NSString).length, length: 4)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Use **bold" as NSString).length, length: 2)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Use **bold**, " as NSString).length, length: 2)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .strikethrough,
+                    range: NSRange(location: ("Use **bold**, ~~" as NSString).length, length: 4)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Use **bold**, ~~gone" as NSString).length, length: 2)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Use **bold**, ~~gone~~, " as NSString).length, length: 1)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .code,
+                    range: NSRange(location: ("Use **bold**, ~~gone~~, `" as NSString).length, length: 4)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Use **bold**, ~~gone~~, `code" as NSString).length, length: 1)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Use **bold**, ~~gone~~, `code`, and " as NSString).length, length: 1)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .link,
+                    range: NSRange(location: ("Use **bold**, ~~gone~~, `code`, and [" as NSString).length, length: 5)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Use **bold**, ~~gone~~, `code`, and [Swift" as NSString).length, length: 20)
                 )
             ]
         )
@@ -356,6 +511,38 @@ final class MarkdownTransformerTests: XCTestCase {
         XCTAssertEqual(
             result.selection,
             EditorTextSelection(blockID: "block-1", location: 5, length: 4)
+        )
+    }
+
+    func testMarkdownInlineFormatterTogglesOffExistingMarkersAroundSelection() throws {
+        let result = try XCTUnwrap(
+            MarkdownInlineFormatter.applyResult(
+                .bold,
+                to: "Use **bold** text",
+                selection: EditorTextSelection(blockID: "block-1", location: 6, length: 4)
+            )
+        )
+
+        XCTAssertEqual(result.text, "Use bold text")
+        XCTAssertEqual(
+            result.selection,
+            EditorTextSelection(blockID: "block-1", location: 4, length: 4)
+        )
+    }
+
+    func testMarkdownInlineFormatterTogglesOffSelectedTextIncludingMarkers() throws {
+        let result = try XCTUnwrap(
+            MarkdownInlineFormatter.applyResult(
+                .bold,
+                to: "Use **bold** text",
+                selection: EditorTextSelection(blockID: "block-1", location: 4, length: 8)
+            )
+        )
+
+        XCTAssertEqual(result.text, "Use bold text")
+        XCTAssertEqual(
+            result.selection,
+            EditorTextSelection(blockID: "block-1", location: 4, length: 4)
         )
     }
 

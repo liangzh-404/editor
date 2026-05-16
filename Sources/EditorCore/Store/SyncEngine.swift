@@ -478,7 +478,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
     private func pageRecord(entityID: String) throws -> CKRecord {
         let row = try requiredRow(
             """
-            SELECT id, workspace_id, notebook_id, title, order_key, is_archived, updated_at
+            SELECT id, workspace_id, notebook_id, title, order_key, is_archived, is_favorite, updated_at
             FROM pages
             WHERE id = ?
             LIMIT 1
@@ -491,6 +491,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         record["title"] = row["title"] as CKRecordValue?
         record["orderKey"] = row["order_key"] as CKRecordValue?
         record["isArchived"] = NSNumber(value: Int(row["is_archived"] ?? "") ?? 0)
+        record["isFavorite"] = NSNumber(value: Int(row["is_favorite"] ?? "") ?? 0)
         record["updatedAt"] = row["updated_at"] as CKRecordValue?
         return record
     }
@@ -602,7 +603,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             notebookID: record["notebookID"] as? String,
             title: title,
             orderKey: orderKey,
-            isArchived: (record["isArchived"] as? NSNumber)?.boolValue ?? false
+            isArchived: (record["isArchived"] as? NSNumber)?.boolValue ?? false,
+            isFavorite: (record["isFavorite"] as? NSNumber)?.boolValue ?? false
         )
     }
 

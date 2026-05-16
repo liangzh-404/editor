@@ -19,6 +19,23 @@ struct EditorApp: App {
         WindowGroup {
             AppEnvironment.makeRootView()
         }
+        .commands {
+            EditorEditingCommands()
+        }
+    }
+}
+
+private struct EditorEditingCommands: Commands {
+    @FocusedValue(\.insertMarkdownLinkAction) private var insertMarkdownLinkAction
+
+    var body: some Commands {
+        CommandGroup(after: .textEditing) {
+            Button("Insert Link") {
+                insertMarkdownLinkAction?()
+            }
+            .keyboardShortcut("k", modifiers: .command)
+            .disabled(insertMarkdownLinkAction == nil)
+        }
     }
 }
 

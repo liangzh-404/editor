@@ -25,18 +25,28 @@ struct PageSummary: Identifiable, Equatable, Sendable {
     let workspaceID: String
     let notebookID: String?
     let title: String
+    let isFavorite: Bool
 
-    init(id: String, workspaceID: String, notebookID: String? = nil, title: String) {
+    init(
+        id: String,
+        workspaceID: String,
+        notebookID: String? = nil,
+        title: String,
+        isFavorite: Bool = false
+    ) {
         self.id = id
         self.workspaceID = workspaceID
         self.notebookID = notebookID
         self.title = title
+        self.isFavorite = isFavorite
     }
 }
 
 enum BlockType: String, Equatable, Sendable {
     case paragraph
     case heading1
+    case heading2
+    case heading3
     case unorderedListItem
     case orderedListItem
     case taskItem
@@ -56,6 +66,8 @@ enum BlockType: String, Equatable, Sendable {
         switch self {
         case .paragraph,
              .heading1,
+             .heading2,
+             .heading3,
              .unorderedListItem,
              .orderedListItem,
              .taskItem,
@@ -79,6 +91,8 @@ enum BlockType: String, Equatable, Sendable {
         switch self {
         case .paragraph,
              .heading1,
+             .heading2,
+             .heading3,
              .unorderedListItem,
              .orderedListItem,
              .taskItem,
@@ -279,6 +293,10 @@ struct WorkspaceSnapshot: Equatable, Sendable {
     let selectedNotebookID: String?
     let selectedPageID: String?
 
+    var favoritePages: [PageSummary] {
+        pages.filter(\.isFavorite)
+    }
+
     init(
         workspaces: [WorkspaceSummary],
         notebooks: [NotebookSummary] = [],
@@ -397,11 +415,46 @@ extension WorkspaceSnapshot {
                         id: page.id,
                         workspaceID: page.workspaceID,
                         notebookID: page.notebookID,
-                        title: title
+                        title: title,
+                        isFavorite: page.isFavorite
                     )
                     : page
             },
             archivedPages: archivedPages,
+            blocks: blocks,
+            attachments: attachments,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
+
+    func replacingPageFavorite(pageID: String, isFavorite: Bool) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages.map { page in
+                page.id == pageID
+                    ? PageSummary(
+                        id: page.id,
+                        workspaceID: page.workspaceID,
+                        notebookID: page.notebookID,
+                        title: page.title,
+                        isFavorite: isFavorite
+                    )
+                    : page
+            },
+            archivedPages: archivedPages.map { page in
+                page.id == pageID
+                    ? PageSummary(
+                        id: page.id,
+                        workspaceID: page.workspaceID,
+                        notebookID: page.notebookID,
+                        title: page.title,
+                        isFavorite: isFavorite
+                    )
+                    : page
+            },
             blocks: blocks,
             attachments: attachments,
             selectedWorkspaceID: selectedWorkspaceID,

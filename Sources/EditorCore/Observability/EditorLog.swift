@@ -13,4 +13,3 @@ enum EditorLog {
     static let sync = Logger(subsystem: subsystem, category: "sync.cloudkit")
     static let attachment = Logger(subsystem: subsystem, category: "attachment.preview")
 }
-

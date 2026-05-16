@@ -182,6 +182,84 @@ final class SyncMergeEngineTests: XCTestCase {
         )
     }
 
+    func testConflictMergeDraftsSeedLocalRemoteAndPruneRemovedConflicts() {
+        let firstConflict = ConflictSnapshot(
+            id: "conflict-one",
+            blockID: "block-one",
+            localTextPlain: "Local one",
+            remoteTextPlain: "Remote one",
+            remoteRevision: 2
+        )
+        let secondConflict = ConflictSnapshot(
+            id: "conflict-two",
+            blockID: "block-two",
+            localTextPlain: "Local two",
+            remoteTextPlain: "Remote two",
+            remoteRevision: 3
+        )
+        var drafts = ConflictMergeDrafts()
+
+        XCTAssertEqual(drafts.text(for: firstConflict), "Local one")
+
+        drafts.setText("Manual one", for: firstConflict)
+        XCTAssertEqual(
+            drafts.mergedTexts(for: [firstConflict, secondConflict]),
+            [
+                "conflict-one": "Manual one",
+                "conflict-two": "Local two"
+            ]
+        )
+
+        drafts.useRemoteText(for: firstConflict)
+        XCTAssertEqual(drafts.text(for: firstConflict), "Remote one")
+
+        drafts.useLocalText(for: firstConflict)
+        XCTAssertEqual(drafts.text(for: firstConflict), "Local one")
+
+        drafts.setText("Manual two", for: secondConflict)
+        drafts.prune(keeping: [firstConflict.id])
+        XCTAssertEqual(drafts.text(for: secondConflict), "Local two")
+    }
+
+    func testConflictMergeDraftsCanSeedEveryDraftFromLocalOrRemoteText() {
+        let firstConflict = ConflictSnapshot(
+            id: "conflict-one",
+            blockID: "block-one",
+            localTextPlain: "Local one",
+            remoteTextPlain: "Remote one",
+            remoteRevision: 2
+        )
+        let secondConflict = ConflictSnapshot(
+            id: "conflict-two",
+            blockID: "block-two",
+            localTextPlain: "Local two",
+            remoteTextPlain: "Remote two",
+            remoteRevision: 3
+        )
+        let conflicts = [firstConflict, secondConflict]
+        var drafts = ConflictMergeDrafts()
+
+        drafts.setText("Manual one", for: firstConflict)
+        drafts.setText("Manual two", for: secondConflict)
+        drafts.useRemoteText(for: conflicts)
+        XCTAssertEqual(
+            drafts.mergedTexts(for: conflicts),
+            [
+                "conflict-one": "Remote one",
+                "conflict-two": "Remote two"
+            ]
+        )
+
+        drafts.useLocalText(for: conflicts)
+        XCTAssertEqual(
+            drafts.mergedTexts(for: conflicts),
+            [
+                "conflict-one": "Local one",
+                "conflict-two": "Local two"
+            ]
+        )
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

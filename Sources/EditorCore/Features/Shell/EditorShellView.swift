@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -7,6 +8,17 @@ import AppKit
 #elseif os(iOS)
 import UIKit
 #endif
+
+struct EditorInsertMarkdownLinkActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+extension FocusedValues {
+    var insertMarkdownLinkAction: (() -> Void)? {
+        get { self[EditorInsertMarkdownLinkActionKey.self] }
+        set { self[EditorInsertMarkdownLinkActionKey.self] = newValue }
+    }
+}
 
 struct EditorShellView: View {
     @StateObject private var viewModel: WorkspaceViewModel
@@ -269,46 +281,167 @@ struct EditorCanvasScrollMetrics: Equatable, Sendable {
     let blockCount: Int
     let visibleBlockCount: Int
     let peakVisibleBlockCount: Int
+    let firstVisibleBlockIndex: Int?
+    let lastVisibleBlockIndex: Int?
+    let peakVisibleBlockIndexSpan: Int
+    let scrollLifetimeMilliseconds: Double
+    let blockAppearanceCount: Int
+    let blockDisappearanceCount: Int
+
+    init(
+        pageID: String?,
+        blockCount: Int,
+        visibleBlockCount: Int,
+        peakVisibleBlockCount: Int,
+        firstVisibleBlockIndex: Int?,
+        lastVisibleBlockIndex: Int?,
+        peakVisibleBlockIndexSpan: Int,
+        scrollLifetimeMilliseconds: Double = 0,
+        blockAppearanceCount: Int = 0,
+        blockDisappearanceCount: Int = 0
+    ) {
+        self.pageID = pageID
+        self.blockCount = blockCount
+        self.visibleBlockCount = visibleBlockCount
+        self.peakVisibleBlockCount = peakVisibleBlockCount
+        self.firstVisibleBlockIndex = firstVisibleBlockIndex
+        self.lastVisibleBlockIndex = lastVisibleBlockIndex
+        self.peakVisibleBlockIndexSpan = peakVisibleBlockIndexSpan
+        self.scrollLifetimeMilliseconds = scrollLifetimeMilliseconds
+        self.blockAppearanceCount = blockAppearanceCount
+        self.blockDisappearanceCount = blockDisappearanceCount
+    }
 
     var isLargePage: Bool {
         blockCount >= EditorCanvasRenderPolicy.largePageBlockThreshold
+    }
+
+    var visibleBlockChurnCount: Int {
+        blockAppearanceCount + blockDisappearanceCount
+    }
+
+    var visibleBlockIndexSpan: Int {
+        guard let firstVisibleBlockIndex,
+              let lastVisibleBlockIndex else {
+            return 0
+        }
+        return lastVisibleBlockIndex - firstVisibleBlockIndex + 1
+    }
+
+    var runtimeSummary: String {
+        [
+            "page_id=\(pageID ?? "none")",
+            "block_count=\(blockCount)",
+            "visible_block_count=\(visibleBlockCount)",
+            "peak_visible_block_count=\(peakVisibleBlockCount)",
+            "first_visible_block_index=\(Self.optionalIndexDescription(firstVisibleBlockIndex))",
+            "last_visible_block_index=\(Self.optionalIndexDescription(lastVisibleBlockIndex))",
+            "visible_block_index_span=\(visibleBlockIndexSpan)",
+            "peak_visible_block_index_span=\(peakVisibleBlockIndexSpan)",
+            "scroll_lifetime_ms=\(Self.millisecondsDescription(scrollLifetimeMilliseconds))",
+            "block_appearance_count=\(blockAppearanceCount)",
+            "block_disappearance_count=\(blockDisappearanceCount)",
+            "visible_block_churn_count=\(visibleBlockChurnCount)",
+            "large_page=\(isLargePage)"
+        ].joined(separator: " ")
+    }
+
+    private static func optionalIndexDescription(_ index: Int?) -> String {
+        index.map(String.init) ?? "none"
+    }
+
+    private static func millisecondsDescription(_ milliseconds: Double) -> String {
+        String(format: "%.3f", milliseconds)
     }
 }
 
 struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
     private var pageID: String?
     private var blockCount: Int
-    private var visibleBlockIDs: Set<String> = []
+    private var visibleBlockIndexesByID: [String: Int] = [:]
     private var peakVisibleBlockCount = 0
+    private var peakVisibleBlockIndexSpan = 0
+    private var startedAtNanoseconds: UInt64
+    private var lastEventNanoseconds: UInt64
+    private var blockAppearanceCount = 0
+    private var blockDisappearanceCount = 0
 
-    init(pageID: String?, blockCount: Int) {
+    init(
+        pageID: String?,
+        blockCount: Int,
+        nowNanoseconds: UInt64 = Self.currentNanoseconds()
+    ) {
         self.pageID = pageID
         self.blockCount = blockCount
+        self.startedAtNanoseconds = nowNanoseconds
+        self.lastEventNanoseconds = nowNanoseconds
     }
 
     var metrics: EditorCanvasScrollMetrics {
-        EditorCanvasScrollMetrics(
+        let firstVisibleBlockIndex = visibleBlockIndexesByID.values.min()
+        let lastVisibleBlockIndex = visibleBlockIndexesByID.values.max()
+        return EditorCanvasScrollMetrics(
             pageID: pageID,
             blockCount: blockCount,
-            visibleBlockCount: visibleBlockIDs.count,
-            peakVisibleBlockCount: peakVisibleBlockCount
+            visibleBlockCount: visibleBlockIndexesByID.count,
+            peakVisibleBlockCount: peakVisibleBlockCount,
+            firstVisibleBlockIndex: firstVisibleBlockIndex,
+            lastVisibleBlockIndex: lastVisibleBlockIndex,
+            peakVisibleBlockIndexSpan: peakVisibleBlockIndexSpan,
+            scrollLifetimeMilliseconds: Self.durationMilliseconds(
+                from: startedAtNanoseconds,
+                to: lastEventNanoseconds
+            ),
+            blockAppearanceCount: blockAppearanceCount,
+            blockDisappearanceCount: blockDisappearanceCount
         )
     }
 
-    mutating func reset(pageID: String?, blockCount: Int) {
+    mutating func reset(
+        pageID: String?,
+        blockCount: Int,
+        nowNanoseconds: UInt64 = Self.currentNanoseconds()
+    ) {
         self.pageID = pageID
         self.blockCount = blockCount
-        visibleBlockIDs.removeAll()
+        visibleBlockIndexesByID.removeAll()
         peakVisibleBlockCount = 0
+        peakVisibleBlockIndexSpan = 0
+        startedAtNanoseconds = nowNanoseconds
+        lastEventNanoseconds = nowNanoseconds
+        blockAppearanceCount = 0
+        blockDisappearanceCount = 0
     }
 
-    mutating func blockAppeared(_ blockID: String) {
-        visibleBlockIDs.insert(blockID)
-        peakVisibleBlockCount = max(peakVisibleBlockCount, visibleBlockIDs.count)
+    mutating func blockAppeared(
+        _ blockID: String,
+        index: Int,
+        nowNanoseconds: UInt64 = Self.currentNanoseconds()
+    ) {
+        visibleBlockIndexesByID[blockID] = index
+        lastEventNanoseconds = nowNanoseconds
+        blockAppearanceCount += 1
+        peakVisibleBlockCount = max(peakVisibleBlockCount, visibleBlockIndexesByID.count)
+        peakVisibleBlockIndexSpan = max(peakVisibleBlockIndexSpan, metrics.visibleBlockIndexSpan)
     }
 
-    mutating func blockDisappeared(_ blockID: String) {
-        visibleBlockIDs.remove(blockID)
+    mutating func blockDisappeared(
+        _ blockID: String,
+        nowNanoseconds: UInt64 = Self.currentNanoseconds()
+    ) {
+        guard visibleBlockIndexesByID.removeValue(forKey: blockID) != nil else {
+            return
+        }
+        lastEventNanoseconds = nowNanoseconds
+        blockDisappearanceCount += 1
+    }
+
+    private static func currentNanoseconds() -> UInt64 {
+        DispatchTime.now().uptimeNanoseconds
+    }
+
+    private static func durationMilliseconds(from start: UInt64, to end: UInt64) -> Double {
+        Double(end - start) / 1_000_000
     }
 }
 
@@ -478,8 +611,22 @@ private struct WorkspaceSidebar: View {
 
             CloudKitAccountStatusSection(viewModel: viewModel)
 
+            if !viewModel.snapshot.favoritePages.isEmpty {
+                Section("Favorites") {
+                    ForEach(viewModel.snapshot.favoritePages) { page in
+                        Button {
+                            viewModel.selectPage(id: page.id)
+                        } label: {
+                            Label(page.title, systemImage: "star.fill")
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("editor.favorite-page.\(page.id)")
+                    }
+                }
+            }
+
             Section("Library") {
-                Label("Favorites", systemImage: "star")
                 Label("Archive", systemImage: "archivebox")
             }
         }
@@ -574,9 +721,29 @@ private struct PageListView: View {
             ForEach(Array(viewModel.snapshot.notebooks.enumerated()), id: \.element.id) { index, notebook in
                 Section {
                     ForEach(pages(in: notebook)) { page in
-                        PageRow(page: page)
+                        PageRow(
+                            page: page,
+                            onFavoriteToggle: {
+                                viewModel.updatePageFavoriteForUI(
+                                    id: page.id,
+                                    isFavorite: !page.isFavorite
+                                )
+                            }
+                        )
                             .tag(Optional(page.id))
                             .contextMenu {
+                                Button {
+                                    viewModel.updatePageFavoriteForUI(
+                                        id: page.id,
+                                        isFavorite: !page.isFavorite
+                                    )
+                                } label: {
+                                    Label(
+                                        page.isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                                        systemImage: page.isFavorite ? "star.slash" : "star"
+                                    )
+                                }
+
                                 Button {
                                     viewModel.archivePageForUI(id: page.id)
                                 } label: {
@@ -709,6 +876,18 @@ private struct CompactPageListView: View {
                         }
                         .accessibilityIdentifier("editor.page.\(page.id)")
                         .contextMenu {
+                            Button {
+                                viewModel.updatePageFavoriteForUI(
+                                    id: page.id,
+                                    isFavorite: !page.isFavorite
+                                )
+                            } label: {
+                                Label(
+                                    page.isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                                    systemImage: page.isFavorite ? "star.slash" : "star"
+                                )
+                            }
+
                             Button {
                                 viewModel.archivePageForUI(id: page.id)
                             } label: {
@@ -945,6 +1124,8 @@ private struct NotebookSectionHeader: View {
             .buttonStyle(.borderless)
             .disabled(!canMoveUp)
             .help("Move up")
+            .accessibilityLabel("Move notebook up")
+            .accessibilityValue(controlAvailabilityValue(canMoveUp))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).move-up")
 
             Button {
@@ -955,6 +1136,8 @@ private struct NotebookSectionHeader: View {
             .buttonStyle(.borderless)
             .disabled(!canMoveDown)
             .help("Move down")
+            .accessibilityLabel("Move notebook down")
+            .accessibilityValue(controlAvailabilityValue(canMoveDown))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).move-down")
 
             Button {
@@ -965,6 +1148,8 @@ private struct NotebookSectionHeader: View {
             .buttonStyle(.borderless)
             .disabled(!canOutdent)
             .help("Outdent notebook")
+            .accessibilityLabel("Outdent notebook")
+            .accessibilityValue(controlAvailabilityValue(canOutdent))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).outdent")
 
             Button {
@@ -975,6 +1160,8 @@ private struct NotebookSectionHeader: View {
             .buttonStyle(.borderless)
             .disabled(!canIndent)
             .help("Indent notebook")
+            .accessibilityLabel("Indent notebook")
+            .accessibilityValue(controlAvailabilityValue(canIndent))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).indent")
 
             Button {
@@ -984,6 +1171,8 @@ private struct NotebookSectionHeader: View {
             }
             .buttonStyle(.borderless)
             .help("New child notebook")
+            .accessibilityLabel("Add child notebook")
+            .accessibilityValue(controlAvailabilityValue(true))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).add-child-notebook")
 
             Button {
@@ -993,6 +1182,8 @@ private struct NotebookSectionHeader: View {
             }
             .buttonStyle(.borderless)
             .help("New page")
+            .accessibilityLabel("Add page to notebook")
+            .accessibilityValue(controlAvailabilityValue(true))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).add-page")
         }
         .onChange(of: notebook.name) { _, name in
@@ -1010,6 +1201,10 @@ private struct NotebookSectionHeader: View {
             draftName = name
             onRename(name)
         }
+    }
+
+    private func controlAvailabilityValue(_ isAvailable: Bool) -> String {
+        isAvailable ? "Available" : "Unavailable"
     }
 }
 
@@ -1080,17 +1275,40 @@ private struct SearchResultRow: View {
 
 private struct PageRow: View {
     let page: PageSummary
+    var onFavoriteToggle: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "doc.text")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text(page.title)
                 .font(.body)
                 .lineLimit(1)
+                .accessibilityLabel(page.title)
+                .accessibilityValue(page.isFavorite ? "Favorite" : "Not favorite")
+                .accessibilityIdentifier("editor.page-row.\(page.id)")
+            Spacer(minLength: 8)
+
+            if let onFavoriteToggle {
+                Button {
+                    onFavoriteToggle()
+                } label: {
+                    Image(systemName: page.isFavorite ? "star.fill" : "star")
+                        .foregroundStyle(page.isFavorite ? .yellow : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(page.isFavorite ? "Remove from Favorites" : "Add to Favorites")
+                .accessibilityLabel(page.isFavorite ? "Remove page from favorites" : "Add page to favorites")
+                .accessibilityValue(page.isFavorite ? "Favorite" : "Not favorite")
+                .accessibilityIdentifier("editor.page.\(page.id).favorite")
+            } else if page.isFavorite {
+                Image(systemName: "star.fill")
+                    .foregroundStyle(.yellow)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.vertical, 5)
-        .accessibilityIdentifier("editor.page-row.\(page.id)")
     }
 }
 
@@ -1188,7 +1406,11 @@ private struct EditorCanvasView: View {
     @State private var activeInlineLinkTarget: (blockID: String, selection: EditorTextSelection?)?
     @State private var inlineLinkLabel = ""
     @State private var inlineLinkURL = ""
+    @State private var isEditingInlineLink = false
     @State private var markdownExportDocument = MarkdownFileDocument(text: "")
+#if DEBUG
+    @State private var uiTestMarkdownExportOutput: String?
+#endif
     @StateObject private var editorSession = EditorSession()
     @State private var pendingFocusRequest: BlockFocusRequest?
     @State private var scrollMetricsTracker = EditorCanvasScrollMetricsTracker(pageID: nil, blockCount: 0)
@@ -1281,6 +1503,16 @@ private struct EditorCanvasView: View {
                     .disabled(inlineFormatTarget == nil)
 
                     Button {
+                        applyMarkdownInlineFormat(.strikethrough)
+                    } label: {
+                        Image(systemName: "strikethrough")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Strikethrough")
+                    .accessibilityIdentifier("editor.inline-format.strikethrough")
+                    .disabled(inlineFormatTarget == nil)
+
+                    Button {
                         applyMarkdownInlineFormat(.code)
                     } label: {
                         Image(systemName: "chevron.left.forwardslash.chevron.right")
@@ -1301,7 +1533,7 @@ private struct EditorCanvasView: View {
                     .disabled(!canUndoTextEdit)
 
                     Button {
-                        isMarkdownImporterPresented = true
+                        handleMarkdownImportButton()
                     } label: {
                         Image(systemName: "square.and.arrow.down")
                     }
@@ -1311,8 +1543,7 @@ private struct EditorCanvasView: View {
                     .disabled(page == nil)
 
                     Button {
-                        markdownExportDocument = MarkdownFileDocument(text: onExportMarkdown())
-                        isMarkdownExporterPresented = true
+                        handleMarkdownExportButton()
                     } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
@@ -1322,7 +1553,7 @@ private struct EditorCanvasView: View {
                     .disabled(page == nil)
 
                     Button {
-                        isAttachmentImporterPresented = true
+                        handleAttachmentImportButton()
                     } label: {
                         Image(systemName: "paperclip")
                     }
@@ -1334,6 +1565,17 @@ private struct EditorCanvasView: View {
                 if isInlineLinkPopoverPresented {
                     inlineLinkPopover
                 }
+
+#if DEBUG
+                if let uiTestMarkdownExportOutput {
+                    Text(uiTestMarkdownExportOutput)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("editor.markdown-export-test-output")
+                        .accessibilityLabel(uiTestMarkdownExportOutput)
+                        .accessibilityValue(uiTestMarkdownExportOutput)
+                }
+#endif
 
                 ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
                     BlockRowView(
@@ -1351,6 +1593,15 @@ private struct EditorCanvasView: View {
                         },
                         onMoveByKeyboard: { direction in
                             onMoveBlockByKeyboard(block.id, direction)
+                        },
+                        onMoveFocusByKeyboard: { direction in
+                            focusAdjacentBlock(from: block.id, direction: direction)
+                        },
+                        onApplyInlineFormatByKeyboard: { format, selection in
+                            applyMarkdownInlineFormat(format, selection: selection)
+                        },
+                        onInsertLinkByKeyboard: { selection in
+                            presentInlineLinkInsertion(selection: selection)
                         },
                         onInsertBlockAfter: {
                             onInsertBlockAfter(block.id)
@@ -1397,7 +1648,7 @@ private struct EditorCanvasView: View {
                         onBlockTextChange(block.id, text)
                     }
                     .onAppear {
-                        recordVisibleBlockAppeared(block.id)
+                        recordVisibleBlockAppeared(block.id, index: index)
                     }
                     .onDisappear {
                         recordVisibleBlockDisappeared(block.id)
@@ -1447,8 +1698,21 @@ private struct EditorCanvasView: View {
             .padding(.vertical, 36)
         }
         .accessibilityIdentifier("editor.canvas-scroll")
+#if DEBUG
+        .overlay(alignment: .topLeading) {
+            scrollMetricsDebugProbe
+        }
+#endif
         .background(Color.white)
+#if os(macOS)
+        .background(
+            MacEditorKeyboardShortcutBridge {
+                presentInlineLinkInsertionFromKeyboardShortcut()
+            }
+        )
+#endif
         .navigationTitle(page?.title ?? "Editor")
+        .focusedValue(\.insertMarkdownLinkAction, insertMarkdownLinkAction)
         .onAppear {
             resetScrollMetrics()
             schedulePendingFocusIfNeeded(pendingFocusBlockID)
@@ -1567,9 +1831,110 @@ private struct EditorCanvasView: View {
         inlineLinkTarget?.blockID
     }
 
+    private var inlineLinkKeyboardTarget: (blockID: String, selection: EditorTextSelection?)? {
+        guard let selection = editorSession.textSelection,
+              let block = blocks.first(where: { $0.id == selection.blockID && $0.type.isTextEditable }),
+              isValid(selection: selection, for: block) else {
+            return nil
+        }
+
+        return (block.id, selection)
+    }
+
     private var inlineLinkToolbarTargetBlockID: String? {
         inlineLinkTargetBlockID ?? activeInlineLinkTarget?.blockID
     }
+
+    private var insertMarkdownLinkAction: (() -> Void)? {
+        guard inlineLinkToolbarTargetBlockID != nil else {
+            return nil
+        }
+
+        return {
+            _ = presentInlineLinkInsertionFromCurrentTarget()
+        }
+    }
+
+    private func handleMarkdownImportButton() {
+#if DEBUG
+        if let sourceURL = makeUITestMarkdownImportSourceURL() {
+            onImportMarkdown(sourceURL)
+            return
+        }
+#endif
+        isMarkdownImporterPresented = true
+    }
+
+    private func handleMarkdownExportButton() {
+        let markdown = MarkdownTransformer.export(blocks: blocks)
+#if DEBUG
+        if ProcessInfo.processInfo.environment["EDITOR_UI_TEST_MARKDOWN_EXPORT_CAPTURE"] == "1" {
+            uiTestMarkdownExportOutput = markdown
+            return
+        }
+#endif
+        markdownExportDocument = MarkdownFileDocument(text: markdown)
+        isMarkdownExporterPresented = true
+    }
+
+    private func handleAttachmentImportButton() {
+#if DEBUG
+        if let sourceURL = makeUITestAttachmentImportSourceURL() {
+            onImportAttachment(sourceURL)
+            return
+        }
+#endif
+        isAttachmentImporterPresented = true
+    }
+
+#if DEBUG
+    private func makeUITestMarkdownImportSourceURL() -> URL? {
+        guard let markdown = ProcessInfo.processInfo.environment["EDITOR_UI_TEST_MARKDOWN_IMPORT_TEXT"] else {
+            return nil
+        }
+
+        do {
+            let fixtureDirectory = try makeUITestFixtureDirectory()
+            let sourceURL = fixtureDirectory.appendingPathComponent("toolbar-import.md")
+            try markdown.write(to: sourceURL, atomically: true, encoding: .utf8)
+            return sourceURL
+        } catch {
+            EditorLog.markdown.error(
+                "markdown_ui_test_fixture_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    private func makeUITestAttachmentImportSourceURL() -> URL? {
+        guard let filename = ProcessInfo.processInfo.environment["EDITOR_UI_TEST_ATTACHMENT_IMPORT_FILENAME"],
+              !filename.isEmpty else {
+            return nil
+        }
+
+        do {
+            let fixtureDirectory = try makeUITestFixtureDirectory()
+            let safeFilename = URL(fileURLWithPath: filename).lastPathComponent
+            let sourceURL = fixtureDirectory.appendingPathComponent(safeFilename)
+            let contents = ProcessInfo.processInfo.environment["EDITOR_UI_TEST_ATTACHMENT_IMPORT_CONTENTS"]
+                ?? "Attachment fixture from macOS toolbar UI automation"
+            try contents.write(to: sourceURL, atomically: true, encoding: .utf8)
+            return sourceURL
+        } catch {
+            EditorLog.attachment.error(
+                "attachment_ui_test_fixture_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    private func makeUITestFixtureDirectory() throws -> URL {
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EditorUITestFixtures", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        return fixtureDirectory
+    }
+#endif
 
     private var inlineLinkPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1597,7 +1962,7 @@ private struct EditorCanvasView: View {
                 Button {
                     insertInlineLink()
                 } label: {
-                    Label("Insert Link", systemImage: "link")
+                    Label(isEditingInlineLink ? "Update Link" : "Insert Link", systemImage: "link")
                 }
                 .disabled(MarkdownInlineLinkComposer.markdown(label: inlineLinkLabel, url: inlineLinkURL) == nil)
                 .accessibilityIdentifier("editor.insert-markdown-link.confirm")
@@ -1635,6 +2000,7 @@ private struct EditorCanvasView: View {
 
         inlineLinkLabel = ""
         inlineLinkURL = ""
+        isEditingInlineLink = false
         isInlineLinkPopoverPresented = false
         activeInlineLinkTarget = nil
     }
@@ -1642,6 +2008,7 @@ private struct EditorCanvasView: View {
     private func cancelInlineLinkInsertion() {
         inlineLinkLabel = ""
         inlineLinkURL = ""
+        isEditingInlineLink = false
         isInlineLinkPopoverPresented = false
         activeInlineLinkTarget = nil
     }
@@ -1653,6 +2020,76 @@ private struct EditorCanvasView: View {
         }
 
         pendingFocusRequest = BlockFocusRequest(blockID: target.blockID, selection: nextSelection)
+    }
+
+    private func applyMarkdownInlineFormat(
+        _ format: MarkdownInlineFormat,
+        selection: EditorTextSelection
+    ) -> Bool {
+        guard let nextSelection = onApplyMarkdownInlineFormat(selection.blockID, format, selection) else {
+            return false
+        }
+
+        pendingFocusRequest = BlockFocusRequest(blockID: selection.blockID, selection: nextSelection)
+        EditorLog.focus.debug(
+            "editor_focus_request_scheduled block_id=\(selection.blockID, privacy: .public) source=keyboard_inline_format"
+        )
+        return true
+    }
+
+    private func presentInlineLinkInsertion(selection: EditorTextSelection) -> Bool {
+        guard let block = blocks.first(where: { $0.id == selection.blockID && $0.type.isTextEditable }),
+              isValid(selection: selection, for: block) else {
+            return false
+        }
+
+        activeInlineLinkTarget = preparedInlineLinkTarget(for: (selection.blockID, selection))
+        isInlineLinkPopoverPresented = true
+        EditorLog.focus.debug(
+            "editor_inline_link_panel_presented block_id=\(selection.blockID, privacy: .public) source=keyboard_link"
+        )
+        return true
+    }
+
+    private func presentInlineLinkInsertionFromCurrentTarget() -> Bool {
+        guard let target = inlineLinkTarget else {
+            return false
+        }
+
+        activeInlineLinkTarget = preparedInlineLinkTarget(for: target)
+        isInlineLinkPopoverPresented = true
+        return true
+    }
+
+#if os(macOS)
+    private func presentInlineLinkInsertionFromKeyboardShortcut() -> Bool {
+        guard let target = inlineLinkKeyboardTarget else {
+            return false
+        }
+
+        activeInlineLinkTarget = preparedInlineLinkTarget(for: target)
+        isInlineLinkPopoverPresented = true
+        return true
+    }
+#endif
+
+    private func preparedInlineLinkTarget(
+        for target: (blockID: String, selection: EditorTextSelection?)
+    ) -> (blockID: String, selection: EditorTextSelection?) {
+        inlineLinkLabel = ""
+        inlineLinkURL = ""
+        isEditingInlineLink = false
+
+        guard let selection = target.selection,
+              let block = blocks.first(where: { $0.id == selection.blockID && $0.type.isTextEditable }),
+              let editTarget = MarkdownInlineLinkEditTarget.target(in: block.textPlain, selection: selection) else {
+            return target
+        }
+
+        inlineLinkLabel = editTarget.label
+        inlineLinkURL = editTarget.url
+        isEditingInlineLink = true
+        return (blockID: target.blockID, selection: editTarget.replacementSelection)
     }
 
     private func isValid(selection: EditorTextSelection, for block: BlockSnapshot) -> Bool {
@@ -1692,6 +2129,28 @@ private struct EditorCanvasView: View {
         }
 
         pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+    }
+
+    private func focusAdjacentBlock(
+        from blockID: String,
+        direction: BlockKeyboardFocusDirection
+    ) -> Bool {
+        guard let target = BlockKeyboardFocusResolver.target(
+            currentBlockID: blockID,
+            direction: direction,
+            blocks: blocks
+        ) else {
+            return false
+        }
+
+        pendingFocusRequest = BlockFocusRequest(
+            blockID: target.blockID,
+            selection: target.selection
+        )
+        EditorLog.focus.debug(
+            "editor_focus_request_scheduled block_id=\(target.blockID, privacy: .public) source=keyboard_navigation direction=\(direction.debugName, privacy: .public)"
+        )
+        return true
     }
 
     private func moveDroppedBlocks(_ draggedBlockIDs: [String], destinationBlockID: String) -> Bool {
@@ -1747,8 +2206,8 @@ private struct EditorCanvasView: View {
         logScrollMetrics(reason: "reset")
     }
 
-    private func recordVisibleBlockAppeared(_ blockID: String) {
-        scrollMetricsTracker.blockAppeared(blockID)
+    private func recordVisibleBlockAppeared(_ blockID: String, index: Int) {
+        scrollMetricsTracker.blockAppeared(blockID, index: index)
         logScrollMetrics(reason: "appear")
     }
 
@@ -1760,9 +2219,24 @@ private struct EditorCanvasView: View {
     private func logScrollMetrics(reason: String) {
         let metrics = scrollMetricsTracker.metrics
         EditorLog.scroll.debug(
-            "editor_canvas_scroll_visible reason=\(reason, privacy: .public) page_id=\(metrics.pageID ?? "none", privacy: .public) block_count=\(metrics.blockCount, privacy: .public) visible_block_count=\(metrics.visibleBlockCount, privacy: .public) peak_visible_block_count=\(metrics.peakVisibleBlockCount, privacy: .public) large_page=\(metrics.isLargePage, privacy: .public)"
+            "editor_canvas_scroll_visible reason=\(reason, privacy: .public) \(metrics.runtimeSummary, privacy: .public)"
         )
     }
+
+#if DEBUG
+    private var scrollMetricsDebugProbe: some View {
+        let summary = scrollMetricsTracker.metrics.runtimeSummary
+        return Text(summary)
+            .font(.system(size: 1))
+            .opacity(0.01)
+            .frame(width: 1, height: 1)
+            .id(summary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("editor.scroll-metrics-test-output")
+            .accessibilityLabel(summary)
+            .accessibilityValue(summary)
+    }
+#endif
 
     private func nestingLevel(for block: BlockSnapshot) -> Int {
         var level = 0
@@ -1780,6 +2254,67 @@ private struct EditorCanvasView: View {
         return min(level, 6)
     }
 }
+
+#if os(macOS)
+private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
+    let onInsertLink: () -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.onInsertLink = onInsertLink
+        context.coordinator.install()
+        return NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onInsertLink = onInsertLink
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    final class Coordinator {
+        var onInsertLink: (() -> Bool)?
+        private var eventMonitor: Any?
+
+        func install() {
+            guard eventMonitor == nil else {
+                return
+            }
+
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else {
+                    return event
+                }
+
+                if MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(
+                    input: event.charactersIgnoringModifiers,
+                    modifiers: event.blockKeyboardShortcutModifiers
+                ), self.onInsertLink?() == true {
+                    return nil
+                }
+
+                return event
+            }
+        }
+
+        func uninstall() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+                self.eventMonitor = nil
+            }
+        }
+
+        deinit {
+            uninstall()
+        }
+    }
+}
+#endif
 
 private struct BacklinksPanel: View {
     let backlinks: [Backlink]
@@ -1901,10 +2436,14 @@ private struct OutlinePanel: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, 3)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Outline heading \(item.title)")
+                .accessibilityValue("Level \(item.level)")
                 .accessibilityIdentifier("editor.outline.\(item.blockID)")
             }
         }
         .padding(.top, 10)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("editor.outline")
     }
 }
@@ -1917,49 +2456,22 @@ private struct ConflictPanel: View {
     let onAcceptAllLocalConflicts: () -> Void
     let onResolveManually: (ConflictSnapshot, String) -> Void
     let onResolveAllManually: ([String: String]) -> Void
-    @State private var mergedTextsByConflictID: [String: String] = [:]
+    @State private var mergeDrafts = ConflictMergeDrafts()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("Sync Conflicts")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 8)
-
-                Button {
-                    onResolveAllManually(currentMergedTexts())
-                } label: {
-                    Label("Apply All Merged", systemImage: "checkmark.circle")
-                }
-                .buttonStyle(.borderless)
-                .disabled(conflicts.isEmpty)
-                .accessibilityIdentifier("editor.conflict.apply-all-merged")
-
-                Button {
-                    onAcceptAllLocalConflicts()
-                } label: {
-                    Label("Use All Local", systemImage: "arrow.up.doc")
-                }
-                .buttonStyle(.borderless)
-                .disabled(conflicts.isEmpty)
-                .accessibilityIdentifier("editor.conflict.accept-all-local")
-
-                Button {
-                    onAcceptAllConflicts()
-                } label: {
-                    Label("Use All Remote", systemImage: "arrow.down.doc")
-                }
-                .buttonStyle(.borderless)
-                .disabled(conflicts.isEmpty)
-                .accessibilityIdentifier("editor.conflict.accept-all-remote")
-            }
+            header
 
             ForEach(conflicts) { conflict in
                 ConflictResolutionRow(
                     conflict: conflict,
                     mergedText: binding(for: conflict),
+                    onUseLocalDraft: { conflict in
+                        mergeDrafts.useLocalText(for: conflict)
+                    },
+                    onUseRemoteDraft: { conflict in
+                        mergeDrafts.useRemoteText(for: conflict)
+                    },
                     onAcceptConflict: onAcceptConflict,
                     onAcceptLocalConflict: onAcceptLocalConflict,
                     onResolveManually: onResolveManually
@@ -1968,34 +2480,102 @@ private struct ConflictPanel: View {
         }
         .padding(.top, 10)
         .onChange(of: conflicts.map(\.id)) { _, conflictIDs in
-            let validIDs = Set(conflictIDs)
-            mergedTextsByConflictID = mergedTextsByConflictID.filter { validIDs.contains($0.key) }
+            mergeDrafts.prune(keeping: conflictIDs)
         }
+    }
+
+    private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                headerTitle
+                Spacer(minLength: 8)
+                headerButtons
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                headerTitle
+                HStack(spacing: 8) {
+                    headerButtons
+                }
+            }
+        }
+    }
+
+    private var headerTitle: some View {
+        Text("Sync Conflicts")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var headerButtons: some View {
+        Button {
+            mergeDrafts.useLocalText(for: conflicts)
+        } label: {
+            Label("Draft All Local", systemImage: "square.and.pencil")
+        }
+        .buttonStyle(.borderless)
+        .disabled(conflicts.isEmpty)
+        .accessibilityIdentifier("editor.conflict.draft-all-local")
+
+        Button {
+            mergeDrafts.useRemoteText(for: conflicts)
+        } label: {
+            Label("Draft All Remote", systemImage: "square.and.pencil")
+        }
+        .buttonStyle(.borderless)
+        .disabled(conflicts.isEmpty)
+        .accessibilityIdentifier("editor.conflict.draft-all-remote")
+
+        Button {
+            onResolveAllManually(currentMergedTexts())
+        } label: {
+            Label("Apply All Merged", systemImage: "checkmark.circle")
+        }
+        .buttonStyle(.borderless)
+        .disabled(conflicts.isEmpty)
+        .accessibilityIdentifier("editor.conflict.apply-all-merged")
+
+        Button {
+            onAcceptAllLocalConflicts()
+        } label: {
+            Label("Use All Local", systemImage: "arrow.up.doc")
+        }
+        .buttonStyle(.borderless)
+        .disabled(conflicts.isEmpty)
+        .accessibilityIdentifier("editor.conflict.accept-all-local")
+
+        Button {
+            onAcceptAllConflicts()
+        } label: {
+            Label("Use All Remote", systemImage: "arrow.down.doc")
+        }
+        .buttonStyle(.borderless)
+        .disabled(conflicts.isEmpty)
+        .accessibilityIdentifier("editor.conflict.accept-all-remote")
     }
 
     private func binding(for conflict: ConflictSnapshot) -> Binding<String> {
         Binding(
             get: {
-                mergedTextsByConflictID[conflict.id] ?? conflict.localTextPlain
+                mergeDrafts.text(for: conflict)
             },
             set: { newValue in
-                mergedTextsByConflictID[conflict.id] = newValue
+                mergeDrafts.setText(newValue, for: conflict)
             }
         )
     }
 
     private func currentMergedTexts() -> [String: String] {
-        Dictionary(
-            uniqueKeysWithValues: conflicts.map { conflict in
-                (conflict.id, mergedTextsByConflictID[conflict.id] ?? conflict.localTextPlain)
-            }
-        )
+        mergeDrafts.mergedTexts(for: conflicts)
     }
 }
 
 private struct ConflictResolutionRow: View {
     let conflict: ConflictSnapshot
     @Binding var mergedText: String
+    let onUseLocalDraft: (ConflictSnapshot) -> Void
+    let onUseRemoteDraft: (ConflictSnapshot) -> Void
     let onAcceptConflict: (ConflictSnapshot) -> Void
     let onAcceptLocalConflict: (ConflictSnapshot) -> Void
     let onResolveManually: (ConflictSnapshot, String) -> Void
@@ -2003,12 +2583,16 @@ private struct ConflictResolutionRow: View {
     init(
         conflict: ConflictSnapshot,
         mergedText: Binding<String>,
+        onUseLocalDraft: @escaping (ConflictSnapshot) -> Void,
+        onUseRemoteDraft: @escaping (ConflictSnapshot) -> Void,
         onAcceptConflict: @escaping (ConflictSnapshot) -> Void,
         onAcceptLocalConflict: @escaping (ConflictSnapshot) -> Void,
         onResolveManually: @escaping (ConflictSnapshot, String) -> Void
     ) {
         self.conflict = conflict
         _mergedText = mergedText
+        self.onUseLocalDraft = onUseLocalDraft
+        self.onUseRemoteDraft = onUseRemoteDraft
         self.onAcceptConflict = onAcceptConflict
         self.onAcceptLocalConflict = onAcceptLocalConflict
         self.onResolveManually = onResolveManually
@@ -2044,36 +2628,73 @@ private struct ConflictResolutionRow: View {
                         .frame(minHeight: 72)
                         .accessibilityIdentifier("editor.conflict.\(conflict.id).merge-text")
 
-                    HStack(spacing: 8) {
-                        Button {
-                            onResolveManually(conflict, mergedText)
-                        } label: {
-                            Label("Apply Merge", systemImage: "checkmark.circle")
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            draftButtons
+                            resolutionButtons
                         }
-                        .buttonStyle(.borderless)
-                        .accessibilityIdentifier("editor.conflict.\(conflict.id).apply-merge")
 
-                        Button {
-                            onAcceptLocalConflict(conflict)
-                        } label: {
-                            Label("Use Local", systemImage: "arrow.up.doc")
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                draftButtons
+                            }
+                            HStack(spacing: 8) {
+                                resolutionButtons
+                            }
                         }
-                        .buttonStyle(.borderless)
-                        .accessibilityIdentifier("editor.conflict.\(conflict.id).accept-local")
-
-                        Button {
-                            onAcceptConflict(conflict)
-                        } label: {
-                            Label("Use Remote", systemImage: "arrow.down.doc")
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityIdentifier("editor.conflict.\(conflict.id).accept-remote")
                     }
                 }
             }
         }
         .padding(.vertical, 6)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("editor.conflict.\(conflict.id)")
+    }
+
+    @ViewBuilder
+    private var draftButtons: some View {
+        Button {
+            onUseLocalDraft(conflict)
+        } label: {
+            Label("Edit Local", systemImage: "square.and.pencil")
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("editor.conflict.\(conflict.id).draft-local")
+
+        Button {
+            onUseRemoteDraft(conflict)
+        } label: {
+            Label("Edit Remote", systemImage: "square.and.pencil")
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("editor.conflict.\(conflict.id).draft-remote")
+    }
+
+    @ViewBuilder
+    private var resolutionButtons: some View {
+        Button {
+            onResolveManually(conflict, mergedText)
+        } label: {
+            Label("Apply Merge", systemImage: "checkmark.circle")
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("editor.conflict.\(conflict.id).apply-merge")
+
+        Button {
+            onAcceptLocalConflict(conflict)
+        } label: {
+            Label("Use Local", systemImage: "arrow.up.doc")
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("editor.conflict.\(conflict.id).accept-local")
+
+        Button {
+            onAcceptConflict(conflict)
+        } label: {
+            Label("Use Remote", systemImage: "arrow.down.doc")
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("editor.conflict.\(conflict.id).accept-remote")
     }
 
     private func conflictTextColumn(title: String, text: String) -> some View {
@@ -2196,6 +2817,9 @@ private struct BlockRowView: View {
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
+    let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
+    let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
+    let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: () -> Bool
     let onIndent: () -> Bool
     let onOutdent: () -> Bool
@@ -2223,6 +2847,9 @@ private struct BlockRowView: View {
         onMoveUp: @escaping () -> Void = {},
         onMoveDown: @escaping () -> Void = {},
         onMoveByKeyboard: @escaping (BlockKeyboardMoveDirection) -> Bool = { _ in false },
+        onMoveFocusByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
+        onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
+        onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onInsertBlockAfter: @escaping () -> Bool = { false },
         onIndent: @escaping () -> Bool = { false },
         onOutdent: @escaping () -> Bool = { false },
@@ -2248,6 +2875,9 @@ private struct BlockRowView: View {
         self.onMoveUp = onMoveUp
         self.onMoveDown = onMoveDown
         self.onMoveByKeyboard = onMoveByKeyboard
+        self.onMoveFocusByKeyboard = onMoveFocusByKeyboard
+        self.onApplyInlineFormatByKeyboard = onApplyInlineFormatByKeyboard
+        self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
         self.onIndent = onIndent
         self.onOutdent = onOutdent
@@ -2272,6 +2902,8 @@ private struct BlockRowView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .draggable(block.id)
+                    .accessibilityLabel("Block drag handle")
+                    .accessibilityValue(block.type.editorMenuTitle)
                     .accessibilityIdentifier("editor.block.\(block.id).drag-handle")
 
                 if block.type.isTextEditable {
@@ -2288,6 +2920,8 @@ private struct BlockRowView: View {
                     }
                     .menuStyle(.borderlessButton)
                     .help("Block type")
+                    .accessibilityLabel("Change block type")
+                    .accessibilityValue(block.type.editorMenuTitle)
                     .accessibilityIdentifier("editor.block.\(block.id).type-menu")
                 }
 
@@ -2299,6 +2933,8 @@ private struct BlockRowView: View {
                 .buttonStyle(.borderless)
                 .disabled(!canMoveUp)
                 .help("Move up")
+                .accessibilityLabel("Move block up")
+                .accessibilityValue(controlAvailabilityValue(canMoveUp))
                 .accessibilityIdentifier("editor.block.\(block.id).move-up")
 
                 Button {
@@ -2309,6 +2945,8 @@ private struct BlockRowView: View {
                 .buttonStyle(.borderless)
                 .disabled(!canMoveDown)
                 .help("Move down")
+                .accessibilityLabel("Move block down")
+                .accessibilityValue(controlAvailabilityValue(canMoveDown))
                 .accessibilityIdentifier("editor.block.\(block.id).move-down")
 
                 Button {
@@ -2319,6 +2957,8 @@ private struct BlockRowView: View {
                 .buttonStyle(.borderless)
                 .disabled(nestingLevel == 0)
                 .help("Outdent")
+                .accessibilityLabel("Outdent block")
+                .accessibilityValue(controlAvailabilityValue(nestingLevel > 0))
                 .accessibilityIdentifier("editor.block.\(block.id).outdent")
 
                 Button {
@@ -2329,6 +2969,8 @@ private struct BlockRowView: View {
                 .buttonStyle(.borderless)
                 .disabled(!canMoveUp)
                 .help("Indent")
+                .accessibilityLabel("Indent block")
+                .accessibilityValue(controlAvailabilityValue(canMoveUp))
                 .accessibilityIdentifier("editor.block.\(block.id).indent")
 
                 Button(role: .destructive) {
@@ -2338,6 +2980,8 @@ private struct BlockRowView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Delete")
+                .accessibilityLabel("Delete block")
+                .accessibilityValue(controlAvailabilityValue(true))
                 .accessibilityIdentifier("editor.block.\(block.id).delete")
             }
             .frame(width: 24)
@@ -2350,7 +2994,6 @@ private struct BlockRowView: View {
                     onTextChange: onTextChange
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("editor.block.\(block.id)")
             } else if block.type.isTextEditable {
                 HStack(alignment: .top, spacing: 8) {
                     if block.type == .taskItem {
@@ -2362,6 +3005,8 @@ private struct BlockRowView: View {
                         .buttonStyle(.borderless)
                         .foregroundStyle(block.taskItemIsCompleted ? .green : .secondary)
                         .help(block.taskItemIsCompleted ? "Mark incomplete" : "Mark complete")
+                        .accessibilityLabel(block.taskItemIsCompleted ? "Mark task incomplete" : "Mark task complete")
+                        .accessibilityValue(block.taskItemIsCompleted ? "Completed" : "Incomplete")
                         .accessibilityIdentifier("editor.block.\(block.id).task-toggle")
                     }
 
@@ -2374,6 +3019,8 @@ private struct BlockRowView: View {
                         .buttonStyle(.borderless)
                         .foregroundStyle(.secondary)
                         .help(isToggleBlockExpanded ? "Collapse" : "Expand")
+                        .accessibilityLabel(isToggleBlockExpanded ? "Collapse toggle block" : "Expand toggle block")
+                        .accessibilityValue(isToggleBlockExpanded ? "Expanded" : "Collapsed")
                         .accessibilityIdentifier("editor.block.\(block.id).toggle-expansion")
                     }
 
@@ -2386,6 +3033,8 @@ private struct BlockRowView: View {
                         .buttonStyle(.borderless)
                         .foregroundStyle(block.codeBlockLineWrapping ? .primary : .secondary)
                         .help(block.codeBlockLineWrapping ? "Disable line wrap" : "Enable line wrap")
+                        .accessibilityLabel(block.codeBlockLineWrapping ? "Disable code line wrap" : "Enable code line wrap")
+                        .accessibilityValue(block.codeBlockLineWrapping ? "Line wrap enabled" : "Line wrap disabled")
                         .accessibilityIdentifier("editor.block.\(block.id).code-wrap")
                     }
 
@@ -2400,6 +3049,9 @@ private struct BlockRowView: View {
                         onFocusRequestHandled: handleFocusRequestHandled,
                         onMoveByKeyboard: onMoveByKeyboard,
                         onIndentationByKeyboard: handleKeyboardIndentation,
+                        onMoveFocusByKeyboard: onMoveFocusByKeyboard,
+                        onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
+                        onInsertLinkByKeyboard: onInsertLinkByKeyboard,
                         onInsertBlockAfter: onInsertBlockAfter,
                         onTextChange: onTextChange
                     )
@@ -2451,6 +3103,10 @@ private struct BlockRowView: View {
         }
     }
 
+    private func controlAvailabilityValue(_ isAvailable: Bool) -> String {
+        isAvailable ? "Available" : "Unavailable"
+    }
+
     private func handleKeyboardIndentation(_ direction: BlockKeyboardIndentationDirection) -> Bool {
         switch direction {
         case .indent:
@@ -2463,6 +3119,8 @@ private struct BlockRowView: View {
     private static let textBlockMenuTypes: [BlockType] = [
         .paragraph,
         .heading1,
+        .heading2,
+        .heading3,
         .unorderedListItem,
         .orderedListItem,
         .taskItem,
@@ -2503,6 +3161,7 @@ private struct StructuredTableBlockEditor: View {
 
     var body: some View {
         let rows = editableRows
+        let tableDimensions = tableDimensionAccessibilityValue(rows: rows)
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Button {
@@ -2512,6 +3171,8 @@ private struct StructuredTableBlockEditor: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Add row")
+                .accessibilityLabel("Add table row")
+                .accessibilityValue(tableDimensions)
                 .accessibilityIdentifier("editor.table.\(blockID).add-row")
 
                 Button {
@@ -2521,6 +3182,8 @@ private struct StructuredTableBlockEditor: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Add column")
+                .accessibilityLabel("Add table column")
+                .accessibilityValue(tableDimensions)
                 .accessibilityIdentifier("editor.table.\(blockID).add-column")
 
                 Button {
@@ -2530,6 +3193,8 @@ private struct StructuredTableBlockEditor: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Remove last row")
+                .accessibilityLabel("Remove last table row")
+                .accessibilityValue(tableDimensions)
                 .accessibilityIdentifier("editor.table.\(blockID).remove-row")
 
                 Button {
@@ -2539,6 +3204,8 @@ private struct StructuredTableBlockEditor: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Remove last column")
+                .accessibilityLabel("Remove last table column")
+                .accessibilityValue(tableDimensions)
                 .accessibilityIdentifier("editor.table.\(blockID).remove-column")
             }
 
@@ -2576,6 +3243,14 @@ private struct StructuredTableBlockEditor: View {
         }
 
         return [[text]]
+    }
+
+    private func tableDimensionAccessibilityValue(rows: [[String]]) -> String {
+        let rowCount = rows.count
+        let columnCount = rows.map(\.count).max() ?? 0
+        let rowLabel = rowCount == 1 ? "row" : "rows"
+        let columnLabel = columnCount == 1 ? "column" : "columns"
+        return "\(rowCount) \(rowLabel), \(columnCount) \(columnLabel)"
     }
 
     private func cellBinding(row rowIndex: Int, column columnIndex: Int) -> Binding<String> {
@@ -2705,7 +3380,11 @@ private extension BlockType {
         case .paragraph:
             return "Paragraph"
         case .heading1:
-            return "Heading"
+            return "Heading 1"
+        case .heading2:
+            return "Heading 2"
+        case .heading3:
+            return "Heading 3"
         case .unorderedListItem:
             return "Bulleted List"
         case .orderedListItem:
@@ -2742,6 +3421,10 @@ private extension BlockType {
         case .paragraph:
             return "text.alignleft"
         case .heading1:
+            return "textformat.size"
+        case .heading2:
+            return "textformat.size"
+        case .heading3:
             return "textformat.size"
         case .unorderedListItem:
             return "list.bullet"

@@ -219,6 +219,174 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testBlockKeyboardFocusResolverMovesOnlyAtTextBoundaries() {
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
+                modifiers: [],
+                selectedRange: NSRange(location: 0, length: 0),
+                text: "First line"
+            ),
+            .previous
+        )
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [],
+                selectedRange: NSRange(location: ("Last line" as NSString).length, length: 0),
+                text: "Last line"
+            ),
+            .next
+        )
+        XCTAssertNil(
+            BlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
+                modifiers: [],
+                selectedRange: NSRange(location: 2, length: 0),
+                text: "Middle"
+            )
+        )
+        XCTAssertNil(
+            BlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [.shift],
+                selectedRange: NSRange(location: 6, length: 0),
+                text: "Middle"
+            )
+        )
+        XCTAssertNil(
+            BlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [],
+                selectedRange: NSRange(location: 0, length: 2),
+                text: "Selected"
+            )
+        )
+    }
+
+    func testBlockKeyboardFocusResolverTargetsAdjacentEditableBlocks() {
+        let blocks = [
+            BlockSnapshot(
+                id: "heading",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "a",
+                type: .heading1,
+                textPlain: "Heading"
+            ),
+            BlockSnapshot(
+                id: "divider",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "b",
+                type: .divider,
+                textPlain: ""
+            ),
+            BlockSnapshot(
+                id: "paragraph",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "c",
+                type: .paragraph,
+                textPlain: "Paragraph"
+            )
+        ]
+
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.target(
+                currentBlockID: "paragraph",
+                direction: .previous,
+                blocks: blocks
+            ),
+            BlockKeyboardFocusTarget(
+                blockID: "heading",
+                selection: EditorTextSelection(
+                    blockID: "heading",
+                    location: ("Heading" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.target(
+                currentBlockID: "heading",
+                direction: .next,
+                blocks: blocks
+            ),
+            BlockKeyboardFocusTarget(
+                blockID: "paragraph",
+                selection: EditorTextSelection(
+                    blockID: "paragraph",
+                    location: 0,
+                    length: 0
+                )
+            )
+        )
+        XCTAssertNil(
+            BlockKeyboardFocusResolver.target(
+                currentBlockID: "heading",
+                direction: .previous,
+                blocks: blocks
+            )
+        )
+        XCTAssertNil(
+            BlockKeyboardFocusResolver.target(
+                currentBlockID: "paragraph",
+                direction: .next,
+                blocks: blocks
+            )
+        )
+    }
+
+    func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicAndStrikethroughShortcutsOnly() {
+        XCTAssertEqual(
+            MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command]),
+            .bold
+        )
+        XCTAssertEqual(
+            MarkdownInlineFormatKeyboardResolver.format(input: "B", modifiers: [.command]),
+            .bold
+        )
+        XCTAssertEqual(
+            MarkdownInlineFormatKeyboardResolver.format(input: "i", modifiers: [.command]),
+            .italic
+        )
+        XCTAssertEqual(
+            MarkdownInlineFormatKeyboardResolver.format(input: "x", modifiers: [.command, .shift]),
+            .strikethrough
+        )
+        XCTAssertNil(
+            MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command, .option])
+        )
+        XCTAssertNil(
+            MarkdownInlineFormatKeyboardResolver.format(input: "x", modifiers: [.command])
+        )
+        XCTAssertNil(
+            MarkdownInlineFormatKeyboardResolver.format(input: "c", modifiers: [.command])
+        )
+        XCTAssertNil(
+            MarkdownInlineFormatKeyboardResolver.format(input: nil, modifiers: [.command])
+        )
+    }
+
+    func testMarkdownInlineLinkKeyboardResolverHandlesCommandKOnly() {
+        XCTAssertTrue(
+            MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(input: "k", modifiers: [.command])
+        )
+        XCTAssertTrue(
+            MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(input: "K", modifiers: [.command])
+        )
+        XCTAssertFalse(
+            MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(input: "k", modifiers: [.command, .option])
+        )
+        XCTAssertFalse(
+            MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(input: "b", modifiers: [.command])
+        )
+        XCTAssertFalse(
+            MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(input: nil, modifiers: [.command])
+        )
+    }
+
     func testBlockDragReorderResolverMovesBeforeDestinationBlock() {
         let visibleBlockIDs = ["a", "b", "c"]
 
@@ -327,12 +495,16 @@ final class NativeTextBlockEditorTests: XCTestCase {
     }
 
     func testEditorCanvasScrollMetricsTrackVisibleBlocksAndLargePageState() {
-        var tracker = EditorCanvasScrollMetricsTracker(pageID: "page-1", blockCount: 1_000)
+        var tracker = EditorCanvasScrollMetricsTracker(
+            pageID: "page-1",
+            blockCount: 1_000,
+            nowNanoseconds: 10_000_000
+        )
 
-        tracker.blockAppeared("a")
-        tracker.blockAppeared("b")
-        tracker.blockAppeared("b")
-        tracker.blockDisappeared("a")
+        tracker.blockAppeared("a", index: 0, nowNanoseconds: 20_000_000)
+        tracker.blockAppeared("b", index: 4, nowNanoseconds: 40_000_000)
+        tracker.blockAppeared("b", index: 4, nowNanoseconds: 60_000_000)
+        tracker.blockDisappeared("a", nowNanoseconds: 80_000_000)
 
         XCTAssertEqual(
             tracker.metrics,
@@ -340,9 +512,57 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 pageID: "page-1",
                 blockCount: 1_000,
                 visibleBlockCount: 1,
-                peakVisibleBlockCount: 2
+                peakVisibleBlockCount: 2,
+                firstVisibleBlockIndex: 4,
+                lastVisibleBlockIndex: 4,
+                peakVisibleBlockIndexSpan: 5,
+                scrollLifetimeMilliseconds: 70,
+                blockAppearanceCount: 3,
+                blockDisappearanceCount: 1
             )
         )
         XCTAssertTrue(tracker.metrics.isLargePage)
+    }
+
+    func testEditorCanvasScrollMetricsCaptureVisibleIndexWindow() {
+        var tracker = EditorCanvasScrollMetricsTracker(pageID: "page-1", blockCount: 1_000)
+
+        tracker.blockAppeared("a", index: 12)
+        tracker.blockAppeared("b", index: 13)
+        tracker.blockAppeared("c", index: 20)
+
+        XCTAssertEqual(tracker.metrics.firstVisibleBlockIndex, 12)
+        XCTAssertEqual(tracker.metrics.lastVisibleBlockIndex, 20)
+        XCTAssertEqual(tracker.metrics.visibleBlockIndexSpan, 9)
+        XCTAssertEqual(tracker.metrics.peakVisibleBlockIndexSpan, 9)
+
+        tracker.blockDisappeared("c")
+
+        XCTAssertEqual(tracker.metrics.firstVisibleBlockIndex, 12)
+        XCTAssertEqual(tracker.metrics.lastVisibleBlockIndex, 13)
+        XCTAssertEqual(tracker.metrics.visibleBlockIndexSpan, 2)
+        XCTAssertEqual(tracker.metrics.peakVisibleBlockIndexSpan, 9)
+    }
+
+    func testEditorCanvasScrollMetricsCaptureLifecycleChurnSummary() {
+        var tracker = EditorCanvasScrollMetricsTracker(
+            pageID: "page-1",
+            blockCount: 760,
+            nowNanoseconds: 1_000_000_000
+        )
+
+        tracker.blockAppeared("a", index: 0, nowNanoseconds: 1_010_000_000)
+        tracker.blockAppeared("b", index: 79, nowNanoseconds: 1_050_000_000)
+        tracker.blockDisappeared("a", nowNanoseconds: 1_100_000_000)
+
+        let metrics = tracker.metrics
+        XCTAssertEqual(metrics.scrollLifetimeMilliseconds, 100)
+        XCTAssertEqual(metrics.blockAppearanceCount, 2)
+        XCTAssertEqual(metrics.blockDisappearanceCount, 1)
+        XCTAssertEqual(metrics.visibleBlockChurnCount, 3)
+        XCTAssertTrue(metrics.runtimeSummary.contains("scroll_lifetime_ms=100.000"))
+        XCTAssertTrue(metrics.runtimeSummary.contains("block_appearance_count=2"))
+        XCTAssertTrue(metrics.runtimeSummary.contains("block_disappearance_count=1"))
+        XCTAssertTrue(metrics.runtimeSummary.contains("visible_block_churn_count=3"))
     }
 }
