@@ -3302,6 +3302,18 @@ private struct BlockFocusRequest: Equatable {
     }
 }
 
+struct QuoteBlockChromeDescriptor: Equatable, Sendable {
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let accessibilityIdentifier: String
+
+    init(block: BlockSnapshot) {
+        accessibilityLabel = "Quote block"
+        accessibilityValue = block.textPlain.isEmpty ? "Empty" : block.textPlain
+        accessibilityIdentifier = "editor.quote.\(block.id)"
+    }
+}
+
 private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
@@ -3645,6 +3657,31 @@ private struct BlockRowView: View {
             .accessibilityLabel("Callout block")
             .accessibilityValue(block.textPlain.isEmpty ? "Empty" : block.textPlain)
             .accessibilityIdentifier("editor.callout.\(block.id)")
+        } else if block.type == .quote {
+            let descriptor = QuoteBlockChromeDescriptor(block: block)
+            HStack(alignment: .top, spacing: 8) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.secondary.opacity(0.38))
+                    .frame(width: 3)
+                    .padding(.vertical, 3)
+                    .accessibilityHidden(true)
+
+                Image(systemName: "quote.opening")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+                    .accessibilityHidden(true)
+
+                nativeTextBlockEditor
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(Color.secondary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(descriptor.accessibilityLabel)
+            .accessibilityValue(descriptor.accessibilityValue)
+            .accessibilityIdentifier(descriptor.accessibilityIdentifier)
         } else {
             HStack(alignment: .top, spacing: 8) {
                 textBlockLeadingControls

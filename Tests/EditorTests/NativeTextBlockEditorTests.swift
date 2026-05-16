@@ -338,6 +338,23 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testQuoteBlockChromeDescriptorExposesSemanticContainer() {
+        let block = BlockSnapshot(
+            id: "quote-1",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .quote,
+            textPlain: "Quoted text"
+        )
+
+        let descriptor = QuoteBlockChromeDescriptor(block: block)
+
+        XCTAssertEqual(descriptor.accessibilityLabel, "Quote block")
+        XCTAssertEqual(descriptor.accessibilityValue, "Quoted text")
+        XCTAssertEqual(descriptor.accessibilityIdentifier, "editor.quote.quote-1")
+    }
+
     func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicStrikethroughAndCodeShortcutsOnly() {
         XCTAssertEqual(
             MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command]),
