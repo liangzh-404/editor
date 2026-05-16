@@ -741,6 +741,7 @@ private struct PageListView: View {
                     ForEach(pages(in: notebook)) { page in
                         PageRow(
                             page: page,
+                            isSelected: viewModel.selectedPageID == page.id,
                             onFavoriteToggle: {
                                 viewModel.updatePageFavoriteForUI(
                                     id: page.id,
@@ -890,7 +891,7 @@ private struct CompactPageListView: View {
                 Section {
                     ForEach(pages(in: notebook)) { page in
                         NavigationLink(value: CompactRoute.page(page.id)) {
-                            PageRow(page: page)
+                            PageRow(page: page, isSelected: viewModel.selectedPageID == page.id)
                         }
                         .accessibilityIdentifier("editor.page.\(page.id)")
                         .contextMenu {
@@ -1293,18 +1294,19 @@ private struct SearchResultRow: View {
 
 private struct PageRow: View {
     let page: PageSummary
+    var isSelected = false
     var onFavoriteToggle: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "doc.text")
-                .foregroundStyle(.secondary)
+            Image(systemName: isSelected ? "doc.text.fill" : "doc.text")
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                 .accessibilityHidden(true)
             Text(page.title)
-                .font(.body)
+                .font(isSelected ? .body.weight(.semibold) : .body)
                 .lineLimit(1)
                 .accessibilityLabel(page.title)
-                .accessibilityValue(page.isFavorite ? "Favorite" : "Not favorite")
+                .accessibilityValue(pageRowAccessibilityValue)
                 .accessibilityIdentifier("editor.page-row.\(page.id)")
             Spacer(minLength: 8)
 
@@ -1327,6 +1329,12 @@ private struct PageRow: View {
             }
         }
         .padding(.vertical, 5)
+    }
+
+    private var pageRowAccessibilityValue: String {
+        let selection = isSelected ? "Selected" : "Not selected"
+        let favorite = page.isFavorite ? "Favorite" : "Not favorite"
+        return "\(selection), \(favorite)"
     }
 }
 

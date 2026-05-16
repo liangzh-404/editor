@@ -1287,6 +1287,84 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testPageReferenceRowClickNavigatesToTargetPageAndMarksSelection() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launchEnvironment["EDITOR_UI_TEST_REFERENCE_TARGETS"] = "1"
+        app.launch()
+
+        app.element(identifier: "editor.insert-page-reference").click()
+        let targetPageItem = app.menuItems["Reference Target"]
+        XCTAssertTrue(targetPageItem.waitForExistence(timeout: 5), "Page reference menu should include the seeded target page")
+        targetPageItem.click()
+
+        let insertedPageReference = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.page-reference."))
+            .firstMatch
+        XCTAssertTrue(insertedPageReference.waitForExistence(timeout: 5), "Inserted page reference should expose a clickable row")
+        insertedPageReference.click()
+
+        let pageTitle = app.textFields["editor.page-title"]
+        XCTAssertTrue(
+            pageTitle.waitForValue(equalTo: "Reference Target", timeout: 5),
+            "Clicking a page reference should navigate the editor to the target page"
+        )
+
+        let targetPageRow = app.staticTexts
+            .matching(NSPredicate(format: "label == %@", "Reference Target"))
+            .firstMatch
+        XCTAssertTrue(
+            targetPageRow.waitForLabelOrValue(containing: "Selected", timeout: 5),
+            "Navigating through a page reference should expose the selected page row state"
+        )
+
+        let targetBlockText = app.textViews
+            .matching(NSPredicate(format: "value CONTAINS %@", "Reference target block"))
+            .firstMatch
+        XCTAssertTrue(
+            targetBlockText.waitForExistence(timeout: 5),
+            "The target page should show its seeded reference target block"
+        )
+    }
+
+    @MainActor
+    func testBlockReferenceRowClickNavigatesAndFocusesTargetBlock() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launchEnvironment["EDITOR_UI_TEST_REFERENCE_TARGETS"] = "1"
+        app.launch()
+
+        app.element(identifier: "editor.insert-block-reference").click()
+        let targetBlockItem = app.menuItems["Reference Target: Reference target block"]
+        XCTAssertTrue(targetBlockItem.waitForExistence(timeout: 5), "Block reference menu should include the seeded target block")
+        targetBlockItem.click()
+
+        let insertedBlockReference = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.block-reference."))
+            .firstMatch
+        XCTAssertTrue(insertedBlockReference.waitForExistence(timeout: 5), "Inserted block reference should expose a clickable row")
+        insertedBlockReference.click()
+
+        let pageTitle = app.textFields["editor.page-title"]
+        XCTAssertTrue(
+            pageTitle.waitForValue(equalTo: "Reference Target", timeout: 5),
+            "Clicking a block reference should navigate the editor to the target page"
+        )
+
+        let targetBlockText = app.textViews
+            .matching(NSPredicate(format: "value CONTAINS %@", "Reference target block"))
+            .firstMatch
+        XCTAssertTrue(
+            targetBlockText.waitForExistence(timeout: 5),
+            "The target page should show the referenced block"
+        )
+        XCTAssertTrue(
+            targetBlockText.waitForKeyboardFocus(timeout: 5),
+            "Clicking a block reference should focus the referenced block"
+        )
+    }
+
+    @MainActor
     func testMarkdownImportToolbarImportsFixtureFile() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
