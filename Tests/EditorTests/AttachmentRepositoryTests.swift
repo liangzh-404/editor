@@ -207,6 +207,55 @@ final class AttachmentRepositoryTests: XCTestCase {
         XCTAssertFalse(attachment.matches(block: fileBlock))
     }
 
+    func testAttachmentSnapshotDoesNotMatchDifferentPayloadAttachmentID() {
+        let attachment = AttachmentSnapshot(
+            id: "attachment-photo",
+            workspaceID: "workspace-local",
+            originalFilename: "photo.png",
+            utiType: "public.png",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/photo.png",
+            thumbnailPath: "/tmp/thumbnail.jpg",
+            kind: .image
+        )
+        let otherAttachmentBlock = BlockSnapshot(
+            id: "block-photo",
+            pageID: "page-local",
+            parentBlockID: nil,
+            orderKey: "000002",
+            type: .attachmentImage,
+            textPlain: "photo.png",
+            attachmentID: "attachment-other"
+        )
+
+        XCTAssertFalse(attachment.matches(block: otherAttachmentBlock))
+    }
+
+    func testImportedAttachmentBlockCarriesPayloadAttachmentID() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let repository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+
+        let result = try repository.importAttachment(
+            sourceURL: makeSourceFile(name: "photo.png", contents: "image bytes"),
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+
+        let reloadedBlock = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().blocks.first { $0.id == result.block.id }
+        )
+        XCTAssertEqual(reloadedBlock.attachmentID, result.attachment.id)
+    }
+
     func testAttachmentPreviewPathSupportsImageAndVideoBlocksOnly() {
         let imageAttachment = AttachmentSnapshot(
             id: "attachment-photo",

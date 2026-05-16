@@ -77,7 +77,8 @@ final class AttachmentRepository: @unchecked Sendable {
             parentBlockID: nil,
             orderKey: try nextOrderKey(pageID: pageID),
             type: kind.blockType,
-            textPlain: originalFilename
+            textPlain: originalFilename,
+            attachmentID: attachmentID
         )
 
         do {

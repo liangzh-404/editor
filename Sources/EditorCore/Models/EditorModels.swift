@@ -177,6 +177,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
     let pageReferenceTargetPageID: String?
     let blockReferenceTargetBlockID: String?
     let tableRows: [[String]]
+    let attachmentID: String?
 
     init(
         id: String,
@@ -190,7 +191,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
         codeBlockLineWrapping: Bool = true,
         pageReferenceTargetPageID: String? = nil,
         blockReferenceTargetBlockID: String? = nil,
-        tableRows: [[String]] = []
+        tableRows: [[String]] = [],
+        attachmentID: String? = nil
     ) {
         self.id = id
         self.pageID = pageID
@@ -204,6 +206,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
         self.pageReferenceTargetPageID = pageReferenceTargetPageID
         self.blockReferenceTargetBlockID = blockReferenceTargetBlockID
         self.tableRows = Self.normalizedTableRows(type: type, text: textPlain, rows: tableRows)
+        self.attachmentID = type.isAttachment ? attachmentID : nil
     }
 
     func replacingText(_ text: String) -> BlockSnapshot {
@@ -223,7 +226,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: type == .codeBlock && self.type == .codeBlock ? codeBlockLineWrapping : true,
             pageReferenceTargetPageID: type == .pageReference || type == .blockReference ? pageReferenceTargetPageID : nil,
             blockReferenceTargetBlockID: type == .blockReference ? blockReferenceTargetBlockID : nil,
-            tableRows: type == .table && self.type == .table ? tableRows : []
+            tableRows: type == .table && self.type == .table ? tableRows : [],
+            attachmentID: type.isAttachment && type == self.type ? attachmentID : nil
         )
     }
 
@@ -240,7 +244,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
-            tableRows: tableRows
+            tableRows: tableRows,
+            attachmentID: attachmentID
         )
     }
 
@@ -257,7 +262,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
-            tableRows: tableRows
+            tableRows: tableRows,
+            attachmentID: attachmentID
         )
     }
 
@@ -274,7 +280,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: type == .codeBlock ? isWrapped : true,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
-            tableRows: tableRows
+            tableRows: tableRows,
+            attachmentID: attachmentID
         )
     }
 
@@ -291,7 +298,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
-            tableRows: type == .table ? rows : []
+            tableRows: type == .table ? rows : [],
+            attachmentID: attachmentID
         )
     }
 
@@ -313,6 +321,17 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
     }
 }
 
+private extension BlockType {
+    var isAttachment: Bool {
+        switch self {
+        case .attachmentImage, .attachmentVideo, .attachmentFile:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 enum AttachmentPreviewState: Equatable, Sendable {
     case thumbnail(String)
     case pending
@@ -331,7 +350,11 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
     let kind: AttachmentKind
 
     func matches(block: BlockSnapshot) -> Bool {
-        block.type == kind.blockType && block.textPlain == originalFilename
+        if let attachmentID = block.attachmentID {
+            return id == attachmentID && block.type == kind.blockType
+        }
+
+        return block.type == kind.blockType && block.textPlain == originalFilename
     }
 
     func previewPath(for block: BlockSnapshot) -> String? {

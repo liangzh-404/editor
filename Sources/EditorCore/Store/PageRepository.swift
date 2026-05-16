@@ -1562,6 +1562,10 @@ final class PageRepository {
                     type: type,
                     payloadJSON: row["payload_json"] ?? "",
                     text: row["text_plain"] ?? ""
+                ),
+                attachmentID: Self.attachmentID(
+                    type: type,
+                    payloadJSON: row["payload_json"] ?? ""
                 )
             )
         }
@@ -1862,6 +1866,16 @@ final class PageRepository {
         }
 
         return normalizedTableRows(text: text, explicitRows: nil)
+    }
+
+    private static func attachmentID(type: BlockType, payloadJSON: String) -> String? {
+        guard type == .attachmentImage || type == .attachmentVideo || type == .attachmentFile,
+              let data = payloadJSON.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        return payload["attachment_id"] as? String
     }
 
     private func currentTaskItemCompletion(blockID: String) throws -> Bool? {
