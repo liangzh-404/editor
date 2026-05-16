@@ -19,6 +19,12 @@ enum WorkspaceCollection: Equatable, Sendable {
     case archive
 }
 
+enum AttachmentPreviewGenerationStatus: Equatable, Sendable {
+    case idle
+    case generating
+    case failed(String)
+}
+
 @MainActor
 final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var snapshot: WorkspaceSnapshot
@@ -38,6 +44,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var pendingCompactPageNavigationID: String?
     @Published private(set) var canUndoTextEdit = false
     @Published private(set) var canUndoPageArchive = false
+    @Published private(set) var attachmentPreviewGenerationStatuses: [String: AttachmentPreviewGenerationStatus] = [:]
 
     private let repository: PageRepository?
     private let diaryRepository: DiaryRepository?
@@ -164,6 +171,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
         canUndoPageArchive = false
+        attachmentPreviewGenerationStatuses = [:]
     }
 
     init(snapshot: WorkspaceSnapshot) {
@@ -187,6 +195,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
         canUndoPageArchive = false
+        attachmentPreviewGenerationStatuses = [:]
     }
 
     func load() throws {
@@ -1881,8 +1890,17 @@ final class WorkspaceViewModel: ObservableObject {
         let thumbnailPath = try attachmentRepository.generateMissingThumbnail(
             attachmentID: attachmentID
         )
+        attachmentPreviewGenerationStatuses[attachmentID] = nil
         try load()
         return thumbnailPath
+    }
+
+    func attachmentPreviewGenerationStatus(attachmentID: String) -> AttachmentPreviewGenerationStatus {
+        attachmentPreviewGenerationStatuses[attachmentID] ?? .idle
+    }
+
+    func retryAttachmentPreviewGeneration(attachmentID: String) {
+        scheduleMissingAttachmentThumbnail(attachmentID: attachmentID)
     }
 
     @discardableResult
@@ -1926,6 +1944,7 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        attachmentPreviewGenerationStatuses[attachmentID] = .generating
         attachmentThumbnailScheduler.scheduleThumbnailGeneration(
             attachmentID: attachmentID,
             generate: {
@@ -1938,12 +1957,14 @@ final class WorkspaceViewModel: ObservableObject {
 
                 switch result {
                 case .success(let thumbnailPath):
+                    self.attachmentPreviewGenerationStatuses[attachmentID] = nil
                     if thumbnailPath != nil {
                         EditorLog.attachment.debug(
                             "attachment_thumbnail_visible id=\(attachmentID, privacy: .public)"
                         )
                     }
                 case .failure(let error):
+                    self.attachmentPreviewGenerationStatuses[attachmentID] = .failed(String(describing: error))
                     EditorLog.attachment.error(
                         "attachment_thumbnail_failed id=\(attachmentID, privacy: .public) error=\(String(describing: error), privacy: .public)"
                     )

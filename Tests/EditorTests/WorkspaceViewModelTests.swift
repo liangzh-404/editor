@@ -333,6 +333,65 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAttachmentPreviewFailureCanBeRetried() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let thumbnailScheduler = CapturingAttachmentThumbnailScheduler()
+        let sourceURL = try makeSourceFile(name: "screen.png", data: Self.onePixelPNGData)
+
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: thumbnailScheduler
+        )
+        try viewModel.load()
+
+        viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+        let importedAttachmentID = try XCTUnwrap(viewModel.snapshot.attachments.first?.id)
+
+        XCTAssertEqual(
+            viewModel.attachmentPreviewGenerationStatus(attachmentID: importedAttachmentID),
+            .generating
+        )
+
+        thumbnailScheduler.completeScheduledThumbnailGeneration(
+            at: 0,
+            with: .failure(WorkspaceViewModelTestError.thumbnailGenerationFailed)
+        )
+
+        XCTAssertEqual(
+            viewModel.attachmentPreviewGenerationStatus(attachmentID: importedAttachmentID),
+            .failed("thumbnailGenerationFailed")
+        )
+
+        viewModel.retryAttachmentPreviewGeneration(attachmentID: importedAttachmentID)
+
+        XCTAssertEqual(thumbnailScheduler.scheduledAttachmentIDs, [
+            importedAttachmentID,
+            importedAttachmentID
+        ])
+        XCTAssertEqual(
+            viewModel.attachmentPreviewGenerationStatus(attachmentID: importedAttachmentID),
+            .generating
+        )
+
+        try thumbnailScheduler.runScheduledThumbnailGeneration(at: 1)
+
+        XCTAssertEqual(
+            viewModel.attachmentPreviewGenerationStatus(attachmentID: importedAttachmentID),
+            .idle
+        )
+        XCTAssertNotNil(viewModel.snapshot.attachments.first?.thumbnailPath)
+    }
+
+    @MainActor
     func testPurgeUnreferencedAttachmentsRefreshesSnapshot() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -2300,5 +2359,24 @@ private final class CapturingAttachmentThumbnailScheduler: AttachmentThumbnailSc
                 try scheduledThumbnailGeneration.generate()
             }
         )
+    }
+
+    @MainActor
+    func completeScheduledThumbnailGeneration(
+        at index: Int,
+        with result: Result<String?, Error>
+    ) {
+        scheduledThumbnailGenerations[index].completion(result)
+    }
+}
+
+private enum WorkspaceViewModelTestError: Error, CustomStringConvertible {
+    case thumbnailGenerationFailed
+
+    var description: String {
+        switch self {
+        case .thumbnailGenerationFailed:
+            return "thumbnailGenerationFailed"
+        }
     }
 }

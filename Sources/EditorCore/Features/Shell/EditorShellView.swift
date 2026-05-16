@@ -117,6 +117,7 @@ private struct ThreeColumnEditorShell: View {
                     blocks: viewModel.editorVisibleBlocks,
                     allBlocks: viewModel.snapshot.blocks,
                     attachments: viewModel.snapshot.attachments,
+                    attachmentPreviewGenerationStatuses: viewModel.attachmentPreviewGenerationStatuses,
                     backlinks: viewModel.selectedPageBacklinks,
                     externalLinks: viewModel.selectedPageExternalLinks,
                     conflicts: viewModel.selectedPageConflicts,
@@ -247,6 +248,9 @@ private struct ThreeColumnEditorShell: View {
                     },
                     onImportAttachment: { sourceURL in
                         viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+                    },
+                    onRetryAttachmentPreview: { attachmentID in
+                        viewModel.retryAttachmentPreviewGeneration(attachmentID: attachmentID)
                     },
                     onPendingBlockFocusHandled: {
                         _ = viewModel.consumePendingFocusBlockID()
@@ -511,6 +515,7 @@ private struct CompactPageDestination: View {
                 blocks: viewModel.editorVisibleBlocks(for: page.id),
                 allBlocks: viewModel.snapshot.blocks,
                 attachments: viewModel.snapshot.attachments,
+                attachmentPreviewGenerationStatuses: viewModel.attachmentPreviewGenerationStatuses,
                 backlinks: viewModel.selectedPageBacklinks,
                 externalLinks: viewModel.selectedPageExternalLinks,
                 conflicts: viewModel.selectedPageConflicts,
@@ -641,6 +646,9 @@ private struct CompactPageDestination: View {
                 },
                 onImportAttachment: { sourceURL in
                     viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+                },
+                onRetryAttachmentPreview: { attachmentID in
+                    viewModel.retryAttachmentPreviewGeneration(attachmentID: attachmentID)
                 },
                 onPendingBlockFocusHandled: {
                     _ = viewModel.consumePendingFocusBlockID()
@@ -1801,6 +1809,7 @@ private struct EditorCanvasView: View {
     let blocks: [BlockSnapshot]
     let allBlocks: [BlockSnapshot]
     let attachments: [AttachmentSnapshot]
+    let attachmentPreviewGenerationStatuses: [String: AttachmentPreviewGenerationStatus]
     let backlinks: [Backlink]
     let externalLinks: [ExternalLink]
     let conflicts: [ConflictSnapshot]
@@ -1844,6 +1853,7 @@ private struct EditorCanvasView: View {
     let onToggleBlockExpansion: (String) -> Void
     let isToggleBlockExpanded: (String) -> Bool
     let onImportAttachment: (URL) -> Void
+    let onRetryAttachmentPreview: (String) -> Void
     let onPendingBlockFocusHandled: () -> Void
     @State private var isAttachmentImporterPresented = false
     @State private var isMarkdownImporterPresented = false
@@ -2027,6 +2037,7 @@ private struct EditorCanvasView: View {
                     BlockRowView(
                         block: block,
                         attachment: attachment(for: block),
+                        attachmentPreviewGenerationStatus: attachmentPreviewGenerationStatus(for: block),
                         editorSession: editorSession,
                         nestingLevel: nestingLevel(for: block),
                         canMoveUp: index > 0,
@@ -2105,6 +2116,9 @@ private struct EditorCanvasView: View {
                         },
                         onToggleBlockExpansion: {
                             onToggleBlockExpansion(block.id)
+                        },
+                        onRetryAttachmentPreview: { attachmentID in
+                            onRetryAttachmentPreview(attachmentID)
                         },
                         isToggleBlockExpanded: isToggleBlockExpanded(block.id),
                         focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
@@ -2655,6 +2669,14 @@ private struct EditorCanvasView: View {
 
     private func attachment(for block: BlockSnapshot) -> AttachmentSnapshot? {
         attachments.first { $0.matches(block: block) }
+    }
+
+    private func attachmentPreviewGenerationStatus(for block: BlockSnapshot) -> AttachmentPreviewGenerationStatus {
+        guard let attachment = attachment(for: block) else {
+            return .idle
+        }
+
+        return attachmentPreviewGenerationStatuses[attachment.id] ?? .idle
     }
 
     private var renderMetrics: EditorCanvasRenderMetrics {
@@ -3283,6 +3305,7 @@ private struct BlockFocusRequest: Equatable {
 private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
+    let attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus
     @ObservedObject var editorSession: EditorSession
     let nestingLevel: Int
     let canMoveUp: Bool
@@ -3305,6 +3328,7 @@ private struct BlockRowView: View {
     let onTaskItemCompletionChange: (Bool) -> Void
     let onCodeBlockLineWrappingChange: (Bool) -> Void
     let onToggleBlockExpansion: () -> Void
+    let onRetryAttachmentPreview: (String) -> Void
     let isToggleBlockExpanded: Bool
     let focusRequestID: UUID?
     let focusSelection: EditorTextSelection?
@@ -3315,6 +3339,7 @@ private struct BlockRowView: View {
     init(
         block: BlockSnapshot,
         attachment: AttachmentSnapshot? = nil,
+        attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus = .idle,
         editorSession: EditorSession,
         nestingLevel: Int = 0,
         canMoveUp: Bool = false,
@@ -3337,6 +3362,7 @@ private struct BlockRowView: View {
         onTaskItemCompletionChange: @escaping (Bool) -> Void = { _ in },
         onCodeBlockLineWrappingChange: @escaping (Bool) -> Void = { _ in },
         onToggleBlockExpansion: @escaping () -> Void = {},
+        onRetryAttachmentPreview: @escaping (String) -> Void = { _ in },
         isToggleBlockExpanded: Bool = true,
         focusRequestID: UUID? = nil,
         focusSelection: EditorTextSelection? = nil,
@@ -3345,6 +3371,7 @@ private struct BlockRowView: View {
     ) {
         self.block = block
         self.attachment = attachment
+        self.attachmentPreviewGenerationStatus = attachmentPreviewGenerationStatus
         self.editorSession = editorSession
         self.nestingLevel = nestingLevel
         self.canMoveUp = canMoveUp
@@ -3367,6 +3394,7 @@ private struct BlockRowView: View {
         self.onTaskItemCompletionChange = onTaskItemCompletionChange
         self.onCodeBlockLineWrappingChange = onCodeBlockLineWrappingChange
         self.onToggleBlockExpansion = onToggleBlockExpansion
+        self.onRetryAttachmentPreview = onRetryAttachmentPreview
         self.isToggleBlockExpanded = isToggleBlockExpanded
         self.focusRequestID = focusRequestID
         self.focusSelection = focusSelection
@@ -3487,7 +3515,12 @@ private struct BlockRowView: View {
                     .padding(.vertical, 10)
                     .accessibilityIdentifier("editor.divider.\(block.id)")
             } else {
-                AttachmentBlockRow(block: block, attachment: attachment)
+                AttachmentBlockRow(
+                    block: block,
+                    attachment: attachment,
+                    generationStatus: attachmentPreviewGenerationStatus,
+                    onRetryPreview: onRetryAttachmentPreview
+                )
             }
         }
         .padding(.vertical, 7)
@@ -4133,6 +4166,8 @@ private extension BlockType {
 private struct AttachmentBlockRow: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
+    let generationStatus: AttachmentPreviewGenerationStatus
+    let onRetryPreview: (String) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -4141,6 +4176,14 @@ private struct AttachmentBlockRow: View {
                     .resizable()
                     .scaledToFill()
                     .frame(width: 52, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .accessibilityHidden(true)
+            } else if isPreviewFailed {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.title3)
+                    .foregroundStyle(.orange)
+                    .frame(width: 52, height: 40)
+                    .background(Color.orange.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .accessibilityHidden(true)
             } else if isPreviewPending {
@@ -4169,6 +4212,18 @@ private struct AttachmentBlockRow: View {
             }
 
             Spacer(minLength: 8)
+
+            if isPreviewFailed, let attachment {
+                Button {
+                    onRetryPreview(attachment.id)
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Retry preview")
+                .accessibilityLabel("Retry attachment preview")
+                .accessibilityIdentifier("editor.attachment.\(block.id).preview-retry")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -4204,7 +4259,14 @@ private struct AttachmentBlockRow: View {
     }
 
     private var isPreviewPending: Bool {
-        previewState == .pending
+        generationStatus == .generating || previewState == .pending
+    }
+
+    private var isPreviewFailed: Bool {
+        if case .failed = generationStatus {
+            return true
+        }
+        return false
     }
 
     private var iconName: String {
@@ -4221,6 +4283,10 @@ private struct AttachmentBlockRow: View {
     }
 
     private var kindLabel: String {
+        if isPreviewFailed {
+            return "Preview failed"
+        }
+
         switch block.type {
         case .attachmentImage:
             return isPreviewPending ? "Image, generating preview" : "Image"
