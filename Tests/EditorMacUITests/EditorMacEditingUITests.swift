@@ -1243,6 +1243,50 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testReferenceRowsExposeSemanticChrome() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launchEnvironment["EDITOR_UI_TEST_REFERENCE_TARGETS"] = "1"
+        app.launch()
+
+        app.element(identifier: "editor.insert-page-reference").click()
+        let targetPageItem = app.menuItems["Reference Target"]
+        XCTAssertTrue(targetPageItem.waitForExistence(timeout: 5), "Page reference menu should include the seeded target page")
+        targetPageItem.click()
+
+        let insertedPageReference = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.page-reference."))
+            .firstMatch
+        XCTAssertTrue(insertedPageReference.waitForExistence(timeout: 5), "Inserted page reference should expose a button row")
+        XCTAssertTrue(
+            insertedPageReference.waitForLabelOrValue(containing: "Page reference", timeout: 5),
+            "Page reference rows should identify the reference type"
+        )
+        XCTAssertTrue(
+            insertedPageReference.waitForLabelOrValue(containing: "Open page", timeout: 5),
+            "Page reference rows should expose the open-page action"
+        )
+
+        app.element(identifier: "editor.insert-block-reference").click()
+        let targetBlockItem = app.menuItems["Reference Target: Reference target block"]
+        XCTAssertTrue(targetBlockItem.waitForExistence(timeout: 5), "Block reference menu should include the seeded target block")
+        targetBlockItem.click()
+
+        let insertedBlockReference = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.block-reference."))
+            .firstMatch
+        XCTAssertTrue(insertedBlockReference.waitForExistence(timeout: 5), "Inserted block reference should expose a button row")
+        XCTAssertTrue(
+            insertedBlockReference.waitForLabelOrValue(containing: "Block reference", timeout: 5),
+            "Block reference rows should identify the reference type"
+        )
+        XCTAssertTrue(
+            insertedBlockReference.waitForLabelOrValue(containing: "Open referenced block", timeout: 5),
+            "Block reference rows should expose the open-block action"
+        )
+    }
+
+    @MainActor
     func testMarkdownImportToolbarImportsFixtureFile() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

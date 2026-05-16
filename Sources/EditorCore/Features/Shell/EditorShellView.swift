@@ -3466,6 +3466,10 @@ private struct PageReferenceBlockRow: View {
     let block: BlockSnapshot
     let onOpenPageReference: (String) -> Void
 
+    private var titleText: String {
+        block.textPlain.isEmpty ? "Untitled" : block.textPlain
+    }
+
     var body: some View {
         Button {
             if let targetPageID = block.pageReferenceTargetPageID {
@@ -3474,10 +3478,20 @@ private struct PageReferenceBlockRow: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "doc.text")
-                    .foregroundStyle(.secondary)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 18)
 
-                Text(block.textPlain.isEmpty ? "Untitled" : block.textPlain)
-                    .font(.callout.weight(.medium))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Page")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Text(titleText)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
 
                 Spacer(minLength: 8)
 
@@ -3485,13 +3499,19 @@ private struct PageReferenceBlockRow: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 7)
             .padding(.horizontal, 8)
-            .background(Color.secondary.opacity(0.06))
+            .background(Color.accentColor.opacity(0.06))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .disabled(block.pageReferenceTargetPageID == nil)
+        .accessibilityLabel("Page reference: \(titleText)")
+        .accessibilityValue(block.pageReferenceTargetPageID == nil ? "Unavailable" : "Open page")
         .accessibilityIdentifier("editor.page-reference.\(block.id)")
     }
 }
@@ -3499,6 +3519,10 @@ private struct PageReferenceBlockRow: View {
 private struct BlockReferenceBlockRow: View {
     let block: BlockSnapshot
     let onOpenBlockReference: (String, String) -> Void
+
+    private var titleText: String {
+        block.textPlain.isEmpty ? "Referenced block" : block.textPlain
+    }
 
     var body: some View {
         Button {
@@ -3509,11 +3533,20 @@ private struct BlockReferenceBlockRow: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "text.quote")
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .frame(width: 18)
 
-                Text(block.textPlain.isEmpty ? "Referenced block" : block.textPlain)
-                    .font(.callout)
-                    .lineLimit(2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Block")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Text(titleText)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
 
                 Spacer(minLength: 8)
 
@@ -3521,13 +3554,23 @@ private struct BlockReferenceBlockRow: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 7)
             .padding(.horizontal, 8)
             .background(Color.secondary.opacity(0.06))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .disabled(block.pageReferenceTargetPageID == nil || block.blockReferenceTargetBlockID == nil)
+        .accessibilityLabel("Block reference: \(titleText)")
+        .accessibilityValue(
+            block.pageReferenceTargetPageID == nil || block.blockReferenceTargetBlockID == nil
+                ? "Unavailable"
+                : "Open referenced block"
+        )
         .accessibilityIdentifier("editor.block-reference.\(block.id)")
     }
 }
