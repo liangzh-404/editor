@@ -3182,6 +3182,7 @@ private struct BlockRowView: View {
         .taskItem,
         .quote,
         .codeBlock,
+        .divider,
         .table,
         .callout,
         .toggle

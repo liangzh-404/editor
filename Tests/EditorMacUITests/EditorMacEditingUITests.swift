@@ -1029,6 +1029,33 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testBlockTypeMenuCanConvertTextBlockToDivider() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
+        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
+        blockTypeMenu.click()
+
+        let dividerMenuItem = app.menuItems["Divider"]
+        XCTAssertTrue(dividerMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Divider type")
+        dividerMenuItem.click()
+
+        let divider = app.element(identifier: "editor.divider.block-welcome-001")
+        XCTAssertTrue(divider.waitForExistence(timeout: 5), "Changing a text block to Divider should render a divider row")
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForNonExistence(timeout: 5), "Divider blocks should not leave an editable text view behind")
+
+        let dragHandle = app.element(identifier: "editor.block.block-welcome-001.drag-handle")
+        XCTAssertTrue(
+            dragHandle.waitForValue(containing: "Divider", timeout: 5),
+            "Block controls should expose the updated Divider type"
+        )
+    }
+
+    @MainActor
     func testTableControlsExposeSemanticLabelsAndDimensions() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
