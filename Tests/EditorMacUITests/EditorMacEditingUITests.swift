@@ -1056,6 +1056,38 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testCalloutBlockTypeRendersCalloutChromeAndKeepsTextEditable() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
+        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
+        blockTypeMenu.click()
+
+        let calloutMenuItem = app.menuItems["Callout"]
+        XCTAssertTrue(calloutMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Callout type")
+        calloutMenuItem.click()
+
+        let callout = app.element(identifier: "editor.callout.block-welcome-001")
+        XCTAssertTrue(callout.waitForExistence(timeout: 5), "Changing a text block to Callout should render visible callout chrome")
+        XCTAssertTrue(
+            callout.waitForLabelOrValue(containing: "Callout block", timeout: 5),
+            "Callout chrome should expose a semantic container label"
+        )
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Callout blocks should keep the native text editor")
+        textView.click()
+        XCTAssertTrue(textView.waitForKeyboardFocus(timeout: 5), "Callout text should be directly editable")
+        app.typeText(" Note")
+        XCTAssertTrue(
+            textView.waitForValue(containing: "Note", timeout: 5),
+            "Typing in a callout should still update the native text view"
+        )
+    }
+
+    @MainActor
     func testTableControlsExposeSemanticLabelsAndDimensions() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

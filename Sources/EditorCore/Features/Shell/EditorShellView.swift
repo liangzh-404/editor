@@ -3049,70 +3049,7 @@ private struct BlockRowView: View {
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else if block.type.isTextEditable {
-                HStack(alignment: .top, spacing: 8) {
-                    if block.type == .taskItem {
-                        Button {
-                            onTaskItemCompletionChange(!block.taskItemIsCompleted)
-                        } label: {
-                            Image(systemName: block.taskItemIsCompleted ? "checkmark.circle.fill" : "circle")
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(block.taskItemIsCompleted ? .green : .secondary)
-                        .help(block.taskItemIsCompleted ? "Mark incomplete" : "Mark complete")
-                        .accessibilityLabel(block.taskItemIsCompleted ? "Mark task incomplete" : "Mark task complete")
-                        .accessibilityValue(block.taskItemIsCompleted ? "Completed" : "Incomplete")
-                        .accessibilityIdentifier("editor.block.\(block.id).task-toggle")
-                    }
-
-                    if block.type == .toggle {
-                        Button {
-                            onToggleBlockExpansion()
-                        } label: {
-                            Image(systemName: isToggleBlockExpanded ? "chevron.down" : "chevron.right")
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.secondary)
-                        .help(isToggleBlockExpanded ? "Collapse" : "Expand")
-                        .accessibilityLabel(isToggleBlockExpanded ? "Collapse toggle block" : "Expand toggle block")
-                        .accessibilityValue(isToggleBlockExpanded ? "Expanded" : "Collapsed")
-                        .accessibilityIdentifier("editor.block.\(block.id).toggle-expansion")
-                    }
-
-                    if block.type == .codeBlock {
-                        Button {
-                            onCodeBlockLineWrappingChange(!block.codeBlockLineWrapping)
-                        } label: {
-                            Image(systemName: "text.alignleft")
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(block.codeBlockLineWrapping ? .primary : .secondary)
-                        .help(block.codeBlockLineWrapping ? "Disable line wrap" : "Enable line wrap")
-                        .accessibilityLabel(block.codeBlockLineWrapping ? "Disable code line wrap" : "Enable code line wrap")
-                        .accessibilityValue(block.codeBlockLineWrapping ? "Line wrap enabled" : "Line wrap disabled")
-                        .accessibilityIdentifier("editor.block.\(block.id).code-wrap")
-                    }
-
-                    NativeTextBlockEditor(
-                        blockID: block.id,
-                        text: block.textPlain,
-                        blockType: block.type,
-                        session: editorSession,
-                        lineWrapping: block.type == .codeBlock ? block.codeBlockLineWrapping : true,
-                        focusRequestID: effectiveFocusRequestID,
-                        focusSelection: effectiveFocusSelection,
-                        onFocusRequestHandled: handleFocusRequestHandled,
-                        onMoveByKeyboard: onMoveByKeyboard,
-                        onIndentationByKeyboard: handleKeyboardIndentation,
-                        onMoveFocusByKeyboard: onMoveFocusByKeyboard,
-                        onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
-                        onInsertLinkByKeyboard: onInsertLinkByKeyboard,
-                        onInsertBlockAfter: onInsertBlockAfter,
-                        onMergeBlockWithPrevious: onMergeBlockWithPrevious,
-                        onMergeBlockWithNext: onMergeBlockWithNext,
-                        onTextChange: onTextChange
-                    )
-                    .accessibilityIdentifier("editor.text.\(block.id)")
-                }
+                textEditableBlockContent
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else if block.type == .pageReference {
                 PageReferenceBlockRow(block: block, onOpenPageReference: onOpenPageReference)
@@ -3157,6 +3094,108 @@ private struct BlockRowView: View {
         default:
             return "editor.block.\(block.id)"
         }
+    }
+
+    @ViewBuilder
+    private var textEditableBlockContent: some View {
+        if block.type == .callout {
+            HStack(alignment: .top, spacing: 8) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.accentColor.opacity(0.35))
+                    .frame(width: 3)
+                    .padding(.vertical, 3)
+                    .accessibilityHidden(true)
+
+                Image(systemName: "exclamationmark.bubble")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+                    .accessibilityHidden(true)
+
+                nativeTextBlockEditor
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(Color.secondary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Callout block")
+            .accessibilityValue(block.textPlain.isEmpty ? "Empty" : block.textPlain)
+            .accessibilityIdentifier("editor.callout.\(block.id)")
+        } else {
+            HStack(alignment: .top, spacing: 8) {
+                textBlockLeadingControls
+                nativeTextBlockEditor
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var textBlockLeadingControls: some View {
+        if block.type == .taskItem {
+            Button {
+                onTaskItemCompletionChange(!block.taskItemIsCompleted)
+            } label: {
+                Image(systemName: block.taskItemIsCompleted ? "checkmark.circle.fill" : "circle")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(block.taskItemIsCompleted ? .green : .secondary)
+            .help(block.taskItemIsCompleted ? "Mark incomplete" : "Mark complete")
+            .accessibilityLabel(block.taskItemIsCompleted ? "Mark task incomplete" : "Mark task complete")
+            .accessibilityValue(block.taskItemIsCompleted ? "Completed" : "Incomplete")
+            .accessibilityIdentifier("editor.block.\(block.id).task-toggle")
+        }
+
+        if block.type == .toggle {
+            Button {
+                onToggleBlockExpansion()
+            } label: {
+                Image(systemName: isToggleBlockExpanded ? "chevron.down" : "chevron.right")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help(isToggleBlockExpanded ? "Collapse" : "Expand")
+            .accessibilityLabel(isToggleBlockExpanded ? "Collapse toggle block" : "Expand toggle block")
+            .accessibilityValue(isToggleBlockExpanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("editor.block.\(block.id).toggle-expansion")
+        }
+
+        if block.type == .codeBlock {
+            Button {
+                onCodeBlockLineWrappingChange(!block.codeBlockLineWrapping)
+            } label: {
+                Image(systemName: "text.alignleft")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(block.codeBlockLineWrapping ? .primary : .secondary)
+            .help(block.codeBlockLineWrapping ? "Disable line wrap" : "Enable line wrap")
+            .accessibilityLabel(block.codeBlockLineWrapping ? "Disable code line wrap" : "Enable code line wrap")
+            .accessibilityValue(block.codeBlockLineWrapping ? "Line wrap enabled" : "Line wrap disabled")
+            .accessibilityIdentifier("editor.block.\(block.id).code-wrap")
+        }
+    }
+
+    private var nativeTextBlockEditor: some View {
+        NativeTextBlockEditor(
+            blockID: block.id,
+            text: block.textPlain,
+            blockType: block.type,
+            session: editorSession,
+            lineWrapping: block.type == .codeBlock ? block.codeBlockLineWrapping : true,
+            focusRequestID: effectiveFocusRequestID,
+            focusSelection: effectiveFocusSelection,
+            onFocusRequestHandled: handleFocusRequestHandled,
+            onMoveByKeyboard: onMoveByKeyboard,
+            onIndentationByKeyboard: handleKeyboardIndentation,
+            onMoveFocusByKeyboard: onMoveFocusByKeyboard,
+            onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
+            onInsertLinkByKeyboard: onInsertLinkByKeyboard,
+            onInsertBlockAfter: onInsertBlockAfter,
+            onMergeBlockWithPrevious: onMergeBlockWithPrevious,
+            onMergeBlockWithNext: onMergeBlockWithNext,
+            onTextChange: onTextChange
+        )
+        .accessibilityIdentifier("editor.text.\(block.id)")
     }
 
     private func controlAvailabilityValue(_ isAvailable: Bool) -> String {
