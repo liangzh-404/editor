@@ -17,6 +17,7 @@ Usage:
   scripts/mac_ui_test.sh [run] [test-name ...] [-- xcodebuild-args ...]
   scripts/mac_ui_test.sh rerun [test-name ...] [-- xcodebuild-args ...]
   scripts/mac_ui_test.sh build
+  scripts/mac_ui_test.sh doctor
   scripts/mac_ui_test.sh test [test-name ...] [-- xcodebuild-args ...]
   scripts/mac_ui_test.sh clean
 
@@ -38,7 +39,7 @@ EOF
 ACTION="run"
 if [[ $# -gt 0 ]]; then
     case "$1" in
-        run|rerun|build|test|clean|help|-h|--help)
+        run|rerun|build|doctor|test|clean|help|-h|--help)
             ACTION="$1"
             shift
             ;;
@@ -156,6 +157,78 @@ EOF
     exit 65
 }
 
+run_doctor() {
+    local status=0
+
+    echo "== macOS UI test diagnostics =="
+    echo "Project: $PROJECT"
+    echo "Scheme: $SCHEME"
+    echo "Destination: $DESTINATION"
+    echo "DerivedData: $DERIVED_DATA_PATH"
+
+    local cached_xctestrun
+    cached_xctestrun="$(xctestrun_path)"
+    if [[ -n "$cached_xctestrun" ]]; then
+        echo "Cached xctestrun: $cached_xctestrun"
+    else
+        echo "Cached xctestrun: missing"
+    fi
+
+    local devtools_status
+    if devtools_status="$(/usr/sbin/DevToolsSecurity -status 2>&1)"; then
+        echo "Developer Tools security: $devtools_status"
+        if [[ "$devtools_status" != *"currently enabled"* ]]; then
+            status=65
+        fi
+    else
+        echo "Developer Tools security: unavailable"
+        echo "$devtools_status"
+        status=65
+    fi
+
+    local system_events_enabled
+    if system_events_enabled="$(osascript -e 'tell application "System Events" to get UI elements enabled' 2>&1)"; then
+        echo "System Events UI elements enabled: $system_events_enabled"
+        if [[ "$system_events_enabled" != "true" ]]; then
+            status=65
+        fi
+    else
+        echo "System Events UI elements enabled: unavailable"
+        echo "$system_events_enabled"
+        status=65
+    fi
+
+    if [[ -e /var/db/com.apple.dt.automationmode/automation-enabled ]]; then
+        echo "Automation mode state file: present"
+    else
+        echo "Automation mode state file: missing"
+    fi
+
+    local testmanager_pids
+    testmanager_pids="$(pgrep -x testmanagerd 2>/dev/null || true)"
+    testmanager_pids="$(printf '%s\n' "$testmanager_pids" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+    if [[ -n "$testmanager_pids" ]]; then
+        echo "testmanagerd pid(s): $testmanager_pids"
+    else
+        echo "testmanagerd pid(s): none"
+    fi
+
+    if [[ "$status" -ne 0 ]]; then
+        cat <<EOF
+
+macOS UI Automation is not ready. Run the following command locally and approve
+the system prompt, then rerun this doctor command:
+
+  /usr/sbin/DevToolsSecurity -enable
+EOF
+    else
+        echo
+        echo "macOS UI Automation preflight is ready."
+    fi
+
+    return "$status"
+}
+
 ensure_build_for_testing() {
     local cached_xctestrun
     cached_xctestrun="$(xctestrun_path)"
@@ -206,6 +279,9 @@ run_xcodebuild() {
 case "$ACTION" in
     build)
         run_build_for_testing
+        ;;
+    doctor)
+        run_doctor
         ;;
     run)
         ensure_build_for_testing

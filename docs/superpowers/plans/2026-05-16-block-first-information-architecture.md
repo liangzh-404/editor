@@ -1209,7 +1209,7 @@ scripts/mac_ui_test.sh rerun testLaunchStartsInBlankDiaryEditorForFastTyping tes
 
 Expected: PASS.
 
-Current status: blocked locally before any business UI test case executes. `scripts/mac_ui_test.sh build` passed, but repeated `rerun` attempts failed at runner initialization with `Timed out while enabling automation mode`. System evidence shows UI Automation requires local authentication on this Mac (`DevToolsSecurity -status` reports Developer mode disabled, `System Events` UI elements are disabled, and unified logs report `Writer daemon requires authentication to enable automation mode`). `scripts/mac_ui_test.sh` now has a fast authorization preflight for `test` and `rerun`, so this blocker exits immediately with the required local authorization command instead of spending 80s in the runner timeout.
+Current status: blocked locally before any business UI test case executes. `scripts/mac_ui_test.sh build` passed, but repeated `rerun` attempts failed at runner initialization with `Timed out while enabling automation mode`. System evidence shows UI Automation requires local authentication on this Mac (`DevToolsSecurity -status` reports Developer mode disabled, `System Events` UI elements are disabled, and unified logs report `Writer daemon requires authentication to enable automation mode`). `scripts/mac_ui_test.sh` now has a fast authorization preflight for `test` and `rerun`, so this blocker exits immediately with the required local authorization command instead of spending 80s in the runner timeout. `scripts/mac_ui_test.sh doctor` prints the full local UI test readiness state without launching xcodebuild.
 
 - [x] **Step 4: Run app builds**
 
