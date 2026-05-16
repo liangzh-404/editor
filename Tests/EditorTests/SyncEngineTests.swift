@@ -629,6 +629,45 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
+    func testCloudKitPrivateDatabaseAdapterDownloadsAttachmentThumbnailAssets() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let assetURL = try makeSourceFile(name: "brief.pdf", contents: "remote asset")
+        let thumbnailAssetURL = try makeSourceFile(name: "thumbnail.jpg", contents: "remote thumbnail")
+        let downloadDirectory = makeTemporaryDirectory()
+        let fetcher = StaticCloudKitRecordFetcher(recordsByType: [
+            "AttachmentRecord": [
+                makeRecord(type: "AttachmentRecord", entityType: "attachment", entityID: "attachment-remote") {
+                    $0["workspaceID"] = "workspace-remote" as CKRecordValue
+                    $0["originalFilename"] = "brief.pdf" as CKRecordValue
+                    $0["utiType"] = "com.adobe.pdf" as CKRecordValue
+                    $0["byteSize"] = NSNumber(value: 12)
+                    $0["contentHash"] = "hash-remote" as CKRecordValue
+                    $0["localPath"] = "/remote/brief.pdf" as CKRecordValue
+                    $0["thumbnailPath"] = "/remote/thumbnail.jpg" as CKRecordValue
+                    $0["asset"] = CKAsset(fileURL: assetURL)
+                    $0["thumbnailAsset"] = CKAsset(fileURL: thumbnailAssetURL)
+                }
+            ]
+        ])
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher,
+            attachmentDownloadDirectory: downloadDirectory
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+        let attachment = try XCTUnwrap(changeSet.attachmentChanges.first)
+        let thumbnailPath = try XCTUnwrap(attachment.thumbnailPath)
+
+        XCTAssertNotEqual(thumbnailPath, "/remote/thumbnail.jpg")
+        XCTAssertTrue(thumbnailPath.hasPrefix(downloadDirectory.path))
+        XCTAssertEqual(
+            try String(contentsOfFile: thumbnailPath, encoding: .utf8),
+            "remote thumbnail"
+        )
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsDeletedRecordIDsToDeletionChanges() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -791,6 +830,51 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual((record["isArchived"] as? NSNumber)?.boolValue, false)
     }
 
+    func testCloudKitPrivateDatabaseAdapterMapsAttachmentAssetsToRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let imported = try AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        ).importAttachment(
+            sourceURL: try makeSourceFile(name: "brief.txt", contents: "local asset"),
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+        let thumbnailURL = URL(fileURLWithPath: imported.attachment.localPath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("thumbnail.jpg")
+        try Data("thumbnail asset".utf8).write(to: thumbnailURL)
+        try database.execute(
+            """
+            UPDATE attachments
+            SET thumbnail_path = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .text(thumbnailURL.path),
+                .text(imported.attachment.id)
+            ]
+        )
+        let saver = CapturingCloudKitRecordSaver()
+
+        _ = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordSaver: saver
+        ).upload(change: SyncChange(entityType: "attachment", entityID: imported.attachment.id, changeType: "create"))
+
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        let asset = try XCTUnwrap(record["asset"] as? CKAsset)
+        let thumbnailAsset = try XCTUnwrap(record["thumbnailAsset"] as? CKAsset)
+        XCTAssertEqual(asset.fileURL?.path, imported.attachment.localPath)
+        XCTAssertEqual(thumbnailAsset.fileURL?.path, thumbnailURL.path)
+    }
+
     func testCloudKitPrivateDatabaseAdapterDeletesRecordForDeleteChange() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -830,6 +914,7 @@ final class SyncEngineTests: XCTestCase {
         try Data(contents.utf8).write(to: fileURL)
         return fileURL
     }
+
 }
 
 final class RecordingCloudKitSyncAdapter: CloudKitSyncAdapter {

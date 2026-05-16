@@ -557,8 +557,12 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         record["updatedAt"] = row["updated_at"] as CKRecordValue?
 
         if let localPath = row["local_path"] ?? nil,
-           FileManager.default.fileExists(atPath: localPath) {
+           fileManager.fileExists(atPath: localPath) {
             record["asset"] = CKAsset(fileURL: URL(fileURLWithPath: localPath))
+        }
+        if let thumbnailPath = row["thumbnail_path"] ?? nil,
+           fileManager.fileExists(atPath: thumbnailPath) {
+            record["thumbnailAsset"] = CKAsset(fileURL: URL(fileURLWithPath: thumbnailPath))
         }
         return record
     }
@@ -655,7 +659,11 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
                 attachmentID: attachmentID,
                 originalFilename: originalFilename
             ) ?? localPath,
-            thumbnailPath: record["thumbnailPath"] as? String
+            thumbnailPath: try downloadedAttachmentThumbnailPath(
+                record: record,
+                workspaceID: workspaceID,
+                attachmentID: attachmentID
+            ) ?? (record["thumbnailPath"] as? String)
         )
     }
 
@@ -675,6 +683,36 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             .appendingPathComponent(workspaceID, isDirectory: true)
             .appendingPathComponent(attachmentID, isDirectory: true)
         let targetURL = targetDirectory.appendingPathComponent(originalFilename)
+        try fileManager.createDirectory(
+            at: targetDirectory,
+            withIntermediateDirectories: true
+        )
+        if fileManager.fileExists(atPath: targetURL.path) {
+            try fileManager.removeItem(at: targetURL)
+        }
+        try fileManager.copyItem(at: sourceURL, to: targetURL)
+        return targetURL.path
+    }
+
+    private func downloadedAttachmentThumbnailPath(
+        record: CKRecord,
+        workspaceID: String,
+        attachmentID: String
+    ) throws -> String? {
+        guard let attachmentDownloadDirectory,
+              let asset = record["thumbnailAsset"] as? CKAsset,
+              let sourceURL = asset.fileURL else {
+            return nil
+        }
+
+        let remoteThumbnailPath = record["thumbnailPath"] as? String
+        let thumbnailFilename = remoteThumbnailPath.map {
+            URL(fileURLWithPath: $0).lastPathComponent
+        } ?? "thumbnail.jpg"
+        let targetDirectory = attachmentDownloadDirectory
+            .appendingPathComponent(workspaceID, isDirectory: true)
+            .appendingPathComponent(attachmentID, isDirectory: true)
+        let targetURL = targetDirectory.appendingPathComponent(thumbnailFilename)
         try fileManager.createDirectory(
             at: targetDirectory,
             withIntermediateDirectories: true
