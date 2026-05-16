@@ -198,6 +198,26 @@ run_doctor() {
         status=65
     fi
 
+    local current_user
+    current_user="$(whoami)"
+    local developer_group_status
+    developer_group_status="$(dseditgroup -o checkmember -m "$current_user" _developer 2>&1 || true)"
+    echo "_developer membership: $developer_group_status"
+
+    local taskport_plist
+    taskport_plist="$(mktemp "${TMPDIR:-/tmp}/editor-taskport.XXXXXX")"
+    if security authorizationdb read system.privilege.taskport >"$taskport_plist" 2>/dev/null; then
+        local taskport_group
+        taskport_group="$(plutil -extract group raw -o - "$taskport_plist" 2>/dev/null || true)"
+        local taskport_authentication
+        taskport_authentication="$(plutil -extract authenticate-user raw -o - "$taskport_plist" 2>/dev/null || true)"
+        echo "taskport authorization group: ${taskport_group:-unknown}"
+        echo "taskport requires authentication: ${taskport_authentication:-unknown}"
+    else
+        echo "taskport authorization: unavailable"
+    fi
+    rm -f "$taskport_plist"
+
     if [[ -e /var/db/com.apple.dt.automationmode/automation-enabled ]]; then
         echo "Automation mode state file: present"
     else
