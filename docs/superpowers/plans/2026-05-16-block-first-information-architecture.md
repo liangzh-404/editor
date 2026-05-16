@@ -435,7 +435,7 @@ git commit -m "Add tag repository"
 - Modify: `Sources/EditorCore/Models/EditorModels.swift`
 - Test: `Tests/EditorTests/PageRepositoryTests.swift`
 
-- [ ] **Step 1: Write failing All Documents tests**
+- [x] **Step 1: Write failing All Documents tests**
 
 Add to `Tests/EditorTests/PageRepositoryTests.swift`:
 
@@ -475,7 +475,7 @@ func testLoadWorkspaceSnapshotLoadsTagsAndAssignments() throws {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -485,7 +485,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: FAIL because `loadWorkspaceSnapshot()` still orders pages by Notebook/order key and does not load tags into the snapshot.
 
-- [ ] **Step 3: Implement All Documents snapshot loading**
+- [x] **Step 3: Implement All Documents snapshot loading**
 
 In `PageRepository.loadWorkspaceSnapshot()`:
 
@@ -500,7 +500,7 @@ ORDER BY pages.updated_at DESC, pages.created_at DESC
 - Populate the new `WorkspaceSnapshot` properties.
 - Keep `notebooks` loading unchanged so compatibility tests continue to pass.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -510,7 +510,7 @@ xcodebuild -quiet test -project Editor.xcodeproj -scheme EditorTests -destinatio
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 

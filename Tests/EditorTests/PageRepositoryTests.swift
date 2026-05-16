@@ -99,6 +99,40 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(unfavoriteSnapshot.favoritePages, [])
     }
 
+    func testLoadWorkspaceSnapshotOrdersActivePagesByUpdatedTimeDescending() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+
+        let older = try repository.createPage(workspaceID: workspaceID, title: "Older")
+        Thread.sleep(forTimeInterval: 0.01)
+        _ = try repository.createPage(workspaceID: workspaceID, title: "Newer")
+        try repository.updatePageTitle(pageID: older.id, title: "Older updated last")
+
+        let reloaded = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloaded.pages.map(\.title).prefix(2), ["Older updated last", "Newer"])
+    }
+
+    func testLoadWorkspaceSnapshotLoadsTagsAndAssignments() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let tag = try tagRepository.createTag(workspaceID: workspaceID, name: "Writing")
+        try tagRepository.assignTags(pageID: pageID, tagIDs: [tag.id])
+
+        let reloaded = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloaded.tags.map(\.path), ["Writing"])
+        XCTAssertEqual(reloaded.pageTags, [PageTagAssignment(pageID: pageID, tagID: tag.id)])
+    }
+
     func testArchivedFavoritePageHidesFromFavoritesUntilRestored() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -121,7 +155,7 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(restoredSnapshot.favoritePages.map(\.title), ["Scratch"])
     }
 
-    func testCreatePagePersistsEmptyEditablePageAtEnd() throws {
+    func testCreatePagePersistsEmptyEditablePageAtTopOfAllDocuments() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -133,8 +167,8 @@ final class PageRepositoryTests: XCTestCase {
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
         let createdBlocks = reloadedSnapshot.blocks.filter { $0.pageID == createdPage.id }
 
-        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["Welcome", "Untitled"])
-        XCTAssertEqual(reloadedSnapshot.pages.last?.id, createdPage.id)
+        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["Untitled", "Welcome"])
+        XCTAssertEqual(reloadedSnapshot.pages.first?.id, createdPage.id)
         XCTAssertEqual(createdBlocks.map(\.type), [.paragraph])
         XCTAssertEqual(createdBlocks.map(\.textPlain), [""])
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().suffix(2).map(\.entityType), ["page", "block"])
@@ -308,7 +342,7 @@ final class PageRepositoryTests: XCTestCase {
         try repository.restorePage(pageID: createdPage.id)
         let restoredSnapshot = try repository.loadWorkspaceSnapshot()
 
-        XCTAssertEqual(restoredSnapshot.pages.map(\.title), ["Welcome", "Scratch"])
+        XCTAssertEqual(restoredSnapshot.pages.map(\.title), ["Scratch", "Welcome"])
         XCTAssertEqual(restoredSnapshot.archivedPages, [])
         XCTAssertEqual(
             try SyncRepository(database: database).pendingChanges().last,

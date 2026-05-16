@@ -73,7 +73,7 @@ final class PageRepository {
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
             WHERE pages.workspace_id = ?
               AND pages.is_archived = 0
-            ORDER BY COALESCE(notebooks.order_key, '999999'), pages.order_key ASC
+            ORDER BY pages.updated_at DESC, pages.created_at DESC
             """,
             bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
         ).map { row in
@@ -144,6 +144,10 @@ final class PageRepository {
             )
         }
 
+        let tagRepository = TagRepository(database: database)
+        let tags = try selectedWorkspaceID.map { try tagRepository.tags(workspaceID: $0) } ?? []
+        let pageTags = try tagRepository.tagAssignments()
+
         return WorkspaceSnapshot(
             workspaces: workspaces,
             notebooks: sortedNotebooks,
@@ -151,6 +155,8 @@ final class PageRepository {
             archivedPages: archivedPages,
             blocks: blocks,
             attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -188,7 +194,7 @@ final class PageRepository {
             throw PageRepositoryError.pageNotFound
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.execute(
             """
             UPDATE pages
@@ -227,7 +233,7 @@ final class PageRepository {
             throw PageRepositoryError.pageNotFound
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.execute(
             """
             UPDATE pages
@@ -284,7 +290,7 @@ final class PageRepository {
             }
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         let notebookID = "notebook-\(UUID().uuidString.lowercased())"
         let orderKey = try nextNotebookOrderKey(
             workspaceID: workspaceID,
@@ -338,7 +344,7 @@ final class PageRepository {
             throw PageRepositoryError.notebookNotFound
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.execute(
             """
             UPDATE notebooks
@@ -411,7 +417,7 @@ final class PageRepository {
         let clampedTargetIndex = min(max(targetIndex, 0), reorderedNotebooks.count)
         reorderedNotebooks.insert(movingNotebook, at: clampedTargetIndex)
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         var changedNotebookIDs: [String] = []
         try database.withImmediateTransaction("move_notebook") {
             for (index, notebook) in reorderedNotebooks.enumerated() {
@@ -490,7 +496,7 @@ final class PageRepository {
             }
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         let orderKey = try nextNotebookOrderKey(
             workspaceID: workspaceID,
             parentNotebookID: parentNotebookID
@@ -554,7 +560,7 @@ final class PageRepository {
             }
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         let pageID = "page-\(UUID().uuidString.lowercased())"
         let blockID = "block-\(UUID().uuidString.lowercased())"
         let orderKey = try nextPageOrderKey(workspaceID: workspaceID, notebookID: resolvedNotebookID)
@@ -617,7 +623,7 @@ final class PageRepository {
             throw PageRepositoryError.pageNotFound
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.execute(
             """
             UPDATE pages
@@ -653,7 +659,7 @@ final class PageRepository {
             throw PageRepositoryError.pageNotFound
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.execute(
             """
             UPDATE pages
@@ -726,7 +732,7 @@ final class PageRepository {
         toggleIsExpanded explicitToggleIsExpanded: Bool? = nil,
         codeBlockLineWrapping explicitCodeBlockLineWrapping: Bool? = nil
     ) throws {
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         let taskItemIsCompleted: Bool
         if type == .taskItem {
             if let explicitTaskItemIsCompleted {
@@ -811,7 +817,7 @@ final class PageRepository {
         }
 
         let text = row["text_plain"] ?? ""
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.execute(
             """
             UPDATE blocks
@@ -858,7 +864,7 @@ final class PageRepository {
         }
 
         let text = row["text_plain"] ?? ""
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.execute(
             """
             UPDATE blocks
@@ -905,7 +911,7 @@ final class PageRepository {
         }
 
         let text = row["text_plain"] ?? ""
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.execute(
             """
             UPDATE blocks
@@ -939,7 +945,7 @@ final class PageRepository {
 
     func importMarkdown(pageID: String, markdown: String) throws {
         let drafts = MarkdownTransformer.importBlocks(markdown: markdown)
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
 
         try database.execute(
             """
@@ -991,7 +997,7 @@ final class PageRepository {
 
 #if DEBUG
     func replacePageWithUITestLargePage(pageID: String, blockCount: Int) throws {
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
 
         try database.execute(
             """
@@ -1121,7 +1127,7 @@ final class PageRepository {
             bindings: [.text(pageID)]
         )
         let blockCount = Int(blockCountRows.first?["block_count"] ?? "") ?? 0
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         let blockID = "block-\(UUID().uuidString.lowercased())"
         let orderKey = String(format: "%06d", blockCount + 1)
 
@@ -1196,7 +1202,7 @@ final class PageRepository {
             throw PageRepositoryError.blockNotFound
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         let insertedBlockID = "block-\(UUID().uuidString.lowercased())"
         let shiftedBlockIDs = Array(orderedBlockIDs.suffix(from: currentIndex + 1))
         var reorderedBlockIDs = orderedBlockIDs
@@ -1299,7 +1305,7 @@ final class PageRepository {
         let clampedTargetIndex = min(max(targetIndex, 0), reorderedBlocks.count)
         reorderedBlocks.insert(movingBlock, at: clampedTargetIndex)
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         var changedBlockIDs: [String] = []
         try database.withImmediateTransaction("move_block") {
             for (index, block) in reorderedBlocks.enumerated() {
@@ -1391,7 +1397,7 @@ final class PageRepository {
             throw PageRepositoryError.blockNotFound
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.withImmediateTransaction("delete_block") {
             try database.execute(
                 """
@@ -1429,7 +1435,7 @@ final class PageRepository {
     }
 
     private func insertDefaultContent() throws {
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
 
         try database.execute(
             """
@@ -1735,7 +1741,7 @@ final class PageRepository {
     }
 
     private func updateBlockParent(blockID: String, parentBlockID: String?) throws {
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = Self.timestamp()
         try database.execute(
             """
             UPDATE blocks
@@ -1934,6 +1940,12 @@ final class PageRepository {
 
     private static func sqliteBool(_ value: String?) -> Bool {
         value == "1" || value == "true"
+    }
+
+    private static func timestamp() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date())
     }
 
     private static func depthFirstNotebooks(_ notebooks: [OrderedNotebookSummary]) -> [NotebookSummary] {
