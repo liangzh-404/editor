@@ -25,7 +25,7 @@ UI_TESTS=(
 usage() {
     cat <<EOF
 Usage:
-  scripts/block_first_final_regression.sh [all|non-ui|units|ui|builds|doctor|diff-check|help]
+  scripts/block_first_final_regression.sh [all|non-ui|units|ui|builds|doctor|authorize|diff-check|help]
 
 Actions:
   all         Run focused unit suite, app builds, diff check, then focused macOS UI suite.
@@ -34,6 +34,7 @@ Actions:
   ui          Run macOS UI readiness doctor, build-for-testing, then focused UI rerun.
   builds      Build EditorMac for macOS arm64 and EditorIOS for iOS Simulator.
   doctor      Print macOS UI test readiness diagnostics.
+  authorize   Run the local macOS UI Automation authorization prompt, then doctor.
   diff-check  Run git diff --check.
   help        Show this message.
 EOF
@@ -105,6 +106,9 @@ case "$ACTION" in
         ;;
     doctor)
         scripts/mac_ui_test.sh doctor
+        ;;
+    authorize)
+        scripts/mac_ui_test.sh authorize
         ;;
     diff-check)
         run_diff_check

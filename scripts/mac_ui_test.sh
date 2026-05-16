@@ -18,6 +18,7 @@ Usage:
   scripts/mac_ui_test.sh rerun [test-name ...] [-- xcodebuild-args ...]
   scripts/mac_ui_test.sh build
   scripts/mac_ui_test.sh doctor
+  scripts/mac_ui_test.sh authorize
   scripts/mac_ui_test.sh test [test-name ...] [-- xcodebuild-args ...]
   scripts/mac_ui_test.sh clean
 
@@ -33,13 +34,15 @@ Environment:
   EDITOR_UI_TEST_VERBOSE=1      Show full xcodebuild output.
   EDITOR_UI_TEST_SKIP_AUTOMATION_PREFLIGHT=1
                                   Skip the macOS UI Automation authorization preflight.
+  EDITOR_UI_TEST_AUTHORIZE_DRY_RUN=1
+                                  Print the authorization command without running it.
 EOF
 }
 
 ACTION="run"
 if [[ $# -gt 0 ]]; then
     case "$1" in
-        run|rerun|build|doctor|test|clean|help|-h|--help)
+        run|rerun|build|doctor|authorize|test|clean|help|-h|--help)
             ACTION="$1"
             shift
             ;;
@@ -249,6 +252,25 @@ EOF
     return "$status"
 }
 
+run_authorize() {
+    cat <<EOF
+== macOS UI Automation authorization ==
+This command may prompt for local administrator approval:
+
+  /usr/sbin/DevToolsSecurity -enable
+EOF
+
+    if [[ "${EDITOR_UI_TEST_AUTHORIZE_DRY_RUN:-0}" == "1" ]]; then
+        echo
+        echo "Dry run: authorization command was not executed."
+        return 0
+    fi
+
+    /usr/sbin/DevToolsSecurity -enable
+    echo
+    run_doctor
+}
+
 ensure_build_for_testing() {
     local cached_xctestrun
     cached_xctestrun="$(xctestrun_path)"
@@ -302,6 +324,9 @@ case "$ACTION" in
         ;;
     doctor)
         run_doctor
+        ;;
+    authorize)
+        run_authorize
         ;;
     run)
         ensure_build_for_testing
