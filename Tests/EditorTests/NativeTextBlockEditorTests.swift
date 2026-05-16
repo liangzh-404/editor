@@ -507,6 +507,65 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(descriptor.accessibilityIdentifier, "editor.divider.divider-1")
     }
 
+    func testAttachmentBlockChromeDescriptorExposesKindAndPreviewState() {
+        let imageBlock = BlockSnapshot(
+            id: "image-block",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .attachmentImage,
+            textPlain: "photo.png"
+        )
+        let imageAttachment = AttachmentSnapshot(
+            id: "image-attachment",
+            workspaceID: "workspace",
+            originalFilename: "photo.png",
+            utiType: "public.png",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/photo.png",
+            thumbnailPath: "/tmp/photo-thumb.jpg",
+            kind: .image
+        )
+        let imageAttachmentWithoutThumbnail = AttachmentSnapshot(
+            id: "image-attachment",
+            workspaceID: "workspace",
+            originalFilename: "photo.png",
+            utiType: "public.png",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/photo.png",
+            thumbnailPath: nil,
+            kind: .image
+        )
+
+        let readyDescriptor = AttachmentBlockChromeDescriptor(
+            block: imageBlock,
+            attachment: imageAttachment,
+            generationStatus: .idle
+        )
+        let generatingDescriptor = AttachmentBlockChromeDescriptor(
+            block: imageBlock,
+            attachment: imageAttachmentWithoutThumbnail,
+            generationStatus: .generating
+        )
+        let missingDescriptor = AttachmentBlockChromeDescriptor(
+            block: imageBlock,
+            attachment: nil,
+            generationStatus: .idle
+        )
+
+        XCTAssertEqual(readyDescriptor.accessibilityLabel, "Image attachment: photo.png")
+        XCTAssertEqual(readyDescriptor.accessibilityValue, "Image, preview ready")
+        XCTAssertEqual(readyDescriptor.accessibilityIdentifier, "editor.attachment.image-block")
+
+        XCTAssertEqual(generatingDescriptor.accessibilityLabel, "Image attachment: photo.png")
+        XCTAssertEqual(generatingDescriptor.accessibilityValue, "Image, generating preview")
+
+        XCTAssertEqual(missingDescriptor.accessibilityLabel, "Image attachment: photo.png")
+        XCTAssertEqual(missingDescriptor.accessibilityValue, "Image, attachment unavailable")
+    }
+
     func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicStrikethroughAndCodeShortcutsOnly() {
         XCTAssertEqual(
             MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command]),

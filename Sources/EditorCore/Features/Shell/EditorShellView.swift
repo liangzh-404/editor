@@ -3401,6 +3401,70 @@ struct DividerBlockChromeDescriptor: Equatable, Sendable {
     }
 }
 
+struct AttachmentBlockChromeDescriptor: Equatable, Sendable {
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let accessibilityIdentifier: String
+
+    init(
+        block: BlockSnapshot,
+        attachment: AttachmentSnapshot?,
+        generationStatus: AttachmentPreviewGenerationStatus
+    ) {
+        let kindTitle = Self.kindTitle(for: block)
+        let filename = block.textPlain.isEmpty
+            ? attachment?.originalFilename ?? "Untitled attachment"
+            : block.textPlain
+        let previewState = attachment?.previewState(for: block) ?? .unavailable
+
+        accessibilityLabel = "\(kindTitle) attachment: \(filename)"
+        accessibilityIdentifier = "editor.attachment.\(block.id)"
+        let statusLabel = Self.statusLabel(
+            attachment: attachment,
+            generationStatus: generationStatus,
+            previewState: previewState
+        )
+        accessibilityValue = "\(kindTitle), \(statusLabel)"
+    }
+
+    private static func statusLabel(
+        attachment: AttachmentSnapshot?,
+        generationStatus: AttachmentPreviewGenerationStatus,
+        previewState: AttachmentPreviewState
+    ) -> String {
+        guard attachment != nil else {
+            return "attachment unavailable"
+        }
+
+        if case .failed = generationStatus {
+            return "preview failed"
+        }
+
+        if generationStatus == .generating || previewState == .pending {
+            return "generating preview"
+        }
+
+        if case .thumbnail = previewState {
+            return "preview ready"
+        }
+
+        return "ready"
+    }
+
+    private static func kindTitle(for block: BlockSnapshot) -> String {
+        switch block.type {
+        case .attachmentImage:
+            return "Image"
+        case .attachmentVideo:
+            return "Video"
+        case .attachmentFile:
+            return "File"
+        default:
+            return "Attachment"
+        }
+    }
+}
+
 private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
@@ -4330,6 +4394,11 @@ private struct AttachmentBlockRow: View {
     let onRetryPreview: (String) -> Void
 
     var body: some View {
+        let descriptor = AttachmentBlockChromeDescriptor(
+            block: block,
+            attachment: attachment,
+            generationStatus: generationStatus
+        )
         HStack(spacing: 10) {
             if let thumbnailImage {
                 thumbnailImage
@@ -4389,9 +4458,9 @@ private struct AttachmentBlockRow: View {
         .padding(.vertical, 10)
         .background(Color(red: 0.97, green: 0.97, blue: 0.95))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .accessibilityIdentifier("editor.attachment.\(block.id)")
-        .accessibilityLabel(block.textPlain)
-        .accessibilityValue(kindLabel)
+        .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+        .accessibilityLabel(descriptor.accessibilityLabel)
+        .accessibilityValue(descriptor.accessibilityValue)
     }
 
     private var thumbnailImage: Image? {
