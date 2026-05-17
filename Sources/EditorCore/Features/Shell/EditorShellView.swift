@@ -380,6 +380,11 @@ private struct CompactEditorShell: View {
                 switch route {
                 case .pages:
                     CompactPageListView(viewModel: viewModel)
+                case .collection(let collection):
+                    CompactCollectionDestination(
+                        viewModel: viewModel,
+                        collection: collection
+                    )
                 case .page(let pageID):
                     CompactPageDestination(
                         viewModel: viewModel,
@@ -482,20 +487,9 @@ private struct CompactHomeView: View {
 
     private var librarySection: some View {
         VStack(spacing: 6) {
-            compactNavigationRow(
-                title: "全部文档",
-                systemImage: "doc.text",
-                count: viewModel.snapshot.pages.count,
-                route: .pages,
-                identifier: "editor.compact.all-documents"
-            )
-            compactNavigationRow(
-                title: "收藏",
-                systemImage: "star",
-                count: viewModel.snapshot.favoritePages.count,
-                route: .pages,
-                identifier: "editor.compact.favorites"
-            )
+            ForEach(CompactLibraryNavigationModel.items(snapshot: viewModel.snapshot)) { item in
+                compactNavigationRow(item: item)
+            }
         }
     }
 
@@ -528,22 +522,16 @@ private struct CompactHomeView: View {
         }
     }
 
-    private func compactNavigationRow(
-        title: String,
-        systemImage: String,
-        count: Int,
-        route: CompactRoute,
-        identifier: String
-    ) -> some View {
-        NavigationLink(value: route) {
+    private func compactNavigationRow(item: CompactLibraryNavigationItem) -> some View {
+        NavigationLink(value: item.route) {
             HStack(spacing: 10) {
-                Image(systemName: systemImage)
+                Image(systemName: item.systemImage)
                     .frame(width: 22)
                     .foregroundStyle(Color(red: 0.49, green: 0.47, blue: 0.62))
-                Text(title)
+                Text(item.title)
                     .font(.body.weight(.semibold))
                 Spacer()
-                Text("\(count)")
+                Text("\(item.count)")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
             }
@@ -555,7 +543,7 @@ private struct CompactHomeView: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier(identifier)
+        .accessibilityIdentifier(item.identifier)
     }
 
     private var recentPages: [PageSummary] {
@@ -1153,8 +1141,87 @@ struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
     }
 }
 
-private enum CompactRoute: Hashable {
+struct CompactLibraryNavigationItem: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let systemImage: String
+    let count: Int
+    let collection: WorkspaceCollection
+    let route: CompactRoute
+    let identifier: String
+}
+
+enum CompactLibraryNavigationModel {
+    static func items(snapshot: WorkspaceSnapshot) -> [CompactLibraryNavigationItem] {
+        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        let allDocumentCount = snapshot.pages.filter { !diaryPageIDs.contains($0.id) }.count
+
+        return [
+            CompactLibraryNavigationItem(
+                id: "all-documents",
+                title: "全部文档",
+                systemImage: "doc.text",
+                count: allDocumentCount,
+                collection: .allDocuments,
+                route: .collection(.allDocuments),
+                identifier: "editor.compact.all-documents"
+            ),
+            CompactLibraryNavigationItem(
+                id: "diary",
+                title: "日记",
+                systemImage: "square.and.pencil",
+                count: diaryPageIDs.count,
+                collection: .diary,
+                route: .collection(.diary),
+                identifier: "editor.compact.diary"
+            ),
+            CompactLibraryNavigationItem(
+                id: "favorites",
+                title: "收藏",
+                systemImage: "star",
+                count: snapshot.favoritePages.count,
+                collection: .favorites,
+                route: .collection(.favorites),
+                identifier: "editor.compact.favorites"
+            )
+        ]
+    }
+}
+
+enum CompactCollectionPageListModel {
+    static func pages(snapshot: WorkspaceSnapshot, collection: WorkspaceCollection) -> [PageSummary] {
+        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+
+        switch collection {
+        case .recent:
+            return snapshot.pages
+        case .diary:
+            return snapshot.pages.filter { diaryPageIDs.contains($0.id) }
+        case .allDocuments:
+            return snapshot.pages.filter { !diaryPageIDs.contains($0.id) }
+        case .favorites:
+            return snapshot.favoritePages
+        case .tag(let tagID):
+            guard !tagID.isEmpty else {
+                return []
+            }
+            let pageIDs = Set(
+                snapshot.pageTags
+                    .filter { $0.tagID == tagID }
+                    .map(\.pageID)
+            )
+            return snapshot.pages.filter { pageIDs.contains($0.id) }
+        case .search:
+            return []
+        case .archive:
+            return snapshot.archivedPages
+        }
+    }
+}
+
+enum CompactRoute: Hashable {
     case pages
+    case collection(WorkspaceCollection)
     case page(String)
 }
 
@@ -2168,6 +2235,81 @@ private struct CompactPageListView: View {
 
     private func nestingLevel(for notebook: NotebookSummary) -> Int {
         NotebookHierarchy.nestingLevel(for: notebook, in: viewModel.snapshot.notebooks)
+    }
+}
+
+private struct CompactCollectionDestination: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+    let collection: WorkspaceCollection
+    @State private var didSelectCollection = false
+
+    var body: some View {
+        Group {
+            if collection == .diary {
+                if viewModel.selectedCollection == .diary,
+                   let pageID = viewModel.selectedPageID {
+                    CompactPageDestination(viewModel: viewModel, pageID: pageID)
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .navigationTitle("日记")
+                }
+            } else {
+                CompactCollectionPageListView(viewModel: viewModel, collection: collection)
+            }
+        }
+        .onAppear {
+            guard !didSelectCollection else {
+                return
+            }
+            didSelectCollection = true
+            viewModel.selectCollection(collection)
+        }
+    }
+}
+
+private struct CompactCollectionPageListView: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+    let collection: WorkspaceCollection
+
+    var body: some View {
+        List {
+            ForEach(pages) { page in
+                NavigationLink(value: CompactRoute.page(page.id)) {
+                    PageRow(page: page, isSelected: viewModel.selectedPageID == page.id)
+                }
+                .accessibilityIdentifier("editor.page.\(page.id)")
+            }
+        }
+        .navigationTitle(navigationTitle)
+        .scrollContentBackground(.hidden)
+        .background(Color.white)
+    }
+
+    private var pages: [PageSummary] {
+        CompactCollectionPageListModel.pages(
+            snapshot: viewModel.snapshot,
+            collection: collection
+        )
+    }
+
+    private var navigationTitle: String {
+        switch collection {
+        case .allDocuments:
+            return "全部文档"
+        case .favorites:
+            return "收藏"
+        case .recent:
+            return "近期文件"
+        case .diary:
+            return "日记"
+        case .tag:
+            return "标签"
+        case .search:
+            return "搜索"
+        case .archive:
+            return "归档"
+        }
     }
 }
 

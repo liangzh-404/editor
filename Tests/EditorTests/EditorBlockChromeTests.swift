@@ -348,6 +348,45 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(SidebarChrome.dividerOpacity, 0.10)
     }
 
+    func testCompactLibraryNavigationRoutesRowsByCollectionAndIncludesDiary() {
+        let workspaceID = "workspace"
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [
+                PageSummary(id: "page-a", workspaceID: workspaceID, title: "A"),
+                PageSummary(id: "page-diary", workspaceID: workspaceID, title: "2026年5月18日 星期一"),
+                PageSummary(id: "page-favorite", workspaceID: workspaceID, title: "收藏", isFavorite: true)
+            ],
+            blocks: [],
+            attachments: [],
+            diaryPages: [
+                DiaryPageSnapshot(pageID: "page-diary", workspaceID: workspaceID, diaryDate: "2026-05-18")
+            ],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: "page-a"
+        )
+
+        let items = CompactLibraryNavigationModel.items(snapshot: snapshot)
+
+        XCTAssertEqual(items.map(\.title), ["全部文档", "日记", "收藏"])
+        XCTAssertEqual(items.map(\.collection), [.allDocuments, .diary, .favorites])
+        XCTAssertEqual(items.map(\.count), [2, 1, 1])
+        XCTAssertEqual(items.map(\.route), [.collection(.allDocuments), .collection(.diary), .collection(.favorites)])
+
+        XCTAssertEqual(
+            CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .allDocuments).map(\.id),
+            ["page-a", "page-favorite"]
+        )
+        XCTAssertEqual(
+            CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .diary).map(\.id),
+            ["page-diary"]
+        )
+        XCTAssertEqual(
+            CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .favorites).map(\.id),
+            ["page-favorite"]
+        )
+    }
+
     func testPastedAttachmentAnchorPrefersTextSelectionThenFocusedBlockThenLastVisibleSelection() {
         let visibleBlockIDs = ["first", "middle", "last"]
 

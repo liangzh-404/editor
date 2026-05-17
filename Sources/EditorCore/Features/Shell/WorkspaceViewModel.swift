@@ -10,7 +10,7 @@ struct PageOutlineItem: Identifiable, Equatable, Sendable {
     }
 }
 
-enum WorkspaceCollection: Equatable, Sendable {
+enum WorkspaceCollection: Equatable, Hashable, Sendable {
     case recent
     case diary
     case allDocuments
