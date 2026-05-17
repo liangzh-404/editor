@@ -4950,7 +4950,8 @@ private struct BlockRowView: View {
                 blockID: block.id,
                 text: block.textPlain,
                 rows: block.tableRows,
-                onRowsChange: onTableRowsChange
+                onRowsChange: onTableRowsChange,
+                onMoveFocusByKeyboard: onMoveFocusByKeyboard
             )
             .onTapGesture {
                 onClearDropTarget()
@@ -5872,6 +5873,7 @@ private struct StructuredTableBlockEditor: View {
     let text: String
     let rows: [[String]]
     let onRowsChange: ([[String]]) -> Void
+    let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     @State private var isTableHovered = false
     @State private var selection = TableSelection.empty
 
@@ -5938,6 +5940,8 @@ private struct StructuredTableBlockEditor: View {
         .background(
             TableDeleteKeyBridge(isEnabled: !selection.isEmpty) {
                 deleteSelection()
+            } onMoveFocus: { direction in
+                onMoveFocusByKeyboard(direction)
             }
             .frame(width: 0, height: 0)
         )
@@ -6319,17 +6323,20 @@ private struct NonEditableBlockKeyboardFocusBridge: NSViewRepresentable {
 private struct TableDeleteKeyBridge: NSViewRepresentable {
     let isEnabled: Bool
     let onDelete: () -> Void
+    let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
 
     func makeNSView(context: Context) -> TableDeleteKeyCaptureView {
         let view = TableDeleteKeyCaptureView(frame: .zero)
         view.isEnabled = isEnabled
         view.onDelete = onDelete
+        view.onMoveFocus = onMoveFocus
         return view
     }
 
     func updateNSView(_ nsView: TableDeleteKeyCaptureView, context: Context) {
         nsView.isEnabled = isEnabled
         nsView.onDelete = onDelete
+        nsView.onMoveFocus = onMoveFocus
 
         guard isEnabled else {
             return
@@ -6346,9 +6353,11 @@ private struct TableDeleteKeyBridge: NSViewRepresentable {
     final class TableDeleteKeyCaptureView: NSView {
         var isEnabled = false
         var onDelete: () -> Void
+        var onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
 
         override init(frame frameRect: NSRect) {
             self.onDelete = {}
+            self.onMoveFocus = { _ in false }
             super.init(frame: frameRect)
         }
 
@@ -6362,11 +6371,23 @@ private struct TableDeleteKeyBridge: NSViewRepresentable {
         }
 
         override func keyDown(with event: NSEvent) {
-            guard isEnabled, (event.keyCode == 51 || event.keyCode == 117) else {
+            guard let action = TableBlockKeyboardActionResolver.action(
+                keyCode: event.keyCode,
+                modifiers: event.blockKeyboardShortcutModifiers,
+                hasSelection: isEnabled
+            ) else {
                 nextResponder?.keyDown(with: event)
                 return
             }
-            onDelete()
+
+            switch action {
+            case .deleteSelection:
+                onDelete()
+            case .moveFocus(let direction):
+                if !onMoveFocus(direction) {
+                    nextResponder?.keyDown(with: event)
+                }
+            }
         }
 
         override func deleteBackward(_ sender: Any?) {

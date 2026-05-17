@@ -344,6 +344,39 @@ enum NonEditableBlockKeyboardFocusResolver {
     }
 }
 
+enum TableBlockKeyboardAction: Equatable, Sendable {
+    case deleteSelection
+    case moveFocus(BlockKeyboardFocusDirection)
+}
+
+enum TableBlockKeyboardActionResolver {
+    static let deleteBackwardKeyCode: UInt16 = 51
+    static let deleteForwardKeyCode: UInt16 = 117
+
+    static func action(
+        keyCode: UInt16,
+        modifiers: Set<BlockKeyboardShortcutModifier>,
+        hasSelection: Bool
+    ) -> TableBlockKeyboardAction? {
+        guard hasSelection, modifiers.isEmpty else {
+            return nil
+        }
+
+        switch keyCode {
+        case deleteBackwardKeyCode, deleteForwardKeyCode:
+            return .deleteSelection
+        default:
+            guard let direction = NonEditableBlockKeyboardFocusResolver.focusDirection(
+                keyCode: keyCode,
+                modifiers: modifiers
+            ) else {
+                return nil
+            }
+            return .moveFocus(direction)
+        }
+    }
+}
+
 enum BlockDragPayloadResolver {
     static func payloadBlockIDs(rootBlockID: String, blocks: [BlockSnapshot]) -> [String] {
         let blocksByID = Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0) })

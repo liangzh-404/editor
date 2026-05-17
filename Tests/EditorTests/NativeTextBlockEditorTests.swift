@@ -529,6 +529,47 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testTableBlockKeyboardActionResolverMovesFocusWhenSelectionIsActive() {
+        XCTAssertEqual(
+            TableBlockKeyboardActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
+                modifiers: [],
+                hasSelection: true
+            ),
+            .moveFocus(.previous)
+        )
+        XCTAssertEqual(
+            TableBlockKeyboardActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [],
+                hasSelection: true
+            ),
+            .moveFocus(.next)
+        )
+        XCTAssertEqual(
+            TableBlockKeyboardActionResolver.action(
+                keyCode: TableBlockKeyboardActionResolver.deleteBackwardKeyCode,
+                modifiers: [],
+                hasSelection: true
+            ),
+            .deleteSelection
+        )
+        XCTAssertNil(
+            TableBlockKeyboardActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [.shift],
+                hasSelection: true
+            )
+        )
+        XCTAssertNil(
+            TableBlockKeyboardActionResolver.action(
+                keyCode: TableBlockKeyboardActionResolver.deleteBackwardKeyCode,
+                modifiers: [],
+                hasSelection: false
+            )
+        )
+    }
+
     func testBlockKeyboardFocusResolverTargetsAdjacentBlocksInDocumentOrder() {
         let blocks = [
             BlockSnapshot(
