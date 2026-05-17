@@ -960,6 +960,8 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
+        openWelcomePageForPageToolbarActions(in: app)
+
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 10), "Welcome text block should be visible before link removal")
 

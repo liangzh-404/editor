@@ -85,7 +85,7 @@ Implement the approved editor architecture so the app supports the full requeste
 - `WorkspaceViewModel.removeMarkdownLink` runs removal through the normal block text update path, so selected-page external links refresh and focus returns to the edited block.
 - `EditorCanvasView` shows a destructive Remove Link action when editing an existing inline link and routes toolbar opens through the same prefill path used by Cmd-K.
 - Regression coverage: `testMarkdownInlineLinkRemoverReplacesLinkWithLabelAndSelectsText`, `testRemoveExistingMarkdownLinkAtSelectionRefreshesExternalLinksAndReturnsLabelSelection`, and added UI coverage `testCommandKRemovesExistingInlineLinkUnderSelection`. Focused inline-link unit regression passed with xcodebuild reporting 0.877s. Latest `scripts/block_first_final_regression.sh non-ui` also passed with focused unit tests reporting 7.950s, then `EditorMac` build, `EditorIOS` build, and `git diff --check`.
-- UI automation attempt: `testCommandKRemovesExistingInlineLinkUnderSelection` built but exited 65 because the runner timed out enabling automation mode.
+- The previously blocked `testCommandKRemovesExistingInlineLinkUnderSelection` UI flow now follows the block-first launch contract by opening All Documents and selecting Welcome before editing the block, passes through the rebuilt `scripts/mac_ui_test.sh run ...` path, and is included in the focused `scripts/block_first_final_regression.sh ui` suite. The refreshed focused UI gate passes 7 macOS UI tests with xcodebuild reporting 124.044s and no forbidden SwiftUI runtime issues; the xcresult still reports Xcode internal QoS priority-inversion warnings for the Cmd-K removal and Cmd+] promotion tests.
 
 ## Recent Conflict Merge Draft Polish
 
