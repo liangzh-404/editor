@@ -346,6 +346,7 @@ struct EditorCanvasScrollMetrics: Equatable, Sendable {
     let peakVisibleBlockCount: Int
     let firstVisibleBlockIndex: Int?
     let lastVisibleBlockIndex: Int?
+    let peakLastVisibleBlockIndex: Int?
     let peakVisibleBlockIndexSpan: Int
     let scrollLifetimeMilliseconds: Double
     let blockAppearanceCount: Int
@@ -358,6 +359,7 @@ struct EditorCanvasScrollMetrics: Equatable, Sendable {
         peakVisibleBlockCount: Int,
         firstVisibleBlockIndex: Int?,
         lastVisibleBlockIndex: Int?,
+        peakLastVisibleBlockIndex: Int? = nil,
         peakVisibleBlockIndexSpan: Int,
         scrollLifetimeMilliseconds: Double = 0,
         blockAppearanceCount: Int = 0,
@@ -369,6 +371,7 @@ struct EditorCanvasScrollMetrics: Equatable, Sendable {
         self.peakVisibleBlockCount = peakVisibleBlockCount
         self.firstVisibleBlockIndex = firstVisibleBlockIndex
         self.lastVisibleBlockIndex = lastVisibleBlockIndex
+        self.peakLastVisibleBlockIndex = peakLastVisibleBlockIndex
         self.peakVisibleBlockIndexSpan = peakVisibleBlockIndexSpan
         self.scrollLifetimeMilliseconds = scrollLifetimeMilliseconds
         self.blockAppearanceCount = blockAppearanceCount
@@ -399,6 +402,7 @@ struct EditorCanvasScrollMetrics: Equatable, Sendable {
             "peak_visible_block_count=\(peakVisibleBlockCount)",
             "first_visible_block_index=\(Self.optionalIndexDescription(firstVisibleBlockIndex))",
             "last_visible_block_index=\(Self.optionalIndexDescription(lastVisibleBlockIndex))",
+            "peak_last_visible_block_index=\(Self.optionalIndexDescription(peakLastVisibleBlockIndex))",
             "visible_block_index_span=\(visibleBlockIndexSpan)",
             "peak_visible_block_index_span=\(peakVisibleBlockIndexSpan)",
             "scroll_lifetime_ms=\(Self.millisecondsDescription(scrollLifetimeMilliseconds))",
@@ -423,6 +427,7 @@ struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
     private var blockCount: Int
     private var visibleBlockIndexesByID: [String: Int] = [:]
     private var peakVisibleBlockCount = 0
+    private var peakLastVisibleBlockIndex: Int?
     private var peakVisibleBlockIndexSpan = 0
     private var startedAtNanoseconds: UInt64
     private var lastEventNanoseconds: UInt64
@@ -450,6 +455,7 @@ struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
             peakVisibleBlockCount: peakVisibleBlockCount,
             firstVisibleBlockIndex: firstVisibleBlockIndex,
             lastVisibleBlockIndex: lastVisibleBlockIndex,
+            peakLastVisibleBlockIndex: peakLastVisibleBlockIndex,
             peakVisibleBlockIndexSpan: peakVisibleBlockIndexSpan,
             scrollLifetimeMilliseconds: Self.durationMilliseconds(
                 from: startedAtNanoseconds,
@@ -469,6 +475,7 @@ struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
         self.blockCount = blockCount
         visibleBlockIndexesByID.removeAll()
         peakVisibleBlockCount = 0
+        peakLastVisibleBlockIndex = nil
         peakVisibleBlockIndexSpan = 0
         startedAtNanoseconds = nowNanoseconds
         lastEventNanoseconds = nowNanoseconds
@@ -481,10 +488,18 @@ struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
         index: Int,
         nowNanoseconds: UInt64 = Self.currentNanoseconds()
     ) {
+        if visibleBlockIndexesByID[blockID] == index {
+            return
+        }
+
+        let wasVisible = visibleBlockIndexesByID[blockID] != nil
         visibleBlockIndexesByID[blockID] = index
         lastEventNanoseconds = nowNanoseconds
-        blockAppearanceCount += 1
+        if !wasVisible {
+            blockAppearanceCount += 1
+        }
         peakVisibleBlockCount = max(peakVisibleBlockCount, visibleBlockIndexesByID.count)
+        peakLastVisibleBlockIndex = max(peakLastVisibleBlockIndex ?? index, index)
         peakVisibleBlockIndexSpan = max(peakVisibleBlockIndexSpan, metrics.visibleBlockIndexSpan)
     }
 
@@ -2183,10 +2198,10 @@ private struct EditorCanvasView: View {
                         onBlockTextChange(block.id, text)
                     }
                     .onAppear {
-                        recordVisibleBlockAppeared(block.id, index: index)
+                        scheduleVisibleBlockAppeared(block.id, index: index)
                     }
                     .onDisappear {
-                        recordVisibleBlockDisappeared(block.id)
+                        scheduleVisibleBlockDisappeared(block.id)
                     }
                     .dropDestination(for: String.self) { draggedBlockIDs, _ in
                         moveDroppedBlocks(draggedBlockIDs, destinationBlockID: block.id)
@@ -2249,7 +2264,7 @@ private struct EditorCanvasView: View {
         .navigationTitle(page?.title ?? "Editor")
         .focusedValue(\.insertMarkdownLinkAction, insertMarkdownLinkAction)
         .onAppear {
-            resetScrollMetrics()
+            scheduleScrollMetricsReset()
             schedulePendingFocusIfNeeded(pendingFocusBlockID)
             logRenderMetrics(reason: "appear")
         }
@@ -2257,7 +2272,7 @@ private struct EditorCanvasView: View {
             schedulePendingFocusIfNeeded(blockID)
         }
         .onChange(of: renderMetrics) { _, _ in
-            resetScrollMetrics()
+            scheduleScrollMetricsReset()
             logRenderMetrics(reason: "change")
         }
         .fileImporter(
@@ -2778,7 +2793,29 @@ private struct EditorCanvasView: View {
         logScrollMetrics(reason: "reset")
     }
 
+    private func scheduleScrollMetricsReset() {
+        DispatchQueue.main.async {
+            resetScrollMetrics()
+        }
+    }
+
+    private func scheduleVisibleBlockAppeared(_ blockID: String, index: Int) {
+        DispatchQueue.main.async {
+            recordVisibleBlockAppeared(blockID, index: index)
+        }
+    }
+
+    private func scheduleVisibleBlockDisappeared(_ blockID: String) {
+        DispatchQueue.main.async {
+            recordVisibleBlockDisappeared(blockID)
+        }
+    }
+
     private func recordVisibleBlockAppeared(_ blockID: String, index: Int) {
+        guard blocks.indices.contains(index),
+              blocks[index].id == blockID else {
+            return
+        }
         scrollMetricsTracker.blockAppeared(blockID, index: index)
         logScrollMetrics(reason: "appear")
     }

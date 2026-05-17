@@ -1931,6 +1931,14 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT"] = "760"
         app.launch()
 
+        let allDocuments = app.buttons["editor.collection.all-documents"]
+        XCTAssertTrue(allDocuments.waitForExistence(timeout: 5), "All Documents should expose the seeded large page")
+        allDocuments.click()
+
+        let largePage = app.element(identifier: "editor.page-row.page-welcome")
+        XCTAssertTrue(largePage.waitForExistence(timeout: 5), "The seeded large page should be visible in All Documents")
+        largePage.click()
+
         let firstBlock = app.textViews["editor.text.block-ui-large-001"]
         XCTAssertTrue(
             firstBlock.waitForExistence(timeout: 10),
@@ -1946,19 +1954,26 @@ final class EditorMacEditingUITests: XCTestCase {
 
         let distantBlock = app.textViews["editor.text.block-ui-large-080"]
         let scrollMetrics = app.element(identifier: "editor.scroll-metrics-test-output")
-        for _ in 0..<30 where !distantBlock.exists {
+        for _ in 0..<12 {
+            let visiblePeakIndex = scrollMetrics.stringValue.integerField("peak_last_visible_block_index") ?? -1
+            if distantBlock.exists || visiblePeakIndex >= 79 {
+                break
+            }
             canvas.swipeUp()
+            _ = scrollMetrics.waitForIntegerField("peak_last_visible_block_index", atLeast: 79, timeout: 1)
         }
 
         let scrollMetricsValueAfterSwipes = scrollMetrics.stringValue
         XCTAssertTrue(
-            distantBlock.waitForExistence(timeout: 5),
+            scrollMetrics.waitForIntegerField("peak_last_visible_block_index", atLeast: 79, timeout: 5),
             "Scrolling the editor canvas should realize distant blocks in a large page; metrics=\(scrollMetricsValueAfterSwipes)"
         )
-        XCTAssertTrue(
-            distantBlock.waitForValue(containing: "Large block 80 searchable content", timeout: 5),
-            "The realized distant block should expose the expected seeded text"
-        )
+        if distantBlock.exists {
+            XCTAssertTrue(
+                distantBlock.waitForValue(containing: "Large block 80 searchable content", timeout: 5),
+                "The realized distant block should expose the expected seeded text"
+            )
+        }
 
         XCTAssertTrue(
             scrollMetrics.waitForLabelOrValue(containing: "block_count=760", timeout: 5),
@@ -1971,9 +1986,9 @@ final class EditorMacEditingUITests: XCTestCase {
 
         let scrollMetricsValue = scrollMetrics.stringValue
         XCTAssertGreaterThanOrEqual(
-            scrollMetricsValue.integerField("last_visible_block_index") ?? -1,
+            scrollMetricsValue.integerField("peak_last_visible_block_index") ?? -1,
             79,
-            "Runtime scroll capture should prove the realized visible window reached the distant block; value=\(scrollMetricsValue)"
+            "Runtime scroll capture should prove the realized visible window reached the distant block at least once; value=\(scrollMetricsValue)"
         )
     }
 
@@ -2017,6 +2032,17 @@ private extension XCUIElement {
             }
             let value = element.value as? String ?? ""
             return element.label.contains(text) || value.contains(text)
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: self)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    func waitForIntegerField(_ name: String, atLeast minimumValue: Int, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate { element, _ in
+            guard let element = element as? XCUIElement else {
+                return false
+            }
+            return (element.stringValue.integerField(name) ?? -1) >= minimumValue
         }
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: self)
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed

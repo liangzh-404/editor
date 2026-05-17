@@ -775,9 +775,10 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 peakVisibleBlockCount: 2,
                 firstVisibleBlockIndex: 4,
                 lastVisibleBlockIndex: 4,
+                peakLastVisibleBlockIndex: 4,
                 peakVisibleBlockIndexSpan: 5,
                 scrollLifetimeMilliseconds: 70,
-                blockAppearanceCount: 3,
+                blockAppearanceCount: 2,
                 blockDisappearanceCount: 1
             )
         )
@@ -824,5 +825,24 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(metrics.runtimeSummary.contains("block_appearance_count=2"))
         XCTAssertTrue(metrics.runtimeSummary.contains("block_disappearance_count=1"))
         XCTAssertTrue(metrics.runtimeSummary.contains("visible_block_churn_count=3"))
+    }
+
+    func testEditorCanvasScrollMetricsTracksFurthestVisibleBlockWithoutDuplicateChurn() {
+        var tracker = EditorCanvasScrollMetricsTracker(
+            pageID: "page-1",
+            blockCount: 760,
+            nowNanoseconds: 1_000_000_000
+        )
+
+        tracker.blockAppeared("a", index: 0, nowNanoseconds: 1_010_000_000)
+        tracker.blockAppeared("b", index: 79, nowNanoseconds: 1_020_000_000)
+        tracker.blockAppeared("b", index: 79, nowNanoseconds: 1_030_000_000)
+        tracker.blockDisappeared("b", nowNanoseconds: 1_040_000_000)
+
+        let metrics = tracker.metrics
+        XCTAssertEqual(metrics.blockAppearanceCount, 2)
+        XCTAssertEqual(metrics.blockDisappearanceCount, 1)
+        XCTAssertEqual(metrics.visibleBlockChurnCount, 3)
+        XCTAssertTrue(metrics.runtimeSummary.contains("peak_last_visible_block_index=79"))
     }
 }

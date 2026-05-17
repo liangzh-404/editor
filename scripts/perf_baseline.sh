@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-DESTINATION="platform=macOS"
+DESTINATION="platform=macOS,arch=arm64"
 LARGE_PAGE_TEST="EditorTests/PageRepositoryTests/testLargePageImportLoadAndSearchIndexRemainUsable"
 SCROLL_METRICS_TEST="EditorTests/NativeTextBlockEditorTests/testEditorCanvasScrollMetricsTrackVisibleBlocksAndLargePageState"
 
