@@ -945,7 +945,11 @@ final class PageRepository {
         )
     }
 
-    func importMarkdown(pageID: String, markdown: String) throws {
+    func importMarkdown(
+        pageID: String,
+        markdown: String,
+        attachmentImporter: ((MarkdownBlockDraft) throws -> AttachmentImportResult?)? = nil
+    ) throws {
         let drafts = MarkdownTransformer.importBlocks(markdown: markdown)
         let now = Self.timestamp()
 
@@ -972,6 +976,14 @@ final class PageRepository {
         for (index, draft) in drafts.enumerated() {
             let blockID = "block-\(UUID().uuidString.lowercased())"
             let referenceTargets = try markdownReferenceTargets(for: draft)
+            if draft.attachmentRelativePath != nil,
+               let importedAttachment = try attachmentImporter?(draft) {
+                try BacklinkRepository(database: database).rebuildLinksForBlock(
+                    blockID: importedAttachment.block.id,
+                    text: importedAttachment.block.textPlain
+                )
+                continue
+            }
             try insertBlock(
                 id: blockID,
                 pageID: pageID,

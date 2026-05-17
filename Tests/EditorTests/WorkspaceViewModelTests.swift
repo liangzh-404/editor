@@ -1079,6 +1079,58 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testImportMarkdownPackageCopiesAttachmentsAndRestoresAttachmentBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let attachmentsDirectory = makeTemporaryDirectory()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: attachmentsDirectory
+        )
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil
+        )
+        try viewModel.load()
+        let packageDirectory = makeTemporaryDirectory()
+        let packageAttachmentDirectory = packageDirectory
+            .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent("source-attachment", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: packageAttachmentDirectory,
+            withIntermediateDirectories: true
+        )
+        try "packaged attachment".write(
+            to: packageAttachmentDirectory.appendingPathComponent("brief.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let markdownURL = packageDirectory.appendingPathComponent("Welcome.md")
+        try """
+        Imported intro
+
+        [brief.txt](Attachments/source-attachment/brief.txt)
+        """.write(to: markdownURL, atomically: true, encoding: .utf8)
+
+        try viewModel.importMarkdownPackageToCurrentPage(markdownURL: markdownURL)
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph, .attachmentFile])
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Imported intro", "brief.txt"])
+        let attachmentBlock = try XCTUnwrap(viewModel.visibleBlocks.last)
+        let importedAttachment = try XCTUnwrap(viewModel.snapshot.attachments.first)
+        XCTAssertEqual(attachmentBlock.attachmentID, importedAttachment.id)
+        XCTAssertTrue(importedAttachment.localPath.hasPrefix(attachmentsDirectory.path))
+        XCTAssertEqual(
+            try String(contentsOfFile: importedAttachment.localPath, encoding: .utf8),
+            "packaged attachment"
+        )
+    }
+
+    @MainActor
     func testImportMarkdownToCurrentPageRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

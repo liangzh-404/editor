@@ -1976,10 +1976,49 @@ final class WorkspaceViewModel: ObservableObject {
         try load()
     }
 
+    func importMarkdownPackageToCurrentPage(markdownURL: URL) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedWorkspaceID, let selectedPageID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        let markdown = try String(contentsOf: markdownURL, encoding: .utf8)
+        let packageDirectory = markdownURL.deletingLastPathComponent()
+        var importedAttachments: [AttachmentImportResult] = []
+        try repository.importMarkdown(pageID: selectedPageID, markdown: markdown) { [attachmentRepository] draft in
+            guard let relativePath = draft.attachmentRelativePath else {
+                return nil
+            }
+            guard let attachmentRepository else {
+                throw WorkspaceViewModelError.missingRepository
+            }
+            guard let sourceURL = Self.packageAttachmentSourceURL(
+                packageDirectory: packageDirectory,
+                relativePath: relativePath
+            ) else {
+                return nil
+            }
+
+            let result = try attachmentRepository.importAttachment(
+                sourceURL: sourceURL,
+                workspaceID: selectedWorkspaceID,
+                pageID: selectedPageID,
+                thumbnailPolicy: .deferred
+            )
+            importedAttachments.append(result)
+            return result
+        }
+        try load()
+        for result in importedAttachments {
+            scheduleMissingAttachmentThumbnail(attachmentID: result.attachment.id)
+        }
+    }
+
     func importMarkdownFileForCurrentPage(sourceURL: URL) {
         do {
-            let markdown = try String(contentsOf: sourceURL, encoding: .utf8)
-            try importMarkdownToCurrentPage(markdown)
+            try importMarkdownPackageToCurrentPage(markdownURL: sourceURL)
             EditorLog.markdown.debug(
                 "markdown_file_imported source=\(sourceURL.lastPathComponent, privacy: .public)"
             )
@@ -2079,6 +2118,22 @@ final class WorkspaceViewModel: ObservableObject {
             }
             attachmentIDs.insert(attachment.id)
             return attachment
+        }
+    }
+
+    private static func packageAttachmentSourceURL(
+        packageDirectory: URL,
+        relativePath: String
+    ) -> URL? {
+        let decodedPath = relativePath.removingPercentEncoding ?? relativePath
+        let pathComponents = decodedPath.split(separator: "/", omittingEmptySubsequences: false)
+        guard pathComponents.first == "Attachments",
+              pathComponents.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            return nil
+        }
+
+        return pathComponents.reduce(packageDirectory) { partialURL, component in
+            partialURL.appendingPathComponent(String(component))
         }
     }
 

@@ -16,11 +16,18 @@ struct MarkdownBlockDraft: Equatable, Sendable {
     let type: BlockType
     let textPlain: String
     let taskItemIsCompleted: Bool
+    let attachmentRelativePath: String?
 
-    init(type: BlockType, textPlain: String, taskItemIsCompleted: Bool = false) {
+    init(
+        type: BlockType,
+        textPlain: String,
+        taskItemIsCompleted: Bool = false,
+        attachmentRelativePath: String? = nil
+    ) {
         self.type = type
         self.textPlain = textPlain
         self.taskItemIsCompleted = taskItemIsCompleted
+        self.attachmentRelativePath = attachmentRelativePath
     }
 }
 
@@ -1265,6 +1272,9 @@ enum MarkdownTransformer {
         if line == "---" {
             return MarkdownBlockDraft(type: .divider, textPlain: "")
         }
+        if let attachmentDraft = attachmentDraft(for: line) {
+            return attachmentDraft
+        }
         if let pageReferenceText = pageReferenceText(for: line) {
             return MarkdownBlockDraft(type: .pageReference, textPlain: pageReferenceText)
         }
@@ -1344,6 +1354,50 @@ enum MarkdownTransformer {
         }
 
         return String(line.dropFirst(prefix.count).dropLast(suffix.count))
+    }
+
+    private static func attachmentDraft(for line: String) -> MarkdownBlockDraft? {
+        if let imageLink = wholeLineMarkdownLink(in: line, prefix: "![") {
+            return MarkdownBlockDraft(
+                type: .attachmentImage,
+                textPlain: imageLink.label,
+                attachmentRelativePath: imageLink.target
+            )
+        }
+
+        if let fileLink = wholeLineMarkdownLink(in: line, prefix: "[") {
+            return MarkdownBlockDraft(
+                type: .attachmentFile,
+                textPlain: fileLink.label,
+                attachmentRelativePath: fileLink.target
+            )
+        }
+
+        return nil
+    }
+
+    private static func wholeLineMarkdownLink(
+        in line: String,
+        prefix: String
+    ) -> (label: String, target: String)? {
+        guard line.hasPrefix(prefix),
+              line.hasSuffix(")") else {
+            return nil
+        }
+
+        let content = line.dropFirst(prefix.count).dropLast()
+        guard let separatorRange = content.range(of: "](") else {
+            return nil
+        }
+
+        let label = String(content[..<separatorRange.lowerBound])
+        let target = String(content[separatorRange.upperBound...])
+        guard !label.isEmpty,
+              target.hasPrefix("Attachments/") else {
+            return nil
+        }
+
+        return (label, target)
     }
 
     private static func pageReferenceText(for line: String) -> String? {
