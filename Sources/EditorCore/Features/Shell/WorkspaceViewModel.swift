@@ -2309,6 +2309,34 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func deleteBlocksFromCurrentPage(blockIDs: [String]) -> Bool {
+        let uniqueBlockIDs = Array(Set(blockIDs))
+        guard !uniqueBlockIDs.isEmpty else {
+            return false
+        }
+
+        do {
+            guard let repository else {
+                throw WorkspaceViewModelError.missingRepository
+            }
+
+            for blockID in uniqueBlockIDs {
+                try repository.deleteBlock(blockID: blockID)
+            }
+            try load()
+            EditorLog.store.debug(
+                "blocks_delete_visible block_ids=\(uniqueBlockIDs.joined(separator: ","), privacy: .public)"
+            )
+            return true
+        } catch {
+            EditorLog.store.error(
+                "blocks_delete_failed block_ids=\(uniqueBlockIDs.joined(separator: ","), privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
     func exportCurrentPageMarkdown() -> String {
         MarkdownTransformer.export(blocks: visibleBlocks, attachments: snapshot.attachments)
     }

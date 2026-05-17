@@ -236,6 +236,9 @@ private struct ThreeColumnEditorShell: View {
                     onDeleteBlock: { blockID in
                         viewModel.deleteBlockFromCurrentPage(blockID: blockID)
                     },
+                    onDeleteBlocks: { blockIDs in
+                        viewModel.deleteBlocksFromCurrentPage(blockIDs: blockIDs)
+                    },
                     onSelectBacklink: { backlink in
                         viewModel.selectBacklink(backlink)
                     },
@@ -708,6 +711,45 @@ enum MobileBlockSelectionReducer {
         return nextSelection
     }
 }
+
+#if os(iOS)
+private struct MobileBlockSelectionToolbar: View {
+    let selectedCount: Int
+    let onClear: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("已选择 \(selectedCount) 个")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 8)
+
+            Button("取消", action: onClear)
+                .font(.subheadline.weight(.medium))
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("editor.mobile-selection-clear")
+
+            Button(role: .destructive, action: onDelete) {
+                Label("删除", systemImage: "trash")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("editor.mobile-selection-delete")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.regularMaterial)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.black.opacity(0.08))
+                .frame(height: 0.5)
+        }
+        .accessibilityIdentifier("editor.mobile-selection-toolbar")
+    }
+}
+#endif
 
 struct TableSelection: Equatable, Sendable {
     var rows: Set<Int>
@@ -1195,6 +1237,9 @@ private struct CompactPageDestination: View {
                 },
                 onDeleteBlock: { blockID in
                     viewModel.deleteBlockFromCurrentPage(blockID: blockID)
+                },
+                onDeleteBlocks: { blockIDs in
+                    viewModel.deleteBlocksFromCurrentPage(blockIDs: blockIDs)
                 },
                 onSelectBacklink: { backlink in
                     viewModel.selectBacklink(backlink)
@@ -2710,6 +2755,7 @@ private struct EditorCanvasView: View {
     let onIndentBlock: (String) -> Bool
     let onOutdentBlock: (String) -> Bool
     let onDeleteBlock: (String) -> Void
+    let onDeleteBlocks: ([String]) -> Bool
     let onSelectBacklink: (Backlink) -> Void
     let onSelectOutlineItem: (PageOutlineItem) -> Void
     let onOpenPageReference: (String) -> Void
@@ -3075,6 +3121,24 @@ private struct EditorCanvasView: View {
         }
 #endif
         .background(Color.white)
+#if os(iOS)
+        .safeAreaInset(edge: .bottom) {
+            if !editorSession.selectedBlockIDs.isEmpty {
+                MobileBlockSelectionToolbar(
+                    selectedCount: editorSession.selectedBlockIDs.count,
+                    onClear: {
+                        editorSession.clearBlockSelection()
+                    },
+                    onDelete: {
+                        let blockIDs = Array(editorSession.selectedBlockIDs)
+                        if onDeleteBlocks(blockIDs) {
+                            editorSession.clearBlockSelection()
+                        }
+                    }
+                )
+            }
+        }
+#endif
 #if os(macOS)
         .background(
             DropTargetCleanupEventBridge(isEnabled: activeBlockDropTarget != nil) {

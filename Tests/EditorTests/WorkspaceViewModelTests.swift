@@ -2529,6 +2529,34 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testDeleteBlocksFromCurrentPageRemovesSelectedBlocksAndReloadsView() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                Third
+                """
+        )
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let firstBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        let thirdBlockID = try XCTUnwrap(viewModel.visibleBlocks.last?.id)
+
+        XCTAssertTrue(viewModel.deleteBlocksFromCurrentPage(blockIDs: [firstBlockID, thirdBlockID]))
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Second"])
+    }
+
+    @MainActor
     func testSplitTextBlockAtSelectionMovesTrailingTextIntoFocusedInsertedBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }
