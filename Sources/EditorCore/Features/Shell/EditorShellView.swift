@@ -653,6 +653,9 @@ enum TableBlockChrome {
     static let selectorHeight: Double = 12
     static let selectorIndicatorOpacity: Double = 0
     static let selectorHitOpacity: Double = 0.0001
+    static let selectorSelectedIndicatorOpacity: Double = 0.55
+    static let selectorSelectedIndicatorThickness: Double = 2
+    static let selectorSelectedIndicatorInset: Double = 7
 }
 
 enum PastedAttachmentAnchorResolver {
@@ -6554,12 +6557,24 @@ private struct StructuredTableBlockEditor: View {
                 extend: isShiftPressed
             )
         } label: {
-            Rectangle()
-                .fill(Color.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
-                .frame(
-                    width: CGFloat(TableBlockChrome.selectorWidth),
-                    height: CGFloat(TableBlockChrome.cellHeight)
-                )
+            ZStack(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
+                    .frame(
+                        width: CGFloat(TableBlockChrome.selectorWidth),
+                        height: CGFloat(TableBlockChrome.cellHeight)
+                    )
+
+                if selection.rows.contains(rowIndex) {
+                    Capsule()
+                        .fill(Color.accentColor.opacity(TableBlockChrome.selectorSelectedIndicatorOpacity))
+                        .frame(
+                            width: CGFloat(TableBlockChrome.selectorSelectedIndicatorThickness),
+                            height: CGFloat(TableBlockChrome.cellHeight - TableBlockChrome.selectorSelectedIndicatorInset * 2)
+                        )
+                        .padding(.vertical, CGFloat(TableBlockChrome.selectorSelectedIndicatorInset))
+                }
+            }
         }
         .buttonStyle(.borderless)
         .contentShape(Rectangle())
@@ -6581,12 +6596,24 @@ private struct StructuredTableBlockEditor: View {
                 extend: isShiftPressed
             )
         } label: {
-            Rectangle()
-                .fill(Color.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
-                .frame(
-                    width: CGFloat(TableBlockChrome.cellWidth),
-                    height: CGFloat(TableBlockChrome.selectorHeight)
-                )
+            ZStack(alignment: .top) {
+                Rectangle()
+                    .fill(Color.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
+                    .frame(
+                        width: CGFloat(TableBlockChrome.cellWidth),
+                        height: CGFloat(TableBlockChrome.selectorHeight)
+                    )
+
+                if selection.columns.contains(columnIndex) {
+                    Capsule()
+                        .fill(Color.accentColor.opacity(TableBlockChrome.selectorSelectedIndicatorOpacity))
+                        .frame(
+                            width: CGFloat(TableBlockChrome.cellWidth - TableBlockChrome.selectorSelectedIndicatorInset * 2),
+                            height: CGFloat(TableBlockChrome.selectorSelectedIndicatorThickness)
+                        )
+                        .padding(.horizontal, CGFloat(TableBlockChrome.selectorSelectedIndicatorInset))
+                }
+            }
         }
         .buttonStyle(.borderless)
         .contentShape(Rectangle())

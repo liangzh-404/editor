@@ -30,6 +30,9 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 4)
         XCTAssertEqual(TableBlockChrome.selectorIndicatorOpacity, 0)
         XCTAssertEqual(TableBlockChrome.selectorHitOpacity, 0.0001)
+        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorOpacity, 0.55)
+        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorThickness, 2)
+        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorInset, 7)
     }
 
     func testTableInsertControlChromeKeepsExpandedPlusInsideGridEdge() {
@@ -41,6 +44,29 @@ final class EditorBlockChromeTests: XCTestCase {
             centerInsetFromEdge,
             expandedRadius,
             "Hovered table insert controls should not be clipped halfway outside the table edge"
+        )
+    }
+
+    func testTableSelectionChromeKeepsIdleSelectorsInvisibleButSelectedFeedbackVisible() {
+        XCTAssertLessThan(
+            TableBlockChrome.selectorHitOpacity,
+            0.001,
+            "Idle row and column selectors should stay quiet instead of showing permanent bars"
+        )
+        XCTAssertEqual(
+            TableBlockChrome.selectorIndicatorOpacity,
+            0,
+            "Idle selector indicators should be hidden until a row or column is selected"
+        )
+        XCTAssertGreaterThan(
+            TableBlockChrome.selectorSelectedIndicatorOpacity,
+            0.4,
+            "Selected rows and columns need a visible edge cue so border selection does not feel invisible"
+        )
+        XCTAssertLessThanOrEqual(
+            TableBlockChrome.selectorSelectedIndicatorThickness,
+            2,
+            "Selected edge feedback should stay Craft-like and avoid heavy table bars"
         )
     }
 
