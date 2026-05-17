@@ -352,23 +352,11 @@ private struct ThreeColumnEditorShell: View {
 private struct CompactEditorShell: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     @State private var path: [CompactRoute] = []
+    @State private var didPushInitialPage = false
 
     var body: some View {
         NavigationStack(path: $path) {
-            List {
-                Section("Spaces") {
-                    ForEach(viewModel.snapshot.workspaces) { workspace in
-                        NavigationLink(value: CompactRoute.pages) {
-                            Label(workspace.name, systemImage: "tray.full")
-                        }
-                        .accessibilityIdentifier("editor.workspace.\(workspace.id)")
-                    }
-                }
-
-                CloudKitAccountStatusSection(viewModel: viewModel)
-            }
-            .navigationTitle("Editor")
-            .background(Color.white)
+            CompactHomeView(viewModel: viewModel)
             .navigationDestination(for: CompactRoute.self) { route in
                 switch route {
                 case .pages:
@@ -380,6 +368,9 @@ private struct CompactEditorShell: View {
                     )
                 }
             }
+            .onAppear {
+                pushInitialPageIfNeeded()
+            }
             .onChange(of: viewModel.pendingCompactPageNavigationID) { _, pageID in
                 guard let pageID = viewModel.consumePendingCompactPageNavigationID() ?? pageID else {
                     return
@@ -387,6 +378,18 @@ private struct CompactEditorShell: View {
                 pushPageIfNeeded(pageID)
             }
         }
+    }
+
+    private func pushInitialPageIfNeeded() {
+        guard !didPushInitialPage else {
+            return
+        }
+        didPushInitialPage = true
+
+        guard let pageID = viewModel.selectedPageID else {
+            return
+        }
+        pushPageIfNeeded(pageID)
     }
 
     private func pushPageIfNeeded(_ pageID: String) {
@@ -397,6 +400,212 @@ private struct CompactEditorShell: View {
         if path.last != .page(pageID) {
             path.append(.page(pageID))
         }
+    }
+}
+
+private struct CompactHomeView: View {
+    @ObservedObject var viewModel: WorkspaceViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                recentSection
+                librarySection
+                tagSection
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 20)
+        }
+        .navigationTitle("近期打开")
+        .background(Color(red: 0.965, green: 0.958, blue: 0.948))
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Color(red: 0.45, green: 0.43, blue: 0.58))
+
+            Text("近期打开")
+                .font(.title2.weight(.bold))
+
+            Spacer()
+
+            NavigationLink(value: CompactRoute.pages) {
+                Image(systemName: "square.and.pencil")
+                    .font(.title3.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("新建或浏览文档")
+        }
+    }
+
+    private var recentSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(recentPages) { page in
+                NavigationLink(value: CompactRoute.page(page.id)) {
+                    CompactRecentPageCard(
+                        page: page,
+                        tagNames: tagNames(for: page),
+                        preview: PageListPreviewResolver.preview(
+                            pageID: page.id,
+                            blocks: viewModel.snapshot.blocks,
+                            attachments: viewModel.snapshot.attachments
+                        )
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("editor.page.\(page.id)")
+            }
+        }
+    }
+
+    private var librarySection: some View {
+        VStack(spacing: 6) {
+            compactNavigationRow(
+                title: "全部文档",
+                systemImage: "doc.text",
+                count: viewModel.snapshot.pages.count,
+                route: .pages,
+                identifier: "editor.compact.all-documents"
+            )
+            compactNavigationRow(
+                title: "收藏",
+                systemImage: "star",
+                count: viewModel.snapshot.favoritePages.count,
+                route: .pages,
+                identifier: "editor.compact.favorites"
+            )
+        }
+    }
+
+    private var tagSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("标签")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(Color.primary.opacity(0.82))
+                .padding(.horizontal, 4)
+
+            ForEach(viewModel.snapshot.tags.prefix(8)) { tag in
+                HStack(spacing: 10) {
+                    Image(systemName: "tag")
+                        .foregroundStyle(Color(red: 0.49, green: 0.47, blue: 0.62))
+                        .frame(width: 22)
+                    Text(tag.path)
+                        .lineLimit(1)
+                    Spacer()
+                    Text("\(tagCount(tag.id))")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.body.weight(.medium))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.5))
+                )
+            }
+        }
+    }
+
+    private func compactNavigationRow(
+        title: String,
+        systemImage: String,
+        count: Int,
+        route: CompactRoute,
+        identifier: String
+    ) -> some View {
+        NavigationLink(value: route) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .frame(width: 22)
+                    .foregroundStyle(Color(red: 0.49, green: 0.47, blue: 0.62))
+                Text(title)
+                    .font(.body.weight(.semibold))
+                Spacer()
+                Text("\(count)")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.62))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var recentPages: [PageSummary] {
+        var pages: [PageSummary] = []
+        if let selectedPage = viewModel.selectedPage {
+            pages.append(selectedPage)
+        }
+        for page in viewModel.visibleDocumentPages where !pages.contains(where: { $0.id == page.id }) {
+            pages.append(page)
+            if pages.count >= 4 {
+                break
+            }
+        }
+        return pages
+    }
+
+    private func tagNames(for page: PageSummary) -> [String] {
+        let tagIDs = Set(viewModel.snapshot.pageTags.filter { $0.pageID == page.id }.map(\.tagID))
+        return viewModel.snapshot.tags.filter { tagIDs.contains($0.id) }.map(\.name)
+    }
+
+    private func tagCount(_ tagID: String) -> Int {
+        viewModel.snapshot.pageTags.filter { $0.tagID == tagID }.count
+    }
+}
+
+private struct CompactRecentPageCard: View {
+    let page: PageSummary
+    let tagNames: [String]
+    let preview: PageListPreview
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: page.isFavorite ? "star.fill" : "doc.text")
+                    .foregroundStyle(page.isFavorite ? Color.yellow : Color.secondary)
+                Text(page.title)
+                    .font(.headline.weight(.bold))
+                    .lineLimit(1)
+                Spacer()
+            }
+
+            Text(preview.excerpt?.isEmpty == false ? preview.excerpt ?? "" : "空白文档")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            if !tagNames.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(tagNames.prefix(3), id: \.self) { tagName in
+                        Text("#\(tagName)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color(red: 0.32, green: 0.43, blue: 0.74))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule()
+                                    .fill(Color(red: 0.89, green: 0.92, blue: 0.98))
+                            )
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+        )
     }
 }
 
@@ -424,10 +633,12 @@ enum TableBlockChrome {
     static let cornerRadius: Double = 9
     static let gridLineOpacity: Double = 0.13
     static let outerBorderOpacity: Double = 0.18
-    static let primaryControlDiameter: Double = 26
-    static let insertControlVisibleDiameter: Double = 5
-    static let selectorWidth: Double = 22
-    static let selectorHeight: Double = 18
+    static let primaryControlDiameter: Double = 20
+    static let insertControlVisibleDiameter: Double = 4
+    static let insertControlExpandedDiameter: Double = 14
+    static let selectorWidth: Double = 12
+    static let selectorHeight: Double = 12
+    static let selectorIndicatorOpacity: Double = 0
 }
 
 struct TableSelection: Equatable, Sendable {
@@ -818,6 +1029,7 @@ private enum CompactRoute: Hashable {
 private struct CompactPageDestination: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     let pageID: String
+    @State private var didRequestInitialFocus = false
 
     var body: some View {
         if let page = viewModel.snapshot.pages.first(where: { $0.id == pageID }) {
@@ -989,11 +1201,20 @@ private struct CompactPageDestination: View {
             )
             .onAppear {
                 viewModel.selectPage(id: page.id)
+                requestInitialFocusIfNeeded()
             }
         } else {
             Color.white
                 .navigationTitle("编辑器")
         }
+    }
+
+    private func requestInitialFocusIfNeeded() {
+        guard !didRequestInitialFocus else {
+            return
+        }
+        didRequestInitialFocus = true
+        _ = viewModel.focusEditorCanvasForUI()
     }
 }
 
@@ -1088,11 +1309,11 @@ private struct WorkspaceSidebar: View {
                     viewModel.selectCollection(.archive)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 18)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 16)
         }
         .navigationTitle("编辑器")
-        .background(Color(red: 0.972, green: 0.974, blue: 0.976))
+        .background(Color(red: 0.958, green: 0.952, blue: 0.942))
     }
 
     private var isTagsSelected: Bool {
@@ -1113,8 +1334,8 @@ private struct SidebarSectionLabel: View {
     var body: some View {
         Text(title)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.tertiary)
-            .padding(.horizontal, 10)
+            .foregroundStyle(Color(red: 0.45, green: 0.43, blue: 0.52).opacity(0.68))
+            .padding(.horizontal, 12)
             .padding(.top, 4)
     }
 }
@@ -1128,23 +1349,30 @@ private struct CollectionRailButton: View {
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(isSelected ? .body.weight(.semibold) : .body)
-                .lineLimit(1)
+            HStack(spacing: 11) {
+                Image(systemName: systemImage)
+                    .font(.body.weight(.medium))
+                    .frame(width: 20)
+                    .foregroundStyle(isSelected ? Color(red: 0.38, green: 0.35, blue: 0.55) : Color.secondary)
+                Text(title)
+                    .font(isSelected ? .body.weight(.semibold) : .body.weight(.medium))
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+            }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
                 .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.82) : Color.clear)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isSelected ? Color(red: 0.82, green: 0.79, blue: 0.74).opacity(0.65) : Color.clear)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(isSelected ? Color.black.opacity(0.045) : Color.clear, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(isSelected ? Color.black.opacity(0.035) : Color.clear, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        .foregroundStyle(isSelected ? Color(red: 0.24, green: 0.22, blue: 0.32) : Color.primary.opacity(0.86))
         .accessibilityIdentifier(identifier)
         .accessibilityValue(isSelected ? "已选中" : "未选中")
     }
@@ -2546,9 +2774,19 @@ private struct EditorCanvasView: View {
 #endif
 #if os(macOS)
         .background(
-            MacEditorKeyboardShortcutBridge {
-                presentInlineLinkInsertionFromKeyboardShortcut()
-            }
+            MacEditorKeyboardShortcutBridge(
+                onInsertLink: {
+                    presentInlineLinkInsertionFromKeyboardShortcut()
+                },
+                onPasteAttachments: {
+                    let attachmentURLs = MacPasteboardAttachmentResolver.attachmentURLs(from: .general)
+                    guard !attachmentURLs.isEmpty else {
+                        return false
+                    }
+                    attachmentURLs.forEach(onImportAttachment)
+                    return true
+                }
+            )
         )
 #endif
         .navigationTitle(page?.title ?? "编辑器")
@@ -3312,6 +3550,7 @@ private struct EditorCanvasView: View {
 #if os(macOS)
 private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
     let onInsertLink: () -> Bool
+    let onPasteAttachments: () -> Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -3319,12 +3558,14 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         context.coordinator.onInsertLink = onInsertLink
+        context.coordinator.onPasteAttachments = onPasteAttachments
         context.coordinator.install()
         return NSView(frame: .zero)
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.onInsertLink = onInsertLink
+        context.coordinator.onPasteAttachments = onPasteAttachments
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -3333,6 +3574,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
 
     final class Coordinator {
         var onInsertLink: (() -> Bool)?
+        var onPasteAttachments: (() -> Bool)?
         private var eventMonitor: Any?
 
         func install() {
@@ -3349,6 +3591,14 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
                     input: event.charactersIgnoringModifiers,
                     modifiers: event.blockKeyboardShortcutModifiers
                 ), self.onInsertLink?() == true {
+                    return nil
+                }
+
+                if MacPasteKeyboardShortcutResolver.requestsAttachmentPaste(
+                    keyCode: event.keyCode,
+                    input: event.charactersIgnoringModifiers,
+                    modifiers: event.blockKeyboardShortcutModifiers
+                ), self.onPasteAttachments?() == true {
                     return nil
                 }
 
@@ -4226,6 +4476,14 @@ private struct BlockRowView: View {
         .onChange(of: effectiveFocusRequestID) { _, requestID in
             handleNonEditableFocusRequestIfNeeded(requestID)
         }
+#if os(macOS)
+        .background(
+            NonEditableBlockKeyboardFocusBridge(isEnabled: isBlockSelected && !usesNativeTextEditor) { direction in
+                onMoveFocusByKeyboard(direction)
+            }
+            .frame(width: 0, height: 0)
+        )
+#endif
     }
 
     @ViewBuilder
@@ -4294,6 +4552,10 @@ private struct BlockRowView: View {
 
     private var isRowActive: Bool {
         isRowHovered || isBlockSelected || editorSession.focusedBlockID == block.id
+    }
+
+    private var usesNativeTextEditor: Bool {
+        block.type.isTextEditable && block.type != .table
     }
 
     private var blockActionOpacity: Double {
@@ -4783,7 +5045,7 @@ private struct BlockRowView: View {
 
     private func requestRowFocus() {
         onClearDropTarget()
-        guard block.type.isTextEditable else {
+        guard usesNativeTextEditor else {
             onSelectCurrentBlock()
             return
         }
@@ -4807,7 +5069,7 @@ private struct BlockRowView: View {
 
     private func handleNonEditableFocusRequestIfNeeded(_ requestID: UUID?) {
         guard requestID != nil,
-              !block.type.isTextEditable else {
+              !usesNativeTextEditor else {
             return
         }
 
@@ -5120,47 +5382,15 @@ private struct StructuredTableBlockEditor: View {
 
         ZStack(alignment: .topLeading) {
             ScrollView(.horizontal, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 0) {
-                        Color.clear
-                            .frame(
-                                width: CGFloat(TableBlockChrome.selectorWidth),
-                                height: CGFloat(TableBlockChrome.selectorHeight)
-                            )
-
-                        ForEach(0..<columnCount, id: \.self) { columnIndex in
-                            columnSelector(columnIndex)
-                        }
-                    }
-
-                    HStack(alignment: .top, spacing: 0) {
-                        VStack(spacing: 0) {
-                            ForEach(rows.indices, id: \.self) { rowIndex in
-                                rowSelector(rowIndex)
-                            }
-                        }
-
-                        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
-                            ForEach(rows.indices, id: \.self) { rowIndex in
-                                GridRow(alignment: .top) {
-                                    ForEach(0..<columnCount, id: \.self) { columnIndex in
-                                        tableCell(
-                                            row: rowIndex,
-                                            column: columnIndex,
-                                            rowCount: rows.count,
-                                            columnCount: columnCount
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                ZStack(alignment: .topLeading) {
+                    tableGrid(rows: rows, columnCount: columnCount)
+                    tableSelectionHitLayer(rows: rows, columnCount: columnCount)
                 }
                 .fixedSize()
             }
             .frame(
-                width: viewportWidth + CGFloat(TableBlockChrome.selectorWidth),
-                height: contentHeight + CGFloat(TableBlockChrome.selectorHeight)
+                width: viewportWidth,
+                height: contentHeight
             )
             .background(Color.white)
             .overlay(
@@ -5169,7 +5399,7 @@ private struct StructuredTableBlockEditor: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: CGFloat(TableBlockChrome.cornerRadius), style: .continuous))
         }
-        .overlay(alignment: .bottomLeading) {
+        .overlay(alignment: .bottom) {
             tablePrimaryControl(
                 systemImage: "plus",
                 help: "新增行",
@@ -5178,8 +5408,7 @@ private struct StructuredTableBlockEditor: View {
                 accessibilityIdentifier: "editor.table.\(blockID).add-row",
                 action: appendRow
             )
-            .padding(.leading, CGFloat(TableBlockChrome.selectorWidth) + 74)
-            .offset(y: 13)
+            .offset(y: 10)
         }
         .overlay(alignment: .trailing) {
             tablePrimaryControl(
@@ -5190,7 +5419,7 @@ private struct StructuredTableBlockEditor: View {
                 accessibilityIdentifier: "editor.table.\(blockID).add-column",
                 action: appendColumn
             )
-            .offset(x: 13)
+            .offset(x: 10)
         }
         .padding(.vertical, 4)
         .onHover { hovering in
@@ -5243,6 +5472,44 @@ private struct StructuredTableBlockEditor: View {
         max(rows.map(\.count).max() ?? 1, 1)
     }
 
+    private func tableContentWidth(columnCount: Int) -> CGFloat {
+        CGFloat(columnCount) * CGFloat(TableBlockChrome.cellWidth)
+    }
+
+    private func tableGrid(rows: [[String]], columnCount: Int) -> some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            ForEach(rows.indices, id: \.self) { rowIndex in
+                GridRow(alignment: .top) {
+                    ForEach(0..<columnCount, id: \.self) { columnIndex in
+                        tableCell(
+                            row: rowIndex,
+                            column: columnIndex,
+                            rowCount: rows.count,
+                            columnCount: columnCount
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func tableSelectionHitLayer(rows: [[String]], columnCount: Int) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(rows.indices, id: \.self) { rowIndex in
+                rowSelector(rowIndex, columnCount: columnCount)
+            }
+
+            ForEach(0..<columnCount, id: \.self) { columnIndex in
+                columnSelector(columnIndex)
+            }
+        }
+        .frame(
+            width: tableContentWidth(columnCount: columnCount),
+            height: tableContentHeight(rows: rows),
+            alignment: .topLeading
+        )
+    }
+
     private func cellBinding(row rowIndex: Int, column columnIndex: Int) -> Binding<String> {
         Binding {
             let rows = editableRows
@@ -5278,6 +5545,12 @@ private struct StructuredTableBlockEditor: View {
             alignment: .topLeading
         )
         .background(cellBackgroundColor(row: rowIndex, column: columnIndex))
+        .overlay {
+            if selection.rows.contains(rowIndex) || selection.columns.contains(columnIndex) {
+                RoundedRectangle(cornerRadius: 0)
+                    .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+            }
+        }
         .overlay(alignment: .trailing) {
             if columnIndex < columnCount - 1 {
                 Rectangle()
@@ -5305,7 +5578,7 @@ private struct StructuredTableBlockEditor: View {
         return rowIndex == 0 ? Color.secondary.opacity(0.012) : Color.white
     }
 
-    private func rowSelector(_ rowIndex: Int) -> some View {
+    private func rowSelector(_ rowIndex: Int, columnCount: Int) -> some View {
         Button {
             selection = TableSelectionReducer.selectionAfterSelectingRow(
                 rowIndex,
@@ -5313,16 +5586,19 @@ private struct StructuredTableBlockEditor: View {
                 extend: isShiftPressed
             )
         } label: {
-            Capsule()
-                .fill(selection.rows.contains(rowIndex) ? Color.accentColor : Color.secondary.opacity(0.34))
-                .frame(width: 12, height: selection.rows.contains(rowIndex) ? 3 : 2)
+            Rectangle()
+                .fill(Color.accentColor.opacity(TableBlockChrome.selectorIndicatorOpacity))
+                .frame(
+                    width: CGFloat(TableBlockChrome.selectorWidth),
+                    height: CGFloat(TableBlockChrome.cellHeight)
+                )
         }
         .buttonStyle(.borderless)
-        .frame(
-            width: CGFloat(TableBlockChrome.selectorWidth),
-            height: CGFloat(TableBlockChrome.cellHeight)
-        )
         .contentShape(Rectangle())
+        .offset(
+            x: -CGFloat(TableBlockChrome.selectorWidth) / 2,
+            y: CGFloat(rowIndex) * CGFloat(TableBlockChrome.cellHeight)
+        )
         .help("选择第 \(rowIndex + 1) 行")
         .accessibilityLabel("选择第 \(rowIndex + 1) 行")
         .accessibilityIdentifier("editor.table.\(blockID).row-selector.\(rowIndex)")
@@ -5336,16 +5612,19 @@ private struct StructuredTableBlockEditor: View {
                 extend: isShiftPressed
             )
         } label: {
-            Capsule()
-                .fill(selection.columns.contains(columnIndex) ? Color.accentColor : Color.secondary.opacity(0.34))
-                .frame(width: selection.columns.contains(columnIndex) ? 30 : 24, height: 2)
+            Rectangle()
+                .fill(Color.accentColor.opacity(TableBlockChrome.selectorIndicatorOpacity))
+                .frame(
+                    width: CGFloat(TableBlockChrome.cellWidth),
+                    height: CGFloat(TableBlockChrome.selectorHeight)
+                )
         }
         .buttonStyle(.borderless)
-        .frame(
-            width: CGFloat(TableBlockChrome.cellWidth),
-            height: CGFloat(TableBlockChrome.selectorHeight)
-        )
         .contentShape(Rectangle())
+        .offset(
+            x: CGFloat(columnIndex) * CGFloat(TableBlockChrome.cellWidth),
+            y: -CGFloat(TableBlockChrome.selectorHeight) / 2
+        )
         .help("选择第 \(columnIndex + 1) 列")
         .accessibilityLabel("选择第 \(columnIndex + 1) 列")
         .accessibilityIdentifier("editor.table.\(blockID).column-selector.\(columnIndex)")
@@ -5430,13 +5709,17 @@ private struct TableInsertControl: View {
                 Circle()
                     .fill(Color.accentColor)
                     .frame(
-                        width: isHovered ? 18 : CGFloat(TableBlockChrome.insertControlVisibleDiameter),
-                        height: isHovered ? 18 : CGFloat(TableBlockChrome.insertControlVisibleDiameter)
+                        width: isHovered
+                            ? CGFloat(TableBlockChrome.insertControlExpandedDiameter)
+                            : CGFloat(TableBlockChrome.insertControlVisibleDiameter),
+                        height: isHovered
+                            ? CGFloat(TableBlockChrome.insertControlExpandedDiameter)
+                            : CGFloat(TableBlockChrome.insertControlVisibleDiameter)
                     )
 
                 if isHovered {
                     Image(systemName: systemImage)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(Color.white)
                 }
             }
@@ -5460,6 +5743,67 @@ private struct TableInsertControl: View {
 }
 
 #if os(macOS)
+private struct NonEditableBlockKeyboardFocusBridge: NSViewRepresentable {
+    let isEnabled: Bool
+    let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onMoveFocus: onMoveFocus)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.install()
+        return NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.onMoveFocus = onMoveFocus
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    @MainActor
+    final class Coordinator {
+        var isEnabled = false
+        var onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
+        private var monitor: Any?
+
+        init(onMoveFocus: @escaping (BlockKeyboardFocusDirection) -> Bool) {
+            self.onMoveFocus = onMoveFocus
+        }
+
+        func install() {
+            guard monitor == nil else {
+                return
+            }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else {
+                    return event
+                }
+                guard isEnabled,
+                      let direction = NonEditableBlockKeyboardFocusResolver.focusDirection(
+                        keyCode: event.keyCode,
+                        modifiers: event.blockKeyboardShortcutModifiers
+                      ) else {
+                    return event
+                }
+
+                return onMoveFocus(direction) ? nil : event
+            }
+        }
+
+        func uninstall() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            monitor = nil
+        }
+    }
+}
+
 private struct TableDeleteKeyBridge: NSViewRepresentable {
     let isEnabled: Bool
     let onDelete: () -> Void

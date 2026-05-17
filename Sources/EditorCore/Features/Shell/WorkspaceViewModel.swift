@@ -1474,12 +1474,21 @@ final class WorkspaceViewModel: ObservableObject {
             return nil
         }
 
-        if let editableBlock = visibleBlocks.last(where: { $0.type.isTextEditable }) {
-            pendingFocusBlockID = editableBlock.id
+        if let lastBlock = visibleBlocks.last {
+            guard lastBlock.type.isTextEditable && lastBlock.type != .table else {
+                let block = try appendParagraphBlockToCurrentPage()
+                pendingFocusBlockID = block.id
+                EditorLog.focus.debug(
+                    "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=canvas_tap_created_after_non_text"
+                )
+                return block.id
+            }
+
+            pendingFocusBlockID = lastBlock.id
             EditorLog.focus.debug(
-                "editor_focus_request_queued block_id=\(editableBlock.id, privacy: .public) source=canvas_tap"
+                "editor_focus_request_queued block_id=\(lastBlock.id, privacy: .public) source=canvas_tap"
             )
-            return editableBlock.id
+            return lastBlock.id
         }
 
         let block = try appendParagraphBlockToCurrentPage()

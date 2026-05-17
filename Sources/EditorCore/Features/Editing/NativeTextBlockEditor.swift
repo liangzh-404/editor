@@ -275,7 +275,7 @@ enum BlockKeyboardFocusResolver {
             candidates = Array(blocks[(currentIndex + 1)...])
         }
 
-        guard let targetBlock = candidates.first(where: { $0.type.isTextEditable }) else {
+        guard let targetBlock = candidates.first(where: acceptsKeyboardTextFocus(_:)) else {
             return nil
         }
 
@@ -295,6 +295,30 @@ enum BlockKeyboardFocusResolver {
                 length: 0
             )
         )
+    }
+
+    private static func acceptsKeyboardTextFocus(_ block: BlockSnapshot) -> Bool {
+        block.type.isTextEditable && block.type != .table
+    }
+}
+
+enum NonEditableBlockKeyboardFocusResolver {
+    static func focusDirection(
+        keyCode: UInt16,
+        modifiers: Set<BlockKeyboardShortcutModifier>
+    ) -> BlockKeyboardFocusDirection? {
+        guard modifiers.isEmpty else {
+            return nil
+        }
+
+        switch keyCode {
+        case BlockKeyboardShortcutResolver.upArrowKeyCode:
+            return .previous
+        case BlockKeyboardShortcutResolver.downArrowKeyCode:
+            return .next
+        default:
+            return nil
+        }
     }
 }
 
@@ -719,6 +743,26 @@ enum MacPasteboardAttachmentResolver {
             )
             return nil
         }
+    }
+}
+
+enum MacPasteKeyboardShortcutResolver {
+    static let vKeyCode: UInt16 = 9
+
+    static func requestsAttachmentPaste(
+        keyCode: UInt16,
+        input: String?,
+        modifiers: Set<BlockKeyboardShortcutModifier>
+    ) -> Bool {
+        guard modifiers == [.command] else {
+            return false
+        }
+
+        if keyCode == vKeyCode {
+            return true
+        }
+
+        return input?.lowercased() == "v"
     }
 }
 

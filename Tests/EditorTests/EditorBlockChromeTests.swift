@@ -22,8 +22,10 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(TableBlockChrome.cornerRadius, 9)
         XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.13)
         XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.18)
-        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 26)
-        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 5)
+        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 20)
+        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 4)
+        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 14)
+        XCTAssertEqual(TableBlockChrome.selectorIndicatorOpacity, 0)
     }
 
     func testTableSelectionDeletesRowsAndColumnsButKeepsOneCell() {

@@ -260,6 +260,32 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testFocusEditorCanvasCreatesParagraphAfterTrailingNonEditableBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+        _ = try viewModel.appendPageReferenceToCurrentPage(targetPageID: targetPage.id)
+        XCTAssertEqual(viewModel.visibleBlocks.last?.type, .pageReference)
+
+        let focusedBlockID = try viewModel.focusEditorCanvas()
+
+        let focusedBlock = try XCTUnwrap(viewModel.visibleBlocks.last)
+        XCTAssertEqual(focusedBlock.id, focusedBlockID)
+        XCTAssertEqual(focusedBlock.type, .paragraph)
+        XCTAssertEqual(focusedBlock.textPlain, "")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, focusedBlockID)
+    }
+
+    @MainActor
     func testUpdateBlockTextRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

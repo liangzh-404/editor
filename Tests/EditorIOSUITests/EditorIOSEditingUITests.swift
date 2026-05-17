@@ -6,6 +6,23 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneLaunchOpensEditablePageImmediately() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "iPhone first screen should open an editable document")
+
+        firstTextView.tap()
+        firstTextView.typeText(" 首屏输入")
+
+        let value = firstTextView.value as? String ?? ""
+        XCTAssertTrue(value.contains("首屏输入"), "Typing should work without navigating through document lists")
+    }
+
+    @MainActor
     func testIPhoneWelcomeBlockAcceptsTypedText() {
         let app = XCUIApplication()
         app.launch()

@@ -241,6 +241,39 @@ final class NativeTextBlockEditorTests: XCTestCase {
 #endif
     }
 
+    func testMacPasteKeyboardShortcutResolverHandlesCommandVOnly() {
+#if os(macOS)
+        XCTAssertTrue(
+            MacPasteKeyboardShortcutResolver.requestsAttachmentPaste(
+                keyCode: MacPasteKeyboardShortcutResolver.vKeyCode,
+                input: "v",
+                modifiers: [.command]
+            )
+        )
+        XCTAssertTrue(
+            MacPasteKeyboardShortcutResolver.requestsAttachmentPaste(
+                keyCode: MacPasteKeyboardShortcutResolver.vKeyCode,
+                input: "V",
+                modifiers: [.command]
+            )
+        )
+        XCTAssertFalse(
+            MacPasteKeyboardShortcutResolver.requestsAttachmentPaste(
+                keyCode: MacPasteKeyboardShortcutResolver.vKeyCode,
+                input: "v",
+                modifiers: []
+            )
+        )
+        XCTAssertFalse(
+            MacPasteKeyboardShortcutResolver.requestsAttachmentPaste(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                input: "\r",
+                modifiers: [.command]
+            )
+        )
+#endif
+    }
+
     func testBlockKeyboardShortcutResolverHandlesCommandOptionArrowsOnly() {
         XCTAssertEqual(
             BlockKeyboardShortcutResolver.moveDirection(
@@ -419,6 +452,29 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testNonEditableBlockKeyboardFocusResolverMovesOnPlainVerticalArrows() {
+        XCTAssertEqual(
+            NonEditableBlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
+                modifiers: []
+            ),
+            .previous
+        )
+        XCTAssertEqual(
+            NonEditableBlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: []
+            ),
+            .next
+        )
+        XCTAssertNil(
+            NonEditableBlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [.shift]
+            )
+        )
+    }
+
     func testBlockKeyboardFocusResolverTargetsAdjacentEditableBlocks() {
         let blocks = [
             BlockSnapshot(
@@ -489,6 +545,47 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 currentBlockID: "paragraph",
                 direction: .next,
                 blocks: blocks
+            )
+        )
+    }
+
+    func testBlockKeyboardFocusResolverSkipsStructuredTableAsTextTarget() {
+        let blocks = [
+            BlockSnapshot(
+                id: "paragraph",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "a",
+                type: .paragraph,
+                textPlain: "Paragraph"
+            ),
+            BlockSnapshot(
+                id: "table",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "b",
+                type: .table,
+                textPlain: "| A |\n| --- |"
+            ),
+            BlockSnapshot(
+                id: "next",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "c",
+                type: .paragraph,
+                textPlain: "Next"
+            )
+        ]
+
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.target(
+                currentBlockID: "paragraph",
+                direction: .next,
+                blocks: blocks
+            ),
+            BlockKeyboardFocusTarget(
+                blockID: "next",
+                selection: EditorTextSelection(blockID: "next", location: 0, length: 0)
             )
         )
     }
