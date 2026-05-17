@@ -1080,8 +1080,20 @@ enum MarkdownTransformer {
         case "---":
             return MarkdownShortcutTransform(type: .divider, textPlain: "")
         default:
+            return orderedListShortcutTransform(for: text)
+        }
+    }
+
+    private static func orderedListShortcutTransform(for text: String) -> MarkdownShortcutTransform? {
+        guard text.hasSuffix(". ") else {
             return nil
         }
+        let numberPrefix = text.dropLast(2)
+        guard !numberPrefix.isEmpty,
+              numberPrefix.allSatisfy(\.isNumber) else {
+            return nil
+        }
+        return MarkdownShortcutTransform(type: .orderedListItem, textPlain: "")
     }
 
     static func export(blocks: [BlockSnapshot]) -> String {

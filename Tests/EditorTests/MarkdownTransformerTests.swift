@@ -20,6 +20,14 @@ final class MarkdownTransformerTests: XCTestCase {
             MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
         )
         XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "2. "),
+            MarkdownShortcutTransform(type: .orderedListItem, textPlain: "")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "10. "),
+            MarkdownShortcutTransform(type: .orderedListItem, textPlain: "")
+        )
+        XCTAssertEqual(
             MarkdownTransformer.shortcutTransform(for: "> "),
             MarkdownShortcutTransform(type: .quote, textPlain: "")
         )

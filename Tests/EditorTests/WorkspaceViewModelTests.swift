@@ -484,6 +484,28 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testOrderedListMarkdownShortcutAcceptsContinuingNumbers() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "2. ")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .orderedListItem)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
+
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.type, .orderedListItem)
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "")
+    }
+
+    @MainActor
     func testChangeBlockTypeRefreshesVisibleBlockAndQueuesSyncChange() throws {
         let database = try migratedDatabase()
         defer { database.close() }
