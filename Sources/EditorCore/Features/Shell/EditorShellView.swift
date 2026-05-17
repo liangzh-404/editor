@@ -772,6 +772,15 @@ enum MobileBlockSelectionReducer {
     }
 }
 
+enum MobileBlockSelectionBatchResolver {
+    static func orderedBlockIDs(
+        selectedBlockIDs: Set<String>,
+        visibleBlockIDs: [String]
+    ) -> [String] {
+        visibleBlockIDs.filter { selectedBlockIDs.contains($0) }
+    }
+}
+
 enum MobileBlockSelectionChromeResolver {
     static func isSelectionControlVisible(isSelectionModeActive: Bool) -> Bool {
         isSelectionModeActive
@@ -786,6 +795,8 @@ enum MobileBlockSelectionChromeResolver {
 private struct MobileBlockSelectionToolbar: View {
     let selectedCount: Int
     let onClear: () -> Void
+    let onOutdent: () -> Void
+    let onIndent: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -800,6 +811,22 @@ private struct MobileBlockSelectionToolbar: View {
                 .font(.subheadline.weight(.medium))
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("editor.mobile-selection-clear")
+
+            Button(action: onOutdent) {
+                Image(systemName: "decrease.indent")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("减少缩进")
+            .accessibilityIdentifier("editor.mobile-selection-outdent")
+
+            Button(action: onIndent) {
+                Image(systemName: "increase.indent")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("增加缩进")
+            .accessibilityIdentifier("editor.mobile-selection-indent")
 
             Button(role: .destructive, action: onDelete) {
                 Label("删除", systemImage: "trash")
@@ -3396,6 +3423,12 @@ private struct EditorCanvasView: View {
                     onClear: {
                         editorSession.clearBlockSelection()
                     },
+                    onOutdent: {
+                        applyMobileSelectedBlocksIndentation(.outdent)
+                    },
+                    onIndent: {
+                        applyMobileSelectedBlocksIndentation(.indent)
+                    },
                     onDelete: {
                         let blockIDs = Array(editorSession.selectedBlockIDs)
                         if onDeleteBlocks(blockIDs) {
@@ -4049,6 +4082,32 @@ private struct EditorCanvasView: View {
         }
 
         pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+    }
+
+    @discardableResult
+    private func applyMobileSelectedBlocksIndentation(_ direction: BlockKeyboardIndentationDirection) -> Bool {
+        let blockIDs = MobileBlockSelectionBatchResolver.orderedBlockIDs(
+            selectedBlockIDs: editorSession.selectedBlockIDs,
+            visibleBlockIDs: blocks.map(\.id)
+        )
+        guard !blockIDs.isEmpty else {
+            return false
+        }
+
+        var didChange = false
+        for blockID in blockIDs {
+            switch direction {
+            case .indent:
+                didChange = onIndentBlock(blockID) || didChange
+            case .outdent:
+                didChange = onOutdentBlock(blockID) || didChange
+            }
+        }
+
+        if didChange {
+            editorSession.selectBlocks(Set(blockIDs))
+        }
+        return didChange
     }
 
     private func importPastedAttachments(_ attachmentURLs: [URL]) -> Bool {

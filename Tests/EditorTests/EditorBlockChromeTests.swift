@@ -172,6 +172,23 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testMobileBlockSelectionBatchResolverKeepsVisibleDocumentOrder() {
+        XCTAssertEqual(
+            MobileBlockSelectionBatchResolver.orderedBlockIDs(
+                selectedBlockIDs: ["third", "first", "missing"],
+                visibleBlockIDs: ["first", "second", "third"]
+            ),
+            ["first", "third"]
+        )
+        XCTAssertEqual(
+            MobileBlockSelectionBatchResolver.orderedBlockIDs(
+                selectedBlockIDs: ["missing"],
+                visibleBlockIDs: ["first", "second", "third"]
+            ),
+            []
+        )
+    }
+
     func testCompactInitialNavigationResolverStartsOnSelectedPageWhenAvailable() {
         XCTAssertEqual(
             CompactInitialNavigationResolver.initialPageID(
