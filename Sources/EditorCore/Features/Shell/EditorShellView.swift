@@ -456,12 +456,15 @@ private struct CompactHomeView: View {
 
             Spacer()
 
-            NavigationLink(value: CompactRoute.pages) {
+            Button {
+                _ = viewModel.createNewDocumentForCompactUI()
+            } label: {
                 Image(systemName: "square.and.pencil")
                     .font(.title3.weight(.semibold))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("新建或浏览文档")
+            .accessibilityLabel("新建文档")
+            .accessibilityIdentifier("editor.compact.new-document")
         }
     }
 

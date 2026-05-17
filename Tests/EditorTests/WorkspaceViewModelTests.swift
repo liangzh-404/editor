@@ -81,6 +81,27 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCreateNewDocumentForCompactUISelectsAndQueuesNavigationToEditablePage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        _ = viewModel.consumePendingCompactPageNavigationID()
+
+        let newPageID = try XCTUnwrap(viewModel.createNewDocumentForCompactUI())
+
+        XCTAssertEqual(viewModel.selectedPageID, newPageID)
+        XCTAssertEqual(viewModel.selectedPage?.title, "未命名")
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, newPageID)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, viewModel.visibleBlocks.first?.id)
+    }
+
+    @MainActor
     func testSelectingDiaryRestoresDailyPageAndAllDocumentsExcludesIt() throws {
         let database = try migratedDatabase()
         defer { database.close() }

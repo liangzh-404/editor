@@ -562,6 +562,22 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func createNewDocumentForCompactUI() -> String? {
+        do {
+            let page = try createPageInSelectedWorkspace(title: "未命名")
+            pendingCompactPageNavigationID = page.id
+            EditorLog.render.debug(
+                "compact_page_navigation_queued page_id=\(page.id, privacy: .public) source=compact_new_document"
+            )
+            return page.id
+        } catch {
+            EditorLog.input.error(
+                "compact_new_document_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
     func navigateBackForUI() -> Bool {
         do {
             return try navigateBack()

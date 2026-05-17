@@ -23,6 +23,31 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneHomeNewDocumentButtonOpensEditableBlankPage() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let homeBackButton = app.navigationBars.buttons["近期打开"]
+        XCTAssertTrue(homeBackButton.waitForExistence(timeout: 5), "Initial compact page should expose a back button to recent home")
+        homeBackButton.tap()
+
+        let newDocumentButton = app.buttons["editor.compact.new-document"]
+        XCTAssertTrue(newDocumentButton.waitForExistence(timeout: 5), "Recent home should expose a direct new document button")
+        newDocumentButton.tap()
+
+        let blankTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(blankTextView.waitForExistence(timeout: 5), "New compact document should open directly on an editable block")
+
+        blankTextView.tap()
+        blankTextView.typeText(" 新文档输入")
+
+        let value = blankTextView.value as? String ?? ""
+        XCTAssertTrue(value.contains("新文档输入"), "Typing should work immediately after compact new document")
+    }
+
+    @MainActor
     func testIPhoneWelcomeBlockAcceptsTypedText() {
         let app = XCUIApplication()
         app.launch()
