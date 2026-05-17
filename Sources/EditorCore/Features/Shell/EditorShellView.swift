@@ -676,6 +676,50 @@ enum PastedAttachmentAnchorResolver {
     }
 }
 
+enum IOSEditorKeyboardShortcutAction: Equatable, Sendable {
+    case pasteAttachments
+    case moveFocus(BlockKeyboardFocusDirection)
+}
+
+enum IOSEditorKeyboardShortcutActionResolver {
+    static let upArrowInput = "\u{F700}"
+    static let downArrowInput = "\u{F701}"
+
+    static func action(
+        input: String?,
+        modifiers: Set<BlockKeyboardShortcutModifier>
+    ) -> IOSEditorKeyboardShortcutAction? {
+        if CommandVPasteShortcutResolver.requestsAttachmentPaste(
+            input: input,
+            modifiers: modifiers
+        ) {
+            return .pasteAttachments
+        }
+
+        guard modifiers.isEmpty else {
+            return nil
+        }
+
+        switch input {
+        case upArrowInput:
+            return .moveFocus(.previous)
+        case downArrowInput:
+            return .moveFocus(.next)
+        default:
+            return nil
+        }
+    }
+}
+
+enum BlockSelectionKeyboardAnchorResolver {
+    static func anchorBlockID(
+        selectedBlockIDs: Set<String>,
+        visibleBlockIDs: [String]
+    ) -> String? {
+        visibleBlockIDs.last { selectedBlockIDs.contains($0) }
+    }
+}
+
 enum MobileBlockSwipeAction: Equatable, Sendable {
     case select
     case indent
@@ -3398,6 +3442,20 @@ private struct EditorCanvasView: View {
                 onPasteAttachments: {
                     let attachmentURLs = IOSPasteboardAttachmentResolver.attachmentURLs(from: .general)
                     return importPastedAttachments(attachmentURLs)
+                },
+                onMoveFocus: { direction in
+                    guard let blockID = BlockSelectionKeyboardAnchorResolver.anchorBlockID(
+                        selectedBlockIDs: editorSession.selectedBlockIDs,
+                        visibleBlockIDs: blocks.map(\.id)
+                    ) else {
+                        return false
+                    }
+
+                    return focusAdjacentBlock(
+                        from: blockID,
+                        direction: direction,
+                        clearsBlockSelection: true
+                    )
                 }
             )
             .frame(width: 0, height: 0)
@@ -4010,7 +4068,8 @@ private struct EditorCanvasView: View {
 
     private func focusAdjacentBlock(
         from blockID: String,
-        direction: BlockKeyboardFocusDirection
+        direction: BlockKeyboardFocusDirection,
+        clearsBlockSelection: Bool = false
     ) -> Bool {
         guard let target = BlockKeyboardFocusResolver.target(
             currentBlockID: blockID,
@@ -4018,6 +4077,10 @@ private struct EditorCanvasView: View {
             blocks: blocks
         ) else {
             return false
+        }
+
+        if clearsBlockSelection {
+            editorSession.clearBlockSelection()
         }
 
         pendingFocusRequest = BlockFocusRequest(
@@ -4315,23 +4378,27 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
 private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
     let isEnabled: Bool
     let onPasteAttachments: () -> Bool
+    let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
 
     func makeUIView(context: Context) -> ShortcutCaptureView {
         let view = ShortcutCaptureView(frame: .zero)
         view.isEnabled = isEnabled
         view.onPasteAttachments = onPasteAttachments
+        view.onMoveFocus = onMoveFocus
         return view
     }
 
     func updateUIView(_ uiView: ShortcutCaptureView, context: Context) {
         uiView.isEnabled = isEnabled
         uiView.onPasteAttachments = onPasteAttachments
+        uiView.onMoveFocus = onMoveFocus
         uiView.updateFirstResponderIfNeeded()
     }
 
     final class ShortcutCaptureView: UIView {
         var isEnabled = false
         var onPasteAttachments: () -> Bool = { false }
+        var onMoveFocus: (BlockKeyboardFocusDirection) -> Bool = { _ in false }
         private var isCapturingKeyboard = false
 
         override var canBecomeFirstResponder: Bool {
@@ -4348,6 +4415,16 @@ private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
                     input: "v",
                     modifierFlags: [.command],
                     action: #selector(pasteAttachments)
+                ),
+                UIKeyCommand(
+                    input: IOSEditorKeyboardShortcutActionResolver.upArrowInput,
+                    modifierFlags: [],
+                    action: #selector(moveFocusUp)
+                ),
+                UIKeyCommand(
+                    input: IOSEditorKeyboardShortcutActionResolver.downArrowInput,
+                    modifierFlags: [],
+                    action: #selector(moveFocusDown)
                 )
             ]
         }
@@ -4369,7 +4446,38 @@ private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
         }
 
         @objc private func pasteAttachments(_ sender: Any?) {
-            _ = onPasteAttachments()
+            performShortcut(input: "v", modifiers: [.command])
+        }
+
+        @objc private func moveFocusUp(_ sender: Any?) {
+            performShortcut(
+                input: IOSEditorKeyboardShortcutActionResolver.upArrowInput,
+                modifiers: []
+            )
+        }
+
+        @objc private func moveFocusDown(_ sender: Any?) {
+            performShortcut(
+                input: IOSEditorKeyboardShortcutActionResolver.downArrowInput,
+                modifiers: []
+            )
+        }
+
+        private func performShortcut(
+            input: String?,
+            modifiers: Set<BlockKeyboardShortcutModifier>
+        ) {
+            switch IOSEditorKeyboardShortcutActionResolver.action(
+                input: input,
+                modifiers: modifiers
+            ) {
+            case .pasteAttachments:
+                _ = onPasteAttachments()
+            case let .moveFocus(direction):
+                _ = onMoveFocus(direction)
+            case nil:
+                break
+            }
         }
     }
 }

@@ -556,6 +556,52 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testIOSEditorKeyboardShortcutActionResolverMovesFocusAndPastes() {
+        XCTAssertEqual(
+            IOSEditorKeyboardShortcutActionResolver.action(
+                input: IOSEditorKeyboardShortcutActionResolver.upArrowInput,
+                modifiers: []
+            ),
+            .moveFocus(.previous)
+        )
+        XCTAssertEqual(
+            IOSEditorKeyboardShortcutActionResolver.action(
+                input: IOSEditorKeyboardShortcutActionResolver.downArrowInput,
+                modifiers: []
+            ),
+            .moveFocus(.next)
+        )
+        XCTAssertEqual(
+            IOSEditorKeyboardShortcutActionResolver.action(
+                input: "v",
+                modifiers: [.command]
+            ),
+            .pasteAttachments
+        )
+        XCTAssertNil(
+            IOSEditorKeyboardShortcutActionResolver.action(
+                input: IOSEditorKeyboardShortcutActionResolver.downArrowInput,
+                modifiers: [.shift]
+            )
+        )
+    }
+
+    func testBlockSelectionKeyboardAnchorResolverUsesSelectedBlockInDocumentOrder() {
+        XCTAssertEqual(
+            BlockSelectionKeyboardAnchorResolver.anchorBlockID(
+                selectedBlockIDs: ["second", "missing"],
+                visibleBlockIDs: ["first", "second", "third"]
+            ),
+            "second"
+        )
+        XCTAssertNil(
+            BlockSelectionKeyboardAnchorResolver.anchorBlockID(
+                selectedBlockIDs: ["missing"],
+                visibleBlockIDs: ["first", "second", "third"]
+            )
+        )
+    }
+
     func testTableBlockKeyboardActionResolverMovesFocusWhenSelectionIsActive() {
         XCTAssertEqual(
             TableBlockKeyboardActionResolver.action(
