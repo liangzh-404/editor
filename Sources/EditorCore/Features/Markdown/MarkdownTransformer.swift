@@ -1124,6 +1124,8 @@ enum MarkdownTransformer {
         var currentCodeFenceMarker: String?
         var tableLines: [String] = []
         var paragraphLines: [String] = []
+        var blockquoteType: BlockType?
+        var blockquoteLines: [String] = []
 
         for line in markdown.components(separatedBy: .newlines) {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
@@ -1131,6 +1133,7 @@ enum MarkdownTransformer {
             if codeLines != nil {
                 flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
+                flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
                 if trimmedLine == currentCodeFenceMarker {
                     drafts.append(
                         MarkdownBlockDraft(
@@ -1149,6 +1152,7 @@ enum MarkdownTransformer {
             if let fenceMarker = codeFenceMarker(forStartLine: trimmedLine) {
                 flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
+                flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
                 codeLines = []
                 currentCodeFenceMarker = fenceMarker
                 continue
@@ -1157,6 +1161,19 @@ enum MarkdownTransformer {
             guard !trimmedLine.isEmpty else {
                 flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
+                flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
+                continue
+            }
+
+            if let blockquoteLine = blockquoteLineDraft(for: trimmedLine) {
+                flushParagraphLines(&paragraphLines, into: &drafts)
+                flushTableLines(&tableLines, into: &drafts)
+                appendBlockquoteLine(
+                    blockquoteLine,
+                    lines: &blockquoteLines,
+                    type: &blockquoteType,
+                    into: &drafts
+                )
                 continue
             }
 
@@ -1187,11 +1204,13 @@ enum MarkdownTransformer {
 
             if isTableLine(trimmedLine) {
                 flushParagraphLines(&paragraphLines, into: &drafts)
+                flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
                 tableLines.append(trimmedLine)
                 continue
             }
 
             flushTableLines(&tableLines, into: &drafts)
+            flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
             let draft = importBlockDraft(for: trimmedLine)
             if draft.type == .paragraph {
                 if shouldContinueParagraph(with: trimmedLine, existingLines: paragraphLines) {
@@ -1217,6 +1236,7 @@ enum MarkdownTransformer {
         }
         flushParagraphLines(&paragraphLines, into: &drafts)
         flushTableLines(&tableLines, into: &drafts)
+        flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
 
         return drafts
     }
@@ -1238,7 +1258,7 @@ enum MarkdownTransformer {
         case .taskItem:
             return "\(block.taskItemIsCompleted ? "- [x]" : "- [ ]") \(block.textPlain)"
         case .quote:
-            return "> \(block.textPlain)"
+            return blockquoteMarkdown(prefix: "> ", text: block.textPlain)
         case .codeBlock:
             return "```\n\(block.textPlain)\n```"
         case .table:
@@ -1247,7 +1267,7 @@ enum MarkdownTransformer {
             }
             return block.textPlain
         case .callout:
-            return "> [!NOTE] \(block.textPlain)"
+            return calloutMarkdown(text: block.textPlain)
         case .toggle:
             return "<details><summary>\(block.textPlain)</summary></details>"
         case .divider:
@@ -1420,6 +1440,43 @@ enum MarkdownTransformer {
             .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
+    private static func blockquoteLineDraft(for line: String) -> MarkdownBlockDraft? {
+        if line.hasPrefix("> [!NOTE] ") {
+            return MarkdownBlockDraft(type: .callout, textPlain: String(line.dropFirst(10)))
+        }
+        if line == "> [!NOTE]" {
+            return MarkdownBlockDraft(type: .callout, textPlain: "")
+        }
+        if line.hasPrefix("> ") {
+            return MarkdownBlockDraft(type: .quote, textPlain: String(line.dropFirst(2)))
+        }
+        if line == ">" {
+            return MarkdownBlockDraft(type: .quote, textPlain: "")
+        }
+        return nil
+    }
+
+    private static func appendBlockquoteLine(
+        _ draft: MarkdownBlockDraft,
+        lines: inout [String],
+        type: inout BlockType?,
+        into drafts: inout [MarkdownBlockDraft]
+    ) {
+        guard let currentType = type else {
+            type = draft.type
+            lines.append(draft.textPlain)
+            return
+        }
+
+        if currentType == draft.type || (currentType == .callout && draft.type == .quote) {
+            lines.append(draft.textPlain)
+        } else {
+            flushBlockquoteLines(&lines, type: &type, into: &drafts)
+            type = draft.type
+            lines.append(draft.textPlain)
+        }
+    }
+
     private static func flushTableLines(
         _ tableLines: inout [String],
         into drafts: inout [MarkdownBlockDraft]
@@ -1434,6 +1491,25 @@ enum MarkdownTransformer {
             )
         )
         tableLines.removeAll()
+    }
+
+    private static func flushBlockquoteLines(
+        _ blockquoteLines: inout [String],
+        type blockquoteType: inout BlockType?,
+        into drafts: inout [MarkdownBlockDraft]
+    ) {
+        guard let currentType = blockquoteType, !blockquoteLines.isEmpty else {
+            return
+        }
+
+        drafts.append(
+            MarkdownBlockDraft(
+                type: currentType,
+                textPlain: blockquoteLines.joined(separator: "\n")
+            )
+        )
+        blockquoteType = nil
+        blockquoteLines.removeAll()
     }
 
     private static func flushParagraphLines(
@@ -1473,6 +1549,19 @@ enum MarkdownTransformer {
         }
 
         return String(line.dropFirst(prefix.count).dropLast(suffix.count))
+    }
+
+    private static func blockquoteMarkdown(prefix: String, text: String) -> String {
+        text.components(separatedBy: .newlines)
+            .map { "\(prefix)\($0)" }
+            .joined(separator: "\n")
+    }
+
+    private static func calloutMarkdown(text: String) -> String {
+        var lines = text.components(separatedBy: .newlines)
+        let firstLine = lines.isEmpty ? "" : lines.removeFirst()
+        let remainingLines = lines.map { "> \($0)" }
+        return (["> [!NOTE] \(firstLine)"] + remainingLines).joined(separator: "\n")
     }
 
     private static func attachmentDraft(for line: String) -> MarkdownBlockDraft? {

@@ -308,6 +308,28 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownSupportsMultilineQuoteAndCalloutBlocks() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    > First quote line
+                    > second quote line
+
+                    > [!NOTE] First callout line
+                    > second callout line
+
+                    Body
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .quote, textPlain: "First quote line\nsecond quote line"),
+                MarkdownBlockDraft(type: .callout, textPlain: "First callout line\nsecond callout line"),
+                MarkdownBlockDraft(type: .paragraph, textPlain: "Body")
+            ]
+        )
+    }
+
     func testImportMarkdownSupportsPageAndBlockReferenceBlocks() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(
@@ -743,6 +765,24 @@ final class MarkdownTransformerTests: XCTestCase {
             > [!NOTE] Important
 
             <details><summary>Details</summary></details>
+            """
+        )
+    }
+
+    func testExportMultilineQuoteAndCalloutBlocksPrefixesEveryLine() {
+        let blocks = [
+            block(type: .quote, text: "First quote line\nsecond quote line"),
+            block(type: .callout, text: "First callout line\nsecond callout line")
+        ]
+
+        XCTAssertEqual(
+            MarkdownTransformer.export(blocks: blocks),
+            """
+            > First quote line
+            > second quote line
+
+            > [!NOTE] First callout line
+            > second callout line
             """
         )
     }

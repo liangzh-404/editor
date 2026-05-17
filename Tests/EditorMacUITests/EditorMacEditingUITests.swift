@@ -1636,6 +1636,14 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_UI_TEST_MARKDOWN_EXPORT_CAPTURE"] = "1"
         app.launch()
 
+        let allDocuments = app.buttons["editor.collection.all-documents"]
+        XCTAssertTrue(allDocuments.waitForExistence(timeout: 5), "All Documents should be visible before exporting a page")
+        allDocuments.click()
+
+        let welcome = app.element(identifier: "editor.page-row.page-welcome")
+        XCTAssertTrue(welcome.waitForExistence(timeout: 5), "Welcome page row should be visible before exporting")
+        welcome.click()
+
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome block should be loaded before exporting")
         XCTAssertTrue(
