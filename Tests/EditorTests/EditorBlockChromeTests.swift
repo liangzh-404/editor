@@ -22,10 +22,60 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(TableBlockChrome.cornerRadius, 9)
         XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.13)
         XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.18)
-        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 20)
+        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 18)
         XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 4)
-        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 14)
+        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 12)
+        XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 0)
         XCTAssertEqual(TableBlockChrome.selectorIndicatorOpacity, 0)
+    }
+
+    func testMobileBlockSwipeResolverSeparatesSelectionFromIndenting() {
+        XCTAssertEqual(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: -72, height: 8),
+                isEditingBlock: false,
+                nestingLevel: 0
+            ),
+            .select
+        )
+        XCTAssertEqual(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: 72, height: 6),
+                isEditingBlock: false,
+                nestingLevel: 0
+            ),
+            .indent
+        )
+        XCTAssertEqual(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: 72, height: 6),
+                isEditingBlock: true,
+                nestingLevel: 1
+            ),
+            .indent
+        )
+        XCTAssertEqual(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: -72, height: 6),
+                isEditingBlock: true,
+                nestingLevel: 1
+            ),
+            .outdent
+        )
+        XCTAssertNil(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: -40, height: 6),
+                isEditingBlock: false,
+                nestingLevel: 0
+            )
+        )
+        XCTAssertNil(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: 72, height: 72),
+                isEditingBlock: false,
+                nestingLevel: 0
+            )
+        )
     }
 
     func testTableSelectionDeletesRowsAndColumnsButKeepsOneCell() {

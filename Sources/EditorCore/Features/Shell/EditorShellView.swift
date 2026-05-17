@@ -633,12 +633,47 @@ enum TableBlockChrome {
     static let cornerRadius: Double = 9
     static let gridLineOpacity: Double = 0.13
     static let outerBorderOpacity: Double = 0.18
-    static let primaryControlDiameter: Double = 20
+    static let primaryControlDiameter: Double = 18
     static let insertControlVisibleDiameter: Double = 4
-    static let insertControlExpandedDiameter: Double = 14
+    static let insertControlExpandedDiameter: Double = 12
+    static let insertControlEdgeOffset: Double = 0
     static let selectorWidth: Double = 12
     static let selectorHeight: Double = 12
     static let selectorIndicatorOpacity: Double = 0
+}
+
+enum MobileBlockSwipeAction: Equatable, Sendable {
+    case select
+    case indent
+    case outdent
+}
+
+enum MobileBlockSwipeActionResolver {
+    static let horizontalThreshold: CGFloat = 56
+    static let horizontalDominanceRatio: CGFloat = 1.25
+
+    static func action(
+        translation: CGSize,
+        isEditingBlock: Bool,
+        nestingLevel: Int
+    ) -> MobileBlockSwipeAction? {
+        let horizontalDistance = abs(translation.width)
+        let verticalDistance = abs(translation.height)
+        guard horizontalDistance >= horizontalThreshold,
+              horizontalDistance > verticalDistance * horizontalDominanceRatio else {
+            return nil
+        }
+
+        if translation.width > 0 {
+            return .indent
+        }
+
+        if isEditingBlock {
+            return nestingLevel > 0 ? .outdent : nil
+        }
+
+        return .select
+    }
 }
 
 struct TableSelection: Equatable, Sendable {
@@ -4463,6 +4498,9 @@ private struct BlockRowView: View {
                 requestRowFocus()
             }
         )
+#if os(iOS)
+        .simultaneousGesture(mobileHorizontalSwipeGesture)
+#endif
 #if os(macOS)
         .onHover { hovering in
             isRowHovered = hovering
@@ -4975,6 +5013,38 @@ private struct BlockRowView: View {
         }
     }
 
+#if os(iOS)
+    private var mobileHorizontalSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .onEnded { value in
+                handleMobileHorizontalSwipe(translation: value.translation)
+            }
+    }
+
+    private func handleMobileHorizontalSwipe(translation: CGSize) {
+        guard let action = MobileBlockSwipeActionResolver.action(
+            translation: translation,
+            isEditingBlock: editorSession.focusedBlockID == block.id,
+            nestingLevel: nestingLevel
+        ) else {
+            return
+        }
+
+        switch action {
+        case .select:
+            onSelectCurrentBlock()
+        case .indent:
+            if onIndent() {
+                rowFocusRequest = BlockFocusRequest(blockID: block.id)
+            }
+        case .outdent:
+            if onOutdent() {
+                rowFocusRequest = BlockFocusRequest(blockID: block.id)
+            }
+        }
+    }
+#endif
+
     private static let textBlockMenuTypes: [BlockType] = [
         .paragraph,
         .heading1,
@@ -5408,7 +5478,7 @@ private struct StructuredTableBlockEditor: View {
                 accessibilityIdentifier: "editor.table.\(blockID).add-row",
                 action: appendRow
             )
-            .offset(y: 10)
+            .offset(y: CGFloat(TableBlockChrome.insertControlEdgeOffset))
         }
         .overlay(alignment: .trailing) {
             tablePrimaryControl(
@@ -5419,7 +5489,7 @@ private struct StructuredTableBlockEditor: View {
                 accessibilityIdentifier: "editor.table.\(blockID).add-column",
                 action: appendColumn
             )
-            .offset(x: 10)
+            .offset(x: CGFloat(TableBlockChrome.insertControlEdgeOffset))
         }
         .padding(.vertical, 4)
         .onHover { hovering in

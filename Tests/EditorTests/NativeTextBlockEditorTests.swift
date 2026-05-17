@@ -2,6 +2,8 @@ import Foundation
 import XCTest
 #if os(macOS)
 import AppKit
+#elseif os(iOS)
+import UIKit
 #endif
 
 final class NativeTextBlockEditorTests: XCTestCase {
@@ -233,6 +235,27 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(pasteboard.writeObjects([image]))
 
         let urls = MacPasteboardAttachmentResolver.attachmentURLs(from: pasteboard)
+
+        let imageURL = try XCTUnwrap(urls.first)
+        defer { try? FileManager.default.removeItem(at: imageURL) }
+        XCTAssertEqual(imageURL.pathExtension, "png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: imageURL.path))
+#endif
+    }
+
+    func testIOSPasteboardAttachmentResolverMaterializesImagePaste() throws {
+#if os(iOS)
+        let pasteboardName = UIPasteboard.Name("editor-test-\(UUID().uuidString)")
+        let pasteboard = try XCTUnwrap(UIPasteboard(name: pasteboardName, create: true))
+        defer { UIPasteboard.remove(withName: pasteboardName) }
+
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4))
+        pasteboard.image = renderer.image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+
+        let urls = IOSPasteboardAttachmentResolver.attachmentURLs(from: pasteboard)
 
         let imageURL = try XCTUnwrap(urls.first)
         defer { try? FileManager.default.removeItem(at: imageURL) }

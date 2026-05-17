@@ -1536,6 +1536,41 @@ extension NSEvent {
 #elseif os(iOS)
 import UIKit
 
+enum IOSPasteboardAttachmentResolver {
+    static func attachmentURLs(from pasteboard: UIPasteboard) -> [URL] {
+        let fileURLs = fileURLs(from: pasteboard)
+        if !fileURLs.isEmpty {
+            return fileURLs
+        }
+
+        let images = pasteboard.images ?? pasteboard.image.map { [$0] } ?? []
+        return images.compactMap(writeTemporaryClipboardImage)
+    }
+
+    private static func fileURLs(from pasteboard: UIPasteboard) -> [URL] {
+        let urls = pasteboard.urls ?? pasteboard.url.map { [$0] } ?? []
+        return urls.filter(\.isFileURL)
+    }
+
+    private static func writeTemporaryClipboardImage(_ image: UIImage) -> URL? {
+        guard let pngData = image.pngData() else {
+            return nil
+        }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("editor-clipboard-\(UUID().uuidString.lowercased()).png")
+        do {
+            try pngData.write(to: url, options: .atomic)
+            return url
+        } catch {
+            EditorLog.attachment.error(
+                "ios_clipboard_image_write_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+}
+
 private struct PlatformNativeTextView: UIViewRepresentable {
     let blockID: String
     let text: String
@@ -1625,6 +1660,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
         textView.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
         textView.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
+        textView.onPasteAttachmentURLs = onPasteAttachmentURLs
         textView.accessibilityIdentifier = "editor.text.\(blockID)"
         textView.delegate = context.coordinator
         context.coordinator.applyModelText(text, to: textView)
@@ -1703,6 +1739,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             }
             textView.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
             textView.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
+            textView.onPasteAttachmentURLs = onPasteAttachmentURLs
         }
         if NativeTextCompositionPolicy.shouldApplyModelText(isComposing: textView.markedTextRange != nil),
            textView.text != text {
@@ -2024,6 +2061,7 @@ private final class EditorUITextView: UITextView {
     var onSelectCurrentBlockByKeyboard: (() -> Bool)?
     var onSelectAllBlocksByKeyboard: (() -> Bool)?
     var onCancelSelectionByKeyboard: (() -> Bool)?
+    var onPasteAttachmentURLs: (([URL]) -> Bool)?
 
     override var keyCommands: [UIKeyCommand]? {
         [
@@ -2078,6 +2116,11 @@ private final class EditorUITextView: UITextView {
                 action: #selector(insertLink)
             ),
             UIKeyCommand(
+                input: "v",
+                modifierFlags: [.command],
+                action: #selector(pasteFromKeyboard)
+            ),
+            UIKeyCommand(
                 input: "a",
                 modifierFlags: [.command],
                 action: #selector(selectAllByKeyboard)
@@ -2130,6 +2173,13 @@ private final class EditorUITextView: UITextView {
         }
 
         super.deleteBackward()
+    }
+
+    override func paste(_ sender: Any?) {
+        if pasteAttachmentsFromGeneralPasteboard() {
+            return
+        }
+        super.paste(sender)
     }
 
     private func isUnmodifiedForwardDeletePress(_ press: UIPress) -> Bool {
@@ -2213,6 +2263,21 @@ private final class EditorUITextView: UITextView {
             return
         }
         _ = onKeyboardLinkInsertion?(selectedRange)
+    }
+
+    @objc private func pasteFromKeyboard() {
+        if pasteAttachmentsFromGeneralPasteboard() {
+            return
+        }
+        paste(nil)
+    }
+
+    private func pasteAttachmentsFromGeneralPasteboard() -> Bool {
+        let attachmentURLs = IOSPasteboardAttachmentResolver.attachmentURLs(from: .general)
+        guard !attachmentURLs.isEmpty else {
+            return false
+        }
+        return onPasteAttachmentURLs?(attachmentURLs) == true
     }
 
     @objc private func selectAllByKeyboard() {
