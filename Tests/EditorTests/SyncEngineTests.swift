@@ -227,7 +227,7 @@ final class SyncEngineTests: XCTestCase {
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try BacklinkRepository(database: database).rebuildLinksForBlock(
             blockID: blockID,
-            text: "See [[Welcome]]"
+            text: "See [[欢迎]]"
         )
         XCTAssertFalse(try BacklinkRepository(database: database).backlinks(targetPageID: pageID).isEmpty)
         let fetcher = StaticRemoteBlockChangeFetcher(
@@ -260,7 +260,7 @@ final class SyncEngineTests: XCTestCase {
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try BacklinkRepository(database: database).rebuildLinksForBlock(
             blockID: blockID,
-            text: "See [[Welcome]]"
+            text: "See [[欢迎]]"
         )
         let fetcher = StaticRemoteBlockChangeFetcher(
             changes: [
@@ -299,7 +299,7 @@ final class SyncEngineTests: XCTestCase {
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try BacklinkRepository(database: database).rebuildLinksForBlock(
             blockID: blockID,
-            text: "See [[Welcome]]"
+            text: "See [[欢迎]]"
         )
         let fetcher = StaticRemoteBlockChangeFetcher(
             changes: [],

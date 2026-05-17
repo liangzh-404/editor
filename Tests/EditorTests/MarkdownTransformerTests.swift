@@ -65,6 +65,64 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testShortcutTransformsListMarkersWithTrailingText() {
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "- fea"),
+            MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "fea")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "* item"),
+            MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "item")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "1. fea"),
+            MarkdownShortcutTransform(type: .orderedListItem, textPlain: "fea")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "12. item"),
+            MarkdownShortcutTransform(type: .orderedListItem, textPlain: "item")
+        )
+    }
+
+    func testShortcutTransformsSlashCommands() {
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "/标题 "),
+            MarkdownShortcutTransform(type: .heading1, textPlain: "")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "/标题2 "),
+            MarkdownShortcutTransform(type: .heading2, textPlain: "")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "/列表 "),
+            MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "/任务 "),
+            MarkdownShortcutTransform(type: .taskItem, textPlain: "")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "/代码 "),
+            MarkdownShortcutTransform(type: .codeBlock, textPlain: "")
+        )
+    }
+
+    func testSlashCommandResolverMatchesChineseAndEnglishAliases() {
+        XCTAssertEqual(
+            SlashCommandResolver.matchingCommands(for: "/列").map(\.type),
+            [.unorderedListItem, .orderedListItem]
+        )
+        XCTAssertTrue(
+            SlashCommandResolver.matchingCommands(for: "/").contains { $0.type == .table },
+            "Root slash menu should include table so keyboard or mouse scrolling can reach it"
+        )
+        XCTAssertEqual(
+            SlashCommandResolver.matchingCommands(for: "/call").map(\.type),
+            [.callout]
+        )
+        XCTAssertTrue(SlashCommandResolver.matchingCommands(for: "/").contains { $0.type == .attachmentFile })
+    }
+
     func testExportBlocksToMarkdown() {
         let blocks = [
             block(type: .heading1, text: "Title"),

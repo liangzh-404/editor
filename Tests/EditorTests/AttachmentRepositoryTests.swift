@@ -382,10 +382,10 @@ final class AttachmentRepositoryTests: XCTestCase {
             kind: .file
         )
 
-        XCTAssertEqual(imageAttachment.previewState(for: imageBlock), .pending)
+        XCTAssertEqual(imageAttachment.previewState(for: imageBlock), .thumbnail("/tmp/photo.png"))
         XCTAssertEqual(videoAttachment.previewState(for: videoBlock), .pending)
         XCTAssertEqual(fileAttachment.previewState(for: fileBlock), .unavailable)
-        XCTAssertNil(imageAttachment.previewPath(for: imageBlock))
+        XCTAssertEqual(imageAttachment.previewPath(for: imageBlock), "/tmp/photo.png")
     }
 
     func testDeletingAttachmentBlockRemovesReferenceButKeepsAttachmentMetadata() throws {

@@ -1,5 +1,8 @@
 import Foundation
 import XCTest
+#if os(macOS)
+import AppKit
+#endif
 
 final class NativeTextBlockEditorTests: XCTestCase {
     @MainActor
@@ -34,7 +37,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testNativeTextBlockEditorShowsPlaceholderForEmptyUnfocusedBlock() {
+    func testNativeTextBlockEditorShowsPlaceholderOnlyForFocusedEmptyBlock() {
         let session = EditorSession()
         let editor = NativeTextBlockEditor(
             blockID: "block-1",
@@ -44,7 +47,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
             onTextChange: { _ in }
         )
 
-        XCTAssertTrue(editor.showsPlaceholder)
+        XCTAssertFalse(editor.showsPlaceholder)
 
         session.beginEditing(blockID: "block-1", reason: .programmatic)
         let focusedEditor = NativeTextBlockEditor(
@@ -54,7 +57,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
             session: session,
             onTextChange: { _ in }
         )
-        XCTAssertFalse(focusedEditor.showsPlaceholder)
+        XCTAssertTrue(focusedEditor.showsPlaceholder)
 
         let editorWithText = NativeTextBlockEditor(
             blockID: "block-1",
@@ -89,6 +92,68 @@ final class NativeTextBlockEditorTests: XCTestCase {
 
         guardState.finishApplyingModelText()
         XCTAssertTrue(guardState.shouldForwardTextChange)
+    }
+
+    func testNativeTextCompositionPolicyDefersModelAndCommandWorkWhileIMEIsComposing() {
+        XCTAssertFalse(NativeTextCompositionPolicy.shouldApplyModelText(isComposing: true))
+        XCTAssertFalse(NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: true))
+        XCTAssertFalse(NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: true))
+
+        XCTAssertTrue(NativeTextCompositionPolicy.shouldApplyModelText(isComposing: false))
+        XCTAssertTrue(NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: false))
+        XCTAssertTrue(NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: false))
+    }
+
+    func testNativeTextDropPolicyKeepsBlockDragsOutOfTextEditor() {
+        XCTAssertFalse(NativeTextDropPolicy.acceptsDropIntoTextEditor)
+    }
+
+    func testSlashCommandKeyboardResolverKeepsArrowKeysInsideOpenMenu() {
+        XCTAssertEqual(
+            SlashCommandKeyboardResolver.navigationDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [],
+                text: "/",
+                selectedRange: NSRange(location: 1, length: 0)
+            ),
+            .down
+        )
+        XCTAssertEqual(
+            SlashCommandKeyboardResolver.navigationDirection(
+                keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
+                modifiers: [],
+                text: "/表",
+                selectedRange: NSRange(location: 2, length: 0)
+            ),
+            .up
+        )
+        XCTAssertNil(
+            SlashCommandKeyboardResolver.navigationDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [],
+                text: "plain",
+                selectedRange: NSRange(location: 5, length: 0)
+            )
+        )
+    }
+
+    func testSlashCommandKeyboardResolverSelectsCommandWithReturnOnlyInOpenMenu() {
+        XCTAssertTrue(
+            SlashCommandKeyboardResolver.requestsSelection(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: [],
+                text: "/表",
+                selectedRange: NSRange(location: 2, length: 0)
+            )
+        )
+        XCTAssertFalse(
+            SlashCommandKeyboardResolver.requestsSelection(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: [],
+                text: "normal",
+                selectedRange: NSRange(location: 6, length: 0)
+            )
+        )
     }
 
     func testNativeTextFocusSelectionUsesValidRequestedSelectionRange() {
@@ -137,6 +202,42 @@ final class NativeTextBlockEditorTests: XCTestCase {
 #if os(macOS)
         XCTAssertTrue(MacWindowVisibilityPolicy.shouldRequestMainWindow(hasVisibleWindows: false))
         XCTAssertFalse(MacWindowVisibilityPolicy.shouldRequestMainWindow(hasVisibleWindows: true))
+#endif
+    }
+
+    func testMacPasteboardAttachmentResolverReadsFileURLs() throws {
+#if os(macOS)
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("editor-pasteboard-\(UUID().uuidString).txt")
+        try "附件".write(to: sourceURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("editor-test-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([sourceURL as NSURL]))
+
+        XCTAssertEqual(MacPasteboardAttachmentResolver.attachmentURLs(from: pasteboard), [sourceURL])
+#endif
+    }
+
+    func testMacPasteboardAttachmentResolverMaterializesImagePaste() throws {
+#if os(macOS)
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus()
+        NSColor.systemBlue.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 4, height: 4)).fill()
+        image.unlockFocus()
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("editor-test-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([image]))
+
+        let urls = MacPasteboardAttachmentResolver.attachmentURLs(from: pasteboard)
+
+        let imageURL = try XCTUnwrap(urls.first)
+        defer { try? FileManager.default.removeItem(at: imageURL) }
+        XCTAssertEqual(imageURL.pathExtension, "png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: imageURL.path))
 #endif
     }
 
@@ -214,6 +315,60 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertNil(
             BlockKeyboardShortcutResolver.indentationDirection(
                 keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: []
+            )
+        )
+    }
+
+    func testBlockSelectAllKeyboardResolverSelectsBlockBeforeAllBlocks() {
+        XCTAssertFalse(
+            BlockSelectAllKeyboardResolver.requestsSelectAll(
+                input: "b",
+                modifiers: [.command]
+            )
+        )
+        XCTAssertEqual(
+            BlockSelectAllKeyboardResolver.stage(
+                selectedRange: NSRange(location: 2, length: 0),
+                text: "Alpha"
+            ),
+            .currentBlock
+        )
+        XCTAssertEqual(
+            BlockSelectAllKeyboardResolver.stage(
+                selectedRange: NSRange(location: 0, length: 5),
+                text: "Alpha"
+            ),
+            .allBlocks
+        )
+    }
+
+    func testBlockSelectionCancelKeyboardResolverHandlesPlainEscapeOnly() {
+        XCTAssertTrue(
+            BlockSelectionCancelKeyboardResolver.requestsCancel(
+                keyCode: BlockSelectionCancelKeyboardResolver.escapeKeyCode,
+                input: "\u{1B}",
+                modifiers: []
+            )
+        )
+        XCTAssertTrue(
+            BlockSelectionCancelKeyboardResolver.requestsCancel(
+                keyCode: 0,
+                input: "\u{1B}",
+                modifiers: []
+            )
+        )
+        XCTAssertFalse(
+            BlockSelectionCancelKeyboardResolver.requestsCancel(
+                keyCode: BlockSelectionCancelKeyboardResolver.escapeKeyCode,
+                input: "\u{1B}",
+                modifiers: [.command]
+            )
+        )
+        XCTAssertFalse(
+            BlockSelectionCancelKeyboardResolver.requestsCancel(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                input: "\r",
                 modifiers: []
             )
         )
@@ -475,17 +630,17 @@ final class NativeTextBlockEditorTests: XCTestCase {
         let heading3Descriptor = HeadingBlockChromeDescriptor(block: heading3)
 
         XCTAssertEqual(heading1Descriptor.level, 1)
-        XCTAssertEqual(heading1Descriptor.accessibilityLabel, "Heading 1 block")
+        XCTAssertEqual(heading1Descriptor.accessibilityLabel, "一级标题块")
         XCTAssertEqual(heading1Descriptor.accessibilityValue, "Main heading")
         XCTAssertEqual(heading1Descriptor.accessibilityIdentifier, "editor.heading1.heading-1")
 
         XCTAssertEqual(heading2Descriptor.level, 2)
-        XCTAssertEqual(heading2Descriptor.accessibilityLabel, "Heading 2 block")
-        XCTAssertEqual(heading2Descriptor.accessibilityValue, "Empty")
+        XCTAssertEqual(heading2Descriptor.accessibilityLabel, "二级标题块")
+        XCTAssertEqual(heading2Descriptor.accessibilityValue, "空")
         XCTAssertEqual(heading2Descriptor.accessibilityIdentifier, "editor.heading2.heading-2")
 
         XCTAssertEqual(heading3Descriptor.level, 3)
-        XCTAssertEqual(heading3Descriptor.accessibilityLabel, "Heading 3 block")
+        XCTAssertEqual(heading3Descriptor.accessibilityLabel, "三级标题块")
         XCTAssertEqual(heading3Descriptor.accessibilityValue, "Detail heading")
         XCTAssertEqual(heading3Descriptor.accessibilityIdentifier, "editor.heading3.heading-3")
     }
@@ -502,8 +657,8 @@ final class NativeTextBlockEditorTests: XCTestCase {
 
         let descriptor = DividerBlockChromeDescriptor(block: divider)
 
-        XCTAssertEqual(descriptor.accessibilityLabel, "Divider block")
-        XCTAssertEqual(descriptor.accessibilityValue, "Separator")
+        XCTAssertEqual(descriptor.accessibilityLabel, "分割线块")
+        XCTAssertEqual(descriptor.accessibilityValue, "分割线")
         XCTAssertEqual(descriptor.accessibilityIdentifier, "editor.divider.divider-1")
     }
 
@@ -555,15 +710,15 @@ final class NativeTextBlockEditorTests: XCTestCase {
             generationStatus: .idle
         )
 
-        XCTAssertEqual(readyDescriptor.accessibilityLabel, "Image attachment: photo.png")
-        XCTAssertEqual(readyDescriptor.accessibilityValue, "Image, preview ready")
+        XCTAssertEqual(readyDescriptor.accessibilityLabel, "图片附件：photo.png")
+        XCTAssertEqual(readyDescriptor.accessibilityValue, "图片, 预览就绪")
         XCTAssertEqual(readyDescriptor.accessibilityIdentifier, "editor.attachment.image-block")
 
-        XCTAssertEqual(generatingDescriptor.accessibilityLabel, "Image attachment: photo.png")
-        XCTAssertEqual(generatingDescriptor.accessibilityValue, "Image, generating preview")
+        XCTAssertEqual(generatingDescriptor.accessibilityLabel, "图片附件：photo.png")
+        XCTAssertEqual(generatingDescriptor.accessibilityValue, "图片, 正在生成预览")
 
-        XCTAssertEqual(missingDescriptor.accessibilityLabel, "Image attachment: photo.png")
-        XCTAssertEqual(missingDescriptor.accessibilityValue, "Image, attachment unavailable")
+        XCTAssertEqual(missingDescriptor.accessibilityLabel, "图片附件：photo.png")
+        XCTAssertEqual(missingDescriptor.accessibilityValue, "图片, 附件不可用")
     }
 
     func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicStrikethroughAndCodeShortcutsOnly() {
@@ -647,6 +802,87 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testBlockPromotionCommandResolverPrefersEditableSelectionBlock() {
+        let blocks = [
+            BlockSnapshot(
+                id: "focused",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "a",
+                type: .paragraph,
+                textPlain: "Focused"
+            ),
+            BlockSnapshot(
+                id: "selected",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "b",
+                type: .heading2,
+                textPlain: "Selected"
+            )
+        ]
+
+        XCTAssertEqual(
+            BlockPromotionCommandResolver.promotableBlockID(
+                selection: EditorTextSelection(blockID: "selected", location: 0, length: 8),
+                focusedBlockID: "focused",
+                blocks: blocks
+            ),
+            "selected"
+        )
+    }
+
+    func testBlockPromotionCommandResolverFallsBackToFocusedEditableBlock() {
+        let blocks = [
+            BlockSnapshot(
+                id: "focused",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "a",
+                type: .paragraph,
+                textPlain: "Focused"
+            ),
+            BlockSnapshot(
+                id: "divider",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "b",
+                type: .divider,
+                textPlain: ""
+            )
+        ]
+
+        XCTAssertEqual(
+            BlockPromotionCommandResolver.promotableBlockID(
+                selection: EditorTextSelection(blockID: "divider", location: 0, length: 0),
+                focusedBlockID: "focused",
+                blocks: blocks
+            ),
+            "focused"
+        )
+    }
+
+    func testBlockPromotionCommandResolverRejectsNonEditableBlocks() {
+        let blocks = [
+            BlockSnapshot(
+                id: "divider",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "a",
+                type: .divider,
+                textPlain: ""
+            )
+        ]
+
+        XCTAssertNil(
+            BlockPromotionCommandResolver.promotableBlockID(
+                selection: EditorTextSelection(blockID: "divider", location: 0, length: 0),
+                focusedBlockID: "divider",
+                blocks: blocks
+            )
+        )
+    }
+
     func testBlockDragReorderResolverMovesBeforeDestinationBlock() {
         let visibleBlockIDs = ["a", "b", "c"]
 
@@ -672,6 +908,29 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 destinationBlockID: "c",
                 visibleBlockIDs: visibleBlockIDs
             )
+        )
+    }
+
+    func testBlockDragReorderResolverMovesAfterDestinationBlockForChildDrop() {
+        let visibleBlockIDs = ["a", "b", "c", "d"]
+
+        XCTAssertEqual(
+            BlockDragReorderResolver.targetIndex(
+                draggedBlockID: "d",
+                destinationBlockID: "b",
+                visibleBlockIDs: visibleBlockIDs,
+                placement: .childAfter
+            ),
+            2
+        )
+        XCTAssertEqual(
+            BlockDragReorderResolver.targetIndex(
+                draggedBlockID: "a",
+                destinationBlockID: "c",
+                visibleBlockIDs: visibleBlockIDs,
+                placement: .after
+            ),
+            2
         )
     }
 

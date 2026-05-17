@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 8
+    static let currentVersion = 9
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -126,6 +126,39 @@ enum SchemaMigrator {
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE,
                 FOREIGN KEY (promoted_from_diary_entry_id) REFERENCES diary_entries(id) ON DELETE SET NULL
+            );
+            """
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS diary_pages (
+                page_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                diary_date TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (workspace_id, diary_date),
+                FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+            );
+            """
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS page_parent_links (
+                parent_page_id TEXT NOT NULL,
+                child_page_id TEXT NOT NULL,
+                source_block_id TEXT NOT NULL,
+                order_key TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (parent_page_id, child_page_id),
+                UNIQUE (source_block_id),
+                FOREIGN KEY (parent_page_id) REFERENCES pages(id) ON DELETE CASCADE,
+                FOREIGN KEY (child_page_id) REFERENCES pages(id) ON DELETE CASCADE,
+                FOREIGN KEY (source_block_id) REFERENCES blocks(id) ON DELETE CASCADE
             );
             """
         )
@@ -329,7 +362,7 @@ enum SchemaMigrator {
                         .text(notebookID),
                         .text(workspaceID),
                         .null,
-                        .text("Notebook"),
+                        .text("笔记本"),
                         .text("000001"),
                         .text(workspace["created_at"] ?? now),
                         .text(workspace["updated_at"] ?? now)

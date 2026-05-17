@@ -25,6 +25,11 @@ enum AttachmentPreviewGenerationStatus: Equatable, Sendable {
     case failed(String)
 }
 
+private struct PageNavigationHistoryEntry: Equatable {
+    let pageID: String
+    let collection: WorkspaceCollection
+}
+
 @MainActor
 final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var snapshot: WorkspaceSnapshot
@@ -39,7 +44,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var selectedPageExternalLinks: [ExternalLink] = []
     @Published private(set) var selectedPageConflicts: [ConflictSnapshot] = []
     @Published private(set) var cloudKitAccountStatus: CloudKitAccountAvailability?
-    @Published private(set) var syncStatusText = "Sync Idle"
+    @Published private(set) var syncStatusText = "同步空闲"
     @Published private(set) var pendingFocusBlockID: String?
     @Published private(set) var pendingCompactPageNavigationID: String?
     @Published private(set) var canUndoTextEdit = false
@@ -57,16 +62,50 @@ final class WorkspaceViewModel: ObservableObject {
     private let conflictRepository: ConflictRepository?
     private let syncEngine: SyncEngine?
     private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
+    private let currentDateProvider: () -> Date
+    private let diaryCalendar: Calendar
     private var hasLoadedSnapshot = false
     private var didRequestInitialEditorFocus = false
     private var textEditUndoStack: [TextEditUndoSnapshot] = []
     private var pageArchiveUndoStack: [PageArchiveUndoSnapshot] = []
+    private var pageNavigationBackStack: [PageNavigationHistoryEntry] = []
+    private var pageNavigationForwardStack: [PageNavigationHistoryEntry] = []
+
+    var canNavigateBack: Bool {
+        !pageNavigationBackStack.isEmpty || selectedPageParentLink != nil
+    }
+
+    var canNavigateForward: Bool {
+        !pageNavigationForwardStack.isEmpty
+    }
 
     var selectedPage: PageSummary? {
         guard let selectedPageID else {
             return nil
         }
         return snapshot.pages.first { $0.id == selectedPageID }
+    }
+
+    var selectedPageParentLink: PageParentLink? {
+        guard let selectedPageID else {
+            return nil
+        }
+
+        return snapshot.pageParentLinks.first { $0.childPageID == selectedPageID }
+    }
+
+    var selectedPageTagNames: [String] {
+        guard let selectedPageID else {
+            return []
+        }
+        let tagIDs = Set(
+            snapshot.pageTags
+                .filter { $0.pageID == selectedPageID }
+                .map(\.tagID)
+        )
+        return snapshot.tags
+            .filter { tagIDs.contains($0.id) }
+            .map(\.name)
     }
 
     var selectedNotebook: NotebookSummary? {
@@ -92,8 +131,10 @@ final class WorkspaceViewModel: ObservableObject {
 
     var visibleDocumentPages: [PageSummary] {
         switch selectedCollection {
-        case .diary, .allDocuments:
-            return snapshot.pages
+        case .diary:
+            return snapshot.pages.filter { diaryPageIDs.contains($0.id) }
+        case .allDocuments:
+            return snapshot.pages.filter { !diaryPageIDs.contains($0.id) }
         case .favorites:
             return snapshot.favoritePages
         case .tag(let tagID):
@@ -127,17 +168,17 @@ final class WorkspaceViewModel: ObservableObject {
     var cloudKitAccountStatusText: String {
         switch cloudKitAccountStatus {
         case .available:
-            return "iCloud Available"
+            return "iCloud 可用"
         case .noAccount:
-            return "iCloud No Account"
+            return "iCloud 未登录"
         case .restricted:
-            return "iCloud Restricted"
+            return "iCloud 受限"
         case .couldNotDetermine:
-            return "iCloud Unknown"
+            return "iCloud 状态未知"
         case .temporarilyUnavailable:
-            return "iCloud Unavailable"
+            return "iCloud 暂不可用"
         case nil:
-            return "iCloud Not Checked"
+            return "iCloud 未检查"
         }
     }
 
@@ -151,7 +192,9 @@ final class WorkspaceViewModel: ObservableObject {
         backlinkRepository: BacklinkRepository? = nil,
         conflictRepository: ConflictRepository? = nil,
         syncEngine: SyncEngine? = nil,
-        cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil
+        cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil,
+        currentDateProvider: @escaping () -> Date = Date.init,
+        diaryCalendar: Calendar = .current
     ) {
         self.repository = repository
         self.diaryRepository = diaryRepository
@@ -163,6 +206,8 @@ final class WorkspaceViewModel: ObservableObject {
         self.conflictRepository = conflictRepository
         self.syncEngine = syncEngine
         self.cloudKitAccountMetadataService = cloudKitAccountMetadataService
+        self.currentDateProvider = currentDateProvider
+        self.diaryCalendar = diaryCalendar
         snapshot = .empty
         selectedWorkspaceID = nil
         selectedNotebookID = nil
@@ -187,6 +232,8 @@ final class WorkspaceViewModel: ObservableObject {
         conflictRepository = nil
         syncEngine = nil
         cloudKitAccountMetadataService = nil
+        currentDateProvider = Date.init
+        diaryCalendar = .current
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
@@ -208,12 +255,11 @@ final class WorkspaceViewModel: ObservableObject {
         let previousSelectedCollection = selectedCollection
         let previousSelectedPageID = selectedPageID
         let shouldRestorePreviousSelection = hasLoadedSnapshot
-        let shouldLaunchIntoDiary = !hasLoadedSnapshot && diaryRepository != nil
+        let shouldOpenDiary = diaryRepository != nil && previousSelectedCollection == .diary
         let loadedSnapshot = try repository.loadWorkspaceSnapshot()
         apply(snapshot: loadedSnapshot)
-        try refreshActiveDiaryEntryIfAvailable()
-        if shouldLaunchIntoDiary {
-            selectCollection(.diary)
+        if shouldOpenDiary {
+            try openDailyDiaryPage(source: "load", recordHistory: false)
         } else if shouldRestorePreviousSelection {
             restoreSelectionAfterReload(
                 collection: previousSelectedCollection,
@@ -221,6 +267,13 @@ final class WorkspaceViewModel: ObservableObject {
             )
         }
         hasLoadedSnapshot = true
+        if try extractInlineHashTagsFromSnapshotIfNeeded() {
+            let currentCollection = selectedCollection
+            let currentPageID = selectedPageID
+            let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+            apply(snapshot: loadedSnapshot)
+            restoreSelectionAfterReload(collection: currentCollection, pageID: currentPageID)
+        }
         try refreshDerivedState(rebuildSearchIndex: true)
         requestInitialEditorFocusIfNeeded(source: "load")
     }
@@ -246,7 +299,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     func syncNow() {
         guard let syncEngine else {
-            syncStatusText = "Sync Unavailable"
+            syncStatusText = "同步不可用"
             return
         }
 
@@ -256,15 +309,15 @@ final class WorkspaceViewModel: ObservableObject {
             let summary = try syncEngine.uploadPendingChanges()
             let fetchSummary = try syncEngine.fetchRemoteChanges()
             if summary.failedCount > 0 {
-                syncStatusText = "Sync Retry Scheduled"
+                syncStatusText = "已安排同步重试"
             } else if fetchSummary.appliedCount > 0 {
-                syncStatusText = "Synced \(fetchSummary.appliedCount) remote \(fetchSummary.appliedCount == 1 ? "change" : "changes")"
+                syncStatusText = "已同步 \(fetchSummary.appliedCount) 条远端变更"
             } else {
-                syncStatusText = "Synced \(summary.uploadedCount) \(summary.uploadedCount == 1 ? "change" : "changes")"
+                syncStatusText = "已同步 \(summary.uploadedCount) 条变更"
             }
             try load()
         } catch {
-            syncStatusText = "Sync Failed"
+            syncStatusText = "同步失败"
             EditorLog.sync.error(
                 "sync_now_failed error=\(String(describing: error), privacy: .public)"
             )
@@ -283,22 +336,68 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func selectPage(id: String) {
+        selectPage(id: id, collection: defaultCollectionForOpeningPage(id: id), recordHistory: true)
+    }
+
+    private func selectPage(
+        id: String,
+        collection: WorkspaceCollection,
+        recordHistory: Bool
+    ) {
+        if recordHistory {
+            recordNavigationHistoryBeforeOpening(pageID: id)
+        }
         selectedPageID = id
-        selectedCollection = .allDocuments
+        selectedCollection = collection
         selectedNotebookID = snapshot.pages.first { $0.id == id }?.notebookID ?? selectedNotebookID
         refreshBacklinksForSelectedPage()
         refreshExternalLinksForSelectedPage()
         refreshConflictsForSelectedPage()
     }
 
+    private var diaryPageIDs: Set<String> {
+        Set(snapshot.diaryPages.map(\.pageID))
+    }
+
+    private func defaultCollectionForOpeningPage(id pageID: String) -> WorkspaceCollection {
+        if selectedCollection == .diary,
+           diaryPageIDs.contains(pageID) {
+            return .diary
+        }
+        return .allDocuments
+    }
+
     func selectCollection(_ collection: WorkspaceCollection) {
         selectedCollection = collection
         if collection == .diary {
-            selectedPageID = nil
-            selectedPageBacklinks = []
-            selectedPageExternalLinks = []
-            selectedPageConflicts = []
+            do {
+                try openDailyDiaryPage(source: "collection_select", recordHistory: true)
+            } catch {
+                selectedPageID = nil
+                selectedPageBacklinks = []
+                selectedPageExternalLinks = []
+                selectedPageConflicts = []
+                EditorLog.render.error(
+                    "daily_page_open_failed error=\(String(describing: error), privacy: .public)"
+                )
+            }
+        } else if let selectedPageID,
+                  !canRestoreSelection(pageID: selectedPageID, in: collection) {
+            self.selectedPageID = visibleDocumentPages.first?.id
+            refreshBacklinksForSelectedPage()
+            refreshExternalLinksForSelectedPage()
+            refreshConflictsForSelectedPage()
         }
+    }
+
+    private func recordNavigationHistoryBeforeOpening(pageID destinationPageID: String) {
+        guard let selectedPageID, selectedPageID != destinationPageID else {
+            return
+        }
+        pageNavigationBackStack.append(
+            PageNavigationHistoryEntry(pageID: selectedPageID, collection: selectedCollection)
+        )
+        pageNavigationForwardStack = []
     }
 
     func updateDiaryText(_ text: String) throws {
@@ -392,6 +491,133 @@ final class WorkspaceViewModel: ObservableObject {
         selectPage(id: targetPageID)
         pendingCompactPageNavigationID = targetPageID
         EditorLog.render.debug("page_reference_opened target_page_id=\(targetPageID, privacy: .public)")
+    }
+
+    @discardableResult
+    func openParentPageForCurrentPage() throws -> Bool {
+        guard let parentLink = selectedPageParentLink else {
+            return false
+        }
+        guard snapshot.pages.contains(where: { $0.id == parentLink.parentPageID }) else {
+            return false
+        }
+
+        selectPage(id: parentLink.parentPageID, collection: .allDocuments, recordHistory: false)
+        pendingFocusBlockID = parentLink.sourceBlockID
+        pendingCompactPageNavigationID = parentLink.parentPageID
+        EditorLog.render.debug(
+            "parent_page_opened parent_page_id=\(parentLink.parentPageID, privacy: .public) child_page_id=\(parentLink.childPageID, privacy: .public)"
+        )
+        return true
+    }
+
+    func openParentPageForCurrentPageForUI() -> Bool {
+        do {
+            return try openParentPageForCurrentPage()
+        } catch {
+            EditorLog.render.error(
+                "parent_page_open_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    func openTodayForUI() -> Bool {
+        do {
+            return try openDailyDiaryPage(source: "shortcut_today", recordHistory: true) != nil
+        } catch {
+            EditorLog.render.error(
+                "daily_page_shortcut_open_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    func createNewDocumentForUI() -> Bool {
+        do {
+            _ = try createPageInSelectedWorkspace(title: "未命名")
+            return true
+        } catch {
+            EditorLog.input.error(
+                "new_document_shortcut_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    func navigateBackForUI() -> Bool {
+        do {
+            return try navigateBack()
+        } catch {
+            EditorLog.render.error(
+                "page_navigation_back_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    func navigateForwardForUI() -> Bool {
+        navigateForward()
+    }
+
+    @discardableResult
+    func navigateBack() throws -> Bool {
+        if let currentPageID = selectedPageID,
+           let currentParentLink = selectedPageParentLink {
+            let currentEntry = PageNavigationHistoryEntry(
+                pageID: currentPageID,
+                collection: selectedCollection
+            )
+            let didOpenParent = try openParentPageForCurrentPage()
+            if didOpenParent {
+                if pageNavigationBackStack.last?.pageID == currentParentLink.parentPageID {
+                    _ = pageNavigationBackStack.popLast()
+                }
+                pageNavigationForwardStack.append(currentEntry)
+                return true
+            }
+        }
+
+        while let previousEntry = pageNavigationBackStack.popLast() {
+            guard canRestoreSelection(pageID: previousEntry.pageID, in: previousEntry.collection) else {
+                continue
+            }
+
+            if let selectedPageID {
+                pageNavigationForwardStack.append(
+                    PageNavigationHistoryEntry(pageID: selectedPageID, collection: selectedCollection)
+                )
+            }
+            selectPage(
+                id: previousEntry.pageID,
+                collection: previousEntry.collection,
+                recordHistory: false
+            )
+            pendingCompactPageNavigationID = previousEntry.pageID
+            return true
+        }
+
+        return try openParentPageForCurrentPage()
+    }
+
+    @discardableResult
+    func navigateForward() -> Bool {
+        while let nextEntry = pageNavigationForwardStack.popLast() {
+            guard canRestoreSelection(pageID: nextEntry.pageID, in: nextEntry.collection) else {
+                continue
+            }
+
+            if let selectedPageID {
+                pageNavigationBackStack.append(
+                    PageNavigationHistoryEntry(pageID: selectedPageID, collection: selectedCollection)
+                )
+            }
+            selectPage(id: nextEntry.pageID, collection: nextEntry.collection, recordHistory: false)
+            pendingCompactPageNavigationID = nextEntry.pageID
+            return true
+        }
+
+        return false
     }
 
     func openBlockReference(targetPageID: String, targetBlockID: String) {
@@ -664,7 +890,9 @@ final class WorkspaceViewModel: ObservableObject {
     private func updateBlockText(blockID: String, text: String, registerUndo: Bool) throws {
         let currentBlock = snapshot.blocks.first { $0.id == blockID }
         let currentType = currentBlock?.type ?? .paragraph
-        let nextBlock = nextBlockState(currentType: currentType, text: text)
+        let tagExtraction = InlineHashTagExtractor.extract(from: text)
+        let nextText = tagExtraction.tagNames.isEmpty ? text : tagExtraction.text
+        let nextBlock = nextBlockState(currentType: currentType, text: nextText)
         let undoSnapshot = makeTextEditUndoSnapshot(
             blockID: blockID,
             currentBlock: currentBlock,
@@ -691,6 +919,30 @@ final class WorkspaceViewModel: ObservableObject {
             snapshot = snapshot.replacingTaskItemCompletion(
                 blockID: blockID,
                 isCompleted: taskItemIsCompleted
+            )
+        }
+        if !tagExtraction.tagNames.isEmpty,
+           let pageID = currentBlock?.pageID ?? selectedPageID {
+            try assignInlineTags(tagExtraction.tagNames, to: pageID)
+            if let repository {
+                let previousSelectedCollection = selectedCollection
+                let previousSelectedPageID = selectedPageID
+                let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+                apply(snapshot: loadedSnapshot)
+                restoreSelectionAfterReload(
+                    collection: previousSelectedCollection,
+                    pageID: previousSelectedPageID
+                )
+            }
+            pendingFocusBlockID = blockID
+            EditorLog.focus.debug(
+                "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=inline_tag_extract"
+            )
+        }
+        if currentType != nextBlock.type {
+            pendingFocusBlockID = blockID
+            EditorLog.focus.debug(
+                "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=markdown_shortcut"
             )
         }
         try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
@@ -770,6 +1022,10 @@ final class WorkspaceViewModel: ObservableObject {
             text: block.textPlain
         )
         try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
+        pendingFocusBlockID = blockID
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=block_type_change"
+        )
     }
 
     func updateTableRows(blockID: String, rows: [[String]]) throws {
@@ -961,6 +1217,32 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     @discardableResult
+    func convertTextBlockToPage(blockID: String) throws -> PageSummary {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let page = try repository.convertTextBlockToPage(blockID: blockID)
+        try load()
+        selectPage(id: page.id)
+        requestFocusForInitialEmptyBlockIfNeeded(source: "block_to_page")
+        return page
+    }
+
+    func convertTextBlockToPageForUI(blockID: String) {
+        do {
+            let page = try convertTextBlockToPage(blockID: blockID)
+            EditorLog.input.debug(
+                "block_converted_to_page block_id=\(blockID, privacy: .public) page_id=\(page.id, privacy: .public)"
+            )
+        } catch {
+            EditorLog.input.error(
+                "block_convert_to_page_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    @discardableResult
     func appendBlockReferenceToCurrentPage(targetBlockID: String) throws -> String {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
@@ -995,7 +1277,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     @discardableResult
     func createPageInSelectedWorkspace(
-        title: String = "Untitled",
+        title: String = "未命名",
         notebookID: String? = nil
     ) throws -> PageSummary {
         guard let repository else {
@@ -1018,7 +1300,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     @discardableResult
     func createNotebookInSelectedWorkspace(
-        name: String = "New Notebook",
+        name: String = "新建笔记本",
         parentNotebookID: String? = nil
     ) throws -> NotebookSummary {
         guard let repository else {
@@ -1380,6 +1662,15 @@ final class WorkspaceViewModel: ObservableObject {
         try load()
     }
 
+    func moveBlocks(blockIDs: [String], toIndex: Int) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        try repository.moveBlocks(blockIDs: blockIDs, toIndex: toIndex)
+        try load()
+    }
+
     @discardableResult
     func insertParagraphBlock(after blockID: String) throws -> String {
         guard let repository else {
@@ -1429,7 +1720,16 @@ final class WorkspaceViewModel: ObservableObject {
             toggleIsExpanded: block.toggleIsExpanded,
             codeBlockLineWrapping: block.codeBlockLineWrapping
         )
+        let insertedBlockType = TextBlockSplitPolicy.insertedBlockType(after: block.type)
         let insertedBlock = try repository.insertParagraphBlock(after: blockID, text: trailingText)
+        if insertedBlockType != .paragraph {
+            try repository.updateBlock(
+                blockID: insertedBlock.id,
+                type: insertedBlockType,
+                text: trailingText,
+                taskItemIsCompleted: false
+            )
+        }
         try load()
         pendingFocusBlockID = insertedBlock.id
         EditorLog.focus.debug(
@@ -1447,6 +1747,46 @@ final class WorkspaceViewModel: ObservableObject {
               selection.location == 0,
               selection.length == 0 else {
             return nil
+        }
+
+        if let currentBlock = snapshot.blocks.first(where: { $0.id == blockID }),
+           currentBlock.type.isTextEditable,
+           currentBlock.type.stripsFormattingBeforeLineHeadMerge {
+            guard let repository else {
+                throw WorkspaceViewModelError.missingRepository
+            }
+            try repository.updateBlock(
+                blockID: blockID,
+                type: .paragraph,
+                text: currentBlock.textPlain,
+                taskItemIsCompleted: false,
+                toggleIsExpanded: currentBlock.toggleIsExpanded,
+                codeBlockLineWrapping: currentBlock.codeBlockLineWrapping
+            )
+            try load()
+            pendingFocusBlockID = blockID
+            EditorLog.focus.debug(
+                "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=line_head_strip_block_type"
+            )
+            return EditorTextSelection(blockID: blockID, location: 0, length: 0)
+        }
+
+        if let currentBlock = snapshot.blocks.first(where: { $0.id == blockID }),
+           currentBlock.type.isTextEditable,
+           currentBlock.parentBlockID != nil {
+            guard let repository else {
+                throw WorkspaceViewModelError.missingRepository
+            }
+            let didOutdent = try repository.outdentBlock(blockID: blockID)
+            guard didOutdent else {
+                return nil
+            }
+            try load()
+            pendingFocusBlockID = blockID
+            EditorLog.focus.debug(
+                "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=empty_indented_backspace"
+            )
+            return EditorTextSelection(blockID: blockID, location: 0, length: 0)
         }
 
         let blocks = editorVisibleBlocks
@@ -1612,6 +1952,16 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.store.error(
                 "block_move_failed block_id=\(blockID, privacy: .public) target_index=\(toIndex, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func moveBlocksInCurrentPage(blockIDs: [String], toIndex: Int) {
+        do {
+            try moveBlocks(blockIDs: blockIDs, toIndex: toIndex)
+        } catch {
+            EditorLog.store.error(
+                "blocks_move_failed block_ids=\(blockIDs.joined(separator: ","), privacy: .public) target_index=\(toIndex, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }
@@ -2232,24 +2582,45 @@ final class WorkspaceViewModel: ObservableObject {
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
         selectedCollection = selectedPageID == nil ? .diary : .allDocuments
-        activeDiaryEntry = snapshot.activeDiaryEntry
+        activeDiaryEntry = nil
     }
 
-    private func refreshActiveDiaryEntryIfAvailable() throws {
-        guard let diaryRepository, let selectedWorkspaceID else {
-            return
+    @discardableResult
+    private func openDailyDiaryPage(source: String, recordHistory: Bool = false) throws -> PageSummary? {
+        guard let repository, let diaryRepository, let selectedWorkspaceID else {
+            return nil
         }
+        let previousPageID = selectedPageID
+        let previousCollection = selectedCollection
 
-        activeDiaryEntry = try diaryRepository.activeEntry(workspaceID: selectedWorkspaceID)
+        let page = try diaryRepository.openDailyPage(
+            workspaceID: selectedWorkspaceID,
+            date: currentDateProvider(),
+            calendar: diaryCalendar
+        )
+        let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+        apply(snapshot: loadedSnapshot)
+        if recordHistory,
+           let previousPageID,
+           previousPageID != page.id {
+            pageNavigationBackStack.append(
+                PageNavigationHistoryEntry(pageID: previousPageID, collection: previousCollection)
+            )
+            pageNavigationForwardStack = []
+        }
+        selectedCollection = .diary
+        selectedPageID = page.id
+        selectedNotebookID = page.notebookID ?? selectedNotebookID
+        refreshBacklinksForSelectedPage()
+        refreshExternalLinksForSelectedPage()
+        refreshConflictsForSelectedPage()
+        requestFocusForInitialEmptyBlockIfNeeded(source: source)
+        return page
     }
 
     private func restoreSelectionAfterReload(collection: WorkspaceCollection, pageID: String?) {
         selectedCollection = collection
         if collection == .diary {
-            selectedPageID = nil
-            selectedPageBacklinks = []
-            selectedPageExternalLinks = []
-            selectedPageConflicts = []
             return
         }
 
@@ -2263,10 +2634,12 @@ final class WorkspaceViewModel: ObservableObject {
     private func canRestoreSelection(pageID: String, in collection: WorkspaceCollection) -> Bool {
         switch collection {
         case .diary:
-            return false
+            return diaryPageIDs.contains(pageID)
         case .archive:
             return snapshot.archivedPages.contains { $0.id == pageID }
-        case .allDocuments, .favorites, .tag, .search:
+        case .allDocuments:
+            return snapshot.pages.contains { $0.id == pageID } && !diaryPageIDs.contains(pageID)
+        case .favorites, .tag, .search:
             return snapshot.pages.contains { $0.id == pageID }
         }
     }
@@ -2446,6 +2819,60 @@ final class WorkspaceViewModel: ObservableObject {
         refreshConflictsForSelectedPage()
     }
 
+    private func assignInlineTags(_ tagNames: [String], to pageID: String) throws {
+        guard !tagNames.isEmpty,
+              let tagRepository,
+              let selectedWorkspaceID else {
+            return
+        }
+
+        var existingTags = try tagRepository.tags(workspaceID: selectedWorkspaceID)
+        var assignedTagIDs = Set(
+            try tagRepository.tagAssignments()
+                .filter { $0.pageID == pageID }
+                .map(\.tagID)
+        )
+
+        for tagName in tagNames {
+            if let existingTag = existingTags.first(where: { $0.name.caseInsensitiveCompare(tagName) == .orderedSame }) {
+                assignedTagIDs.insert(existingTag.id)
+            } else {
+                let createdTag = try tagRepository.createTag(workspaceID: selectedWorkspaceID, name: tagName)
+                existingTags.append(createdTag)
+                assignedTagIDs.insert(createdTag.id)
+            }
+        }
+
+        try tagRepository.assignTags(pageID: pageID, tagIDs: Array(assignedTagIDs).sorted())
+    }
+
+    private func extractInlineHashTagsFromSnapshotIfNeeded() throws -> Bool {
+        guard let repository, tagRepository != nil else {
+            return false
+        }
+
+        var didExtractTags = false
+        for block in snapshot.blocks where block.type.isTextEditable {
+            let extraction = InlineHashTagExtractor.extract(from: block.textPlain)
+            guard !extraction.tagNames.isEmpty else {
+                continue
+            }
+
+            try repository.updateBlock(
+                blockID: block.id,
+                type: block.type,
+                text: extraction.text,
+                taskItemIsCompleted: block.taskItemIsCompleted,
+                toggleIsExpanded: block.toggleIsExpanded,
+                codeBlockLineWrapping: block.codeBlockLineWrapping
+            )
+            try assignInlineTags(extraction.tagNames, to: block.pageID)
+            didExtractTags = true
+        }
+
+        return didExtractTags
+    }
+
     private func makeTextEditUndoSnapshot(
         blockID: String,
         currentBlock: BlockSnapshot?,
@@ -2506,7 +2933,43 @@ final class WorkspaceViewModel: ObservableObject {
     }
 }
 
+enum TextBlockSplitPolicy {
+    static func insertedBlockType(after type: BlockType) -> BlockType {
+        switch type {
+        case .unorderedListItem, .orderedListItem, .taskItem:
+            return type
+        default:
+            return .paragraph
+        }
+    }
+}
+
 private extension BlockType {
+    var stripsFormattingBeforeLineHeadMerge: Bool {
+        switch self {
+        case .heading1,
+             .heading2,
+             .heading3,
+             .unorderedListItem,
+             .orderedListItem,
+             .taskItem,
+             .quote,
+             .callout,
+             .toggle,
+             .codeBlock:
+            return true
+        case .paragraph,
+             .table,
+             .divider,
+             .pageReference,
+             .blockReference,
+             .attachmentImage,
+             .attachmentVideo,
+             .attachmentFile:
+            return false
+        }
+    }
+
     var headingLevel: Int? {
         switch self {
         case .heading1:

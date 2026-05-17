@@ -21,18 +21,18 @@ final class BacklinkRepositoryTests: XCTestCase {
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
 
-        try pageRepository.updateBlockText(blockID: blockID, text: "See [[Welcome]]")
+        try pageRepository.updateBlockText(blockID: blockID, text: "See [[欢迎]]")
 
         XCTAssertEqual(
             try BacklinkRepository(database: database).backlinks(targetPageID: pageID),
             [
                 Backlink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: blockID,
                     targetPageID: pageID,
                     targetBlockID: nil,
-                    linkText: "Welcome"
+                    linkText: "欢迎"
                 )
             ]
         )
@@ -47,7 +47,7 @@ final class BacklinkRepositoryTests: XCTestCase {
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
 
-        try pageRepository.updateBlockText(blockID: blockID, text: "See [[Welcome]]")
+        try pageRepository.updateBlockText(blockID: blockID, text: "See [[欢迎]]")
         try pageRepository.updateBlockText(blockID: blockID, text: "No link now")
 
         XCTAssertEqual(
@@ -75,14 +75,14 @@ final class BacklinkRepositoryTests: XCTestCase {
             [
                 ExternalLink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: blockID,
                     targetURL: "https://swift.org",
                     linkText: "Swift"
                 ),
                 ExternalLink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: blockID,
                     targetURL: "x-editor://local",
                     linkText: "Docs"

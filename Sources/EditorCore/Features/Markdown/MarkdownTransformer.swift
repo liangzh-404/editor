@@ -12,6 +12,204 @@ struct MarkdownShortcutTransform: Equatable, Sendable {
     }
 }
 
+struct SlashCommandDescriptor: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let aliases: [String]
+    let type: BlockType
+}
+
+enum SlashCommandResolver {
+    static let commands: [SlashCommandDescriptor] = [
+        SlashCommandDescriptor(
+            id: "page",
+            title: "页面",
+            subtitle: "把当前块变成一个可打开的页面",
+            aliases: ["page", "页面", "子页面"],
+            type: .pageReference
+        ),
+        SlashCommandDescriptor(
+            id: "paragraph",
+            title: "正文",
+            subtitle: "普通文本块",
+            aliases: ["text", "paragraph", "正文", "文本"],
+            type: .paragraph
+        ),
+        SlashCommandDescriptor(
+            id: "heading1",
+            title: "一级标题",
+            subtitle: "大标题",
+            aliases: ["h1", "标题", "一级标题"],
+            type: .heading1
+        ),
+        SlashCommandDescriptor(
+            id: "heading2",
+            title: "二级标题",
+            subtitle: "章节标题",
+            aliases: ["h2", "标题2", "二级标题"],
+            type: .heading2
+        ),
+        SlashCommandDescriptor(
+            id: "heading3",
+            title: "三级标题",
+            subtitle: "小标题",
+            aliases: ["h3", "标题3", "三级标题"],
+            type: .heading3
+        ),
+        SlashCommandDescriptor(
+            id: "unordered-list",
+            title: "无序列表",
+            subtitle: "圆点项目",
+            aliases: ["list", "ul", "列表", "无序", "无序列表"],
+            type: .unorderedListItem
+        ),
+        SlashCommandDescriptor(
+            id: "ordered-list",
+            title: "有序列表",
+            subtitle: "数字项目",
+            aliases: ["ol", "ordered", "有序", "有序列表", "编号"],
+            type: .orderedListItem
+        ),
+        SlashCommandDescriptor(
+            id: "task",
+            title: "任务",
+            subtitle: "待办项目",
+            aliases: ["todo", "task", "任务", "待办"],
+            type: .taskItem
+        ),
+        SlashCommandDescriptor(
+            id: "quote",
+            title: "引用",
+            subtitle: "引用文字",
+            aliases: ["quote", "引用"],
+            type: .quote
+        ),
+        SlashCommandDescriptor(
+            id: "code",
+            title: "代码",
+            subtitle: "等宽代码块",
+            aliases: ["code", "代码"],
+            type: .codeBlock
+        ),
+        SlashCommandDescriptor(
+            id: "table",
+            title: "表格",
+            subtitle: "文档内嵌网格",
+            aliases: ["table", "表格", "grid", "网格"],
+            type: .table
+        ),
+        SlashCommandDescriptor(
+            id: "callout",
+            title: "提示",
+            subtitle: "重点提示块",
+            aliases: ["callout", "note", "提示", "标注"],
+            type: .callout
+        ),
+        SlashCommandDescriptor(
+            id: "toggle",
+            title: "折叠",
+            subtitle: "可展开内容",
+            aliases: ["toggle", "折叠"],
+            type: .toggle
+        ),
+        SlashCommandDescriptor(
+            id: "divider",
+            title: "分割线",
+            subtitle: "内容分隔",
+            aliases: ["divider", "分割线"],
+            type: .divider
+        ),
+        SlashCommandDescriptor(
+            id: "attachment",
+            title: "附件",
+            subtitle: "插入图片或文件",
+            aliases: ["attach", "attachment", "file", "image", "附件", "图片", "文件"],
+            type: .attachmentFile
+        )
+    ]
+
+    static func matchingCommands(for query: String) -> [SlashCommandDescriptor] {
+        guard query.hasPrefix("/") else {
+            return []
+        }
+        let token = String(query.dropFirst())
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !token.isEmpty else {
+            return commands
+        }
+
+        return commands.filter { command in
+            command.title.lowercased().contains(token)
+                || command.aliases.contains { $0.lowercased().contains(token) }
+        }
+    }
+}
+
+struct InlineHashTagExtraction: Equatable, Sendable {
+    let text: String
+    let tagNames: [String]
+}
+
+enum InlineHashTagExtractor {
+    static func extract(from text: String) -> InlineHashTagExtraction {
+        var output = ""
+        var tagNames: [String] = []
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            let character = text[index]
+            if character == "#", isTagBoundary(before: index, in: text) {
+                let tagStart = text.index(after: index)
+                if tagStart < text.endIndex,
+                   let tagEnd = tagEnd(startingAt: tagStart, in: text),
+                   tagEnd > tagStart {
+                    let tagName = String(text[tagStart..<tagEnd])
+                    if !tagNames.contains(tagName) {
+                        tagNames.append(tagName)
+                    }
+                    index = tagEnd
+                    continue
+                }
+            }
+
+            output.append(character)
+            index = text.index(after: index)
+        }
+
+        let normalizedText = output
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+
+        return InlineHashTagExtraction(text: normalizedText, tagNames: tagNames)
+    }
+
+    private static func isTagBoundary(before index: String.Index, in text: String) -> Bool {
+        guard index > text.startIndex else {
+            return true
+        }
+        return text[text.index(before: index)].isWhitespace
+    }
+
+    private static func tagEnd(startingAt start: String.Index, in text: String) -> String.Index? {
+        var index = start
+        var hasValidCharacter = false
+        while index < text.endIndex {
+            let character = text[index]
+            if character.isWhitespace || character == "#" {
+                break
+            }
+            guard character.isLetter || character.isNumber || character == "_" || character == "-" else {
+                break
+            }
+            hasValidCharacter = true
+            index = text.index(after: index)
+        }
+        return hasValidCharacter ? index : nil
+    }
+}
+
 struct MarkdownBlockDraft: Equatable, Sendable {
     let type: BlockType
     let textPlain: String
@@ -1053,21 +1251,29 @@ enum MarkdownTransformer {
         switch text {
         case "# ":
             return MarkdownShortcutTransform(type: .heading1, textPlain: "")
+        case "/标题 ", "/h1 ":
+            return MarkdownShortcutTransform(type: .heading1, textPlain: "")
         case "## ":
+            return MarkdownShortcutTransform(type: .heading2, textPlain: "")
+        case "/标题2 ", "/h2 ":
             return MarkdownShortcutTransform(type: .heading2, textPlain: "")
         case "### ":
             return MarkdownShortcutTransform(type: .heading3, textPlain: "")
+        case "/标题3 ", "/h3 ":
+            return MarkdownShortcutTransform(type: .heading3, textPlain: "")
         case "- ":
             return MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
-        case "* ", "+ ":
+        case "* ", "+ ", "/列表 ", "/list ":
             return MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
         case "1. ":
             return MarkdownShortcutTransform(type: .orderedListItem, textPlain: "")
         case "> ":
             return MarkdownShortcutTransform(type: .quote, textPlain: "")
+        case "/引用 ", "/quote ":
+            return MarkdownShortcutTransform(type: .quote, textPlain: "")
         case "- [ ] ":
             return MarkdownShortcutTransform(type: .taskItem, textPlain: "")
-        case "* [ ] ", "+ [ ] ":
+        case "* [ ] ", "+ [ ] ", "/任务 ", "/todo ":
             return MarkdownShortcutTransform(type: .taskItem, textPlain: "")
         case "- [x] ", "- [X] ":
             return MarkdownShortcutTransform(
@@ -1083,27 +1289,81 @@ enum MarkdownTransformer {
             )
         case "```":
             return MarkdownShortcutTransform(type: .codeBlock, textPlain: "")
+        case "/代码 ", "/code ":
+            return MarkdownShortcutTransform(type: .codeBlock, textPlain: "")
         case "> [!NOTE] ":
+            return MarkdownShortcutTransform(type: .callout, textPlain: "")
+        case "/提示 ", "/callout ":
             return MarkdownShortcutTransform(type: .callout, textPlain: "")
         case "<details>":
             return MarkdownShortcutTransform(type: .toggle, textPlain: "")
+        case "/折叠 ", "/toggle ":
+            return MarkdownShortcutTransform(type: .toggle, textPlain: "")
         case "---":
             return MarkdownShortcutTransform(type: .divider, textPlain: "")
+        case "/分割线 ", "/divider ":
+            return MarkdownShortcutTransform(type: .divider, textPlain: "")
         default:
-            return orderedListShortcutTransform(for: text)
+            return taskItemShortcutTransform(for: text)
+                ?? unorderedListShortcutTransform(for: text)
+                ?? orderedListShortcutTransform(for: text)
         }
     }
 
+    private static func taskItemShortcutTransform(for text: String) -> MarkdownShortcutTransform? {
+        let prefixes: [(prefix: String, isCompleted: Bool)] = [
+            ("- [ ] ", false),
+            ("* [ ] ", false),
+            ("+ [ ] ", false),
+            ("- [x] ", true),
+            ("- [X] ", true),
+            ("* [x] ", true),
+            ("* [X] ", true),
+            ("+ [x] ", true),
+            ("+ [X] ", true)
+        ]
+
+        for candidate in prefixes where text.hasPrefix(candidate.prefix) {
+            return MarkdownShortcutTransform(
+                type: .taskItem,
+                textPlain: String(text.dropFirst(candidate.prefix.count)),
+                taskItemIsCompleted: candidate.isCompleted
+            )
+        }
+
+        return nil
+    }
+
+    private static func unorderedListShortcutTransform(for text: String) -> MarkdownShortcutTransform? {
+        for prefix in ["- ", "* ", "+ "] where text.hasPrefix(prefix) {
+            return MarkdownShortcutTransform(
+                type: .unorderedListItem,
+                textPlain: String(text.dropFirst(prefix.count))
+            )
+        }
+
+        return nil
+    }
+
     private static func orderedListShortcutTransform(for text: String) -> MarkdownShortcutTransform? {
-        guard text.hasSuffix(". ") else {
+        guard let markerEnd = text.firstIndex(of: ".") else {
             return nil
         }
-        let numberPrefix = text.dropLast(2)
+        let spaceIndex = text.index(after: markerEnd)
+        guard spaceIndex < text.endIndex,
+              text[spaceIndex] == " " else {
+            return nil
+        }
+        let numberPrefix = text[..<markerEnd]
         guard !numberPrefix.isEmpty,
               numberPrefix.allSatisfy(\.isNumber) else {
             return nil
         }
-        return MarkdownShortcutTransform(type: .orderedListItem, textPlain: "")
+        let contentStart = text.index(after: spaceIndex)
+        return MarkdownShortcutTransform(
+            type: .orderedListItem,
+            textPlain: String(text[contentStart...])
+        )
     }
 
     static func export(blocks: [BlockSnapshot]) -> String {
