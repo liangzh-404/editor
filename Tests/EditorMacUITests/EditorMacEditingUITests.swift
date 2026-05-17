@@ -174,6 +174,8 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
+        openWelcomePageForPageToolbarActions(in: app)
+
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible and addressable")
 
@@ -189,6 +191,8 @@ final class EditorMacEditingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
 
         let blockRow = app.groups["editor.block.block-welcome-001"]
         XCTAssertTrue(blockRow.waitForExistence(timeout: 5), "Welcome block row should be visible and tappable")
@@ -211,6 +215,8 @@ final class EditorMacEditingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
 
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible and addressable")
@@ -236,6 +242,8 @@ final class EditorMacEditingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
 
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before splitting")

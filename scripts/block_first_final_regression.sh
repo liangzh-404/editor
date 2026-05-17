@@ -17,6 +17,10 @@ UNIT_TEST_ARGS=(
 UI_TESTS=(
     "testLaunchStartsInBlankDiaryEditorForFastTyping"
     "testAllDocumentsListShowsPagesSortedByUpdatedTime"
+    "testWelcomeBlockAcceptsTypedText"
+    "testClickingBlockRowFocusesEditorForTyping"
+    "testReturnCreatesNextBlockAndKeepsTypingInEditor"
+    "testReturnSplitsTextBlockAtCaretAndFocusesInsertedRemainder"
     "testCommandRightBracketPromotesSelectedDiaryTextToPage"
     "testPageFavoriteToggleUpdatesSidebarAndRowState"
     "testMarkdownImportToolbarRendersAndExportsMultilineQuoteAndCalloutBlocks"
