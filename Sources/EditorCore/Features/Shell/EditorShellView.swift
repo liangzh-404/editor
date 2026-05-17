@@ -1076,11 +1076,25 @@ private struct DiaryEditorView: View {
     @State private var syncedEntryID: String?
 
     var body: some View {
+#if os(macOS)
+        PlatformDiaryTextEditor(
+            text: entry?.textPlain ?? "",
+            onTextChange: onTextChange,
+            onSelectedTextChange: updateSelectedText,
+            onPromoteSelection: promoteSelectedText
+        )
+            .padding(.horizontal, 40)
+            .padding(.vertical, 36)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color.white)
+            .accessibilityLabel("Diary")
+            .accessibilityIdentifier("editor.diary.text")
+            .focusedValue(\.promoteDiarySelectionAction, promoteDiarySelectionAction)
+            .navigationTitle("Diary")
+#else
         PlatformDiaryTextEditor(
             text: textBinding,
-            onSelectedTextChange: { selectedText in
-                self.selectedText = selectedText
-            },
+            onSelectedTextChange: updateSelectedText,
             onPromoteSelection: promoteSelectedText
         )
             .padding(.horizontal, 40)
@@ -1097,6 +1111,7 @@ private struct DiaryEditorView: View {
                 syncTextFromEntry(force: false)
             }
             .navigationTitle("Diary")
+#endif
     }
 
     private var promoteDiarySelectionAction: (() -> Void)? {
@@ -1116,6 +1131,14 @@ private struct DiaryEditorView: View {
             text = newText
             onTextChange(newText)
         }
+    }
+
+    private func updateSelectedText(_ nextSelectedText: String) {
+        guard selectedText != nextSelectedText else {
+            return
+        }
+
+        selectedText = nextSelectedText
     }
 
     private func syncTextFromEntry(force: Bool) {
@@ -1138,7 +1161,8 @@ private struct DiaryEditorView: View {
 
 #if os(macOS)
 private struct PlatformDiaryTextEditor: NSViewRepresentable {
-    @Binding var text: String
+    let text: String
+    let onTextChange: (String) -> Void
     let onSelectedTextChange: (String) -> Void
     let onPromoteSelection: (String) -> Bool
 
@@ -1224,7 +1248,7 @@ private struct PlatformDiaryTextEditor: NSViewRepresentable {
                 return
             }
 
-            parent.text = textView.string
+            parent.onTextChange(textView.string)
             publishSelectedText(in: textView)
         }
 

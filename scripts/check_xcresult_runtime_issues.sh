@@ -28,9 +28,11 @@ if [[ ! -d "$XCRESULT_PATH" ]]; then
 fi
 
 JSON_PATH="$(mktemp "${TMPDIR:-/tmp}/editor-xcresult-runtime-issues.XXXXXX.json")"
-trap 'rm -f "$JSON_PATH"' EXIT
+DIAGNOSTICS_PATH="$(mktemp -d "${TMPDIR:-/tmp}/editor-xcresult-runtime-diagnostics.XXXXXX")"
+trap 'rm -f "$JSON_PATH"; rm -rf "$DIAGNOSTICS_PATH"' EXIT
 
 xcrun xcresulttool get --legacy --path "$XCRESULT_PATH" --format json >"$JSON_PATH"
+xcrun xcresulttool export diagnostics --path "$XCRESULT_PATH" --output-path "$DIAGNOSTICS_PATH" >/dev/null
 
 issues="$(
     ruby -rjson -e '
@@ -64,9 +66,36 @@ issues="$(
     ' "$JSON_PATH"
 )"
 
-if [[ -n "$issues" ]]; then
+stdio_issues="$(
+    ruby -e '
+      forbidden = [
+        /Publishing changes from within view updates/,
+        /Modifying state during view update/
+      ]
+
+      root = ARGV.fetch(0)
+      matches = []
+      Dir.glob(File.join(root, "**", "StandardOutputAndStandardError*.txt")).sort.each do |path|
+        File.foreach(path).with_index(1) do |line, line_number|
+          next unless forbidden.any? { |pattern| line.match?(pattern) }
+
+          relative_path = path.delete_prefix(root + "/")
+          matches << "#{relative_path}:#{line_number}: #{line.strip}"
+        end
+      end
+
+      puts matches.uniq.join("\n")
+    ' "$DIAGNOSTICS_PATH"
+)"
+
+if [[ -n "$issues" || -n "$stdio_issues" ]]; then
     echo "Forbidden runtime issues found in $XCRESULT_PATH:" >&2
-    echo "$issues" >&2
+    if [[ -n "$issues" ]]; then
+        echo "$issues" >&2
+    fi
+    if [[ -n "$stdio_issues" ]]; then
+        echo "$stdio_issues" >&2
+    fi
     exit 1
 fi
 
