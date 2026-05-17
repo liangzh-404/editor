@@ -583,6 +583,7 @@ struct NativeTextBlockEditor: View {
     let onPasteAttachmentURLs: ([URL]) -> Bool
     let onSelectAllBlocksByKeyboard: () -> Bool
     let onCancelSelectionByKeyboard: () -> Bool
+    let onHorizontalSwipe: (CGFloat) -> Bool
     let onTextChange: (String) -> Void
     @State private var measuredHeight: CGFloat = 0
 
@@ -608,6 +609,7 @@ struct NativeTextBlockEditor: View {
         onPasteAttachmentURLs: @escaping ([URL]) -> Bool = { _ in false },
         onSelectAllBlocksByKeyboard: @escaping () -> Bool = { false },
         onCancelSelectionByKeyboard: @escaping () -> Bool = { false },
+        onHorizontalSwipe: @escaping (CGFloat) -> Bool = { _ in false },
         onTextChange: @escaping (String) -> Void
     ) {
         self.blockID = blockID
@@ -631,6 +633,7 @@ struct NativeTextBlockEditor: View {
         self.onPasteAttachmentURLs = onPasteAttachmentURLs
         self.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
         self.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
+        self.onHorizontalSwipe = onHorizontalSwipe
         self.onTextChange = onTextChange
     }
 
@@ -658,6 +661,7 @@ struct NativeTextBlockEditor: View {
                 onPasteAttachmentURLs: onPasteAttachmentURLs,
                 onSelectAllBlocksByKeyboard: onSelectAllBlocksByKeyboard,
                 onCancelSelectionByKeyboard: onCancelSelectionByKeyboard,
+                onHorizontalSwipe: onHorizontalSwipe,
                 minimumHeight: minimumHeight,
                 onContentHeightChange: updateMeasuredHeight,
                 onTextChange: onTextChange
@@ -843,6 +847,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onPasteAttachmentURLs: ([URL]) -> Bool
     let onSelectAllBlocksByKeyboard: () -> Bool
     let onCancelSelectionByKeyboard: () -> Bool
+    let onHorizontalSwipe: (CGFloat) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -1648,6 +1653,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onPasteAttachmentURLs: ([URL]) -> Bool
     let onSelectAllBlocksByKeyboard: () -> Bool
     let onCancelSelectionByKeyboard: () -> Bool
+    let onHorizontalSwipe: (CGFloat) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -1716,6 +1722,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
         textView.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
         textView.onPasteAttachmentURLs = onPasteAttachmentURLs
+        textView.onHorizontalSwipe = onHorizontalSwipe
+        textView.installHorizontalSwipeRecognizersIfNeeded()
         textView.accessibilityIdentifier = "editor.text.\(blockID)"
         textView.delegate = context.coordinator
         context.coordinator.applyModelText(text, to: textView)
@@ -1795,6 +1803,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             textView.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
             textView.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
             textView.onPasteAttachmentURLs = onPasteAttachmentURLs
+            textView.onHorizontalSwipe = onHorizontalSwipe
+            textView.installHorizontalSwipeRecognizersIfNeeded()
         }
         if NativeTextCompositionPolicy.shouldApplyModelText(isComposing: textView.markedTextRange != nil),
            textView.text != text {
@@ -2102,7 +2112,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     }
 }
 
-private final class EditorUITextView: UITextView {
+private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     var onKeyboardMove: ((BlockKeyboardMoveDirection) -> Bool)?
     var onKeyboardIndentation: ((BlockKeyboardIndentationDirection) -> Bool)?
     var onKeyboardFocusMove: ((BlockKeyboardFocusDirection) -> Bool)?
@@ -2117,6 +2127,20 @@ private final class EditorUITextView: UITextView {
     var onSelectAllBlocksByKeyboard: (() -> Bool)?
     var onCancelSelectionByKeyboard: (() -> Bool)?
     var onPasteAttachmentURLs: (([URL]) -> Bool)?
+    var onHorizontalSwipe: ((CGFloat) -> Bool)?
+    private var didInstallHorizontalSwipeRecognizers = false
+
+    func installHorizontalSwipeRecognizersIfNeeded() {
+        guard !didInstallHorizontalSwipeRecognizers else {
+            return
+        }
+        didInstallHorizontalSwipeRecognizers = true
+
+        let horizontalPan = UIPanGestureRecognizer(target: self, action: #selector(handleHorizontalPan(_:)))
+        horizontalPan.cancelsTouchesInView = false
+        horizontalPan.delegate = self
+        addGestureRecognizer(horizontalPan)
+    }
 
     override var keyCommands: [UIKeyCommand]? {
         [
@@ -2186,6 +2210,38 @@ private final class EditorUITextView: UITextView {
                 action: #selector(cancelSelectionByKeyboard)
             )
         ]
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+
+    override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        switch direction {
+        case .left:
+            return onHorizontalSwipe?(-72) ?? false
+        case .right:
+            return onHorizontalSwipe?(72) ?? false
+        default:
+            return super.accessibilityScroll(direction)
+        }
+    }
+
+    @objc private func handleHorizontalPan(_ recognizer: UIPanGestureRecognizer) {
+        guard recognizer.state == .ended else {
+            return
+        }
+
+        let translation = recognizer.translation(in: self)
+        guard abs(translation.x) >= 44,
+              abs(translation.x) > abs(translation.y) * 1.35 else {
+            return
+        }
+
+        _ = onHorizontalSwipe?(translation.x)
     }
 
     @objc private func moveBlockUp() {

@@ -702,8 +702,8 @@ enum MobileBlockSwipeActionResolver {
             return .indent
         }
 
-        if isEditingBlock {
-            return nestingLevel > 0 ? .outdent : nil
+        if isEditingBlock, nestingLevel > 0 {
+            return .outdent
         }
 
         return .select
@@ -722,6 +722,16 @@ enum MobileBlockSelectionReducer {
             nextSelection.insert(blockID)
         }
         return nextSelection
+    }
+}
+
+enum MobileBlockSelectionChromeResolver {
+    static func isSelectionControlVisible(isSelectionModeActive: Bool) -> Bool {
+        isSelectionModeActive
+    }
+
+    static func symbolName(isSelected: Bool) -> String {
+        isSelected ? "checkmark.circle.fill" : "circle"
     }
 }
 
@@ -3217,6 +3227,7 @@ private struct EditorCanvasView: View {
                             onRetryAttachmentPreview(attachmentID)
                         },
                         isToggleBlockExpanded: isToggleBlockExpanded(block.id),
+                        isMobileSelectionModeActive: !editorSession.selectedBlockIDs.isEmpty,
                         isBlockSelected: editorSession.selectedBlockIDs.contains(block.id),
                         dropPlacement: activeBlockDropTarget?.blockID == block.id ? activeBlockDropTarget?.placement : nil,
                         focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
@@ -5003,6 +5014,7 @@ private struct BlockRowView: View {
     let onToggleBlockExpansion: () -> Void
     let onRetryAttachmentPreview: (String) -> Void
     let isToggleBlockExpanded: Bool
+    let isMobileSelectionModeActive: Bool
     let isBlockSelected: Bool
     let dropPlacement: BlockDropPlacement?
     let focusRequestID: UUID?
@@ -5051,6 +5063,7 @@ private struct BlockRowView: View {
         onToggleBlockExpansion: @escaping () -> Void = {},
         onRetryAttachmentPreview: @escaping (String) -> Void = { _ in },
         isToggleBlockExpanded: Bool = true,
+        isMobileSelectionModeActive: Bool = false,
         isBlockSelected: Bool = false,
         dropPlacement: BlockDropPlacement? = nil,
         focusRequestID: UUID? = nil,
@@ -5095,6 +5108,7 @@ private struct BlockRowView: View {
         self.onToggleBlockExpansion = onToggleBlockExpansion
         self.onRetryAttachmentPreview = onRetryAttachmentPreview
         self.isToggleBlockExpanded = isToggleBlockExpanded
+        self.isMobileSelectionModeActive = isMobileSelectionModeActive
         self.isBlockSelected = isBlockSelected
         self.dropPlacement = dropPlacement
         self.focusRequestID = focusRequestID
@@ -5240,7 +5254,35 @@ private struct BlockRowView: View {
         isRowActive ? 1 : EditorBlockChrome.inactiveHandleOpacity
     }
 
+    @ViewBuilder
     private var blockActionColumn: some View {
+#if os(iOS)
+        if MobileBlockSelectionChromeResolver.isSelectionControlVisible(
+            isSelectionModeActive: isMobileSelectionModeActive
+        ) {
+            Button {
+                onToggleBlockSelection()
+            } label: {
+                Image(systemName: MobileBlockSelectionChromeResolver.symbolName(isSelected: isBlockSelected))
+                    .font(.callout.weight(isBlockSelected ? .semibold : .regular))
+                    .foregroundStyle(isBlockSelected ? Color.accentColor : Color.secondary.opacity(0.72))
+            }
+            .buttonStyle(.plain)
+            .frame(width: CGFloat(EditorBlockChrome.dragHandleWidth), height: 24)
+            .contentShape(Rectangle())
+            .padding(.top, 0)
+            .accessibilityLabel(isBlockSelected ? "取消选择块" : "选择块")
+            .accessibilityValue(block.type.editorMenuTitle)
+            .accessibilityIdentifier("editor.block.\(block.id).selection-toggle")
+        } else {
+            dragHandleColumn
+        }
+#else
+        dragHandleColumn
+#endif
+    }
+
+    private var dragHandleColumn: some View {
         Image(systemName: "circle.grid.2x2")
             .font(.caption2)
             .foregroundStyle(.secondary)
@@ -5632,12 +5674,23 @@ private struct BlockRowView: View {
                 editorSession.clearBlockSelection()
                 return hadBlockSelection
             },
+            onHorizontalSwipe: { translationWidth in
+#if os(iOS)
+                handleMobileHorizontalSwipe(translation: CGSize(width: translationWidth, height: 0))
+                return true
+#else
+                return false
+#endif
+            },
             onTextChange: { text in
                 onClearDropTarget()
                 onTextChange(text)
             }
         )
         .accessibilityIdentifier("editor.text.\(block.id)")
+#if os(iOS)
+        .highPriorityGesture(mobileHorizontalSwipeGesture)
+#endif
     }
 
     private func controlAvailabilityValue(_ isAvailable: Bool) -> String {

@@ -65,6 +65,14 @@ final class EditorBlockChromeTests: XCTestCase {
             ),
             .outdent
         )
+        XCTAssertEqual(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: -72, height: 6),
+                isEditingBlock: true,
+                nestingLevel: 0
+            ),
+            .select
+        )
         XCTAssertNil(
             MobileBlockSwipeActionResolver.action(
                 translation: CGSize(width: -40, height: 6),
@@ -102,6 +110,27 @@ final class EditorBlockChromeTests: XCTestCase {
                 current: []
             ),
             ["block-a"]
+        )
+    }
+
+    func testMobileBlockSelectionChromeShowsSelectableCirclesInSelectionMode() {
+        XCTAssertFalse(
+            MobileBlockSelectionChromeResolver.isSelectionControlVisible(
+                isSelectionModeActive: false
+            )
+        )
+        XCTAssertTrue(
+            MobileBlockSelectionChromeResolver.isSelectionControlVisible(
+                isSelectionModeActive: true
+            )
+        )
+        XCTAssertEqual(
+            MobileBlockSelectionChromeResolver.symbolName(isSelected: false),
+            "circle"
+        )
+        XCTAssertEqual(
+            MobileBlockSelectionChromeResolver.symbolName(isSelected: true),
+            "checkmark.circle.fill"
         )
     }
 
