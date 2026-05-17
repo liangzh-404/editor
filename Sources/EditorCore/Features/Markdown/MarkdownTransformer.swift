@@ -1121,6 +1121,7 @@ enum MarkdownTransformer {
     static func importBlocks(markdown: String) -> [MarkdownBlockDraft] {
         var drafts: [MarkdownBlockDraft] = []
         var codeLines: [String]?
+        var currentCodeFenceMarker: String?
         var tableLines: [String] = []
         var paragraphLines: [String] = []
 
@@ -1130,7 +1131,7 @@ enum MarkdownTransformer {
             if codeLines != nil {
                 flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
-                if trimmedLine == "```" {
+                if trimmedLine == currentCodeFenceMarker {
                     drafts.append(
                         MarkdownBlockDraft(
                             type: .codeBlock,
@@ -1138,16 +1139,18 @@ enum MarkdownTransformer {
                         )
                     )
                     codeLines = nil
+                    currentCodeFenceMarker = nil
                 } else {
                     codeLines?.append(line)
                 }
                 continue
             }
 
-            if isCodeFenceStart(trimmedLine) {
+            if let fenceMarker = codeFenceMarker(forStartLine: trimmedLine) {
                 flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
                 codeLines = []
+                currentCodeFenceMarker = fenceMarker
                 continue
             }
 
@@ -1333,8 +1336,14 @@ enum MarkdownTransformer {
         return String(parts[1])
     }
 
-    private static func isCodeFenceStart(_ line: String) -> Bool {
-        line.hasPrefix("```")
+    private static func codeFenceMarker(forStartLine line: String) -> String? {
+        if line.hasPrefix("```") {
+            return "```"
+        }
+        if line.hasPrefix("~~~") {
+            return "~~~"
+        }
+        return nil
     }
 
     private static func isTableLine(_ line: String) -> Bool {

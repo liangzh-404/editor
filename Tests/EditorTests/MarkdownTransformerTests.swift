@@ -208,6 +208,30 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownSupportsTildeFencedCodeBlocks() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    ~~~python
+                    value = 1
+                    print(value)
+                    ~~~
+                    """
+            ),
+            [
+                MarkdownBlockDraft(
+                    type: .codeBlock,
+                    textPlain:
+                        """
+                        value = 1
+                        print(value)
+                        """
+                )
+            ]
+        )
+    }
+
     func testImportMarkdownSupportsTableCalloutAndToggleBlocks() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(
