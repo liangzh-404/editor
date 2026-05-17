@@ -11,6 +11,7 @@ struct PageOutlineItem: Identifiable, Equatable, Sendable {
 }
 
 enum WorkspaceCollection: Equatable, Sendable {
+    case recent
     case diary
     case allDocuments
     case favorites
@@ -36,7 +37,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var selectedWorkspaceID: String?
     @Published private(set) var selectedNotebookID: String?
     @Published private(set) var selectedPageID: String?
-    @Published private(set) var selectedCollection: WorkspaceCollection = .diary
+    @Published private(set) var selectedCollection: WorkspaceCollection = .recent
     @Published private(set) var activeDiaryEntry: DiaryEntrySnapshot?
     @Published private(set) var searchQuery = ""
     @Published private(set) var searchResults: [SearchResult] = []
@@ -131,6 +132,8 @@ final class WorkspaceViewModel: ObservableObject {
 
     var visibleDocumentPages: [PageSummary] {
         switch selectedCollection {
+        case .recent:
+            return snapshot.pages
         case .diary:
             return snapshot.pages.filter { diaryPageIDs.contains($0.id) }
         case .allDocuments:
@@ -212,7 +215,7 @@ final class WorkspaceViewModel: ObservableObject {
         selectedWorkspaceID = nil
         selectedNotebookID = nil
         selectedPageID = nil
-        selectedCollection = .diary
+        selectedCollection = .recent
         activeDiaryEntry = nil
         pendingFocusBlockID = nil
         pendingCompactPageNavigationID = nil
@@ -238,7 +241,7 @@ final class WorkspaceViewModel: ObservableObject {
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
-        selectedCollection = snapshot.selectedPageID == nil ? .diary : .allDocuments
+        selectedCollection = snapshot.selectedPageID == nil ? .diary : .recent
         activeDiaryEntry = snapshot.activeDiaryEntry
         pendingFocusBlockID = nil
         pendingCompactPageNavigationID = nil
@@ -255,8 +258,9 @@ final class WorkspaceViewModel: ObservableObject {
         let previousSelectedCollection = selectedCollection
         let previousSelectedPageID = selectedPageID
         let shouldRestorePreviousSelection = hasLoadedSnapshot
-        let shouldOpenDiary = diaryRepository != nil && previousSelectedCollection == .diary
         let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let shouldOpenDiary = diaryRepository != nil
+            && (previousSelectedCollection == .diary || loadedSnapshot.selectedPageID == nil)
         apply(snapshot: loadedSnapshot)
         if shouldOpenDiary {
             try openDailyDiaryPage(source: "load", recordHistory: false)
@@ -360,11 +364,22 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func defaultCollectionForOpeningPage(id pageID: String) -> WorkspaceCollection {
-        if selectedCollection == .diary,
-           diaryPageIDs.contains(pageID) {
+        switch selectedCollection {
+        case .diary where diaryPageIDs.contains(pageID):
             return .diary
+        case .recent where snapshot.pages.contains(where: { $0.id == pageID }):
+            return .recent
+        case .allDocuments where snapshot.pages.contains(where: { $0.id == pageID }) && !diaryPageIDs.contains(pageID):
+            return .allDocuments
+        case .favorites where snapshot.favoritePages.contains(where: { $0.id == pageID }):
+            return .favorites
+        case .tag(let tagID) where snapshot.pageTags.contains(where: { $0.pageID == pageID && $0.tagID == tagID }):
+            return .tag(tagID)
+        case .archive where snapshot.archivedPages.contains(where: { $0.id == pageID }):
+            return .archive
+        default:
+            return .allDocuments
         }
-        return .allDocuments
     }
 
     func selectCollection(_ collection: WorkspaceCollection) {
@@ -2590,7 +2605,7 @@ final class WorkspaceViewModel: ObservableObject {
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
-        selectedCollection = selectedPageID == nil ? .diary : .allDocuments
+        selectedCollection = selectedPageID == nil ? .diary : .recent
         activeDiaryEntry = nil
     }
 
@@ -2646,6 +2661,8 @@ final class WorkspaceViewModel: ObservableObject {
             return diaryPageIDs.contains(pageID)
         case .archive:
             return snapshot.archivedPages.contains { $0.id == pageID }
+        case .recent:
+            return snapshot.pages.contains { $0.id == pageID }
         case .allDocuments:
             return snapshot.pages.contains { $0.id == pageID } && !diaryPageIDs.contains(pageID)
         case .favorites, .tag, .search:

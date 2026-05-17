@@ -34,7 +34,7 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadStartsInDiaryModeWithDailyPageBlockCanvas() throws {
+    func testLoadStartsInRecentModeAndDiaryStillOpensDailyPage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
         let repository = PageRepository(database: database)
@@ -47,6 +47,12 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
 
         try viewModel.load()
+
+        XCTAssertEqual(viewModel.selectedCollection, .recent)
+        XCTAssertEqual(viewModel.selectedPage?.title, "欢迎")
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["开始用块写作。"])
+
+        viewModel.selectCollection(.diary)
 
         XCTAssertEqual(viewModel.selectedCollection, .diary)
         XCTAssertNil(viewModel.activeDiaryEntry)
@@ -70,6 +76,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             diaryCalendar: Self.gregorianCalendar
         )
         try viewModel.load()
+        viewModel.selectCollection(.diary)
         let diaryPageID = try XCTUnwrap(viewModel.selectedPageID)
         let diaryBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
 
@@ -157,7 +164,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertTrue(viewModel.navigateBackForUI())
         XCTAssertEqual(viewModel.selectedPageID, welcomePageID)
-        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+        XCTAssertEqual(viewModel.selectedCollection, .recent)
         XCTAssertTrue(viewModel.canNavigateForward)
 
         XCTAssertTrue(viewModel.navigateForwardForUI())
@@ -857,7 +864,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(createdPage.title, "项目计划")
         XCTAssertEqual(viewModel.selectedPageID, createdPage.id)
-        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+        XCTAssertEqual(viewModel.selectedCollection, .recent)
         XCTAssertEqual(sourceBlock.type, .pageReference)
         XCTAssertEqual(sourceBlock.pageReferenceTargetPageID, createdPage.id)
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
@@ -1513,7 +1520,7 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testImportMarkdownToCurrentPagePreservesPageRouteAfterDiaryLaunch() throws {
+    func testImportMarkdownToCurrentPagePreservesRecentPageRoute() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -1535,7 +1542,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             """
         )
 
-        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+        XCTAssertEqual(viewModel.selectedCollection, .recent)
         XCTAssertEqual(viewModel.selectedPageID, pageID)
         XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.heading1, .paragraph])
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Imported", "Body"])

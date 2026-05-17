@@ -1253,102 +1253,269 @@ private struct CompactPageDestination: View {
     }
 }
 
+struct SidebarNavigationItem: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let systemImage: String
+    let count: Int
+    let showsCount: Bool
+    let collection: WorkspaceCollection
+    let identifier: String
+    let isSelected: Bool
+
+    init(
+        id: String,
+        title: String,
+        systemImage: String,
+        count: Int,
+        showsCount: Bool = true,
+        collection: WorkspaceCollection,
+        identifier: String,
+        isSelected: Bool
+    ) {
+        self.id = id
+        self.title = title
+        self.systemImage = systemImage
+        self.count = count
+        self.showsCount = showsCount
+        self.collection = collection
+        self.identifier = identifier
+        self.isSelected = isSelected
+    }
+}
+
+struct SidebarNavigationModel: Equatable, Sendable {
+    let primaryItems: [SidebarNavigationItem]
+    let tagItems: [SidebarNavigationItem]
+    let utilityItems: [SidebarNavigationItem]
+
+    init(snapshot: WorkspaceSnapshot, selectedCollection: WorkspaceCollection) {
+        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        let allDocumentCount = snapshot.pages.filter { !diaryPageIDs.contains($0.id) }.count
+        let tagCounts = Dictionary(
+            grouping: snapshot.pageTags,
+            by: \.tagID
+        )
+        .mapValues(\.count)
+
+        primaryItems = [
+            SidebarNavigationItem(
+                id: "recent",
+                title: "近期文件",
+                systemImage: "clock.arrow.circlepath",
+                count: snapshot.pages.count,
+                collection: .recent,
+                identifier: "editor.collection.recent",
+                isSelected: selectedCollection == .recent
+            ),
+            SidebarNavigationItem(
+                id: "all-documents",
+                title: "全部文档",
+                systemImage: "doc.text",
+                count: allDocumentCount,
+                collection: .allDocuments,
+                identifier: "editor.collection.all-documents",
+                isSelected: selectedCollection == .allDocuments
+            ),
+            SidebarNavigationItem(
+                id: "diary",
+                title: "日记",
+                systemImage: "square.and.pencil",
+                count: diaryPageIDs.count,
+                collection: .diary,
+                identifier: "editor.collection.diary",
+                isSelected: selectedCollection == .diary
+            ),
+            SidebarNavigationItem(
+                id: "favorites",
+                title: "收藏",
+                systemImage: "star",
+                count: snapshot.favoritePages.count,
+                collection: .favorites,
+                identifier: "editor.collection.favorites",
+                isSelected: selectedCollection == .favorites
+            )
+        ]
+
+        tagItems = snapshot.tags.map { tag in
+            SidebarNavigationItem(
+                id: "tag-\(tag.id)",
+                title: tag.path,
+                systemImage: "tag",
+                count: tagCounts[tag.id] ?? 0,
+                collection: .tag(tag.id),
+                identifier: "editor.collection.tag.\(tag.id)",
+                isSelected: selectedCollection == .tag(tag.id)
+            )
+        }
+
+        utilityItems = [
+            SidebarNavigationItem(
+                id: "search",
+                title: "搜索",
+                systemImage: "magnifyingglass",
+                count: 0,
+                showsCount: false,
+                collection: .search,
+                identifier: "editor.collection.search",
+                isSelected: selectedCollection == .search
+            ),
+            SidebarNavigationItem(
+                id: "archive",
+                title: "归档",
+                systemImage: "archivebox",
+                count: snapshot.archivedPages.count,
+                showsCount: snapshot.archivedPages.count > 0,
+                collection: .archive,
+                identifier: "editor.collection.archive",
+                isSelected: selectedCollection == .archive
+            )
+        ]
+    }
+}
+
 private struct WorkspaceSidebar: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                SidebarSectionLabel("写作")
-                CollectionRailButton(
-                    title: "日记",
-                    systemImage: "square.and.pencil",
-                    isSelected: viewModel.selectedCollection == .diary,
-                    identifier: "editor.collection.diary"
-                ) {
-                    viewModel.selectCollection(.diary)
+            VStack(alignment: .leading, spacing: 14) {
+                sidebarHeader
+                newDocumentButton
+                sidebarGroup(items: sidebarModel.primaryItems)
+                favoritePageShortcuts
+                tagGroup
+                sidebarGroup(items: sidebarModel.utilityItems)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 12)
+        }
+        .navigationTitle("编辑器")
+        .background(Color(red: 0.965, green: 0.960, blue: 0.950))
+    }
+
+    private var sidebarModel: SidebarNavigationModel {
+        SidebarNavigationModel(
+            snapshot: viewModel.snapshot,
+            selectedCollection: viewModel.selectedCollection
+        )
+    }
+
+    private var sidebarHeader: some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color(red: 0.78, green: 0.72, blue: 0.64))
+                .frame(width: 28, height: 28)
+                .overlay {
+                    Text("文")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
                 }
 
-                SidebarSectionLabel("浏览")
-                CollectionRailButton(
-                    title: "全部文档",
-                    systemImage: "doc.text",
-                    isSelected: viewModel.selectedCollection == .allDocuments,
-                    identifier: "editor.collection.all-documents"
-                ) {
-                    viewModel.selectCollection(.allDocuments)
-                }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Editor")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color(red: 0.24, green: 0.23, blue: 0.30))
+                Text("本地文档")
+                    .font(.caption2)
+                    .foregroundStyle(Color(red: 0.50, green: 0.48, blue: 0.58))
+            }
 
-                CollectionRailButton(
-                    title: "收藏",
-                    systemImage: "star",
-                    isSelected: viewModel.selectedCollection == .favorites,
-                    identifier: "editor.collection.favorites"
-                ) {
-                    viewModel.selectCollection(.favorites)
-                }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Editor 本地文档")
+    }
 
+    private var newDocumentButton: some View {
+        Button {
+            _ = viewModel.createNewDocumentForUI()
+        } label: {
+            HStack(spacing: 11) {
+                Image(systemName: "doc.badge.plus")
+                    .font(.body.weight(.medium))
+                    .frame(width: 22)
+                    .foregroundStyle(Color(red: 0.50, green: 0.48, blue: 0.58))
+                Text("新建文档")
+                    .font(.body.weight(.medium))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color(red: 0.28, green: 0.27, blue: 0.34))
+        .accessibilityIdentifier("editor.sidebar.new-document")
+    }
+
+    private func sidebarGroup(items: [SidebarNavigationItem]) -> some View {
+        VStack(spacing: 4) {
+            ForEach(items) { item in
+                CollectionRailButton(item: item) {
+                    viewModel.selectCollection(item.collection)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var favoritePageShortcuts: some View {
+        if !viewModel.snapshot.favoritePages.isEmpty {
+            VStack(spacing: 2) {
                 ForEach(viewModel.snapshot.favoritePages) { page in
                     Button {
                         viewModel.selectPage(id: page.id)
                     } label: {
-                        Label(page.title, systemImage: "star.fill")
-                            .font(.callout)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
+                        HStack(spacing: 9) {
+                            Image(systemName: "star.fill")
+                                .font(.caption.weight(.semibold))
+                                .frame(width: 18)
+                                .foregroundStyle(Color(red: 0.74, green: 0.62, blue: 0.30))
+                            Text(page.title)
+                                .font(.callout)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.leading, 24)
+                        .padding(.trailing, 12)
+                        .padding(.vertical, 5)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(Color.secondary)
-                    .padding(.leading, 16)
+                    .foregroundStyle(Color(red: 0.43, green: 0.41, blue: 0.50))
                     .accessibilityIdentifier("editor.favorite-page.\(page.id)")
                 }
+            }
+        }
+    }
 
+    @ViewBuilder
+    private var tagGroup: some View {
+        if !sidebarModel.tagItems.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
                 CollectionRailButton(
-                    title: "标签",
-                    systemImage: "tag",
-                    isSelected: isTagsSelected,
-                    identifier: "editor.collection.tags"
+                    item: SidebarNavigationItem(
+                        id: "tags",
+                        title: "标签",
+                        systemImage: "tag",
+                        count: sidebarModel.tagItems.count,
+                        collection: .tag(""),
+                        identifier: "editor.collection.tags",
+                        isSelected: isTagsSelected
+                    )
                 ) {
                     viewModel.selectCollection(.tag(""))
                 }
 
-                ForEach(viewModel.snapshot.tags) { tag in
-                    CollectionRailButton(
-                        title: tag.path,
-                        systemImage: "tag",
-                        isSelected: viewModel.selectedCollection == .tag(tag.id),
-                        identifier: "editor.collection.tag.\(tag.id)"
-                    ) {
-                        viewModel.selectCollection(.tag(tag.id))
+                ForEach(sidebarModel.tagItems) { item in
+                    CollectionRailButton(item: item) {
+                        viewModel.selectCollection(item.collection)
                     }
                     .padding(.leading, 18)
                 }
-
-                CollectionRailButton(
-                    title: "搜索",
-                    systemImage: "magnifyingglass",
-                    isSelected: viewModel.selectedCollection == .search,
-                    identifier: "editor.collection.search"
-                ) {
-                    viewModel.selectCollection(.search)
-                }
-
-                CollectionRailButton(
-                    title: "归档",
-                    systemImage: "archivebox",
-                    isSelected: viewModel.selectedCollection == .archive,
-                    identifier: "editor.collection.archive"
-                ) {
-                    viewModel.selectCollection(.archive)
-                }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 16)
         }
-        .navigationTitle("编辑器")
-        .background(Color(red: 0.958, green: 0.952, blue: 0.942))
     }
 
     private var isTagsSelected: Bool {
@@ -1376,40 +1543,43 @@ private struct SidebarSectionLabel: View {
 }
 
 private struct CollectionRailButton: View {
-    let title: String
-    let systemImage: String
-    let isSelected: Bool
-    let identifier: String
+    let item: SidebarNavigationItem
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 11) {
-                Image(systemName: systemImage)
+                Image(systemName: item.systemImage)
                     .font(.body.weight(.medium))
-                    .frame(width: 20)
-                    .foregroundStyle(isSelected ? Color(red: 0.38, green: 0.35, blue: 0.55) : Color.secondary)
-                Text(title)
-                    .font(isSelected ? .body.weight(.semibold) : .body.weight(.medium))
+                    .frame(width: 22)
+                    .foregroundStyle(item.isSelected ? Color(red: 0.40, green: 0.37, blue: 0.56) : Color(red: 0.54, green: 0.52, blue: 0.61))
+                Text(item.title)
+                    .font(item.isSelected ? .body.weight(.semibold) : .body.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 6)
+                if item.showsCount {
+                    Text("\(item.count)")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(item.isSelected ? Color(red: 0.42, green: 0.39, blue: 0.57) : Color(red: 0.58, green: 0.56, blue: 0.66))
+                        .monospacedDigit()
+                }
             }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(isSelected ? Color(red: 0.82, green: 0.79, blue: 0.74).opacity(0.65) : Color.clear)
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(item.isSelected ? Color(red: 0.79, green: 0.76, blue: 0.70).opacity(0.68) : Color.clear)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(isSelected ? Color.black.opacity(0.035) : Color.clear, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .stroke(item.isSelected ? Color.black.opacity(0.035) : Color.clear, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isSelected ? Color(red: 0.24, green: 0.22, blue: 0.32) : Color.primary.opacity(0.86))
-        .accessibilityIdentifier(identifier)
-        .accessibilityValue(isSelected ? "已选中" : "未选中")
+        .foregroundStyle(item.isSelected ? Color(red: 0.24, green: 0.22, blue: 0.32) : Color.primary.opacity(0.82))
+        .accessibilityIdentifier(item.identifier)
+        .accessibilityValue(item.isSelected ? "已选中，\(item.count)" : "未选中，\(item.count)")
     }
 }
 
@@ -1502,6 +1672,8 @@ private struct PageListView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 6) {
                 switch viewModel.selectedCollection {
+                case .recent:
+                    pageRowsSection(title: "近期文件", pages: viewModel.visibleDocumentPages)
                 case .diary:
                     pageRowsSection(title: "日记", pages: viewModel.visibleDocumentPages)
                 case .allDocuments:
@@ -1656,6 +1828,8 @@ private struct PageListView: View {
 
     private var navigationTitle: String {
         switch viewModel.selectedCollection {
+        case .recent:
+            return "近期文件"
         case .diary:
             return "日记"
         case .allDocuments:

@@ -246,6 +246,48 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(preview.fileAttachment?.id, file.id)
     }
 
+    func testSidebarNavigationModelShowsRecentCountsAndTagCounts() {
+        let workspaceID = "workspace"
+        let pages = [
+            PageSummary(id: "page-recent", workspaceID: workspaceID, title: "最近文件"),
+            PageSummary(id: "page-diary", workspaceID: workspaceID, title: "2026年5月18日 星期一"),
+            PageSummary(id: "page-favorite", workspaceID: workspaceID, title: "收藏文件", isFavorite: true)
+        ]
+        let tags = [
+            TagSummary(id: "tag-work", workspaceID: workspaceID, parentTagID: nil, name: "工作", path: "工作"),
+            TagSummary(id: "tag-life", workspaceID: workspaceID, parentTagID: nil, name: "生活", path: "生活")
+        ]
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: pages,
+            blocks: [],
+            attachments: [],
+            tags: tags,
+            pageTags: [
+                PageTagAssignment(pageID: "page-recent", tagID: "tag-work"),
+                PageTagAssignment(pageID: "page-favorite", tagID: "tag-work"),
+                PageTagAssignment(pageID: "page-diary", tagID: "tag-life")
+            ],
+            diaryPages: [
+                DiaryPageSnapshot(pageID: "page-diary", workspaceID: workspaceID, diaryDate: "2026-05-18")
+            ],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: "page-recent"
+        )
+
+        let model = SidebarNavigationModel(snapshot: snapshot, selectedCollection: .recent)
+
+        XCTAssertEqual(
+            model.primaryItems.map(\.title),
+            ["近期文件", "全部文档", "日记", "收藏"]
+        )
+        XCTAssertEqual(model.primaryItems.map(\.count), [3, 2, 1, 1])
+        XCTAssertEqual(model.primaryItems.first?.identifier, "editor.collection.recent")
+        XCTAssertEqual(model.primaryItems.first?.isSelected, true)
+        XCTAssertEqual(model.tagItems.map(\.title), ["工作", "生活"])
+        XCTAssertEqual(model.tagItems.map(\.count), [2, 1])
+    }
+
     private func block(id: String, parentBlockID: String?, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: id,
