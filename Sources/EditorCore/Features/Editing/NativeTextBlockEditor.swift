@@ -344,6 +344,16 @@ enum NonEditableBlockKeyboardFocusResolver {
     }
 }
 
+enum NonEditableBlockKeyboardBridgeActivationResolver {
+    static func isEnabled(
+        blockType: BlockType,
+        isBlockSelected: Bool
+    ) -> Bool {
+        let usesNativeTextEditor = blockType.isTextEditable && blockType != .table
+        return isBlockSelected && !usesNativeTextEditor
+    }
+}
+
 enum TableBlockKeyboardAction: Equatable, Sendable {
     case deleteSelection
     case moveFocus(BlockKeyboardFocusDirection)

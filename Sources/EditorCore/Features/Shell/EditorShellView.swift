@@ -5422,7 +5422,12 @@ private struct BlockRowView: View {
         }
 #if os(macOS)
         .background(
-            NonEditableBlockKeyboardFocusBridge(isEnabled: isBlockSelected && !usesNativeTextEditor) { direction in
+            NonEditableBlockKeyboardFocusBridge(
+                isEnabled: NonEditableBlockKeyboardBridgeActivationResolver.isEnabled(
+                    blockType: block.type,
+                    isBlockSelected: isBlockSelected
+                )
+            ) { direction in
                 onMoveFocusByKeyboard(direction)
             }
             .frame(width: 0, height: 0)

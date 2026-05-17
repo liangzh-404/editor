@@ -556,6 +556,39 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testNonEditableBlockKeyboardBridgeActivationMatchesSelectedStructuredBlocks() {
+        XCTAssertTrue(
+            NonEditableBlockKeyboardBridgeActivationResolver.isEnabled(
+                blockType: .table,
+                isBlockSelected: true
+            )
+        )
+        XCTAssertTrue(
+            NonEditableBlockKeyboardBridgeActivationResolver.isEnabled(
+                blockType: .pageReference,
+                isBlockSelected: true
+            )
+        )
+        XCTAssertTrue(
+            NonEditableBlockKeyboardBridgeActivationResolver.isEnabled(
+                blockType: .divider,
+                isBlockSelected: true
+            )
+        )
+        XCTAssertFalse(
+            NonEditableBlockKeyboardBridgeActivationResolver.isEnabled(
+                blockType: .paragraph,
+                isBlockSelected: true
+            )
+        )
+        XCTAssertFalse(
+            NonEditableBlockKeyboardBridgeActivationResolver.isEnabled(
+                blockType: .table,
+                isBlockSelected: false
+            )
+        )
+    }
+
     func testIOSEditorKeyboardShortcutActionResolverMovesFocusAndPastes() {
         XCTAssertEqual(
             IOSEditorKeyboardShortcutActionResolver.action(
