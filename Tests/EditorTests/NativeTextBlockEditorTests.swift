@@ -498,7 +498,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
-    func testBlockKeyboardFocusResolverTargetsAdjacentEditableBlocks() {
+    func testBlockKeyboardFocusResolverTargetsAdjacentBlocksInDocumentOrder() {
         let blocks = [
             BlockSnapshot(
                 id: "heading",
@@ -533,6 +533,17 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 blocks: blocks
             ),
             BlockKeyboardFocusTarget(
+                blockID: "divider",
+                selection: EditorTextSelection(blockID: "divider", location: 0, length: 0)
+            )
+        )
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.target(
+                currentBlockID: "divider",
+                direction: .previous,
+                blocks: blocks
+            ),
+            BlockKeyboardFocusTarget(
                 blockID: "heading",
                 selection: EditorTextSelection(
                     blockID: "heading",
@@ -544,6 +555,17 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(
             BlockKeyboardFocusResolver.target(
                 currentBlockID: "heading",
+                direction: .next,
+                blocks: blocks
+            ),
+            BlockKeyboardFocusTarget(
+                blockID: "divider",
+                selection: EditorTextSelection(blockID: "divider", location: 0, length: 0)
+            )
+        )
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.target(
+                currentBlockID: "divider",
                 direction: .next,
                 blocks: blocks
             ),
@@ -572,7 +594,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
-    func testBlockKeyboardFocusResolverSkipsStructuredTableAsTextTarget() {
+    func testBlockKeyboardFocusResolverTargetsAdjacentStructuredBlocksForSelectionNavigation() {
         let blocks = [
             BlockSnapshot(
                 id: "paragraph",
@@ -591,12 +613,12 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 textPlain: "| A |\n| --- |"
             ),
             BlockSnapshot(
-                id: "next",
+                id: "page-reference",
                 pageID: "page",
                 parentBlockID: nil,
                 orderKey: "c",
-                type: .paragraph,
-                textPlain: "Next"
+                type: .pageReference,
+                textPlain: "Specs"
             )
         ]
 
@@ -607,8 +629,30 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 blocks: blocks
             ),
             BlockKeyboardFocusTarget(
-                blockID: "next",
-                selection: EditorTextSelection(blockID: "next", location: 0, length: 0)
+                blockID: "table",
+                selection: EditorTextSelection(blockID: "table", location: 0, length: 0)
+            )
+        )
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.target(
+                currentBlockID: "table",
+                direction: .next,
+                blocks: blocks
+            ),
+            BlockKeyboardFocusTarget(
+                blockID: "page-reference",
+                selection: EditorTextSelection(blockID: "page-reference", location: 0, length: 0)
+            )
+        )
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.target(
+                currentBlockID: "page-reference",
+                direction: .previous,
+                blocks: blocks
+            ),
+            BlockKeyboardFocusTarget(
+                blockID: "table",
+                selection: EditorTextSelection(blockID: "table", location: 0, length: 0)
             )
         )
     }

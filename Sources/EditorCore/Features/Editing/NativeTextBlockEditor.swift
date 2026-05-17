@@ -275,14 +275,16 @@ enum BlockKeyboardFocusResolver {
             candidates = Array(blocks[(currentIndex + 1)...])
         }
 
-        guard let targetBlock = candidates.first(where: acceptsKeyboardTextFocus(_:)) else {
+        guard let targetBlock = candidates.first(where: acceptsKeyboardNavigationFocus(_:)) else {
             return nil
         }
 
         let location: Int
         switch direction {
         case .previous:
-            location = (targetBlock.textPlain as NSString).length
+            location = targetBlock.type.isTextEditable && targetBlock.type != .table
+                ? (targetBlock.textPlain as NSString).length
+                : 0
         case .next:
             location = 0
         }
@@ -297,8 +299,28 @@ enum BlockKeyboardFocusResolver {
         )
     }
 
-    private static func acceptsKeyboardTextFocus(_ block: BlockSnapshot) -> Bool {
-        block.type.isTextEditable && block.type != .table
+    private static func acceptsKeyboardNavigationFocus(_ block: BlockSnapshot) -> Bool {
+        switch block.type {
+        case .paragraph,
+             .heading1,
+             .heading2,
+             .heading3,
+             .unorderedListItem,
+             .orderedListItem,
+             .taskItem,
+             .quote,
+             .codeBlock,
+             .callout,
+             .toggle,
+             .table,
+             .divider,
+             .pageReference,
+             .blockReference,
+             .attachmentImage,
+             .attachmentVideo,
+             .attachmentFile:
+            return true
+        }
     }
 }
 
