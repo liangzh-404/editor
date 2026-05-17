@@ -694,6 +694,21 @@ enum MobileBlockSwipeActionResolver {
     }
 }
 
+enum MobileBlockSelectionReducer {
+    static func selectionAfterSelecting(
+        blockID: String,
+        current: Set<String>
+    ) -> Set<String> {
+        var nextSelection = current
+        if nextSelection.contains(blockID) {
+            nextSelection.remove(blockID)
+        } else {
+            nextSelection.insert(blockID)
+        }
+        return nextSelection
+    }
+}
+
 struct TableSelection: Equatable, Sendable {
     var rows: Set<Int>
     var columns: Set<Int>
@@ -2962,6 +2977,14 @@ private struct EditorCanvasView: View {
                         onSelectCurrentBlock: {
                             editorSession.selectBlocks([block.id])
                         },
+                        onToggleBlockSelection: {
+                            editorSession.selectBlocks(
+                                MobileBlockSelectionReducer.selectionAfterSelecting(
+                                    blockID: block.id,
+                                    current: editorSession.selectedBlockIDs
+                                )
+                            )
+                        },
                         onSelectAllBlocksByKeyboard: {
                             let blockIDs = Set(blocks.map(\.id))
                             guard !blockIDs.isEmpty else {
@@ -4702,6 +4725,7 @@ private struct BlockRowView: View {
     let focusSelection: EditorTextSelection?
     let onFocusRequestHandled: () -> Void
     let onSelectCurrentBlock: () -> Void
+    let onToggleBlockSelection: () -> Void
     let onSelectAllBlocksByKeyboard: () -> Bool
     let onClearDropTarget: () -> Void
     let onTableRowsChange: ([[String]]) -> Void
@@ -4749,6 +4773,7 @@ private struct BlockRowView: View {
         focusSelection: EditorTextSelection? = nil,
         onFocusRequestHandled: @escaping () -> Void = {},
         onSelectCurrentBlock: @escaping () -> Void = {},
+        onToggleBlockSelection: @escaping () -> Void = {},
         onSelectAllBlocksByKeyboard: @escaping () -> Bool = { false },
         onClearDropTarget: @escaping () -> Void = {},
         onTableRowsChange: @escaping ([[String]]) -> Void = { _ in },
@@ -4792,6 +4817,7 @@ private struct BlockRowView: View {
         self.focusSelection = focusSelection
         self.onFocusRequestHandled = onFocusRequestHandled
         self.onSelectCurrentBlock = onSelectCurrentBlock
+        self.onToggleBlockSelection = onToggleBlockSelection
         self.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
         self.onClearDropTarget = onClearDropTarget
         self.onTableRowsChange = onTableRowsChange
@@ -5361,7 +5387,7 @@ private struct BlockRowView: View {
 
         switch action {
         case .select:
-            onSelectCurrentBlock()
+            onToggleBlockSelection()
         case .indent:
             if onIndent() {
                 rowFocusRequest = BlockFocusRequest(blockID: block.id)

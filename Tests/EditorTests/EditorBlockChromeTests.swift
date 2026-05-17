@@ -80,6 +80,30 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testMobileBlockSelectionReducerAddsAndTogglesBlocks() {
+        XCTAssertEqual(
+            MobileBlockSelectionReducer.selectionAfterSelecting(
+                blockID: "block-b",
+                current: ["block-a"]
+            ),
+            ["block-a", "block-b"]
+        )
+        XCTAssertEqual(
+            MobileBlockSelectionReducer.selectionAfterSelecting(
+                blockID: "block-a",
+                current: ["block-a", "block-b"]
+            ),
+            ["block-b"]
+        )
+        XCTAssertEqual(
+            MobileBlockSelectionReducer.selectionAfterSelecting(
+                blockID: "block-a",
+                current: []
+            ),
+            ["block-a"]
+        )
+    }
+
     func testCompactInitialNavigationResolverStartsOnSelectedPageWhenAvailable() {
         XCTAssertEqual(
             CompactInitialNavigationResolver.initialPageID(
