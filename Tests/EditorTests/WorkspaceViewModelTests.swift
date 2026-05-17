@@ -1131,6 +1131,35 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPlainMarkdownImportPreservesAttachmentPackageLinksWithoutImporter() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        try viewModel.importMarkdownToCurrentPage(
+            """
+            Imported intro
+
+            [brief.txt](Attachments/source-attachment/brief.txt)
+            """
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph, .paragraph])
+        XCTAssertEqual(
+            viewModel.visibleBlocks.map(\.textPlain),
+            [
+                "Imported intro",
+                "[brief.txt](Attachments/source-attachment/brief.txt)"
+            ]
+        )
+        XCTAssertEqual(viewModel.snapshot.attachments, [])
+    }
+
+    @MainActor
     func testImportMarkdownToCurrentPageRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

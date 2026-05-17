@@ -976,22 +976,27 @@ final class PageRepository {
         for (index, draft) in drafts.enumerated() {
             let blockID = "block-\(UUID().uuidString.lowercased())"
             let referenceTargets = try markdownReferenceTargets(for: draft)
-            if draft.attachmentRelativePath != nil,
-               let importedAttachment = try attachmentImporter?(draft) {
-                try BacklinkRepository(database: database).rebuildLinksForBlock(
-                    blockID: importedAttachment.block.id,
-                    text: importedAttachment.block.textPlain
-                )
-                continue
+            let importDraft: MarkdownBlockDraft
+            if draft.attachmentRelativePath != nil {
+                if let importedAttachment = try attachmentImporter?(draft) {
+                    try BacklinkRepository(database: database).rebuildLinksForBlock(
+                        blockID: importedAttachment.block.id,
+                        text: importedAttachment.block.textPlain
+                    )
+                    continue
+                }
+                importDraft = markdownAttachmentFallbackDraft(for: draft)
+            } else {
+                importDraft = draft
             }
             try insertBlock(
                 id: blockID,
                 pageID: pageID,
                 parentBlockID: nil,
                 orderKey: String(format: "%06d", index + 1),
-                type: draft.type,
-                text: draft.textPlain,
-                taskItemIsCompleted: draft.taskItemIsCompleted,
+                type: importDraft.type,
+                text: importDraft.textPlain,
+                taskItemIsCompleted: importDraft.taskItemIsCompleted,
                 pageReferenceTargetPageID: referenceTargets.pageID,
                 blockReferenceTargetBlockID: referenceTargets.blockID,
                 createdAt: now
@@ -1003,7 +1008,7 @@ final class PageRepository {
             )
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: blockID,
-                text: draft.textPlain,
+                text: importDraft.textPlain,
                 pageReferenceTargetPageID: referenceTargets.pageID,
                 blockReferenceTargetBlockID: referenceTargets.blockID
             )
@@ -1012,6 +1017,20 @@ final class PageRepository {
         EditorLog.markdown.debug(
             "markdown_imported page_id=\(pageID, privacy: .public) blocks=\(drafts.count, privacy: .public)"
         )
+    }
+
+    private func markdownAttachmentFallbackDraft(for draft: MarkdownBlockDraft) -> MarkdownBlockDraft {
+        guard let attachmentRelativePath = draft.attachmentRelativePath else {
+            return draft
+        }
+
+        let markdownText: String
+        if draft.type == .attachmentImage {
+            markdownText = "![\(draft.textPlain)](\(attachmentRelativePath))"
+        } else {
+            markdownText = "[\(draft.textPlain)](\(attachmentRelativePath))"
+        }
+        return MarkdownBlockDraft(type: .paragraph, textPlain: markdownText)
     }
 
     private func markdownReferenceTargets(
