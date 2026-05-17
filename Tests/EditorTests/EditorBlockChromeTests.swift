@@ -23,13 +23,25 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(TableBlockChrome.cornerRadius, 8)
         XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.045)
         XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.09)
-        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 20)
+        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 18)
         XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 3)
-        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 12)
-        XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 7)
-        XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 10)
+        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 10)
+        XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 6)
+        XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 4)
         XCTAssertEqual(TableBlockChrome.selectorIndicatorOpacity, 0)
         XCTAssertEqual(TableBlockChrome.selectorHitOpacity, 0.0001)
+    }
+
+    func testTableInsertControlChromeKeepsExpandedPlusInsideGridEdge() {
+        let centerInsetFromEdge = TableBlockChrome.primaryControlDiameter / 2
+            - TableBlockChrome.insertControlEdgeOffset
+        let expandedRadius = TableBlockChrome.insertControlExpandedDiameter / 2
+
+        XCTAssertGreaterThanOrEqual(
+            centerInsetFromEdge,
+            expandedRadius,
+            "Hovered table insert controls should not be clipped halfway outside the table edge"
+        )
     }
 
     func testMobileBlockSwipeResolverSeparatesSelectionFromIndenting() {

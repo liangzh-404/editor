@@ -644,11 +644,11 @@ enum TableBlockChrome {
     static let cornerRadius: Double = 8
     static let gridLineOpacity: Double = 0.045
     static let outerBorderOpacity: Double = 0.09
-    static let primaryControlDiameter: Double = 20
+    static let primaryControlDiameter: Double = 18
     static let insertControlVisibleDiameter: Double = 3
-    static let insertControlExpandedDiameter: Double = 12
-    static let insertControlIconFontSize: Double = 7
-    static let insertControlEdgeOffset: Double = 10
+    static let insertControlExpandedDiameter: Double = 10
+    static let insertControlIconFontSize: Double = 6
+    static let insertControlEdgeOffset: Double = 4
     static let selectorWidth: Double = 12
     static let selectorHeight: Double = 12
     static let selectorIndicatorOpacity: Double = 0
