@@ -1160,6 +1160,15 @@ enum MarkdownTransformer {
                 continue
             }
 
+            if let headingType = setextHeadingType(for: trimmedLine),
+               tableLines.isEmpty,
+               paragraphLines.count == 1 {
+                let headingText = paragraphLines[0]
+                paragraphLines.removeAll()
+                drafts.append(MarkdownBlockDraft(type: headingType, textPlain: headingText))
+                continue
+            }
+
             if isTableLine(trimmedLine) {
                 flushParagraphLines(&paragraphLines, into: &drafts)
                 tableLines.append(trimmedLine)
@@ -1342,6 +1351,19 @@ enum MarkdownTransformer {
         }
         if line.hasPrefix("~~~") {
             return "~~~"
+        }
+        return nil
+    }
+
+    private static func setextHeadingType(for line: String) -> BlockType? {
+        guard !line.isEmpty else {
+            return nil
+        }
+        if line.allSatisfy({ $0 == "=" }) {
+            return .heading1
+        }
+        if line.allSatisfy({ $0 == "-" }) {
+            return .heading2
         }
         return nil
     }

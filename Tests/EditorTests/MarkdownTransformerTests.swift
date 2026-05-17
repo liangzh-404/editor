@@ -232,6 +232,28 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownSupportsSetextHeadings() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    Project Notes
+                    ===
+
+                    Section Title
+                    ---
+
+                    Body paragraph
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .heading1, textPlain: "Project Notes"),
+                MarkdownBlockDraft(type: .heading2, textPlain: "Section Title"),
+                MarkdownBlockDraft(type: .paragraph, textPlain: "Body paragraph")
+            ]
+        )
+    }
+
     func testImportMarkdownSupportsTableCalloutAndToggleBlocks() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(
