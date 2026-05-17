@@ -651,16 +651,17 @@ enum TableBlockChrome {
     static let cellHeight: Double = 42
     static let maxViewportWidth: Double = 620
     static let cornerRadius: Double = 8
-    static let gridLineOpacity: Double = 0.075
-    static let outerBorderOpacity: Double = 0.12
-    static let primaryControlDiameter: Double = 18
+    static let gridLineOpacity: Double = 0.045
+    static let outerBorderOpacity: Double = 0.09
+    static let primaryControlDiameter: Double = 20
     static let insertControlVisibleDiameter: Double = 3
-    static let insertControlExpandedDiameter: Double = 7
-    static let insertControlEdgeOffset: Double = -6
+    static let insertControlExpandedDiameter: Double = 12
+    static let insertControlIconFontSize: Double = 7
+    static let insertControlEdgeOffset: Double = 10
     static let selectorWidth: Double = 12
     static let selectorHeight: Double = 12
     static let selectorIndicatorOpacity: Double = 0
-    static let selectorHitOpacity: Double = 0.001
+    static let selectorHitOpacity: Double = 0.0001
 }
 
 enum MobileBlockSwipeAction: Equatable, Sendable {
@@ -6235,7 +6236,7 @@ private struct TableInsertControl: View {
 
                 if isHovered {
                     Image(systemName: systemImage)
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.system(size: CGFloat(TableBlockChrome.insertControlIconFontSize), weight: .bold))
                         .foregroundStyle(Color.white)
                 }
             }
