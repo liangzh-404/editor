@@ -1055,7 +1055,11 @@ private struct PageListView: View {
         Binding {
             viewModel.selectedPageID
         } set: { newValue in
-            if let newValue {
+            guard let newValue,
+                  newValue != viewModel.selectedPageID else {
+                return
+            }
+            DispatchQueue.main.async {
                 viewModel.selectPage(id: newValue)
             }
         }

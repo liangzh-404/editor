@@ -38,6 +38,8 @@ Environment:
                                   Print the authorization command without running it.
   EDITOR_UI_TEST_AUTHORIZE_TIMEOUT_SECONDS
                                   Seconds to wait for local approval before failing. Defaults to 120.
+  EDITOR_UI_TEST_SKIP_RUNTIME_ISSUE_CHECK=1
+                                  Skip the post-run SwiftUI runtime issue check.
 EOF
 }
 
@@ -108,6 +110,12 @@ xctestrun_path() {
         -maxdepth 1 \
         -name "${SCHEME}_*.xctestrun" \
         -print 2>/dev/null | head -n 1 || true
+}
+
+latest_xcresult_path() {
+    find "$DERIVED_DATA_PATH/Logs/Test" \
+        -name "Test-${SCHEME}-*.xcresult" \
+        -print 2>/dev/null | sort | tail -n 1 || true
 }
 
 build_inputs_newer_than() {
@@ -357,6 +365,7 @@ run_test_without_building() {
         args+=("${only_testing_args[@]}")
     fi
     run_xcodebuild "${args[@]}"
+    check_runtime_issues
 }
 
 run_standard_test() {
@@ -367,6 +376,7 @@ run_standard_test() {
         args+=("${only_testing_args[@]}")
     fi
     run_xcodebuild "${args[@]}"
+    check_runtime_issues
 }
 
 run_xcodebuild() {
@@ -375,6 +385,21 @@ run_xcodebuild() {
         args+=("${XCODEBUILD_ARGS[@]}")
     fi
     xcodebuild "${args[@]}"
+}
+
+check_runtime_issues() {
+    if [[ "${EDITOR_UI_TEST_SKIP_RUNTIME_ISSUE_CHECK:-0}" == "1" ]]; then
+        return
+    fi
+
+    local latest_xcresult
+    latest_xcresult="$(latest_xcresult_path)"
+    if [[ -z "$latest_xcresult" ]]; then
+        echo "No xcresult bundle found under $DERIVED_DATA_PATH/Logs/Test for runtime issue checking." >&2
+        return 1
+    fi
+
+    scripts/check_xcresult_runtime_issues.sh "$latest_xcresult"
 }
 
 case "$ACTION" in
