@@ -79,6 +79,8 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(tableNames.contains("page_tags"))
         XCTAssertTrue(tableNames.contains("diary_entries"))
         XCTAssertTrue(tableNames.contains("page_origin"))
+        XCTAssertTrue(tableNames.contains("diary_pages"))
+        XCTAssertTrue(tableNames.contains("page_parent_links"))
     }
 
     func testTagAndDiaryTablesExposeRequiredColumns() throws {
@@ -91,11 +93,15 @@ final class SchemaMigratorTests: XCTestCase {
         let pageTagColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('page_tags')"))
         let diaryColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('diary_entries')"))
         let pageOriginColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('page_origin')"))
+        let diaryPageColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('diary_pages')"))
+        let pageParentLinkColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('page_parent_links')"))
 
         XCTAssertTrue(tagColumns.isSuperset(of: ["id", "workspace_id", "parent_tag_id", "name", "order_key", "created_at", "updated_at"]))
         XCTAssertTrue(pageTagColumns.isSuperset(of: ["page_id", "tag_id", "created_at"]))
         XCTAssertTrue(diaryColumns.isSuperset(of: ["id", "workspace_id", "text_plain", "created_at", "updated_at"]))
         XCTAssertTrue(pageOriginColumns.isSuperset(of: ["page_id", "promoted_from_diary_entry_id", "created_at"]))
+        XCTAssertTrue(diaryPageColumns.isSuperset(of: ["page_id", "workspace_id", "diary_date", "created_at", "updated_at"]))
+        XCTAssertTrue(pageParentLinkColumns.isSuperset(of: ["parent_page_id", "child_page_id", "source_block_id", "order_key", "created_at", "updated_at"]))
     }
 
     func testLinksTableTracksExternalTargets() throws {

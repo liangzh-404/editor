@@ -17,6 +17,8 @@ final class PageRepository {
         let workspaceCount = try database.queryInt("SELECT COUNT(*) FROM workspaces")
         if workspaceCount == 0 {
             try insertDefaultContent()
+        } else {
+            try localizeDefaultSeedContentIfUnmodified()
         }
 
         return try loadWorkspaceSnapshot()
@@ -147,6 +149,35 @@ final class PageRepository {
         let tagRepository = TagRepository(database: database)
         let tags = try selectedWorkspaceID.map { try tagRepository.tags(workspaceID: $0) } ?? []
         let pageTags = try tagRepository.tagAssignments()
+        let diaryPages = try database.query(
+            """
+            SELECT page_id, workspace_id, diary_date
+            FROM diary_pages
+            WHERE workspace_id = ?
+            ORDER BY diary_date DESC
+            """,
+            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
+        ).map { row in
+            DiaryPageSnapshot(
+                pageID: row["page_id"] ?? "",
+                workspaceID: row["workspace_id"] ?? "",
+                diaryDate: row["diary_date"] ?? ""
+            )
+        }
+        let pageParentLinks = try database.query(
+            """
+            SELECT parent_page_id, child_page_id, source_block_id, order_key
+            FROM page_parent_links
+            ORDER BY parent_page_id ASC, order_key ASC
+            """
+        ).map { row in
+            PageParentLink(
+                parentPageID: row["parent_page_id"] ?? "",
+                childPageID: row["child_page_id"] ?? "",
+                sourceBlockID: row["source_block_id"] ?? "",
+                orderKey: row["order_key"] ?? ""
+            )
+        }
 
         return WorkspaceSnapshot(
             workspaces: workspaces,
@@ -157,6 +188,8 @@ final class PageRepository {
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -1155,6 +1188,172 @@ final class PageRepository {
         )
     }
 
+    @discardableResult
+    func convertTextBlockToPage(blockID: String) throws -> PageSummary {
+        guard let source = try database.query(
+            """
+            SELECT blocks.type,
+                   blocks.text_plain,
+                   blocks.page_id,
+                   blocks.order_key,
+                   pages.workspace_id,
+                   pages.notebook_id
+            FROM blocks
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ?
+              AND blocks.is_deleted = 0
+              AND pages.is_archived = 0
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        ).first else {
+            throw PageRepositoryError.blockNotFound
+        }
+        guard let type = source["type"].flatMap(BlockType.init(rawValue:)),
+              type.isTextEditable,
+              let pageID = source["page_id"],
+              let workspaceID = source["workspace_id"] else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        let sourceText = source["text_plain"] ?? ""
+        let title = Self.pageTitle(fromBlockText: sourceText)
+        let sourceOrderKey = source["order_key"] ?? "000001"
+        let notebookID = source["notebook_id"] ?? nil
+        let descendantBlockIDs = try descendantBlockIDs(rootBlockID: blockID, pageID: pageID)
+        let now = Self.timestamp()
+        let newPageID = "page-\(UUID().uuidString.lowercased())"
+        let initialBlockID = "block-\(UUID().uuidString.lowercased())"
+        let orderKey = try nextPageOrderKey(workspaceID: workspaceID, notebookID: notebookID)
+        let pageReferencePayload = try blockPayloadJSON(
+            type: .pageReference,
+            text: title,
+            pageReferenceTargetPageID: newPageID
+        )
+
+        try database.withImmediateTransaction("convert_text_block_to_page") {
+            try database.execute(
+                """
+                INSERT INTO pages (id, workspace_id, notebook_id, title, order_key, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                bindings: [
+                    .text(newPageID),
+                    .text(workspaceID),
+                    notebookID.map(SQLiteValue.text) ?? .null,
+                    .text(title),
+                    .text(orderKey),
+                    .text(now),
+                    .text(now)
+                ]
+            )
+            if descendantBlockIDs.isEmpty {
+                try insertBlock(
+                    id: initialBlockID,
+                    pageID: newPageID,
+                    parentBlockID: nil,
+                    orderKey: "000001",
+                    type: .paragraph,
+                    text: "",
+                    createdAt: now
+                )
+            } else {
+                let placeholders = descendantBlockIDs.map { _ in "?" }.joined(separator: ", ")
+                try database.execute(
+                    """
+                    UPDATE blocks
+                    SET page_id = ?,
+                        parent_block_id = CASE
+                            WHEN parent_block_id = ? THEN NULL
+                            ELSE parent_block_id
+                        END,
+                        revision = revision + 1,
+                        sync_state = ?,
+                        updated_at = ?
+                    WHERE id IN (\(placeholders))
+                      AND is_deleted = 0
+                    """,
+                    bindings: [
+                        .text(newPageID),
+                        .text(blockID),
+                        .text("local"),
+                        .text(now)
+                    ] + descendantBlockIDs.map(SQLiteValue.text)
+                )
+            }
+            try database.execute(
+                """
+                UPDATE blocks
+                SET type = ?,
+                    payload_json = ?,
+                    text_plain = ?,
+                    revision = revision + 1,
+                    sync_state = ?,
+                    updated_at = ?
+                WHERE id = ? AND is_deleted = 0
+                """,
+                bindings: [
+                    .text(BlockType.pageReference.rawValue),
+                    .text(pageReferencePayload),
+                    .text(title),
+                    .text("local"),
+                    .text(now),
+                    .text(blockID)
+                ]
+            )
+            try database.execute(
+                """
+                INSERT OR REPLACE INTO page_parent_links (
+                    parent_page_id,
+                    child_page_id,
+                    source_block_id,
+                    order_key,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                bindings: [
+                    .text(pageID),
+                    .text(newPageID),
+                    .text(blockID),
+                    .text(sourceOrderKey),
+                    .text(now),
+                    .text(now)
+                ]
+            )
+
+            let syncRepository = SyncRepository(database: database)
+            try syncRepository.enqueue(entityType: "page", entityID: newPageID, changeType: "create")
+            if descendantBlockIDs.isEmpty {
+                try syncRepository.enqueue(entityType: "block", entityID: initialBlockID, changeType: "create")
+            } else {
+                for descendantBlockID in descendantBlockIDs {
+                    try syncRepository.enqueue(entityType: "block", entityID: descendantBlockID, changeType: "update")
+                }
+                try rebuildLinksForBlocks(blockIDs: descendantBlockIDs)
+            }
+            try syncRepository.enqueue(entityType: "block", entityID: blockID, changeType: "update")
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: blockID,
+                text: title,
+                pageReferenceTargetPageID: newPageID
+            )
+        }
+
+        EditorLog.store.debug(
+            "block_converted_to_page block_id=\(blockID, privacy: .public) source_page_id=\(pageID, privacy: .public) new_page_id=\(newPageID, privacy: .public)"
+        )
+
+        return PageSummary(
+            id: newPageID,
+            workspaceID: workspaceID,
+            notebookID: notebookID,
+            title: title,
+            isFavorite: false
+        )
+    }
+
     func appendBlockReferenceBlock(pageID: String, targetBlockID: String) throws -> BlockSnapshot {
         guard let targetRow = try database.query(
             """
@@ -1349,6 +1548,15 @@ final class PageRepository {
     }
 
     func moveBlock(blockID: String, toIndex targetIndex: Int) throws {
+        try moveBlocks(blockIDs: [blockID], toIndex: targetIndex)
+    }
+
+    func moveBlocks(blockIDs: [String], toIndex targetIndex: Int) throws {
+        let uniqueBlockIDs = NSOrderedSet(array: blockIDs).array.compactMap { $0 as? String }
+        guard let firstBlockID = uniqueBlockIDs.first else {
+            return
+        }
+
         let selectedRows = try database.query(
             """
             SELECT page_id
@@ -1356,7 +1564,7 @@ final class PageRepository {
             WHERE id = ? AND is_deleted = 0
             LIMIT 1
             """,
-            bindings: [.text(blockID)]
+            bindings: [.text(firstBlockID)]
         )
 
         guard let pageID = selectedRows.first?["page_id"] ?? nil else {
@@ -1378,14 +1586,16 @@ final class PageRepository {
             )
         }
 
-        guard let currentIndex = blocks.firstIndex(where: { $0.id == blockID }) else {
+        let movingBlockIDSet = Set(uniqueBlockIDs)
+        let movingBlocks = blocks.filter { movingBlockIDSet.contains($0.id) }
+        guard movingBlocks.count == uniqueBlockIDs.count else {
             throw PageRepositoryError.blockNotFound
         }
 
-        var reorderedBlocks = blocks
-        let movingBlock = reorderedBlocks.remove(at: currentIndex)
-        let clampedTargetIndex = min(max(targetIndex, 0), reorderedBlocks.count)
-        reorderedBlocks.insert(movingBlock, at: clampedTargetIndex)
+        let remainingBlocks = blocks.filter { !movingBlockIDSet.contains($0.id) }
+        let clampedTargetIndex = min(max(targetIndex, 0), remainingBlocks.count)
+        var reorderedBlocks = remainingBlocks
+        reorderedBlocks.insert(contentsOf: movingBlocks, at: clampedTargetIndex)
 
         let now = Self.timestamp()
         var changedBlockIDs: [String] = []
@@ -1426,7 +1636,7 @@ final class PageRepository {
         }
 
         EditorLog.store.debug(
-            "block_moved block_id=\(blockID, privacy: .public) page_id=\(pageID, privacy: .public) target_index=\(targetIndex, privacy: .public) changed_blocks=\(changedBlockIDs.count, privacy: .public)"
+            "blocks_moved first_block_id=\(firstBlockID, privacy: .public) moved_count=\(movingBlocks.count, privacy: .public) page_id=\(pageID, privacy: .public) target_index=\(targetIndex, privacy: .public) changed_blocks=\(changedBlockIDs.count, privacy: .public)"
         )
     }
 
@@ -1526,7 +1736,7 @@ final class PageRepository {
             """,
             bindings: [
                 .text(defaultWorkspaceID),
-                .text("Local"),
+                .text("本地"),
                 .text(now),
                 .text(now)
             ]
@@ -1541,7 +1751,7 @@ final class PageRepository {
                 .text(defaultNotebookID),
                 .text(defaultWorkspaceID),
                 .null,
-                .text("Notebook"),
+                .text("笔记本"),
                 .text("000001"),
                 .text(now),
                 .text(now)
@@ -1557,7 +1767,7 @@ final class PageRepository {
                 .text(defaultPageID),
                 .text(defaultWorkspaceID),
                 .text(defaultNotebookID),
-                .text("Welcome"),
+                .text("欢迎"),
                 .text("000001"),
                 .text(now),
                 .text(now)
@@ -1588,8 +1798,8 @@ final class PageRepository {
                 .null,
                 .text("000001"),
                 .text(BlockType.paragraph.rawValue),
-                .text("{\"text\":\"Start writing in blocks.\"}"),
-                .text("Start writing in blocks."),
+                .text("{\"text\":\"开始用块写作。\"}"),
+                .text("开始用块写作。"),
                 .integer(1),
                 .text("local"),
                 .integer(0),
@@ -1597,6 +1807,117 @@ final class PageRepository {
                 .text(now)
             ]
         )
+    }
+
+    private func localizeDefaultSeedContentIfUnmodified() throws {
+        let now = Self.timestamp()
+
+        try database.execute(
+            """
+            UPDATE workspaces
+            SET name = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND name = ?
+            """,
+            bindings: [
+                .text("本地"),
+                .text(now),
+                .text(defaultWorkspaceID),
+                .text("Local")
+            ]
+        )
+
+        try database.execute(
+            """
+            UPDATE notebooks
+            SET name = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND name = ?
+            """,
+            bindings: [
+                .text("笔记本"),
+                .text(now),
+                .text(defaultNotebookID),
+                .text("Notebook")
+            ]
+        )
+
+        try database.execute(
+            """
+            UPDATE pages
+            SET title = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND title = ?
+            """,
+            bindings: [
+                .text("欢迎"),
+                .text(now),
+                .text(defaultPageID),
+                .text("Welcome")
+            ]
+        )
+
+        try database.execute(
+            """
+            UPDATE blocks
+            SET payload_json = ?,
+                text_plain = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND text_plain = ?
+            """,
+            bindings: [
+                .text("{\"text\":\"开始用块写作。\"}"),
+                .text("开始用块写作。"),
+                .text(now),
+                .text(defaultBlockID),
+                .text("Start writing in blocks.")
+            ]
+        )
+
+        let oldDefaultBlockText = "Start writing in blocks."
+        let newDefaultBlockText = "开始用块写作。"
+        let defaultBlockRows = try database.query(
+            """
+            SELECT type, text_plain
+            FROM blocks
+            WHERE id = ?
+              AND text_plain LIKE ?
+            LIMIT 1
+            """,
+            bindings: [
+                .text(defaultBlockID),
+                .text("\(oldDefaultBlockText)%")
+            ]
+        )
+        if let currentText = defaultBlockRows.first?["text_plain"],
+           let currentTypeRawValue = defaultBlockRows.first?["type"],
+           let currentType = BlockType(rawValue: currentTypeRawValue),
+           currentText.hasPrefix(oldDefaultBlockText) {
+            let suffix = String(currentText.dropFirst(oldDefaultBlockText.count))
+            let localizedText = "\(newDefaultBlockText)\(suffix)"
+            let payloadJSON = try blockPayloadJSON(type: currentType, text: localizedText)
+            try database.execute(
+                """
+                UPDATE blocks
+                SET payload_json = ?,
+                    text_plain = ?,
+                    updated_at = ?
+                WHERE id = ?
+                  AND text_plain = ?
+                """,
+                bindings: [
+                    .text(payloadJSON),
+                    .text(localizedText),
+                    .text(now),
+                    .text(defaultBlockID),
+                    .text(currentText)
+                ]
+            )
+        }
     }
 
     private func loadBlocks(pageIDs: [String]) throws -> [BlockSnapshot] {
@@ -1648,6 +1969,11 @@ final class PageRepository {
                 )
             )
         }
+    }
+
+    private static func pageTitle(fromBlockText text: String) -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedText.isEmpty ? "未命名" : trimmedText
     }
 
     private func nextNotebookOrderKey(
@@ -1809,6 +2135,67 @@ final class PageRepository {
             throw PageRepositoryError.blockNotFound
         }
         return row
+    }
+
+    private func descendantBlockIDs(rootBlockID: String, pageID: String) throws -> [String] {
+        let rows = try database.query(
+            """
+            SELECT id, parent_block_id
+            FROM blocks
+            WHERE page_id = ?
+              AND is_deleted = 0
+            ORDER BY order_key ASC
+            """,
+            bindings: [.text(pageID)]
+        )
+
+        var childIDsByParentID: [String: [String]] = [:]
+        for row in rows {
+            guard let id = row["id"],
+                  let parentBlockID = row["parent_block_id"] else {
+                continue
+            }
+            childIDsByParentID[parentBlockID, default: []].append(id)
+        }
+
+        var descendantIDs: [String] = []
+        func appendDescendants(of parentID: String) {
+            for childID in childIDsByParentID[parentID] ?? [] {
+                descendantIDs.append(childID)
+                appendDescendants(of: childID)
+            }
+        }
+
+        appendDescendants(of: rootBlockID)
+        return descendantIDs
+    }
+
+    private func rebuildLinksForBlocks(blockIDs: [String]) throws {
+        guard !blockIDs.isEmpty else {
+            return
+        }
+
+        let placeholders = blockIDs.map { _ in "?" }.joined(separator: ", ")
+        let rows = try database.query(
+            """
+            SELECT id, text_plain, payload_json
+            FROM blocks
+            WHERE id IN (\(placeholders))
+              AND is_deleted = 0
+            """,
+            bindings: blockIDs.map(SQLiteValue.text)
+        )
+        let backlinkRepository = BacklinkRepository(database: database)
+
+        for row in rows {
+            let payloadJSON = row["payload_json"] ?? ""
+            try backlinkRepository.rebuildLinksForBlock(
+                blockID: row["id"] ?? "",
+                text: row["text_plain"] ?? "",
+                pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
+                blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
+            )
+        }
     }
 
     private func siblingBlocks(pageID: String, parentBlockID: String?) throws -> [String] {

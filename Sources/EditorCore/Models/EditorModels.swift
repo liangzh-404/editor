@@ -61,6 +61,19 @@ struct DiaryEntrySnapshot: Identifiable, Equatable, Sendable {
     let textPlain: String
 }
 
+struct DiaryPageSnapshot: Equatable, Sendable {
+    let pageID: String
+    let workspaceID: String
+    let diaryDate: String
+}
+
+struct PageParentLink: Equatable, Sendable {
+    let parentPageID: String
+    let childPageID: String
+    let sourceBlockID: String
+    let orderKey: String
+}
+
 enum BlockType: String, Equatable, Sendable {
     case paragraph
     case heading1
@@ -371,7 +384,12 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
         }
 
         switch kind {
-        case .image, .video:
+        case .image:
+            if let thumbnailPath {
+                return .thumbnail(thumbnailPath)
+            }
+            return localPath.isEmpty ? .pending : .thumbnail(localPath)
+        case .video:
             if let thumbnailPath {
                 return .thumbnail(thumbnailPath)
             }
@@ -392,6 +410,8 @@ struct WorkspaceSnapshot: Equatable, Sendable {
     let tags: [TagSummary]
     let pageTags: [PageTagAssignment]
     let activeDiaryEntry: DiaryEntrySnapshot?
+    let diaryPages: [DiaryPageSnapshot]
+    let pageParentLinks: [PageParentLink]
     let selectedWorkspaceID: String?
     let selectedNotebookID: String?
     let selectedPageID: String?
@@ -410,6 +430,8 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         tags: [TagSummary] = [],
         pageTags: [PageTagAssignment] = [],
         activeDiaryEntry: DiaryEntrySnapshot? = nil,
+        diaryPages: [DiaryPageSnapshot] = [],
+        pageParentLinks: [PageParentLink] = [],
         selectedWorkspaceID: String?,
         selectedNotebookID: String? = nil,
         selectedPageID: String?
@@ -423,6 +445,8 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         self.tags = tags
         self.pageTags = pageTags
         self.activeDiaryEntry = activeDiaryEntry
+        self.diaryPages = diaryPages
+        self.pageParentLinks = pageParentLinks
         self.selectedWorkspaceID = selectedWorkspaceID
         self.selectedNotebookID = selectedNotebookID
         self.selectedPageID = selectedPageID
@@ -455,6 +479,8 @@ extension WorkspaceSnapshot {
             tags: tags,
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -482,6 +508,8 @@ extension WorkspaceSnapshot {
             tags: tags,
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -501,6 +529,8 @@ extension WorkspaceSnapshot {
             tags: tags,
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -520,6 +550,8 @@ extension WorkspaceSnapshot {
             tags: tags,
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -539,6 +571,8 @@ extension WorkspaceSnapshot {
             tags: tags,
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -566,6 +600,8 @@ extension WorkspaceSnapshot {
             tags: tags,
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -603,6 +639,8 @@ extension WorkspaceSnapshot {
             tags: tags,
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID
@@ -629,6 +667,8 @@ extension WorkspaceSnapshot {
             tags: tags,
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
             selectedPageID: selectedPageID

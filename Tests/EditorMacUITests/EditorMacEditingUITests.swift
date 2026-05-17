@@ -1,5 +1,6 @@
 import Darwin
 import XCTest
+import AppKit
 
 final class EditorMacEditingUITests: XCTestCase {
     private static let editorMacBundleIdentifier = "com.liangzhang.editor.mac"
@@ -18,6 +19,7 @@ final class EditorMacEditingUITests: XCTestCase {
             )
         appSupportDirectory = appContainerApplicationSupport
             .appendingPathComponent("EditorMacUITests-\(UUID().uuidString)", isDirectory: true)
+        try Self.removeSavedWindowState()
     }
 
     override func tearDownWithError() throws {
@@ -37,6 +39,55 @@ final class EditorMacEditingUITests: XCTestCase {
         }
 
         return URL(fileURLWithPath: String(cString: homeDirectory), isDirectory: true)
+    }
+
+    private static func todayDiaryTitle() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy年M月d日 EEEE"
+        return formatter.string(from: Date())
+    }
+
+    private static func removeSavedWindowState() throws {
+        let home = try currentUserHomeDirectory()
+        let savedStatePaths = [
+            home.appendingPathComponent(
+                "Library/Saved Application State/com.liangzhang.editor.mac.savedState",
+                isDirectory: true
+            ),
+            home.appendingPathComponent(
+                "Library/Containers/com.liangzhang.editor.mac/Data/Library/Saved Application State/com.liangzhang.editor.mac.savedState",
+                isDirectory: true
+            )
+        ]
+
+        for savedStatePath in savedStatePaths {
+            try? FileManager.default.removeItem(at: savedStatePath)
+        }
+    }
+
+    @MainActor
+    private func waitForPageTitle(
+        in app: XCUIApplication,
+        equalTo expectedTitle: String,
+        timeout: TimeInterval,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        let titleFields = app.textFields.matching(identifier: "editor.page-title")
+        repeat {
+            for index in 0..<titleFields.count {
+                let titleField = titleFields.element(boundBy: index)
+                if (titleField.value as? String) == expectedTitle {
+                    return true
+                }
+            }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        } while Date() < deadline
+
+        return false
     }
 
     @MainActor
@@ -71,7 +122,9 @@ final class EditorMacEditingUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let allDocuments = app.buttons["editor.collection.all-documents"]
+        let allDocuments = app.buttons
+            .matching(identifier: "editor.collection.all-documents")
+            .firstMatch
         XCTAssertTrue(
             allDocuments.waitForExistence(timeout: 5),
             "All Documents should be visible before using page toolbar actions",
@@ -80,7 +133,9 @@ final class EditorMacEditingUITests: XCTestCase {
         )
         allDocuments.click()
 
-        let welcome = app.element(identifier: "editor.page-row.page-welcome")
+        let welcome = app.descendants(matching: .any)
+            .matching(identifier: "editor.page-row.page-welcome")
+            .firstMatch
         XCTAssertTrue(
             welcome.waitForExistence(timeout: 5),
             "Welcome page row should be visible before using page toolbar actions",
@@ -89,7 +144,9 @@ final class EditorMacEditingUITests: XCTestCase {
         )
         welcome.click()
 
-        let textView = app.textViews["editor.text.block-welcome-001"]
+        let textView = app.textViews
+            .matching(identifier: "editor.text.block-welcome-001")
+            .firstMatch
         XCTAssertTrue(
             textView.waitForExistence(timeout: 5),
             "Welcome block should be loaded before using page toolbar actions",
@@ -99,19 +156,55 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
-    func testLaunchStartsInBlankDiaryEditorForFastTyping() {
+    private func openInlineLinkPanelFromPageActions(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let pageActions = app.element(identifier: "editor.page-actions")
+        XCTAssertTrue(
+            pageActions.waitForExistence(timeout: 5),
+            "Page actions menu should be visible before opening the inline link panel",
+            file: file,
+            line: line
+        )
+        pageActions.click()
+
+        let linkItem = app.menuItems["链接"]
+        XCTAssertTrue(
+            linkItem.waitForExistence(timeout: 5),
+            "Page actions menu should expose the link command",
+            file: file,
+            line: line
+        )
+        linkItem.click()
+    }
+
+    @MainActor
+    func testLaunchStartsInDailyPageBlockEditorForFastTyping() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let diaryEditor = app.textViews["editor.diary.text"]
-        XCTAssertTrue(diaryEditor.waitForExistence(timeout: 5), "Launch should expose the diary editor")
-        diaryEditor.click()
+        let legacyDiaryEditor = app.textViews["editor.diary.text"]
+        XCTAssertFalse(
+            legacyDiaryEditor.waitForExistence(timeout: 1),
+            "Launch should no longer expose the legacy plain diary editor"
+        )
+        let pageTitle = app.textFields
+            .matching(identifier: "editor.page-title")
+            .firstMatch
+        XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "Launch should expose the daily page editor")
+        let dailyBlockEditor = app.textViews
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.text."))
+            .firstMatch
+        XCTAssertTrue(dailyBlockEditor.waitForExistence(timeout: 5), "Daily page should expose a normal block editor")
+        dailyBlockEditor.click()
         app.typeText("Captured immediately")
 
         XCTAssertTrue(
-            diaryEditor.waitForValue(containing: "Captured immediately", timeout: 5),
-            "Typing after launch should write into diary"
+            dailyBlockEditor.waitForValue(containing: "Captured immediately", timeout: 5),
+            "Typing after launch should write into the daily page block"
         )
     }
 
@@ -128,6 +221,10 @@ final class EditorMacEditingUITests: XCTestCase {
 
         let welcome = app.staticTexts["editor.page-row.page-welcome"]
         XCTAssertTrue(welcome.waitForExistence(timeout: 5), "Existing pages should appear in All Documents")
+        XCTAssertFalse(
+            app.staticTexts[Self.todayDiaryTitle()].waitForExistence(timeout: 1),
+            "Daily diary pages should stay in Diary instead of appearing in All Documents"
+        )
     }
 
     @MainActor
@@ -136,23 +233,67 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let diaryEditor = app.textViews["editor.diary.text"]
-        XCTAssertTrue(diaryEditor.waitForExistence(timeout: 5), "Diary editor should be visible at launch")
+        let diaryEditor = app.textViews
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.text."))
+            .firstMatch
+        XCTAssertTrue(diaryEditor.waitForExistence(timeout: 5), "Daily page block editor should be visible at launch")
         diaryEditor.click()
         app.typeText("Promote this text")
         diaryEditor.typeKey("a", modifierFlags: [.command])
         diaryEditor.typeKey("]", modifierFlags: [.command])
 
-        let pageTitle = app.textFields["editor.page-title"]
+        let pageTitle = app.textFields
+            .matching(identifier: "editor.page-title")
+            .firstMatch
         XCTAssertTrue(
             pageTitle.waitForValue(equalTo: "Promote this text", timeout: 5),
             "Cmd+] should create and open a page from selected diary text"
         )
 
         let promotedBlock = app.textViews
-            .matching(NSPredicate(format: "value CONTAINS %@", "Promote this text"))
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.text."))
             .firstMatch
-        XCTAssertTrue(promotedBlock.waitForExistence(timeout: 5))
+        XCTAssertTrue(promotedBlock.waitForExistence(timeout: 5), "Converted page should open with a normal editable block")
+    }
+
+    @MainActor
+    func testCraftDocumentNavigationShortcuts() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
+        XCTAssertTrue(waitForPageTitle(in: app, equalTo: "欢迎", timeout: 5))
+
+        app.typeKey("n", modifierFlags: [.command])
+        XCTAssertTrue(
+            waitForPageTitle(in: app, equalTo: "未命名", timeout: 5),
+            "⌘N should create a normal untitled document in the current workspace"
+        )
+
+        app.typeKey("[", modifierFlags: [.command])
+        XCTAssertTrue(
+            waitForPageTitle(in: app, equalTo: "欢迎", timeout: 5),
+            "⌘[ should navigate back to the previous page"
+        )
+
+        app.typeKey("n", modifierFlags: [.command, .option])
+        XCTAssertTrue(
+            waitForPageTitle(in: app, equalTo: Self.todayDiaryTitle(), timeout: 5),
+            "⌥⌘N should open today's daily page"
+        )
+
+        app.typeKey("[", modifierFlags: [.command])
+        XCTAssertTrue(
+            waitForPageTitle(in: app, equalTo: "欢迎", timeout: 5),
+            "⌘[ should navigate back from today's daily page"
+        )
+
+        app.typeKey(.rightArrow, modifierFlags: [.command])
+        XCTAssertTrue(
+            waitForPageTitle(in: app, equalTo: Self.todayDiaryTitle(), timeout: 5),
+            "⌘→ should navigate forward to the page we backed out of"
+        )
     }
 
     @MainActor
@@ -184,6 +325,66 @@ final class EditorMacEditingUITests: XCTestCase {
 
         let value = textView.value as? String ?? ""
         XCTAssertTrue(value.contains("Editable"), "Typing into the welcome block should update the native text view value")
+    }
+
+    @MainActor
+    func testTypingAfterClickingTextBeginningKeepsCaretLocation() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let textView = app.textViews
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.text."))
+            .firstMatch
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "An empty daily block should be visible before editing")
+        textView.click()
+        app.typeText("AlphaBeta")
+        XCTAssertTrue(textView.waitForValue(equalTo: "AlphaBeta", timeout: 5))
+
+        textView.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).click()
+        app.typeText("X")
+
+        XCTAssertTrue(textView.waitForValue(containing: "X", timeout: 5))
+        let valueAfterLeadingClick = textView.value as? String ?? ""
+        XCTAssertTrue(
+            valueAfterLeadingClick != "AlphaBetaX",
+            "Typing after a leading click should insert near the clicked caret location instead of jumping to the end; value=\(valueAfterLeadingClick)"
+        )
+    }
+
+    @MainActor
+    func testCommandASelectsCurrentBlockThenAllBlocks() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
+
+        let firstTextView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5))
+        firstTextView.click()
+        firstTextView.typeKey(.return, modifierFlags: [])
+        app.typeText("Second")
+
+        let firstBlock = app.groups["editor.block.block-welcome-001"]
+        XCTAssertTrue(firstBlock.waitForExistence(timeout: 5))
+        let secondBlock = app.groups
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.block."))
+            .element(boundBy: 1)
+        XCTAssertTrue(secondBlock.waitForExistence(timeout: 5))
+
+        firstTextView.click()
+        firstTextView.typeKey("a", modifierFlags: [.command])
+        XCTAssertTrue(firstBlock.waitForLabelOrValue(containing: "当前块已选中", timeout: 5))
+        XCTAssertFalse(secondBlock.waitForLabelOrValue(containing: "当前块已选中", timeout: 1))
+
+        firstTextView.typeKey("a", modifierFlags: [.command])
+        XCTAssertTrue(firstBlock.waitForLabelOrValue(containing: "当前块已选中", timeout: 5))
+        XCTAssertTrue(secondBlock.waitForLabelOrValue(containing: "当前块已选中", timeout: 5))
+
+        firstTextView.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(firstBlock.waitForLabelOrValue(containing: "当前块未选中", timeout: 5))
+        XCTAssertTrue(secondBlock.waitForLabelOrValue(containing: "当前块未选中", timeout: 5))
     }
 
     @MainActor
@@ -418,6 +619,10 @@ final class EditorMacEditingUITests: XCTestCase {
         let secondTextView = app.textViews.element(boundBy: initialTextViewCount)
         XCTAssertTrue(secondTextView.waitForExistence(timeout: 5), "Return should create a second editable block")
         app.typeText("Second block")
+        XCTAssertTrue(
+            secondTextView.waitForKeyboardFocus(timeout: 5),
+            "The inserted second block should keep keyboard focus before boundary arrow navigation"
+        )
 
         secondTextView.typeKey(.leftArrow, modifierFlags: [.command])
         secondTextView.typeKey(.upArrow, modifierFlags: [])
@@ -472,6 +677,56 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testBlockContextMenuShowsChineseCoreActions() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before opening block actions")
+        textView.click()
+
+        openWelcomeBlockContextMenu(in: app)
+
+        XCTAssertTrue(app.menuItems["下方新增"].waitForExistence(timeout: 5), "Block menu should include add-below")
+        XCTAssertTrue(app.menuItems["一级标题"].waitForExistence(timeout: 5), "Block menu should include type conversion")
+        XCTAssertTrue(app.menuItems["删除"].waitForExistence(timeout: 5), "Block menu should include delete without showing it as permanent chrome")
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
+    @MainActor
+    func testBlockContextMenuConvertsTextBlockToPage() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before conversion")
+        textView.click()
+
+        openWelcomeBlockContextMenu(in: app)
+
+        let pageMenuItem = app.menuItems["页面"]
+        XCTAssertTrue(pageMenuItem.waitForExistence(timeout: 5), "Conversion menu should expose text-block-to-page")
+        pageMenuItem.click()
+
+        let pageTitle = app.textFields["editor.page-title"]
+        XCTAssertTrue(
+            pageTitle.waitForValue(containing: "开始用块写作。", timeout: 5),
+            "Converting a text block to a page should open the created page with the block text as title"
+        )
+        XCTAssertTrue(
+            app.staticTexts["开始用块写作。"].waitForExistence(timeout: 5)
+                || app.buttons["开始用块写作。"].waitForExistence(timeout: 5),
+            "The created page should appear in the page list"
+        )
+    }
+
+    @MainActor
     func testNotebookActionControlsExposeSemanticLabelsAndAvailability() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
@@ -512,9 +767,9 @@ final class EditorMacEditingUITests: XCTestCase {
         let pageRow = app.element(identifier: "editor.page-row.page-welcome")
 
         XCTAssertTrue(favoritePageButton.waitForExistence(timeout: 5), "Favorited pages should appear in the sidebar")
-        XCTAssertEqual(favoritePageButton.label, "Welcome")
+        XCTAssertEqual(favoritePageButton.label, "欢迎")
         XCTAssertTrue(pageRow.waitForExistence(timeout: 5), "Page list row should expose favorite state")
-        XCTAssertTrue(pageRow.waitForValue(containing: "Favorite", timeout: 5))
+        XCTAssertTrue(pageRow.waitForValue(containing: "已收藏", timeout: 5))
     }
 
     @MainActor
@@ -530,28 +785,28 @@ final class EditorMacEditingUITests: XCTestCase {
         XCTAssertTrue(pageRow.waitForExistence(timeout: 5), "Page list row should be visible before toggling favorite state")
         XCTAssertTrue(favoriteToggle.waitForExistence(timeout: 5), "Page rows should expose a direct favorite toggle")
         XCTAssertTrue(
-            favoriteToggle.waitForLabelOrValue(containing: "Add page to favorites", timeout: 5),
+            favoriteToggle.waitForLabelOrValue(containing: "收藏页面", timeout: 5),
             "Initial favorite toggle should describe the add action"
         )
-        XCTAssertTrue(pageRow.waitForValue(containing: "Not favorite", timeout: 5))
+        XCTAssertTrue(pageRow.waitForValue(containing: "未收藏", timeout: 5))
         XCTAssertFalse(favoritePageButton.exists, "Fresh default page should not appear in Favorites before toggling")
 
         favoriteToggle.click()
 
         XCTAssertTrue(
-            favoriteToggle.waitForLabelOrValue(containing: "Remove page from favorites", timeout: 5),
+            favoriteToggle.waitForLabelOrValue(containing: "取消收藏页面", timeout: 5),
             "Favorite toggle should describe the remove action after adding"
         )
-        XCTAssertTrue(pageRow.waitForValue(containing: "Favorite", timeout: 5))
+        XCTAssertTrue(pageRow.waitForValue(containing: "已收藏", timeout: 5))
         XCTAssertTrue(favoritePageButton.waitForExistence(timeout: 5), "Favorited page should appear in the sidebar")
 
         favoriteToggle.click()
 
         XCTAssertTrue(
-            favoriteToggle.waitForLabelOrValue(containing: "Add page to favorites", timeout: 5),
+            favoriteToggle.waitForLabelOrValue(containing: "收藏页面", timeout: 5),
             "Favorite toggle should return to the add action after removing"
         )
-        XCTAssertTrue(pageRow.waitForValue(containing: "Not favorite", timeout: 5))
+        XCTAssertTrue(pageRow.waitForValue(containing: "未收藏", timeout: 5))
         XCTAssertTrue(favoritePageButton.waitForNonExistence(timeout: 5), "Removed favorite should leave the sidebar")
     }
 
@@ -629,7 +884,7 @@ final class EditorMacEditingUITests: XCTestCase {
         textView.typeKey("b", modifierFlags: [.command])
 
         XCTAssertTrue(
-            textView.waitForValue(containing: "**Start writing in blocks.**", timeout: 5),
+            textView.waitForValue(containing: "**开始用块写作。**", timeout: 5),
             "Cmd-B should wrap the selected block text in Markdown bold markers"
         )
 
@@ -656,13 +911,13 @@ final class EditorMacEditingUITests: XCTestCase {
         textView.typeKey("a", modifierFlags: [.command])
         textView.typeKey("b", modifierFlags: [.command])
         XCTAssertTrue(
-            textView.waitForValue(containing: "**Start writing in blocks.**", timeout: 5),
+            textView.waitForValue(containing: "**开始用块写作。**", timeout: 5),
             "First Cmd-B should wrap the selected block text in Markdown bold markers"
         )
 
         textView.typeKey("b", modifierFlags: [.command])
         XCTAssertTrue(
-            textView.waitForValue(containing: "Start writing in blocks.", timeout: 5),
+            textView.waitForValue(containing: "开始用块写作。", timeout: 5),
             "Second Cmd-B should remove the surrounding Markdown bold markers"
         )
 
@@ -761,7 +1016,7 @@ final class EditorMacEditingUITests: XCTestCase {
         textView.typeKey("e", modifierFlags: [.command])
 
         XCTAssertTrue(
-            textView.waitForValue(containing: "`Start writing in blocks.`", timeout: 5),
+            textView.waitForValue(containing: "`开始用块写作。`", timeout: 5),
             "Cmd-E should wrap the selected block text in inline-code Markdown markers"
         )
 
@@ -819,7 +1074,7 @@ final class EditorMacEditingUITests: XCTestCase {
         textView.typeKey("x", modifierFlags: [.command, .shift])
 
         XCTAssertTrue(
-            textView.waitForValue(containing: "~~Start writing in blocks.~~", timeout: 5),
+            textView.waitForValue(containing: "~~开始用块写作。~~", timeout: 5),
             "Cmd-Shift-X should wrap the selected block text in Markdown strikethrough markers"
         )
 
@@ -881,7 +1136,7 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
-    func testCommandKOpensInlineLinkPanelForSelection() {
+    func testPageActionsMenuOpensInlineLinkPanelForSelection() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
@@ -889,34 +1144,35 @@ final class EditorMacEditingUITests: XCTestCase {
         openWelcomePageForPageToolbarActions(in: app)
 
         let textView = app.textViews["editor.text.block-welcome-001"]
-        XCTAssertTrue(textView.waitForExistence(timeout: 10), "Welcome text block should be visible before keyboard link insertion")
+        XCTAssertTrue(textView.waitForExistence(timeout: 10), "Welcome text block should be visible before page action link insertion")
 
         textView.click()
+        XCTAssertTrue(textView.waitForKeyboardFocus(timeout: 5), "Welcome text block should be focused before opening the page actions link panel")
         textView.typeKey("a", modifierFlags: [.command])
-        textView.typeKey("k", modifierFlags: [.command])
+        openInlineLinkPanelFromPageActions(in: app)
 
         let labelField = app.textFields["editor.insert-markdown-link.label"]
-        XCTAssertTrue(labelField.waitForExistence(timeout: 5), "Cmd-K should open the inline link panel")
+        XCTAssertTrue(labelField.waitForExistence(timeout: 5), "The page actions menu should open the inline link panel")
         labelField.click()
         labelField.typeText("Swift")
 
         let urlField = app.textFields["editor.insert-markdown-link.url"]
-        XCTAssertTrue(urlField.waitForExistence(timeout: 5), "Inline link panel should expose a URL field after Cmd-K")
+        XCTAssertTrue(urlField.waitForExistence(timeout: 5), "Inline link panel should expose a URL field after opening from page actions")
         urlField.click()
         urlField.typeText("https://swift.org")
 
         let confirmButton = app.buttons["editor.insert-markdown-link.confirm"]
-        XCTAssertTrue(confirmButton.waitForExistence(timeout: 5), "Inline link panel should expose a confirm button after Cmd-K")
+        XCTAssertTrue(confirmButton.waitForExistence(timeout: 5), "Inline link panel should expose a confirm button after opening from page actions")
         confirmButton.click()
 
         XCTAssertTrue(
             textView.waitForValue(containing: "[Swift](https://swift.org)", timeout: 5),
-            "Confirming the Cmd-K link panel should replace the selected text with inline Markdown"
+            "Confirming the page action link panel should replace the selected text with inline Markdown"
         )
     }
 
     @MainActor
-    func testCommandKUpdatesExistingInlineLinkUnderSelection() {
+    func testPageActionsMenuUpdatesExistingInlineLinkUnderSelection() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
@@ -927,14 +1183,12 @@ final class EditorMacEditingUITests: XCTestCase {
         XCTAssertTrue(textView.waitForExistence(timeout: 10), "Welcome text block should be visible before link update")
 
         textView.click()
+        XCTAssertTrue(textView.waitForKeyboardFocus(timeout: 5), "Welcome text block should be focused before creating the initial link")
         textView.typeKey("a", modifierFlags: [.command])
-
-        let linkButton = app.buttons["editor.insert-markdown-link"]
-        XCTAssertTrue(linkButton.waitForExistence(timeout: 5), "Inline link toolbar button should be visible")
-        linkButton.click()
+        openInlineLinkPanelFromPageActions(in: app)
 
         let labelField = app.textFields["editor.insert-markdown-link.label"]
-        XCTAssertTrue(labelField.waitForExistence(timeout: 5), "Inline link panel should expose a label field")
+        XCTAssertTrue(labelField.waitForExistence(timeout: 5), "Page actions should expose a label field")
         labelField.click()
         labelField.typeText("Swift")
 
@@ -952,15 +1206,15 @@ final class EditorMacEditingUITests: XCTestCase {
             "Initial link insertion should place an editable inline Markdown link"
         )
 
-        textView.typeKey("k", modifierFlags: [.command])
+        openInlineLinkPanelFromPageActions(in: app)
 
         XCTAssertTrue(
             labelField.waitForValue(containing: "Swift", timeout: 5),
-            "Cmd-K from inside an existing inline link should prefill the current label"
+            "Opening link editing from page actions inside an existing inline link should prefill the current label"
         )
         XCTAssertTrue(
             urlField.waitForValue(containing: "https://swift.org", timeout: 5),
-            "Cmd-K from inside an existing inline link should prefill the current URL"
+            "Opening link editing from page actions inside an existing inline link should prefill the current URL"
         )
 
         labelField.click()
@@ -985,7 +1239,7 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
-    func testCommandKRemovesExistingInlineLinkUnderSelection() {
+    func testPageActionsMenuRemovesExistingInlineLinkUnderSelection() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
@@ -996,14 +1250,12 @@ final class EditorMacEditingUITests: XCTestCase {
         XCTAssertTrue(textView.waitForExistence(timeout: 10), "Welcome text block should be visible before link removal")
 
         textView.click()
+        XCTAssertTrue(textView.waitForKeyboardFocus(timeout: 5), "Welcome text block should be focused before creating the initial link")
         textView.typeKey("a", modifierFlags: [.command])
-
-        let linkButton = app.buttons["editor.insert-markdown-link"]
-        XCTAssertTrue(linkButton.waitForExistence(timeout: 5), "Inline link toolbar button should be visible")
-        linkButton.click()
+        openInlineLinkPanelFromPageActions(in: app)
 
         let labelField = app.textFields["editor.insert-markdown-link.label"]
-        XCTAssertTrue(labelField.waitForExistence(timeout: 5), "Inline link panel should expose a label field")
+        XCTAssertTrue(labelField.waitForExistence(timeout: 5), "Page actions should expose a label field")
         labelField.click()
         labelField.typeText("Swift")
 
@@ -1021,7 +1273,7 @@ final class EditorMacEditingUITests: XCTestCase {
             "Initial link insertion should place an editable inline Markdown link"
         )
 
-        textView.typeKey("k", modifierFlags: [.command])
+        openInlineLinkPanelFromPageActions(in: app)
 
         let removeButton = app.buttons["editor.insert-markdown-link.remove"]
         XCTAssertTrue(removeButton.waitForExistence(timeout: 5), "Editing an existing inline link should expose Remove Link")
@@ -1075,11 +1327,10 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let taskMenuItem = app.menuItems["Task"]
+        let taskMenuItem = app.menuItems["任务"]
         XCTAssertTrue(taskMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Task type")
         taskMenuItem.click()
 
@@ -1106,11 +1357,10 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let taskMenuItem = app.menuItems["Task"]
+        let taskMenuItem = app.menuItems["任务"]
         XCTAssertTrue(taskMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Task type")
         taskMenuItem.click()
 
@@ -1149,11 +1399,10 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let toggleMenuItem = app.menuItems["Toggle"]
+        let toggleMenuItem = app.menuItems["折叠"]
         XCTAssertTrue(toggleMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Toggle type")
         toggleMenuItem.click()
 
@@ -1180,11 +1429,10 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let toggleMenuItem = app.menuItems["Toggle"]
+        let toggleMenuItem = app.menuItems["折叠"]
         XCTAssertTrue(toggleMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Toggle type")
         toggleMenuItem.click()
 
@@ -1223,11 +1471,10 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let codeMenuItem = app.menuItems["Code"]
+        let codeMenuItem = app.menuItems["代码"]
         XCTAssertTrue(codeMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Code type")
         codeMenuItem.click()
 
@@ -1254,11 +1501,10 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let codeMenuItem = app.menuItems["Code"]
+        let codeMenuItem = app.menuItems["代码"]
         XCTAssertTrue(codeMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Code type")
         codeMenuItem.click()
 
@@ -1290,38 +1536,27 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
+        openWelcomePageForPageToolbarActions(in: app)
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5))
+        textView.click()
         let dragHandle = app.element(identifier: "editor.block.block-welcome-001.drag-handle")
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        let moveUpButton = app.element(identifier: "editor.block.block-welcome-001.move-up")
-        let moveDownButton = app.element(identifier: "editor.block.block-welcome-001.move-down")
-        let outdentButton = app.element(identifier: "editor.block.block-welcome-001.outdent")
-        let indentButton = app.element(identifier: "editor.block.block-welcome-001.indent")
-        let deleteButton = app.element(identifier: "editor.block.block-welcome-001.delete")
 
         XCTAssertTrue(dragHandle.waitForExistence(timeout: 5), "Welcome block should expose a drag handle")
-        XCTAssertEqual(dragHandle.label, "Block drag handle")
+        XCTAssertEqual(dragHandle.label, "块拖拽手柄")
         XCTAssertTrue(
-            dragHandle.waitForValue(containing: "Paragraph", timeout: 5),
+            dragHandle.waitForValue(containing: "正文", timeout: 5),
             "Drag handle should expose the current block type"
         )
 
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        XCTAssertEqual(blockTypeMenu.label, "Change block type")
-        XCTAssertTrue(
-            blockTypeMenu.waitForValue(containing: "Paragraph", timeout: 5),
-            "Block type menu should expose the current block type"
+        XCTAssertFalse(
+            app.element(identifier: "editor.block.block-welcome-001.type-menu").exists,
+            "Block rows should not show a second permanent type/menu button next to the drag handle"
         )
-
-        XCTAssertEqual(moveUpButton.label, "Move block up")
-        XCTAssertEqual(moveDownButton.label, "Move block down")
-        XCTAssertEqual(outdentButton.label, "Outdent block")
-        XCTAssertEqual(indentButton.label, "Indent block")
-        XCTAssertEqual(deleteButton.label, "Delete block")
-        XCTAssertTrue(moveUpButton.waitForValue(containing: "Unavailable", timeout: 5))
-        XCTAssertTrue(moveDownButton.waitForValue(containing: "Unavailable", timeout: 5))
-        XCTAssertTrue(outdentButton.waitForValue(containing: "Unavailable", timeout: 5))
-        XCTAssertTrue(indentButton.waitForValue(containing: "Unavailable", timeout: 5))
-        XCTAssertTrue(deleteButton.waitForValue(containing: "Available", timeout: 5))
+        openWelcomeBlockContextMenu(in: app)
+        XCTAssertTrue(app.menuItems["删除"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.menuItems["一级标题"].waitForExistence(timeout: 5))
+        app.typeKey(.escape, modifierFlags: [])
     }
 
     @MainActor
@@ -1330,11 +1565,10 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let dividerMenuItem = app.menuItems["Divider"]
+        let dividerMenuItem = app.menuItems["分割线"]
         XCTAssertTrue(dividerMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Divider type")
         dividerMenuItem.click()
 
@@ -1344,11 +1578,6 @@ final class EditorMacEditingUITests: XCTestCase {
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForNonExistence(timeout: 5), "Divider blocks should not leave an editable text view behind")
 
-        let dragHandle = app.element(identifier: "editor.block.block-welcome-001.drag-handle")
-        XCTAssertTrue(
-            dragHandle.waitForValue(containing: "Divider", timeout: 5),
-            "Block controls should expose the updated Divider type"
-        )
     }
 
     @MainActor
@@ -1357,11 +1586,10 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let calloutMenuItem = app.menuItems["Callout"]
+        let calloutMenuItem = app.menuItems["提示"]
         XCTAssertTrue(calloutMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Callout type")
         calloutMenuItem.click()
 
@@ -1389,11 +1617,10 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let tableMenuItem = app.menuItems["Table"]
+        let tableMenuItem = app.menuItems["表格"]
         XCTAssertTrue(tableMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Table type")
         tableMenuItem.click()
 
@@ -1403,36 +1630,36 @@ final class EditorMacEditingUITests: XCTestCase {
         let removeColumnButton = app.element(identifier: "editor.table.block-welcome-001.remove-column")
 
         XCTAssertTrue(addRowButton.waitForExistence(timeout: 5), "Changing a block to Table should expose row controls")
-        XCTAssertEqual(addRowButton.label, "Add table row")
-        XCTAssertEqual(addColumnButton.label, "Add table column")
-        XCTAssertEqual(removeRowButton.label, "Remove last table row")
-        XCTAssertEqual(removeColumnButton.label, "Remove last table column")
+        XCTAssertEqual(addRowButton.label, "新增表格行")
+        XCTAssertEqual(addColumnButton.label, "新增表格列")
+        XCTAssertEqual(removeRowButton.label, "删除最后一行")
+        XCTAssertEqual(removeColumnButton.label, "删除最后一列")
         XCTAssertTrue(
-            addRowButton.waitForValue(containing: "1 row, 1 column", timeout: 5),
+            addRowButton.waitForValue(containing: "1 行，1 列", timeout: 5),
             "Table controls should expose the initial table dimensions"
         )
 
         addRowButton.click()
         XCTAssertTrue(
-            addRowButton.waitForValue(containing: "2 rows, 1 column", timeout: 5),
+            addRowButton.waitForValue(containing: "2 行，1 列", timeout: 5),
             "Adding a row should update the exposed table dimensions"
         )
 
         addColumnButton.click()
         XCTAssertTrue(
-            addColumnButton.waitForValue(containing: "2 rows, 2 columns", timeout: 5),
+            addColumnButton.waitForValue(containing: "2 行，2 列", timeout: 5),
             "Adding a column should update the exposed table dimensions"
         )
 
         removeRowButton.click()
         XCTAssertTrue(
-            removeRowButton.waitForValue(containing: "1 row, 2 columns", timeout: 5),
+            removeRowButton.waitForValue(containing: "1 行，2 列", timeout: 5),
             "Removing a row should update the exposed table dimensions"
         )
 
         removeColumnButton.click()
         XCTAssertTrue(
-            removeColumnButton.waitForValue(containing: "1 row, 1 column", timeout: 5),
+            removeColumnButton.waitForValue(containing: "1 行，1 列", timeout: 5),
             "Removing a column should update the exposed table dimensions"
         )
     }
@@ -1443,22 +1670,21 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
-        let blockTypeMenu = app.element(identifier: "editor.block.block-welcome-001.type-menu")
-        XCTAssertTrue(blockTypeMenu.waitForExistence(timeout: 5), "Welcome block should expose its block type menu")
-        blockTypeMenu.click()
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
 
-        let tableMenuItem = app.menuItems["Table"]
+        let tableMenuItem = app.menuItems["表格"]
         XCTAssertTrue(tableMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Table type")
         tableMenuItem.click()
 
         let tableBlock = app.element(identifier: "editor.table.block-welcome-001")
         XCTAssertTrue(tableBlock.waitForExistence(timeout: 5), "Changing a text block to Table should render visible table chrome")
         XCTAssertTrue(
-            tableBlock.waitForLabelOrValue(containing: "Table block", timeout: 5),
+            tableBlock.waitForLabelOrValue(containing: "表格块", timeout: 5),
             "Table chrome should expose a semantic container label"
         )
         XCTAssertTrue(
-            tableBlock.waitForLabelOrValue(containing: "1 row, 1 column", timeout: 5),
+            tableBlock.waitForLabelOrValue(containing: "1 行，1 列", timeout: 5),
             "Table chrome should expose its current dimensions"
         )
 
@@ -1474,8 +1700,40 @@ final class EditorMacEditingUITests: XCTestCase {
         let addColumnButton = app.element(identifier: "editor.table.block-welcome-001.add-column")
         addColumnButton.click()
         XCTAssertTrue(
-            tableBlock.waitForLabelOrValue(containing: "1 row, 2 columns", timeout: 5),
+            tableBlock.waitForLabelOrValue(containing: "1 行，2 列", timeout: 5),
             "Table chrome should update dimensions after adding a column"
+        )
+    }
+
+    @MainActor
+    func testSlashCommandMenuKeyboardCanReachTableCommand() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before opening slash menu")
+        textView.click()
+        textView.typeKey("a", modifierFlags: [.command])
+        app.typeText("/")
+
+        let slashMenu = app.element(identifier: "editor.slash-command-menu")
+        XCTAssertTrue(slashMenu.waitForExistence(timeout: 5), "Typing / should show the scrollable slash command menu")
+        XCTAssertTrue(
+            app.element(identifier: "editor.slash-command.table").waitForExistence(timeout: 5),
+            "Scrollable slash menu should contain the table command"
+        )
+
+        for _ in 0..<10 {
+            textView.typeKey(.downArrow, modifierFlags: [])
+        }
+        textView.typeKey(.return, modifierFlags: [])
+
+        XCTAssertTrue(
+            app.element(identifier: "editor.table.block-welcome-001").waitForExistence(timeout: 5),
+            "Down-arrow navigation plus Return should convert the block to an embedded table"
         )
     }
 
@@ -1802,7 +2060,7 @@ final class EditorMacEditingUITests: XCTestCase {
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome block should be loaded before exporting")
         XCTAssertTrue(
-            textView.waitForValue(containing: "Start writing in blocks.", timeout: 5),
+            textView.waitForValue(containing: "开始用块写作。", timeout: 5),
             "Welcome block text should be loaded before exporting"
         )
 
@@ -1815,7 +2073,7 @@ final class EditorMacEditingUITests: XCTestCase {
         let exportedLabel = exportedMarkdown.label
         let exportedValue = exportedMarkdown.value as? String ?? ""
         XCTAssertTrue(
-            exportedMarkdown.waitForLabelOrValue(containing: "Start writing in blocks.", timeout: 5),
+            exportedMarkdown.waitForLabelOrValue(containing: "开始用块写作。", timeout: 5),
             "Clicking the Markdown export toolbar button should capture the current page Markdown; label=\(exportedLabel) value=\(exportedValue)"
         )
     }
@@ -1837,6 +2095,43 @@ final class EditorMacEditingUITests: XCTestCase {
         XCTAssertTrue(
             insertedAttachment.waitForLabelOrValue(containing: "toolbar-attachment.txt", timeout: 5),
             "Toolbar attachment row should expose the imported filename"
+        )
+    }
+
+    @MainActor
+    func testCommandVPastesImageFileAsAttachmentRow() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let textView = app.textViews
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.text."))
+            .firstMatch
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Daily page text block should be visible before pasting an image")
+
+        let imageURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("editor-ui-paste-\(UUID().uuidString)")
+            .appendingPathComponent("pasted-image.png")
+        try FileManager.default.createDirectory(
+            at: imageURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: imageURL.deletingLastPathComponent()) }
+        let imageData = try XCTUnwrap(
+            Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+        )
+        try imageData.write(to: imageURL, options: .atomic)
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.writeObjects([imageURL as NSURL]))
+
+        textView.click()
+        textView.typeKey("v", modifierFlags: .command)
+
+        let insertedAttachment = app.element(identifierPrefix: "editor.attachment.")
+        XCTAssertTrue(insertedAttachment.waitForExistence(timeout: 10), "Cmd+V should import the pasted image file as an attachment block")
+        XCTAssertTrue(
+            insertedAttachment.waitForLabelOrValue(containing: "pasted-image.png", timeout: 5),
+            "Pasted image attachment should expose the source filename"
         )
     }
 
@@ -2118,6 +2413,18 @@ private func textViewValues(in application: XCUIApplication) -> String {
             return "\(identifier)=\(value)"
         }
         .joined(separator: " | ")
+}
+
+@MainActor
+private func openWelcomeBlockContextMenu(in application: XCUIApplication) {
+    let textView = application.textViews["editor.text.block-welcome-001"]
+    if textView.waitForExistence(timeout: 2) {
+        textView.click()
+    }
+
+    let handle = application.element(identifier: "editor.block.block-welcome-001.drag-handle")
+    XCTAssertTrue(handle.waitForExistence(timeout: 5), "Welcome block drag handle should exist before opening its context menu")
+    handle.rightClick()
 }
 
 private extension String {

@@ -19,13 +19,13 @@ final class PageRepositoryTests: XCTestCase {
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
 
-        XCTAssertEqual(snapshot.workspaces.map(\.name), ["Local"])
-        XCTAssertEqual(snapshot.notebooks.map(\.name), ["Notebook"])
-        XCTAssertEqual(snapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(snapshot.workspaces.map(\.name), ["本地"])
+        XCTAssertEqual(snapshot.notebooks.map(\.name), ["笔记本"])
+        XCTAssertEqual(snapshot.pages.map(\.title), ["欢迎"])
         XCTAssertEqual(snapshot.pages.first?.notebookID, snapshot.notebooks.first?.id)
         XCTAssertEqual(snapshot.blocks.count, 1)
         XCTAssertEqual(snapshot.blocks.first?.type, .paragraph)
-        XCTAssertEqual(snapshot.blocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(snapshot.blocks.first?.textPlain, "开始用块写作。")
         XCTAssertEqual(snapshot.selectedWorkspaceID, snapshot.workspaces.first?.id)
         XCTAssertEqual(snapshot.selectedPageID, snapshot.pages.first?.id)
     }
@@ -198,11 +198,11 @@ final class PageRepositoryTests: XCTestCase {
         let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
         let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
 
-        let createdPage = try repository.createPage(workspaceID: workspaceID, title: "Untitled")
+        let createdPage = try repository.createPage(workspaceID: workspaceID, title: "未命名")
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
         let createdBlocks = reloadedSnapshot.blocks.filter { $0.pageID == createdPage.id }
 
-        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["Untitled", "Welcome"])
+        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["未命名", "欢迎"])
         XCTAssertEqual(reloadedSnapshot.pages.first?.id, createdPage.id)
         XCTAssertEqual(createdBlocks.map(\.type), [.paragraph])
         XCTAssertEqual(createdBlocks.map(\.textPlain), [""])
@@ -273,7 +273,7 @@ final class PageRepositoryTests: XCTestCase {
 
         XCTAssertEqual(
             reloadedSnapshot.notebooks.map(\.name),
-            ["Notebook", "Projects", "Client A", "Areas"]
+            ["笔记本", "Projects", "Client A", "Areas"]
         )
     }
 
@@ -334,7 +334,7 @@ final class PageRepositoryTests: XCTestCase {
         try repository.moveNotebook(notebookID: areas.id, toIndex: 0)
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
 
-        XCTAssertEqual(reloadedSnapshot.notebooks.map(\.name), ["Areas", "Notebook", "Projects"])
+        XCTAssertEqual(reloadedSnapshot.notebooks.map(\.name), ["Areas", "笔记本", "Projects"])
         XCTAssertEqual(
             try SyncRepository(database: database).pendingChanges().suffix(3).map(\.entityType),
             ["notebook", "notebook", "notebook"]
@@ -353,7 +353,7 @@ final class PageRepositoryTests: XCTestCase {
         try repository.archivePage(pageID: createdPage.id)
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
 
-        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["欢迎"])
         XCTAssertEqual(
             try SyncRepository(database: database).pendingChanges().last,
             SyncChange(entityType: "page", entityID: createdPage.id, changeType: "archive")
@@ -371,13 +371,13 @@ final class PageRepositoryTests: XCTestCase {
         try repository.archivePage(pageID: createdPage.id)
 
         let archivedSnapshot = try repository.loadWorkspaceSnapshot()
-        XCTAssertEqual(archivedSnapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(archivedSnapshot.pages.map(\.title), ["欢迎"])
         XCTAssertEqual(archivedSnapshot.archivedPages.map(\.title), ["Scratch"])
 
         try repository.restorePage(pageID: createdPage.id)
         let restoredSnapshot = try repository.loadWorkspaceSnapshot()
 
-        XCTAssertEqual(restoredSnapshot.pages.map(\.title), ["Scratch", "Welcome"])
+        XCTAssertEqual(restoredSnapshot.pages.map(\.title), ["Scratch", "欢迎"])
         XCTAssertEqual(restoredSnapshot.archivedPages, [])
         XCTAssertEqual(
             try SyncRepository(database: database).pendingChanges().last,
@@ -398,7 +398,7 @@ final class PageRepositoryTests: XCTestCase {
         try repository.permanentlyDeleteArchivedPage(pageID: createdPage.id)
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
 
-        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["Welcome"])
+        XCTAssertEqual(reloadedSnapshot.pages.map(\.title), ["欢迎"])
         XCTAssertEqual(reloadedSnapshot.archivedPages, [])
         XCTAssertEqual(
             try database.queryInt("SELECT COUNT(*) FROM blocks WHERE page_id = '\(createdPage.id)'"),
@@ -528,7 +528,7 @@ final class PageRepositoryTests: XCTestCase {
             [
                 Backlink(
                     sourcePageID: sourcePageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: importedBlocks[0].id,
                     targetPageID: targetPage.id,
                     targetBlockID: nil,
@@ -536,7 +536,7 @@ final class PageRepositoryTests: XCTestCase {
                 ),
                 Backlink(
                     sourcePageID: sourcePageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: importedBlocks[1].id,
                     targetPageID: targetPage.id,
                     targetBlockID: targetBlock.id,
@@ -644,6 +644,36 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.orderKey), ["000001", "000002", "000003"])
     }
 
+    func testMoveBlocksPersistsDraggedGroupOrder() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                Parent
+                Child
+                Sibling
+                Tail
+                """
+        )
+        let importedSnapshot = try repository.loadWorkspaceSnapshot()
+        let parentID = try XCTUnwrap(importedSnapshot.blocks.first?.id)
+        let childID = try XCTUnwrap(importedSnapshot.blocks.dropFirst().first?.id)
+        XCTAssertTrue(try repository.indentBlock(blockID: childID))
+
+        try repository.moveBlocks(blockIDs: [parentID, childID], toIndex: 2)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.blocks.map(\.textPlain), ["Sibling", "Tail", "Parent", "Child"])
+        XCTAssertEqual(reloadedSnapshot.blocks.first { $0.id == childID }?.parentBlockID, parentID)
+        XCTAssertEqual(reloadedSnapshot.blocks.map(\.orderKey), ["000001", "000002", "000003", "000004"])
+    }
+
     func testIndentBlockNestsUnderPreviousSiblingAndQueuesSync() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -748,7 +778,7 @@ final class PageRepositoryTests: XCTestCase {
             [
                 Backlink(
                     sourcePageID: sourcePageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: block.id,
                     targetPageID: targetPage.id,
                     targetBlockID: nil,
@@ -762,6 +792,83 @@ final class PageRepositoryTests: XCTestCase {
         )
         XCTAssertEqual(reloadedBlock.type, .pageReference)
         XCTAssertEqual(reloadedBlock.pageReferenceTargetPageID, targetPage.id)
+    }
+
+    func testConvertTextBlockToPageReplacesSourceWithPageReference() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "项目计划")
+
+        let createdPage = try repository.convertTextBlockToPage(blockID: blockID)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let sourceBlock = try XCTUnwrap(reloadedSnapshot.blocks.first { $0.id == blockID })
+        let createdPageInitialBlock = try XCTUnwrap(
+            reloadedSnapshot.blocks.first { $0.pageID == createdPage.id }
+        )
+
+        XCTAssertEqual(createdPage.title, "项目计划")
+        XCTAssertEqual(sourceBlock.type, .pageReference)
+        XCTAssertEqual(sourceBlock.textPlain, "项目计划")
+        XCTAssertEqual(sourceBlock.pageReferenceTargetPageID, createdPage.id)
+        XCTAssertEqual(
+            reloadedSnapshot.pageParentLinks,
+            [
+                PageParentLink(
+                    parentPageID: sourcePageID,
+                    childPageID: createdPage.id,
+                    sourceBlockID: blockID,
+                    orderKey: "000001"
+                )
+            ]
+        )
+        XCTAssertEqual(createdPageInitialBlock.type, .paragraph)
+        XCTAssertEqual(createdPageInitialBlock.textPlain, "")
+        XCTAssertEqual(
+            try BacklinkRepository(database: database).backlinks(targetPageID: createdPage.id),
+            [
+                Backlink(
+                    sourcePageID: sourcePageID,
+                    sourcePageTitle: "欢迎",
+                    sourceBlockID: blockID,
+                    targetPageID: createdPage.id,
+                    targetBlockID: nil,
+                    linkText: "项目计划"
+                )
+            ]
+        )
+    }
+
+    func testConvertTextBlockToPageMovesNestedChildBlocksIntoCreatedPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "项目计划")
+        let childBlock = try repository.appendBlock(
+            pageID: sourcePageID,
+            type: .paragraph,
+            text: "迁移到子页面"
+        )
+        XCTAssertTrue(try repository.indentBlock(blockID: childBlock.id))
+
+        let createdPage = try repository.convertTextBlockToPage(blockID: blockID)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let sourcePageBlocks = reloadedSnapshot.blocks.filter { $0.pageID == sourcePageID }
+        let createdPageBlocks = reloadedSnapshot.blocks.filter { $0.pageID == createdPage.id }
+        let migratedChildBlock = try XCTUnwrap(createdPageBlocks.first { $0.id == childBlock.id })
+
+        XCTAssertEqual(sourcePageBlocks.map(\.id), [blockID])
+        XCTAssertEqual(createdPageBlocks.map(\.id), [childBlock.id])
+        XCTAssertNil(migratedChildBlock.parentBlockID)
+        XCTAssertEqual(migratedChildBlock.textPlain, "迁移到子页面")
     }
 
     func testAppendBlockReferenceBlockCreatesTypedBlockAndBlockBacklink() throws {
@@ -793,7 +900,7 @@ final class PageRepositoryTests: XCTestCase {
             [
                 Backlink(
                     sourcePageID: sourcePageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: block.id,
                     targetPageID: targetPage.id,
                     targetBlockID: targetBlock.id,
@@ -848,7 +955,7 @@ final class PageRepositoryTests: XCTestCase {
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
-        try repository.updateBlockText(blockID: blockID, text: "See [[Welcome]]")
+        try repository.updateBlockText(blockID: blockID, text: "See [[欢迎]]")
         XCTAssertFalse(try BacklinkRepository(database: database).backlinks(targetPageID: pageID).isEmpty)
 
         try repository.deleteBlock(blockID: blockID)

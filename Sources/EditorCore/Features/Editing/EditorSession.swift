@@ -20,6 +20,7 @@ final class EditorSession: ObservableObject {
     @Published private(set) var dirtyBlockIDs: Set<String> = []
     @Published private(set) var textSelection: EditorTextSelection?
     @Published private(set) var composingBlockID: String?
+    @Published private(set) var selectedBlockIDs: Set<String> = []
 
     private var draftTexts: [String: String] = [:]
 
@@ -35,11 +36,31 @@ final class EditorSession: ObservableObject {
         )
     }
 
+    func selectBlocks(_ blockIDs: Set<String>) {
+        guard selectedBlockIDs != blockIDs else {
+            return
+        }
+
+        selectedBlockIDs = blockIDs
+        EditorLog.selection.debug(
+            "editor_block_selection_updated count=\(blockIDs.count, privacy: .public)"
+        )
+    }
+
+    func clearBlockSelection() {
+        guard !selectedBlockIDs.isEmpty else {
+            return
+        }
+        selectedBlockIDs = []
+        EditorLog.selection.debug("editor_block_selection_cleared")
+    }
+
     func updateDraft(blockID: String, text: String) {
         guard draftTexts[blockID] != text || !dirtyBlockIDs.contains(blockID) else {
             return
         }
 
+        clearBlockSelection()
         draftTexts[blockID] = text
         dirtyBlockIDs.insert(blockID)
         EditorLog.input.debug(

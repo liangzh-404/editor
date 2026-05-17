@@ -29,46 +29,158 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.blocks.count, 1)
         XCTAssertEqual(viewModel.selectedWorkspaceID, viewModel.snapshot.workspaces.first?.id)
         XCTAssertEqual(viewModel.selectedPageID, viewModel.snapshot.pages.first?.id)
-        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
-        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Start writing in blocks."])
+        XCTAssertEqual(viewModel.selectedPage?.title, "欢迎")
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["开始用块写作。"])
     }
 
     @MainActor
-    func testLoadStartsInDiaryModeWithActiveDiaryEntry() throws {
+    func testLoadStartsInDiaryModeWithDailyPageBlockCanvas() throws {
         let database = try migratedDatabase()
         defer { database.close() }
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
         let viewModel = WorkspaceViewModel(
             repository: repository,
-            diaryRepository: DiaryRepository(database: database)
+            diaryRepository: DiaryRepository(database: database),
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 16) },
+            diaryCalendar: Self.gregorianCalendar
         )
 
         try viewModel.load()
 
         XCTAssertEqual(viewModel.selectedCollection, .diary)
-        XCTAssertNotNil(viewModel.activeDiaryEntry)
-        XCTAssertNil(viewModel.selectedPageID)
+        XCTAssertNil(viewModel.activeDiaryEntry)
+        XCTAssertEqual(viewModel.selectedPage?.title, "2026年5月16日 星期六")
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph])
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
+        XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [viewModel.selectedPageID])
     }
 
     @MainActor
-    func testPromoteSelectedDiaryTextSelectsNewPageAndShowsAllDocuments() throws {
+    func testSelectingDiaryRestoresDailyPageAndAllDocumentsExcludesIt() throws {
         let database = try migratedDatabase()
         defer { database.close() }
         let repository = PageRepository(database: database)
-        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let welcomePageID = try XCTUnwrap(snapshot.selectedPageID)
         let viewModel = WorkspaceViewModel(
             repository: repository,
-            diaryRepository: DiaryRepository(database: database)
+            diaryRepository: DiaryRepository(database: database),
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 16) },
+            diaryCalendar: Self.gregorianCalendar
         )
         try viewModel.load()
-        try viewModel.updateDiaryText("Promote me now")
+        let diaryPageID = try XCTUnwrap(viewModel.selectedPageID)
+        let diaryBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
 
-        try viewModel.promoteSelectedDiaryTextToPage("Promote me")
+        try viewModel.updateBlockText(blockID: diaryBlockID, text: "今天记录")
+        viewModel.selectPage(id: welcomePageID)
+        viewModel.selectCollection(.diary)
 
+        XCTAssertEqual(viewModel.selectedCollection, .diary)
+        XCTAssertEqual(viewModel.selectedPageID, diaryPageID)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["今天记录"])
+        XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [diaryPageID])
+
+        viewModel.selectCollection(.allDocuments)
+
+        XCTAssertFalse(viewModel.visibleDocumentPages.contains { $0.id == diaryPageID })
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == welcomePageID })
+        XCTAssertEqual(viewModel.selectedPageID, welcomePageID)
+    }
+
+    @MainActor
+    func testOpenParentPageForCurrentPageUsesRecordedPageParentLink() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let parentPageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        try viewModel.updateBlockText(blockID: sourceBlockID, text: "子页面标题")
+
+        let childPage = try viewModel.convertTextBlockToPage(blockID: sourceBlockID)
+
+        XCTAssertEqual(viewModel.selectedPageID, childPage.id)
+        XCTAssertEqual(viewModel.selectedPageParentLink?.parentPageID, parentPageID)
+
+        let didOpenParent = try viewModel.openParentPageForCurrentPage()
+
+        XCTAssertTrue(didOpenParent)
+        XCTAssertEqual(viewModel.selectedPageID, parentPageID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, sourceBlockID)
+    }
+
+    @MainActor
+    func testNavigateBackFromChildPageFocusesRecordedSourceBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let parentPageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        try viewModel.updateBlockText(blockID: sourceBlockID, text: "子页面标题")
+
+        let childPage = try viewModel.convertTextBlockToPage(blockID: sourceBlockID)
+        XCTAssertEqual(viewModel.selectedPageID, childPage.id)
+
+        XCTAssertTrue(try viewModel.navigateBack())
+
+        XCTAssertEqual(viewModel.selectedPageID, parentPageID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, sourceBlockID)
+    }
+
+    @MainActor
+    func testOpenTodayForUISelectsDailyPageAndNavigateBackReturnsToPreviousPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let welcomePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database),
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 16) },
+            diaryCalendar: Self.gregorianCalendar
+        )
+        try viewModel.load()
+        viewModel.selectPage(id: welcomePageID)
+
+        XCTAssertTrue(viewModel.openTodayForUI())
+        XCTAssertEqual(viewModel.selectedCollection, .diary)
+        XCTAssertEqual(viewModel.selectedPage?.title, "2026年5月16日 星期六")
+        XCTAssertTrue(viewModel.canNavigateBack)
+
+        XCTAssertTrue(viewModel.navigateBackForUI())
+        XCTAssertEqual(viewModel.selectedPageID, welcomePageID)
         XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
-        XCTAssertEqual(viewModel.selectedPage?.title, "Promote me")
-        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Promote me"])
+        XCTAssertTrue(viewModel.canNavigateForward)
+
+        XCTAssertTrue(viewModel.navigateForwardForUI())
+        XCTAssertEqual(viewModel.selectedPage?.title, "2026年5月16日 星期六")
+    }
+
+    @MainActor
+    func testNewDocumentForUICreatesUntitledPageAndCanNavigateBack() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let welcomePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        viewModel.selectPage(id: welcomePageID)
+
+        XCTAssertTrue(viewModel.createNewDocumentForUI())
+        XCTAssertEqual(viewModel.selectedPage?.title, "未命名")
+        XCTAssertTrue(viewModel.canNavigateBack)
+
+        XCTAssertTrue(viewModel.navigateBackForUI())
+        XCTAssertEqual(viewModel.selectedPageID, welcomePageID)
     }
 
     @MainActor
@@ -165,6 +277,31 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testMarkdownShortcutWithTrailingTextUpdatesBlockAndKeepsFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "- 已有内容")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .unorderedListItem)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "已有内容")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "1. 第二项")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .orderedListItem)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "第二项")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+    }
+
+    @MainActor
     func testUndoLastTextEditRestoresPreviousBlockTextAndKeepsFocus() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -184,7 +321,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         try viewModel.undoLastTextEdit()
 
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用块写作。")
         XCTAssertEqual(viewModel.visibleBlocks.first?.type, .paragraph)
         XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
         XCTAssertFalse(viewModel.canUndoTextEdit)
@@ -212,7 +349,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         try viewModel.undoLastTextEdit()
 
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用块写作。")
         XCTAssertEqual(viewModel.visibleBlocks.first?.type, .paragraph)
         XCTAssertFalse(viewModel.canUndoTextEdit)
         XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
@@ -434,6 +571,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.visibleBlocks.first?.type, .heading1)
         XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
 
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
         XCTAssertEqual(reloadedSnapshot.blocks.first?.type, .heading1)
@@ -460,7 +598,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.undoLastTextEdit()
 
         XCTAssertEqual(viewModel.visibleBlocks.first?.type, .paragraph)
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用块写作。")
         XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
     }
 
@@ -499,10 +637,36 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.visibleBlocks.first?.type, .orderedListItem)
         XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
 
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
         XCTAssertEqual(reloadedSnapshot.blocks.first?.type, .orderedListItem)
         XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "")
+    }
+
+    @MainActor
+    func testMarkdownListShortcutPreservesExistingTrailingText() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "- fea")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .unorderedListItem)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "fea")
+
+        try viewModel.changeBlockType(blockID: blockID, type: .paragraph)
+        try viewModel.updateBlockText(blockID: blockID, text: "1. ordered")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .orderedListItem)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "ordered")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
     }
 
     @MainActor
@@ -543,7 +707,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.changeBlockType(blockID: blockID, type: .quote)
 
         XCTAssertEqual(viewModel.visibleBlocks.first?.type, .quote)
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用块写作。")
         XCTAssertEqual(
             try SyncRepository(database: database).pendingChanges().last,
             SyncChange(entityType: "block", entityID: blockID, changeType: "update")
@@ -635,7 +799,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             [
                 Backlink(
                     sourcePageID: sourcePageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: blockID,
                     targetPageID: targetPage.id,
                     targetBlockID: nil,
@@ -643,6 +807,34 @@ final class WorkspaceViewModelTests: XCTestCase {
                 )
             ]
         )
+    }
+
+    @MainActor
+    func testConvertTextBlockToPageSelectsNewPageAndLeavesSourceReference() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "项目计划")
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+
+        let createdPage = try viewModel.convertTextBlockToPage(blockID: blockID)
+        let sourceBlock = try XCTUnwrap(viewModel.snapshot.blocks.first { $0.id == blockID })
+
+        XCTAssertEqual(createdPage.title, "项目计划")
+        XCTAssertEqual(viewModel.selectedPageID, createdPage.id)
+        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+        XCTAssertEqual(sourceBlock.type, .pageReference)
+        XCTAssertEqual(sourceBlock.pageReferenceTargetPageID, createdPage.id)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
     }
 
     @MainActor
@@ -692,11 +884,11 @@ final class WorkspaceViewModelTests: XCTestCase {
         let viewModel = WorkspaceViewModel(repository: repository)
         try viewModel.load()
 
-        let createdPage = try viewModel.createPageInSelectedWorkspace(title: "Untitled")
+        let createdPage = try viewModel.createPageInSelectedWorkspace(title: "未命名")
 
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Untitled", "Welcome"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["未命名", "欢迎"])
         XCTAssertEqual(viewModel.selectedPageID, createdPage.id)
-        XCTAssertEqual(viewModel.selectedPage?.title, "Untitled")
+        XCTAssertEqual(viewModel.selectedPage?.title, "未命名")
         XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph])
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
     }
@@ -714,7 +906,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let notebook = try viewModel.createNotebookInSelectedWorkspace(name: "Projects")
 
-        XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["Notebook", "Projects"])
+        XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["笔记本", "Projects"])
         XCTAssertEqual(viewModel.snapshot.notebooks.last, notebook)
     }
 
@@ -736,7 +928,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             parentNotebookID: parent.id
         )
 
-        XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["Notebook", "Projects", "Client A", "Areas"])
+        XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["笔记本", "Projects", "Client A", "Areas"])
         XCTAssertEqual(
             viewModel.snapshot.notebooks.first { $0.id == child.id }?.parentNotebookID,
             parent.id
@@ -779,7 +971,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         try viewModel.moveNotebook(id: areas.id, toIndex: 0)
 
-        XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["Areas", "Notebook", "Projects"])
+        XCTAssertEqual(viewModel.snapshot.notebooks.map(\.name), ["Areas", "笔记本", "Projects"])
         XCTAssertEqual(viewModel.selectedNotebookID, areas.id)
     }
 
@@ -854,9 +1046,9 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         try viewModel.archiveSelectedPage()
 
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome"])
-        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
-        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Start writing in blocks."])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["欢迎"])
+        XCTAssertEqual(viewModel.selectedPage?.title, "欢迎")
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["开始用块写作。"])
     }
 
     @MainActor
@@ -876,7 +1068,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.archivePageForUI(id: scratchPage.id)
 
         XCTAssertEqual(viewModel.snapshot.archivedPages.map(\.title), ["Scratch"])
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Current", "Welcome"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Current", "欢迎"])
         XCTAssertEqual(viewModel.selectedPageID, currentPage.id)
         XCTAssertEqual(viewModel.selectedPage?.title, "Current")
     }
@@ -927,7 +1119,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.undoLastPageArchive()
 
         XCTAssertEqual(viewModel.snapshot.archivedPages, [])
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Scratch", "Current", "Welcome"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Scratch", "Current", "欢迎"])
         XCTAssertEqual(viewModel.selectedPageID, currentPage.id)
         XCTAssertFalse(viewModel.canUndoPageArchive)
     }
@@ -946,13 +1138,13 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         viewModel.archivePageForUI(id: scratchPage.id)
 
-        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
+        XCTAssertEqual(viewModel.selectedPage?.title, "欢迎")
         XCTAssertTrue(viewModel.canUndoPageArchive)
 
         try viewModel.undoLastPageArchive()
 
         XCTAssertEqual(viewModel.snapshot.archivedPages, [])
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Scratch", "Welcome"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Scratch", "欢迎"])
         XCTAssertEqual(viewModel.selectedPageID, scratchPage.id)
         XCTAssertEqual(viewModel.selectedPage?.title, "Scratch")
         XCTAssertFalse(viewModel.canUndoPageArchive)
@@ -976,7 +1168,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.restoreArchivedPage(id: page.id)
 
         XCTAssertEqual(viewModel.snapshot.archivedPages, [])
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Scratch", "Welcome"])
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Scratch", "欢迎"])
         XCTAssertEqual(viewModel.selectedPageID, page.id)
         XCTAssertEqual(viewModel.selectedPage?.title, "Scratch")
     }
@@ -997,8 +1189,8 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.permanentlyDeleteArchivedPage(id: page.id)
 
         XCTAssertEqual(viewModel.snapshot.archivedPages, [])
-        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["Welcome"])
-        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
+        XCTAssertEqual(viewModel.snapshot.pages.map(\.title), ["欢迎"])
+        XCTAssertEqual(viewModel.selectedPage?.title, "欢迎")
     }
 
     @MainActor
@@ -1012,7 +1204,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         let viewModel = WorkspaceViewModel(repository: repository)
         try viewModel.load()
 
-        _ = try viewModel.createPageInSelectedWorkspace(title: "Untitled")
+        _ = try viewModel.createPageInSelectedWorkspace(title: "未命名")
         let initialBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
 
         XCTAssertEqual(viewModel.pendingFocusBlockID, initialBlockID)
@@ -1075,7 +1267,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(
             viewModel.exportCurrentPageMarkdown(),
             """
-            Start writing in blocks.
+            开始用块写作。
 
             [brief.txt](Attachments/\(result.attachment.id)/brief.txt)
             """
@@ -1102,14 +1294,14 @@ final class WorkspaceViewModelTests: XCTestCase {
             sourceURL: makeSourceFile(name: "brief.txt", contents: "local attachment")
         )
         let exportDirectory = makeTemporaryDirectory()
-        let markdownURL = exportDirectory.appendingPathComponent("Welcome.md")
+        let markdownURL = exportDirectory.appendingPathComponent("欢迎.md")
 
         try viewModel.exportCurrentPageMarkdownPackage(to: markdownURL)
 
         XCTAssertEqual(
             try String(contentsOf: markdownURL, encoding: .utf8),
             """
-            Start writing in blocks.
+            开始用块写作。
 
             [brief.txt](Attachments/\(result.attachment.id)/brief.txt)
             """
@@ -1155,7 +1347,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             atomically: true,
             encoding: .utf8
         )
-        let markdownURL = packageDirectory.appendingPathComponent("Welcome.md")
+        let markdownURL = packageDirectory.appendingPathComponent("欢迎.md")
         try """
         Imported intro
 
@@ -1222,7 +1414,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
         try viewModel.load()
         let packageDirectory = makeTemporaryDirectory()
-        let markdownURL = packageDirectory.appendingPathComponent("Welcome.md")
+        let markdownURL = packageDirectory.appendingPathComponent("欢迎.md")
         try """
         Imported intro
 
@@ -1260,7 +1452,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
         try viewModel.load()
         let packageDirectory = makeTemporaryDirectory()
-        let markdownURL = packageDirectory.appendingPathComponent("Welcome.md")
+        let markdownURL = packageDirectory.appendingPathComponent("欢迎.md")
         try "[missing.txt](Attachments/source-attachment/missing.txt)"
             .write(to: markdownURL, atomically: true, encoding: .utf8)
         try viewModel.importMarkdownPackageToCurrentPage(markdownURL: markdownURL)
@@ -1429,18 +1621,18 @@ final class WorkspaceViewModelTests: XCTestCase {
         let pageID = try XCTUnwrap(viewModel.selectedPageID)
         let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
 
-        try viewModel.updateBlockText(blockID: blockID, text: "See [[Welcome]]")
+        try viewModel.updateBlockText(blockID: blockID, text: "See [[欢迎]]")
 
         XCTAssertEqual(
             viewModel.selectedPageBacklinks,
             [
                 Backlink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: blockID,
                     targetPageID: pageID,
                     targetBlockID: nil,
-                    linkText: "Welcome"
+                    linkText: "欢迎"
                 )
             ]
         )
@@ -1469,7 +1661,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             [
                 ExternalLink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: blockID,
                     targetURL: "https://swift.org",
                     linkText: "Swift"
@@ -1504,7 +1696,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(
             viewModel.visibleBlocks.first?.textPlain,
-            "Start writing in blocks. [Swift](https://swift.org)"
+            "开始用块写作。 [Swift](https://swift.org)"
         )
         XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
         XCTAssertEqual(
@@ -1512,7 +1704,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             [
                 ExternalLink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: blockID,
                     targetURL: "https://swift.org",
                     linkText: "Swift"
@@ -1542,22 +1734,22 @@ final class WorkspaceViewModelTests: XCTestCase {
                 blockID: blockID,
                 label: "Swift",
                 url: "https://swift.org",
-                selection: EditorTextSelection(blockID: blockID, location: 6, length: 7)
+                selection: EditorTextSelection(blockID: blockID, location: 3, length: 1)
             )
         )
 
         XCTAssertEqual(
             viewModel.visibleBlocks.first?.textPlain,
-            "Start [Swift](https://swift.org) in blocks."
+            "开始用[Swift](https://swift.org)写作。"
         )
-        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 7, length: 5))
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 4, length: 5))
         XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
         XCTAssertEqual(
             viewModel.selectedPageExternalLinks,
             [
                 ExternalLink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: blockID,
                     targetURL: "https://swift.org",
                     linkText: "Swift"
@@ -1617,7 +1809,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             [
                 ExternalLink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: blockID,
                     targetURL: "https://developer.apple.com",
                     linkText: "Apple Docs"
@@ -1746,17 +1938,17 @@ final class WorkspaceViewModelTests: XCTestCase {
             try viewModel.applyMarkdownInlineFormat(
                 blockID: blockID,
                 format: .bold,
-                selection: EditorTextSelection(blockID: blockID, location: 6, length: 7)
+                selection: EditorTextSelection(blockID: blockID, location: 3, length: 1)
             )
         )
 
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start **writing** in blocks.")
-        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 8, length: 7))
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用**块**写作。")
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 5, length: 1))
         XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
         XCTAssertTrue(viewModel.canUndoTextEdit)
 
         try viewModel.undoLastTextEdit()
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用块写作。")
     }
 
     @MainActor
@@ -1775,12 +1967,12 @@ final class WorkspaceViewModelTests: XCTestCase {
             try viewModel.applyMarkdownInlineFormat(
                 blockID: blockID,
                 format: .italic,
-                selection: EditorTextSelection(blockID: blockID, location: 6, length: 7)
+                selection: EditorTextSelection(blockID: blockID, location: 3, length: 1)
             )
         )
 
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start *writing* in blocks.")
-        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 7, length: 7))
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用*块*写作。")
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: 4, length: 1))
         XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
         XCTAssertTrue(viewModel.canUndoTextEdit)
     }
@@ -1804,7 +1996,7 @@ final class WorkspaceViewModelTests: XCTestCase {
                 selection: EditorTextSelection(blockID: "other-block", location: 0, length: 5)
             )
         )
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Start writing in blocks.")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用块写作。")
         XCTAssertFalse(viewModel.canUndoTextEdit)
     }
 
@@ -2076,7 +2268,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.selectBacklink(
             Backlink(
                 sourcePageID: snapshot.selectedPageID ?? "",
-                sourcePageTitle: "Welcome",
+                sourcePageTitle: "欢迎",
                 sourceBlockID: snapshot.blocks.first?.id,
                 targetPageID: secondPageID,
                 targetBlockID: nil,
@@ -2085,7 +2277,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
 
         XCTAssertEqual(viewModel.selectedPageID, snapshot.selectedPageID)
-        XCTAssertEqual(viewModel.selectedPage?.title, "Welcome")
+        XCTAssertEqual(viewModel.selectedPage?.title, "欢迎")
         XCTAssertEqual(viewModel.pendingCompactPageNavigationID, snapshot.selectedPageID)
     }
 
@@ -2232,13 +2424,121 @@ final class WorkspaceViewModelTests: XCTestCase {
             [
                 ExternalLink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: insertedBlock.id,
                     targetURL: "https://swift.org",
                     linkText: "Swift"
                 )
             ]
         )
+    }
+
+    @MainActor
+    func testSplitListBlockAtEndInheritsListTypeAndFocusesInsertedBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(pageID: pageID, markdown: "- 买咖啡")
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        let nextSelection = try viewModel.splitTextBlockAtSelection(
+            blockID: blockID,
+            selection: EditorTextSelection(blockID: blockID, location: 3, length: 0)
+        )
+
+        let insertedBlock = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.unorderedListItem, .unorderedListItem])
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["买咖啡", ""])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, insertedBlock.id)
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: insertedBlock.id, location: 0, length: 0))
+    }
+
+    @MainActor
+    func testBackspaceAtStartOfEmptyIndentedBlockOutdentsInsteadOfMerging() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(pageID: pageID, markdown: "父块")
+        _ = try repository.appendBlock(pageID: pageID, type: .paragraph, text: "")
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let parentBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        let childBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+        XCTAssertTrue(try viewModel.indentBlock(blockID: childBlockID))
+
+        let nextSelection = try viewModel.mergeTextBlockWithPreviousAtSelection(
+            blockID: childBlockID,
+            selection: EditorTextSelection(blockID: childBlockID, location: 0, length: 0)
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.id), [parentBlockID, childBlockID])
+        XCTAssertNil(viewModel.visibleBlocks.first { $0.id == childBlockID }?.parentBlockID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, childBlockID)
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: childBlockID, location: 0, length: 0))
+    }
+
+    @MainActor
+    func testBackspaceAtStartOfTypedHeadingStripsBlockTypeBeforeMerging() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(pageID: pageID, markdown: "上一个块\n\n标题文本")
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let headingBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+        try viewModel.changeBlockType(blockID: headingBlockID, type: .heading1)
+
+        let nextSelection = try viewModel.mergeTextBlockWithPreviousAtSelection(
+            blockID: headingBlockID,
+            selection: EditorTextSelection(blockID: headingBlockID, location: 0, length: 0)
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["上一个块", "标题文本"])
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph, .paragraph])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, headingBlockID)
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: headingBlockID, location: 0, length: 0))
+    }
+
+    @MainActor
+    func testBackspaceAtStartOfIndentedTextOutdentsBeforeMerging() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(pageID: pageID, markdown: "父块\n\n子块")
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let parentBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        let childBlockID = try XCTUnwrap(viewModel.visibleBlocks.dropFirst().first?.id)
+        XCTAssertTrue(try viewModel.indentBlock(blockID: childBlockID))
+
+        let nextSelection = try viewModel.mergeTextBlockWithPreviousAtSelection(
+            blockID: childBlockID,
+            selection: EditorTextSelection(blockID: childBlockID, location: 0, length: 0)
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.id), [parentBlockID, childBlockID])
+        XCTAssertNil(viewModel.visibleBlocks.first { $0.id == childBlockID }?.parentBlockID)
+        XCTAssertEqual(viewModel.visibleBlocks.first { $0.id == childBlockID }?.textPlain, "子块")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, childBlockID)
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: childBlockID, location: 0, length: 0))
     }
 
     @MainActor
@@ -2275,7 +2575,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             [
                 ExternalLink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: firstBlockID,
                     targetURL: "https://swift.org",
                     linkText: "Swift"
@@ -2319,7 +2619,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             [
                 ExternalLink(
                     sourcePageID: pageID,
-                    sourcePageTitle: "Welcome",
+                    sourcePageTitle: "欢迎",
                     sourceBlockID: firstBlockID,
                     targetURL: "https://swift.org",
                     linkText: "Swift"
@@ -2396,6 +2696,64 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.visibleBlocks.first { $0.id == secondBlockID }?.parentBlockID, firstBlockID)
         XCTAssertEqual(viewModel.pendingFocusBlockID, secondBlockID)
+    }
+
+    @MainActor
+    func testChangeBlockTypeKeepsFocusOnConvertedBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.changeBlockType(blockID: blockID, type: .unorderedListItem)
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .unorderedListItem)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+    }
+
+    @MainActor
+    func testHashTagTextIsExtractedIntoSelectedPageTagMetadata() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "开饭了 #生活 #abc")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开饭了")
+        XCTAssertEqual(viewModel.snapshot.tags.map(\.name).sorted(), ["abc", "生活"])
+        let assignedTagIDs = Set(viewModel.snapshot.pageTags.filter { $0.pageID == pageID }.map(\.tagID))
+        XCTAssertEqual(assignedTagIDs, Set(viewModel.snapshot.tags.map(\.id)))
+    }
+
+    @MainActor
+    func testLoadExtractsExistingHashTagBlocksIntoPageMetadata() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(pageID: pageID, markdown: "#abc")
+        let tagRepository = TagRepository(database: database)
+
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
+        XCTAssertEqual(viewModel.snapshot.tags.map(\.name), ["abc"])
+        XCTAssertEqual(viewModel.selectedPageTagNames, ["abc"])
     }
 
     @MainActor
@@ -2536,7 +2894,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.refreshCloudKitAccountStatus()
 
         XCTAssertEqual(viewModel.cloudKitAccountStatus, .available)
-        XCTAssertEqual(viewModel.cloudKitAccountStatusText, "iCloud Available")
+        XCTAssertEqual(viewModel.cloudKitAccountStatusText, "iCloud 可用")
     }
 
     @MainActor
@@ -2562,7 +2920,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.syncNow()
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
-        XCTAssertEqual(viewModel.syncStatusText, "Synced 1 change")
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
     }
 
     @MainActor
@@ -2587,7 +2945,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.syncAfterActivation()
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
-        XCTAssertEqual(viewModel.syncStatusText, "Synced 1 change")
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
     }
 
     @MainActor
@@ -2649,7 +3007,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.syncNow()
 
         XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Fetched into UI")
-        XCTAssertEqual(viewModel.syncStatusText, "Synced 1 remote change")
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条远端变更")
     }
 
     private func migratedDatabase() throws -> SQLiteDatabase {
@@ -2660,6 +3018,17 @@ final class WorkspaceViewModelTests: XCTestCase {
 
     private func temporaryDatabasePath() -> String {
         makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path
+    }
+
+    private static var gregorianCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "zh_Hans_CN")
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private static func date(year: Int, month: Int, day: Int) -> Date {
+        gregorianCalendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
 
     private func makeSourceFile(name: String, contents: String) throws -> URL {

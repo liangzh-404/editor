@@ -17,6 +17,38 @@ struct EditorPromoteDiarySelectionActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct EditorOpenParentPageActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct EditorCreateNewDocumentActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct EditorOpenTodayActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct EditorNavigateBackActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct EditorNavigateForwardActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct EditorShowAllDocumentsActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct EditorShowFavoritesActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct EditorQuickOpenActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var insertMarkdownLinkAction: (() -> Void)? {
         get { self[EditorInsertMarkdownLinkActionKey.self] }
@@ -26,6 +58,46 @@ extension FocusedValues {
     var promoteDiarySelectionAction: (() -> Void)? {
         get { self[EditorPromoteDiarySelectionActionKey.self] }
         set { self[EditorPromoteDiarySelectionActionKey.self] = newValue }
+    }
+
+    var openParentPageAction: (() -> Void)? {
+        get { self[EditorOpenParentPageActionKey.self] }
+        set { self[EditorOpenParentPageActionKey.self] = newValue }
+    }
+
+    var createNewDocumentAction: (() -> Void)? {
+        get { self[EditorCreateNewDocumentActionKey.self] }
+        set { self[EditorCreateNewDocumentActionKey.self] = newValue }
+    }
+
+    var openTodayAction: (() -> Void)? {
+        get { self[EditorOpenTodayActionKey.self] }
+        set { self[EditorOpenTodayActionKey.self] = newValue }
+    }
+
+    var navigateBackAction: (() -> Void)? {
+        get { self[EditorNavigateBackActionKey.self] }
+        set { self[EditorNavigateBackActionKey.self] = newValue }
+    }
+
+    var navigateForwardAction: (() -> Void)? {
+        get { self[EditorNavigateForwardActionKey.self] }
+        set { self[EditorNavigateForwardActionKey.self] = newValue }
+    }
+
+    var showAllDocumentsAction: (() -> Void)? {
+        get { self[EditorShowAllDocumentsActionKey.self] }
+        set { self[EditorShowAllDocumentsActionKey.self] = newValue }
+    }
+
+    var showFavoritesAction: (() -> Void)? {
+        get { self[EditorShowFavoritesActionKey.self] }
+        set { self[EditorShowFavoritesActionKey.self] = newValue }
+    }
+
+    var quickOpenAction: (() -> Void)? {
+        get { self[EditorQuickOpenActionKey.self] }
+        set { self[EditorQuickOpenActionKey.self] = newValue }
     }
 }
 
@@ -81,36 +153,7 @@ private struct ThreeColumnEditorShell: View {
         } content: {
             PageListView(viewModel: viewModel)
         } detail: {
-            if viewModel.selectedPage == nil {
-                if viewModel.activeDiaryEntry == nil {
-                    Color.white
-                        .navigationTitle("Diary")
-                } else {
-                    DiaryEditorView(
-                        entry: viewModel.activeDiaryEntry,
-                        onTextChange: { text in
-                            do {
-                                try viewModel.updateDiaryText(text)
-                            } catch {
-                                EditorLog.input.error(
-                                    "diary_text_update_failed error=\(String(describing: error), privacy: .public)"
-                                )
-                            }
-                        },
-                        onPromoteSelection: { selectedText in
-                            do {
-                                try viewModel.promoteSelectedDiaryTextToPage(selectedText)
-                                return true
-                            } catch {
-                                EditorLog.input.error(
-                                    "diary_text_promote_failed error=\(String(describing: error), privacy: .public)"
-                                )
-                                return false
-                            }
-                        }
-                    )
-                }
-            } else {
+            if viewModel.selectedPage != nil {
                 EditorCanvasView(
                     page: viewModel.selectedPage,
                     pages: viewModel.snapshot.pages,
@@ -123,6 +166,8 @@ private struct ThreeColumnEditorShell: View {
                     externalLinks: viewModel.selectedPageExternalLinks,
                     conflicts: viewModel.selectedPageConflicts,
                     outlineItems: viewModel.selectedPageOutline,
+                    parentPageLink: viewModel.selectedPageParentLink,
+                    pageTagNames: viewModel.selectedPageTagNames,
                     pendingFocusBlockID: viewModel.pendingFocusBlockID,
                     canUndoTextEdit: viewModel.canUndoTextEdit,
                     onAddParagraphBlock: {
@@ -164,6 +209,9 @@ private struct ThreeColumnEditorShell: View {
                     onMoveBlock: { blockID, targetIndex in
                         viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                     },
+                    onMoveBlocks: { blockIDs, targetIndex in
+                        viewModel.moveBlocksInCurrentPage(blockIDs: blockIDs, toIndex: targetIndex)
+                    },
                     onMoveBlockByKeyboard: { blockID, direction in
                         viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
                     },
@@ -196,6 +244,9 @@ private struct ThreeColumnEditorShell: View {
                     },
                     onOpenPageReference: { targetPageID in
                         viewModel.openPageReference(targetPageID: targetPageID)
+                    },
+                    onOpenParentPage: {
+                        viewModel.openParentPageForCurrentPageForUI()
                     },
                     onOpenBlockReference: { targetPageID, targetBlockID in
                         viewModel.openBlockReference(targetPageID: targetPageID, targetBlockID: targetBlockID)
@@ -241,6 +292,9 @@ private struct ThreeColumnEditorShell: View {
                     onBlockTypeChange: { blockID, type in
                         viewModel.changeBlockTypeForUI(blockID: blockID, type: type)
                     },
+                    onConvertBlockToPage: { blockID in
+                        viewModel.convertTextBlockToPageForUI(blockID: blockID)
+                    },
                     onTaskItemCompletionChange: { blockID, isCompleted in
                         viewModel.updateTaskItemCompletionForUI(
                             blockID: blockID,
@@ -266,8 +320,32 @@ private struct ThreeColumnEditorShell: View {
                         _ = viewModel.consumePendingFocusBlockID()
                     }
                 )
+            } else {
+                Color.white
+                    .navigationTitle("编辑器")
             }
         }
+        .focusedValue(\.createNewDocumentAction, {
+            _ = viewModel.createNewDocumentForUI()
+        })
+        .focusedValue(\.openTodayAction, {
+            _ = viewModel.openTodayForUI()
+        })
+        .focusedValue(\.navigateBackAction, {
+            _ = viewModel.navigateBackForUI()
+        })
+        .focusedValue(\.navigateForwardAction, {
+            _ = viewModel.navigateForwardForUI()
+        })
+        .focusedValue(\.showAllDocumentsAction, {
+            viewModel.selectCollection(.allDocuments)
+        })
+        .focusedValue(\.showFavoritesAction, {
+            viewModel.selectCollection(.favorites)
+        })
+        .focusedValue(\.quickOpenAction, {
+            viewModel.selectCollection(.search)
+        })
     }
 }
 
@@ -319,6 +397,215 @@ private struct CompactEditorShell: View {
         if path.last != .page(pageID) {
             path.append(.page(pageID))
         }
+    }
+}
+
+enum EditorBlockChrome {
+    static let blockSpacing: Double = 0
+    static let rowVerticalPadding: Double = 0
+    static let listVerticalPadding: Double = 0
+    static let listHorizontalPadding: Double = 0
+    static let listBackgroundOpacity: Double = 0
+    static let listMarkerWidth: Double = 18
+    static let listTextSpacing: Double = 6
+    static let actionColumnWidth: Double = 18
+    static let actionColumnSpacing: Double = 5
+    static let dragHandleWidth: Double = 18
+    static let inactiveHandleOpacity: Double = 0
+    static let specialBlockCornerRadius: Double = 5
+    static let dropTargetHeight: Double = 32
+    static let dropSlotHeight: Double = 8
+}
+
+enum TableBlockChrome {
+    static let cellWidth: Double = 142
+    static let cellHeight: Double = 46
+    static let maxViewportWidth: Double = 620
+    static let cornerRadius: Double = 9
+    static let gridLineOpacity: Double = 0.13
+    static let outerBorderOpacity: Double = 0.18
+    static let primaryControlDiameter: Double = 26
+    static let insertControlVisibleDiameter: Double = 5
+    static let selectorWidth: Double = 22
+    static let selectorHeight: Double = 18
+}
+
+struct TableSelection: Equatable, Sendable {
+    var rows: Set<Int>
+    var columns: Set<Int>
+
+    init(rows: Set<Int> = [], columns: Set<Int> = []) {
+        self.rows = rows
+        self.columns = columns
+    }
+
+    static let empty = TableSelection()
+
+    var isEmpty: Bool {
+        rows.isEmpty && columns.isEmpty
+    }
+}
+
+enum TableSelectionReducer {
+    static func selectionAfterSelectingRow(
+        _ row: Int,
+        current: TableSelection,
+        extend: Bool
+    ) -> TableSelection {
+        var selectedRows = extend ? current.rows : []
+        if extend, selectedRows.contains(row) {
+            selectedRows.remove(row)
+        } else {
+            selectedRows.insert(row)
+        }
+        return TableSelection(rows: selectedRows, columns: [])
+    }
+
+    static func selectionAfterSelectingColumn(
+        _ column: Int,
+        current: TableSelection,
+        extend: Bool
+    ) -> TableSelection {
+        var selectedColumns = extend ? current.columns : []
+        if extend, selectedColumns.contains(column) {
+            selectedColumns.remove(column)
+        } else {
+            selectedColumns.insert(column)
+        }
+        return TableSelection(rows: [], columns: selectedColumns)
+    }
+
+    static func rowsAfterDeletingSelection(
+        _ selection: TableSelection,
+        from rows: [[String]]
+    ) -> [[String]] {
+        let normalizedRows = normalized(rows)
+        let rowsAfterRowDeletion: [[String]]
+        if selection.rows.isEmpty {
+            rowsAfterRowDeletion = normalizedRows
+        } else {
+            rowsAfterRowDeletion = normalizedRows.enumerated()
+                .filter { index, _ in !selection.rows.contains(index) }
+                .map(\.element)
+        }
+
+        let survivingRows = rowsAfterRowDeletion.isEmpty ? [[""]] : rowsAfterRowDeletion
+
+        guard !selection.columns.isEmpty else {
+            return survivingRows
+        }
+
+        let deletedColumns = selection.columns
+        let rowsAfterColumnDeletion = survivingRows.map { row in
+            let keptCells = row.enumerated()
+                .filter { index, _ in !deletedColumns.contains(index) }
+                .map(\.element)
+            return keptCells.isEmpty ? [""] : keptCells
+        }
+
+        return rowsAfterColumnDeletion.isEmpty ? [[""]] : rowsAfterColumnDeletion
+    }
+
+    private static func normalized(_ rows: [[String]]) -> [[String]] {
+        let sourceRows = rows.isEmpty ? [[""]] : rows
+        let columnCount = max(sourceRows.map(\.count).max() ?? 1, 1)
+        return sourceRows.map { row in
+            if row.count >= columnCount {
+                return row
+            }
+            return row + Array(repeating: "", count: columnCount - row.count)
+        }
+    }
+}
+
+enum BlockDropPlacement: Equatable, Sendable {
+    case before
+    case after
+    case childAfter
+}
+
+struct BlockDropTarget: Equatable, Sendable {
+    let blockID: String
+    let placement: BlockDropPlacement
+}
+
+enum BlockDropTargetLifecycleReducer {
+    static func targetAfterEditorInteraction(current: BlockDropTarget?) -> BlockDropTarget? {
+        nil
+    }
+}
+
+enum BlockDropPlacementResolver {
+    static let indentationThreshold: CGFloat = 180
+    static let beforeBandHeight: CGFloat = 10
+
+    static func placement(location: CGPoint, rowSize: CGSize) -> BlockDropPlacement {
+        let topBandHeight = min(beforeBandHeight, max(rowSize.height * 0.35, 8))
+        if location.y <= topBandHeight {
+            return .before
+        }
+        if location.x >= indentationThreshold {
+            return .childAfter
+        }
+        return .after
+    }
+}
+
+struct PageListPreview: Equatable, Sendable {
+    let excerpt: String?
+    let imageAttachment: AttachmentSnapshot?
+    let fileAttachment: AttachmentSnapshot?
+}
+
+enum PageListPreviewResolver {
+    static func preview(
+        pageID: String,
+        blocks: [BlockSnapshot],
+        attachments: [AttachmentSnapshot]
+    ) -> PageListPreview {
+        let pageBlocks = blocks.filter { $0.pageID == pageID }
+        let excerpt = pageBlocks.first { block in
+            block.type == .paragraph
+                && !block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imageAttachment = attachment(
+            in: attachments,
+            matching: pageBlocks.first { $0.type == .attachmentImage }
+        )
+        let fileAttachment = attachment(
+            in: attachments,
+            matching: pageBlocks.first { $0.type == .attachmentFile }
+        )
+
+        return PageListPreview(
+            excerpt: excerpt,
+            imageAttachment: imageAttachment,
+            fileAttachment: fileAttachment
+        )
+    }
+
+    private static func attachment(
+        in attachments: [AttachmentSnapshot],
+        matching block: BlockSnapshot?
+    ) -> AttachmentSnapshot? {
+        guard let block else {
+            return nil
+        }
+        return attachments.first { $0.matches(block: block) }
+    }
+}
+
+enum PageReferencePreviewResolver {
+    static func previewText(targetPageID: String?, blocks: [BlockSnapshot]) -> String? {
+        guard let targetPageID else {
+            return nil
+        }
+
+        return blocks.first { block in
+            block.pageID == targetPageID
+                && block.type.isTextEditable
+                && !block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -546,6 +833,8 @@ private struct CompactPageDestination: View {
                 externalLinks: viewModel.selectedPageExternalLinks,
                 conflicts: viewModel.selectedPageConflicts,
                 outlineItems: viewModel.selectedPageOutline,
+                parentPageLink: viewModel.selectedPageParentLink,
+                pageTagNames: viewModel.selectedPageTagNames,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
                 onAddParagraphBlock: {
@@ -587,6 +876,9 @@ private struct CompactPageDestination: View {
                 onMoveBlock: { blockID, targetIndex in
                     viewModel.moveBlockInCurrentPage(blockID: blockID, toIndex: targetIndex)
                 },
+                onMoveBlocks: { blockIDs, targetIndex in
+                    viewModel.moveBlocksInCurrentPage(blockIDs: blockIDs, toIndex: targetIndex)
+                },
                 onMoveBlockByKeyboard: { blockID, direction in
                     viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
                 },
@@ -619,6 +911,9 @@ private struct CompactPageDestination: View {
                 },
                 onOpenPageReference: { targetPageID in
                     viewModel.openPageReference(targetPageID: targetPageID)
+                },
+                onOpenParentPage: {
+                    viewModel.openParentPageForCurrentPageForUI()
                 },
                 onOpenBlockReference: { targetPageID, targetBlockID in
                     viewModel.openBlockReference(targetPageID: targetPageID, targetBlockID: targetBlockID)
@@ -664,6 +959,9 @@ private struct CompactPageDestination: View {
                 onBlockTypeChange: { blockID, type in
                     viewModel.changeBlockTypeForUI(blockID: blockID, type: type)
                 },
+                onConvertBlockToPage: { blockID in
+                    viewModel.convertTextBlockToPageForUI(blockID: blockID)
+                },
                 onTaskItemCompletionChange: { blockID, isCompleted in
                     viewModel.updateTaskItemCompletionForUI(
                         blockID: blockID,
@@ -694,7 +992,7 @@ private struct CompactPageDestination: View {
             }
         } else {
             Color.white
-                .navigationTitle("Editor")
+                .navigationTitle("编辑器")
         }
     }
 }
@@ -703,21 +1001,21 @@ private struct WorkspaceSidebar: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
-        List {
-            Section("Write") {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                SidebarSectionLabel("写作")
                 CollectionRailButton(
-                    title: "Diary",
+                    title: "日记",
                     systemImage: "square.and.pencil",
                     isSelected: viewModel.selectedCollection == .diary,
                     identifier: "editor.collection.diary"
                 ) {
                     viewModel.selectCollection(.diary)
                 }
-            }
 
-            Section("Browse") {
+                SidebarSectionLabel("浏览")
                 CollectionRailButton(
-                    title: "All Documents",
+                    title: "全部文档",
                     systemImage: "doc.text",
                     isSelected: viewModel.selectedCollection == .allDocuments,
                     identifier: "editor.collection.all-documents"
@@ -726,7 +1024,7 @@ private struct WorkspaceSidebar: View {
                 }
 
                 CollectionRailButton(
-                    title: "Favorites",
+                    title: "收藏",
                     systemImage: "star",
                     isSelected: viewModel.selectedCollection == .favorites,
                     identifier: "editor.collection.favorites"
@@ -741,15 +1039,18 @@ private struct WorkspaceSidebar: View {
                         Label(page.title, systemImage: "star.fill")
                             .font(.callout)
                             .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(Color.primary)
-                    .padding(.leading, 18)
+                    .foregroundStyle(Color.secondary)
+                    .padding(.leading, 16)
                     .accessibilityIdentifier("editor.favorite-page.\(page.id)")
                 }
 
                 CollectionRailButton(
-                    title: "Tags",
+                    title: "标签",
                     systemImage: "tag",
                     isSelected: isTagsSelected,
                     identifier: "editor.collection.tags"
@@ -770,7 +1071,7 @@ private struct WorkspaceSidebar: View {
                 }
 
                 CollectionRailButton(
-                    title: "Search",
+                    title: "搜索",
                     systemImage: "magnifyingglass",
                     isSelected: viewModel.selectedCollection == .search,
                     identifier: "editor.collection.search"
@@ -779,7 +1080,7 @@ private struct WorkspaceSidebar: View {
                 }
 
                 CollectionRailButton(
-                    title: "Archive",
+                    title: "归档",
                     systemImage: "archivebox",
                     isSelected: viewModel.selectedCollection == .archive,
                     identifier: "editor.collection.archive"
@@ -787,12 +1088,11 @@ private struct WorkspaceSidebar: View {
                     viewModel.selectCollection(.archive)
                 }
             }
-
-            CloudKitAccountStatusSection(viewModel: viewModel)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 18)
         }
-        .navigationTitle("Editor")
-        .scrollContentBackground(.hidden)
-        .background(Color(red: 0.98, green: 0.98, blue: 0.96))
+        .navigationTitle("编辑器")
+        .background(Color(red: 0.972, green: 0.974, blue: 0.976))
     }
 
     private var isTagsSelected: Bool {
@@ -800,6 +1100,22 @@ private struct WorkspaceSidebar: View {
             return true
         }
         return false
+    }
+}
+
+private struct SidebarSectionLabel: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 10)
+            .padding(.top, 4)
     }
 }
 
@@ -815,11 +1131,22 @@ private struct CollectionRailButton: View {
             Label(title, systemImage: systemImage)
                 .font(isSelected ? .body.weight(.semibold) : .body)
                 .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isSelected ? Color.white.opacity(0.82) : Color.clear)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(isSelected ? Color.black.opacity(0.045) : Color.clear, lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
         .accessibilityIdentifier(identifier)
-        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityValue(isSelected ? "已选中" : "未选中")
     }
 }
 
@@ -827,7 +1154,8 @@ private struct CloudKitAccountStatusSection: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
-        Section("Sync") {
+        VStack(alignment: .leading, spacing: 8) {
+            SidebarSectionLabel("同步")
             HStack(spacing: 8) {
                 Image(systemName: statusIconName)
                     .foregroundStyle(statusColor)
@@ -836,16 +1164,21 @@ private struct CloudKitAccountStatusSection: View {
                 Text(viewModel.cloudKitAccountStatusText)
                     .font(.callout)
                     .lineLimit(1)
+                    .foregroundStyle(.secondary)
 
-                Spacer(minLength: 8)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .accessibilityIdentifier("editor.icloud-status")
 
+            HStack(spacing: 12) {
                 Button {
                     viewModel.syncNow()
                 } label: {
                     Image(systemName: "arrow.triangle.2.circlepath.icloud")
                 }
                 .buttonStyle(.borderless)
-                .help("Sync now")
+                .help("立即同步")
                 .accessibilityIdentifier("editor.sync-now")
 
                 Button {
@@ -854,7 +1187,7 @@ private struct CloudKitAccountStatusSection: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .help("Refresh iCloud status")
+                .help("刷新 iCloud 状态")
                 .accessibilityIdentifier("editor.refresh-icloud-status")
 
                 Button {
@@ -863,14 +1196,15 @@ private struct CloudKitAccountStatusSection: View {
                     Image(systemName: "trash.slash")
                 }
                 .buttonStyle(.borderless)
-                .help("Clean unreferenced attachments")
+                .help("清理未引用附件")
                 .accessibilityIdentifier("editor.clean-attachments")
             }
-            .accessibilityIdentifier("editor.icloud-status")
+            .padding(.horizontal, 10)
 
             Text(viewModel.syncStatusText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
                 .accessibilityIdentifier("editor.sync-status")
         }
     }
@@ -902,32 +1236,43 @@ private struct PageListView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
-        List(selection: selectedPageBinding) {
-            switch viewModel.selectedCollection {
-            case .diary, .allDocuments:
-                pageRowsSection(title: "All Documents", pages: viewModel.visibleDocumentPages)
-            case .favorites:
-                pageRowsSection(title: "Favorites", pages: viewModel.visibleDocumentPages)
-            case .tag(let tagID):
-                tagSection(tagID: tagID)
-            case .search:
-                SearchSectionView(viewModel: viewModel)
-            case .archive:
-                archiveSection
-            }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 6) {
+                switch viewModel.selectedCollection {
+                case .diary:
+                    pageRowsSection(title: "日记", pages: viewModel.visibleDocumentPages)
+                case .allDocuments:
+                    pageRowsSection(title: "全部文档", pages: viewModel.visibleDocumentPages)
+                case .favorites:
+                    pageRowsSection(title: "收藏", pages: viewModel.visibleDocumentPages)
+                case .tag(let tagID):
+                    tagSection(tagID: tagID)
+                case .search:
+                    SearchSectionView(viewModel: viewModel)
+                case .archive:
+                    archiveSection
+                }
 
-            if viewModel.canUndoPageArchive && viewModel.selectedCollection != .archive {
-                undoArchiveSection
+                if viewModel.canUndoPageArchive && viewModel.selectedCollection != .archive {
+                    undoArchiveSection
+                }
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 14)
         }
         .navigationTitle(navigationTitle)
-        .scrollContentBackground(.hidden)
-        .background(Color.white)
+        .background(Color(red: 0.986, green: 0.987, blue: 0.989))
     }
 
     @ViewBuilder
     private func pageRowsSection(title: String, pages: [PageSummary]) -> some View {
-        Section(title) {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 2)
+
             ForEach(pages) { page in
                 pageRow(page)
             }
@@ -937,15 +1282,25 @@ private struct PageListView: View {
     @ViewBuilder
     private func tagSection(tagID: String) -> some View {
         if tagID.isEmpty {
-            Section("Tags") {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("标签")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 2)
+
                 ForEach(viewModel.snapshot.tags) { tag in
                     Button {
                         viewModel.selectCollection(.tag(tag.id))
                     } label: {
                         Label(tag.path, systemImage: "tag")
                             .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
                     }
                     .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                     .accessibilityIdentifier("editor.tag-row.\(tag.id)")
                 }
             }
@@ -955,36 +1310,42 @@ private struct PageListView: View {
     }
 
     private var archiveSection: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 4) {
             if viewModel.canUndoPageArchive {
                 undoArchiveSection
             }
 
-            Section("Archive") {
-                ForEach(viewModel.snapshot.archivedPages) { page in
-                    ArchivedPageRow(
-                        page: page,
-                        onRestore: {
-                            viewModel.restoreArchivedPageForUI(id: page.id)
-                        },
-                        onDelete: {
-                            viewModel.permanentlyDeleteArchivedPageForUI(id: page.id)
-                        }
-                    )
-                }
+            Text("归档")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 2)
+
+            ForEach(viewModel.snapshot.archivedPages) { page in
+                ArchivedPageRow(
+                    page: page,
+                    onRestore: {
+                        viewModel.restoreArchivedPageForUI(id: page.id)
+                    },
+                    onDelete: {
+                        viewModel.permanentlyDeleteArchivedPageForUI(id: page.id)
+                    }
+                )
             }
         }
     }
 
     private var undoArchiveSection: some View {
-        Section {
-            Button {
-                viewModel.undoLastPageArchiveForUI()
-            } label: {
-                Label("Undo Archive", systemImage: "arrow.uturn.backward")
-            }
-            .accessibilityIdentifier("editor.undo-page-archive")
+        Button {
+            viewModel.undoLastPageArchiveForUI()
+        } label: {
+            Label("撤销归档", systemImage: "arrow.uturn.backward")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("editor.undo-page-archive")
     }
 
     private func pageRow(_ page: PageSummary) -> some View {
@@ -992,6 +1353,12 @@ private struct PageListView: View {
             page: page,
             isSelected: viewModel.selectedPageID == page.id,
             tagNames: tagNames(for: page),
+            preview: PageListPreviewResolver.preview(
+                pageID: page.id,
+                blocks: viewModel.snapshot.blocks,
+                attachments: viewModel.snapshot.attachments
+            ),
+            usesRichPreview: true,
             onFavoriteToggle: {
                 viewModel.updatePageFavoriteForUI(
                     id: page.id,
@@ -999,7 +1366,10 @@ private struct PageListView: View {
                 )
             }
         )
-        .tag(Optional(page.id))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            viewModel.selectPage(id: page.id)
+        }
         .contextMenu {
             Button {
                 viewModel.updatePageFavoriteForUI(
@@ -1008,7 +1378,7 @@ private struct PageListView: View {
                 )
             } label: {
                 Label(
-                    page.isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                    page.isFavorite ? "取消收藏" : "加入收藏",
                     systemImage: page.isFavorite ? "star.slash" : "star"
                 )
             }
@@ -1016,28 +1386,30 @@ private struct PageListView: View {
             Button {
                 viewModel.archivePageForUI(id: page.id)
             } label: {
-                Label("Archive", systemImage: "archivebox")
+                Label("归档", systemImage: "archivebox")
             }
         }
     }
 
     private var navigationTitle: String {
         switch viewModel.selectedCollection {
-        case .diary, .allDocuments:
-            return "All Documents"
+        case .diary:
+            return "日记"
+        case .allDocuments:
+            return "全部文档"
         case .favorites:
-            return "Favorites"
+            return "收藏"
         case .tag(let tagID):
-            return tagID.isEmpty ? "Tags" : tagName(for: tagID)
+            return tagID.isEmpty ? "标签" : tagName(for: tagID)
         case .search:
-            return "Search"
+            return "搜索"
         case .archive:
-            return "Archive"
+            return "归档"
         }
     }
 
     private func tagName(for tagID: String) -> String {
-        viewModel.snapshot.tags.first { $0.id == tagID }?.path ?? "Tags"
+        viewModel.snapshot.tags.first { $0.id == tagID }?.path ?? "标签"
     }
 
     private func tagNames(for page: PageSummary) -> [String] {
@@ -1066,287 +1438,6 @@ private struct PageListView: View {
     }
 }
 
-private struct DiaryEditorView: View {
-    let entry: DiaryEntrySnapshot?
-    let onTextChange: (String) -> Void
-    let onPromoteSelection: (String) -> Bool
-
-    @State private var text = ""
-    @State private var selectedText = ""
-    @State private var syncedEntryID: String?
-
-    var body: some View {
-#if os(macOS)
-        PlatformDiaryTextEditor(
-            text: entry?.textPlain ?? "",
-            onTextChange: onTextChange,
-            onSelectedTextChange: updateSelectedText,
-            onPromoteSelection: promoteSelectedText
-        )
-            .padding(.horizontal, 40)
-            .padding(.vertical, 36)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Color.white)
-            .accessibilityLabel("Diary")
-            .accessibilityIdentifier("editor.diary.text")
-            .focusedValue(\.promoteDiarySelectionAction, promoteDiarySelectionAction)
-            .navigationTitle("Diary")
-#else
-        PlatformDiaryTextEditor(
-            text: textBinding,
-            onSelectedTextChange: updateSelectedText,
-            onPromoteSelection: promoteSelectedText
-        )
-            .padding(.horizontal, 40)
-            .padding(.vertical, 36)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Color.white)
-            .accessibilityLabel("Diary")
-            .accessibilityIdentifier("editor.diary.text")
-            .focusedValue(\.promoteDiarySelectionAction, promoteDiarySelectionAction)
-            .onAppear {
-                syncTextFromEntry(force: true)
-            }
-            .onChange(of: entry) { _, _ in
-                syncTextFromEntry(force: false)
-            }
-            .navigationTitle("Diary")
-#endif
-    }
-
-    private var promoteDiarySelectionAction: (() -> Void)? {
-        guard !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return nil
-        }
-
-        return {
-            _ = promoteSelectedText(selectedText)
-        }
-    }
-
-    private var textBinding: Binding<String> {
-        Binding {
-            text
-        } set: { newText in
-            text = newText
-            onTextChange(newText)
-        }
-    }
-
-    private func updateSelectedText(_ nextSelectedText: String) {
-        guard selectedText != nextSelectedText else {
-            return
-        }
-
-        selectedText = nextSelectedText
-    }
-
-    private func syncTextFromEntry(force: Bool) {
-        let entryID = entry?.id
-        guard force || syncedEntryID != entryID else {
-            return
-        }
-        syncedEntryID = entryID
-        text = entry?.textPlain ?? ""
-    }
-
-    private func promoteSelectedText(_ selectedText: String) -> Bool {
-        guard !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return false
-        }
-
-        return onPromoteSelection(selectedText)
-    }
-}
-
-#if os(macOS)
-private struct PlatformDiaryTextEditor: NSViewRepresentable {
-    let text: String
-    let onTextChange: (String) -> Void
-    let onSelectedTextChange: (String) -> Void
-    let onPromoteSelection: (String) -> Bool
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.borderType = .noBorder
-
-        let textView = DiaryNSTextView(frame: .zero)
-        textView.delegate = context.coordinator
-        textView.isEditable = true
-        textView.isSelectable = true
-        textView.isRichText = false
-        textView.importsGraphics = false
-        textView.allowsUndo = true
-        textView.font = .preferredFont(forTextStyle: .body)
-        textView.textColor = .labelColor
-        textView.backgroundColor = .clear
-        textView.drawsBackground = false
-        textView.textContainerInset = .zero
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.containerSize = NSSize(
-            width: scrollView.contentSize.width,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
-        textView.setAccessibilityIdentifier("editor.diary.text")
-        textView.onPromoteSelection = { [weak coordinator = context.coordinator, weak textView] in
-            guard let coordinator, let textView else {
-                return false
-            }
-            return coordinator.promoteSelection(in: textView)
-        }
-
-        context.coordinator.applyModelText(text, to: textView)
-        scrollView.documentView = textView
-        scrollView.setAccessibilityIdentifier("editor.diary.container")
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.parent = self
-        guard let textView = scrollView.documentView as? DiaryNSTextView else {
-            return
-        }
-
-        textView.onPromoteSelection = { [weak coordinator = context.coordinator, weak textView] in
-            guard let coordinator, let textView else {
-                return false
-            }
-            return coordinator.promoteSelection(in: textView)
-        }
-        if textView.string != text {
-            context.coordinator.applyModelText(text, to: textView)
-        }
-        context.coordinator.publishSelectedText(in: textView)
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: PlatformDiaryTextEditor
-        private var isApplyingModelText = false
-
-        init(parent: PlatformDiaryTextEditor) {
-            self.parent = parent
-        }
-
-        func textDidChange(_ notification: Notification) {
-            guard !isApplyingModelText,
-                  let textView = notification.object as? NSTextView else {
-                return
-            }
-
-            parent.onTextChange(textView.string)
-            publishSelectedText(in: textView)
-        }
-
-        func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else {
-                return
-            }
-
-            publishSelectedText(in: textView)
-        }
-
-        func applyModelText(_ text: String, to textView: NSTextView) {
-            isApplyingModelText = true
-            let currentRange = textView.selectedRange()
-            textView.string = text
-            textView.setSelectedRange(Self.clamped(range: currentRange, text: text))
-            isApplyingModelText = false
-            publishSelectedText(in: textView)
-        }
-
-        func promoteSelection(in textView: NSTextView) -> Bool {
-            let selectedText = Self.selectedText(in: textView)
-            guard parent.onPromoteSelection(selectedText) else {
-                return false
-            }
-            parent.onSelectedTextChange("")
-            return true
-        }
-
-        func publishSelectedText(in textView: NSTextView) {
-            parent.onSelectedTextChange(Self.selectedText(in: textView))
-        }
-
-        private static func selectedText(in textView: NSTextView) -> String {
-            let range = textView.selectedRange()
-            guard range.length > 0,
-                  let textRange = Range(range, in: textView.string) else {
-                return ""
-            }
-
-            return String(textView.string[textRange])
-        }
-
-        private static func clamped(range: NSRange, text: String) -> NSRange {
-            let length = (text as NSString).length
-            let location = min(range.location, length)
-            let selectedLength = min(range.length, length - location)
-            return NSRange(location: location, length: selectedLength)
-        }
-    }
-}
-
-private final class DiaryNSTextView: NSTextView {
-    var onPromoteSelection: (() -> Bool)?
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-        NativeTextBlockEditor.acceptsInactiveWindowFirstMouse
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if DiaryPromotionKeyboardResolver.requestsPromotion(
-            input: event.charactersIgnoringModifiers,
-            modifiers: event.blockKeyboardShortcutModifiers
-        ), onPromoteSelection?() == true {
-            return
-        }
-
-        super.keyDown(with: event)
-    }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if DiaryPromotionKeyboardResolver.requestsPromotion(
-            input: event.charactersIgnoringModifiers,
-            modifiers: event.blockKeyboardShortcutModifiers
-        ), onPromoteSelection?() == true {
-            return true
-        }
-
-        return super.performKeyEquivalent(with: event)
-    }
-}
-#else
-private struct PlatformDiaryTextEditor: View {
-    @Binding var text: String
-    let onSelectedTextChange: (String) -> Void
-    let onPromoteSelection: (String) -> Bool
-
-    var body: some View {
-        TextEditor(text: $text)
-            .font(.body)
-            .scrollContentBackground(.hidden)
-            .onChange(of: text) { _, _ in
-                onSelectedTextChange("")
-            }
-    }
-}
-#endif
-
 private struct CompactPageListView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
@@ -1369,7 +1460,7 @@ private struct CompactPageListView: View {
                                 )
                             } label: {
                                 Label(
-                                    page.isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                                    page.isFavorite ? "取消收藏" : "加入收藏",
                                     systemImage: page.isFavorite ? "star.slash" : "star"
                                 )
                             }
@@ -1377,7 +1468,7 @@ private struct CompactPageListView: View {
                             Button {
                                 viewModel.archivePageForUI(id: page.id)
                             } label: {
-                                Label("Archive", systemImage: "archivebox")
+                                Label("归档", systemImage: "archivebox")
                             }
                         }
                     }
@@ -1436,7 +1527,7 @@ private struct CompactPageListView: View {
                 Button {
                     _ = viewModel.addNotebookToSelectedWorkspace()
                 } label: {
-                    Label("New Notebook", systemImage: "folder.badge.plus")
+                    Label("新建笔记本", systemImage: "folder.badge.plus")
                 }
             }
 
@@ -1445,14 +1536,14 @@ private struct CompactPageListView: View {
                     Button {
                         viewModel.undoLastPageArchiveForUI()
                     } label: {
-                        Label("Undo Archive", systemImage: "arrow.uturn.backward")
+                        Label("撤销归档", systemImage: "arrow.uturn.backward")
                     }
                     .accessibilityIdentifier("editor.undo-page-archive")
                 }
             }
 
             if !viewModel.snapshot.archivedPages.isEmpty {
-                Section("Archive") {
+                Section("归档") {
                     ForEach(viewModel.snapshot.archivedPages) { page in
                         ArchivedPageRow(
                             page: page,
@@ -1467,7 +1558,7 @@ private struct CompactPageListView: View {
                 }
             }
         }
-        .navigationTitle("Pages")
+        .navigationTitle("页面")
         .scrollContentBackground(.hidden)
         .background(Color.white)
     }
@@ -1596,7 +1687,7 @@ private struct NotebookSectionHeader: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField("Notebook", text: nameBinding)
+            TextField("笔记本", text: nameBinding)
                 .textFieldStyle(.plain)
                 .font(.caption.weight(.semibold))
                 .accessibilityIdentifier("editor.notebook.\(notebook.id).name")
@@ -1609,8 +1700,8 @@ private struct NotebookSectionHeader: View {
             }
             .buttonStyle(.borderless)
             .disabled(!canMoveUp)
-            .help("Move up")
-            .accessibilityLabel("Move notebook up")
+            .help("上移")
+            .accessibilityLabel("上移笔记本")
             .accessibilityValue(controlAvailabilityValue(canMoveUp))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).move-up")
 
@@ -1621,8 +1712,8 @@ private struct NotebookSectionHeader: View {
             }
             .buttonStyle(.borderless)
             .disabled(!canMoveDown)
-            .help("Move down")
-            .accessibilityLabel("Move notebook down")
+            .help("下移")
+            .accessibilityLabel("下移笔记本")
             .accessibilityValue(controlAvailabilityValue(canMoveDown))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).move-down")
 
@@ -1633,8 +1724,8 @@ private struct NotebookSectionHeader: View {
             }
             .buttonStyle(.borderless)
             .disabled(!canOutdent)
-            .help("Outdent notebook")
-            .accessibilityLabel("Outdent notebook")
+            .help("减少缩进")
+            .accessibilityLabel("减少笔记本缩进")
             .accessibilityValue(controlAvailabilityValue(canOutdent))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).outdent")
 
@@ -1645,8 +1736,8 @@ private struct NotebookSectionHeader: View {
             }
             .buttonStyle(.borderless)
             .disabled(!canIndent)
-            .help("Indent notebook")
-            .accessibilityLabel("Indent notebook")
+            .help("增加缩进")
+            .accessibilityLabel("增加笔记本缩进")
             .accessibilityValue(controlAvailabilityValue(canIndent))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).indent")
 
@@ -1656,8 +1747,8 @@ private struct NotebookSectionHeader: View {
                 Image(systemName: "folder.badge.plus")
             }
             .buttonStyle(.borderless)
-            .help("New child notebook")
-            .accessibilityLabel("Add child notebook")
+            .help("新建子笔记本")
+            .accessibilityLabel("新建子笔记本")
             .accessibilityValue(controlAvailabilityValue(true))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).add-child-notebook")
 
@@ -1667,8 +1758,8 @@ private struct NotebookSectionHeader: View {
                 Image(systemName: "plus")
             }
             .buttonStyle(.borderless)
-            .help("New page")
-            .accessibilityLabel("Add page to notebook")
+            .help("新建页面")
+            .accessibilityLabel("在笔记本中新建页面")
             .accessibilityValue(controlAvailabilityValue(true))
             .accessibilityIdentifier("editor.notebook.\(notebook.id).add-page")
         }
@@ -1690,7 +1781,7 @@ private struct NotebookSectionHeader: View {
     }
 
     private func controlAvailabilityValue(_ isAvailable: Bool) -> String {
-        isAvailable ? "Available" : "Unavailable"
+        isAvailable ? "可用" : "不可用"
     }
 }
 
@@ -1698,8 +1789,13 @@ private struct SearchSectionView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
-        Section("Search") {
-            TextField("Search", text: searchBinding)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("搜索")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+
+            TextField("搜索", text: searchBinding)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("editor.search-field")
 
@@ -1763,13 +1859,21 @@ private struct PageRow: View {
     let page: PageSummary
     var isSelected = false
     var tagNames: [String] = []
+    var preview: PageListPreview?
+    var usesRichPreview = false
     var onFavoriteToggle: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: isSelected ? "doc.text.fill" : "doc.text")
-                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                .accessibilityHidden(true)
+        if usesRichPreview {
+            richPreviewBody
+        } else {
+            compactBody
+        }
+    }
+
+    private var compactBody: some View {
+        HStack(spacing: 8) {
+            pageIcon
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(page.title)
@@ -1798,31 +1902,204 @@ private struct PageRow: View {
             Spacer(minLength: 8)
 
             if let onFavoriteToggle {
-                Button {
-                    onFavoriteToggle()
-                } label: {
-                    Image(systemName: page.isFavorite ? "star.fill" : "star")
-                        .foregroundStyle(page.isFavorite ? .yellow : .secondary)
-                }
-                .buttonStyle(.borderless)
-                .help(page.isFavorite ? "Remove from Favorites" : "Add to Favorites")
-                .accessibilityLabel(page.isFavorite ? "Remove page from favorites" : "Add page to favorites")
-                .accessibilityValue(page.isFavorite ? "Favorite" : "Not favorite")
-                .accessibilityIdentifier("editor.page.\(page.id).favorite")
+                favoriteButton(onFavoriteToggle)
             } else if page.isFavorite {
                 Image(systemName: "star.fill")
                     .foregroundStyle(.yellow)
                     .accessibilityHidden(true)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isSelected ? Color.primary.opacity(0.09) : Color.clear)
+        )
+    }
+
+    private var richPreviewBody: some View {
+        HStack(alignment: .top, spacing: 0) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(isSelected ? Color.red.opacity(0.72) : Color.clear)
+                .frame(width: 4)
+                .padding(.vertical, 8)
+
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    pageIcon
+
+                    Text(page.title)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                        .accessibilityLabel(page.title)
+                        .accessibilityValue(pageRowAccessibilityValue)
+                        .accessibilityIdentifier("editor.page-row.\(page.id)")
+
+                    Spacer(minLength: 8)
+
+                    if let onFavoriteToggle {
+                        favoriteButton(onFavoriteToggle)
+                    } else if page.isFavorite {
+                        Image(systemName: "star.fill")
+                            .foregroundStyle(.yellow)
+                            .accessibilityHidden(true)
+                    }
+                }
+
+                if let excerpt = preview?.excerpt, !excerpt.isEmpty {
+                    Text(excerpt)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if preview?.imageAttachment != nil || preview?.fileAttachment != nil {
+                    HStack(alignment: .top, spacing: 10) {
+                        if let imageAttachment = preview?.imageAttachment {
+                            PageRowImageAttachmentThumbnail(attachment: imageAttachment)
+                        }
+
+                        if let fileAttachment = preview?.fileAttachment {
+                            PageRowFileAttachmentPill(attachment: fileAttachment)
+                        }
+                    }
+                }
+
+                if !tagNames.isEmpty {
+                    tagChips
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.secondary.opacity(0.08) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isSelected ? Color.secondary.opacity(0.06) : Color.clear, lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+    }
+
+    private var pageIcon: some View {
+        Image(systemName: "doc.text")
+            .font(.callout)
+            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+            .accessibilityHidden(true)
+    }
+
+    private var tagChips: some View {
+        HStack(spacing: 5) {
+            ForEach(tagNames, id: \.self) { tagName in
+                Text(tagName)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color(red: 0.45, green: 0.28, blue: 0.70))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color(red: 0.45, green: 0.28, blue: 0.70).opacity(0.10))
+                    .clipShape(Capsule())
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func favoriteButton(_ onFavoriteToggle: @escaping () -> Void) -> some View {
+        Button {
+            onFavoriteToggle()
+        } label: {
+            Image(systemName: page.isFavorite ? "star.fill" : "star")
+                .foregroundStyle(page.isFavorite ? .yellow : .secondary)
+        }
+        .buttonStyle(.borderless)
+        .help(page.isFavorite ? "取消收藏" : "加入收藏")
+        .accessibilityLabel(page.isFavorite ? "取消收藏页面" : "收藏页面")
+        .accessibilityValue(page.isFavorite ? "已收藏" : "未收藏")
+        .accessibilityIdentifier("editor.page.\(page.id).favorite")
     }
 
     private var pageRowAccessibilityValue: String {
-        let selection = isSelected ? "Selected" : "Not selected"
-        let favorite = page.isFavorite ? "Favorite" : "Not favorite"
-        let tags = tagNames.isEmpty ? "No tags" : "Tags: \(tagNames.joined(separator: ", "))"
+        let selection = isSelected ? "已选中" : "未选中"
+        let favorite = page.isFavorite ? "已收藏" : "未收藏"
+        let tags = tagNames.isEmpty ? "无标签" : "标签：\(tagNames.joined(separator: ", "))"
         return "\(selection), \(favorite), \(tags)"
+    }
+}
+
+private struct PageRowImageAttachmentThumbnail: View {
+    let attachment: AttachmentSnapshot
+
+    var body: some View {
+        Group {
+            if let image = thumbnailImage {
+                image
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "photo")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.secondary.opacity(0.08))
+            }
+        }
+        .frame(width: 112, height: 72)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .accessibilityLabel("图片附件")
+        .accessibilityValue(attachment.originalFilename)
+    }
+
+    private var thumbnailImage: Image? {
+        let path = attachment.thumbnailPath ?? attachment.localPath
+#if os(macOS)
+        guard let image = NSImage(contentsOfFile: path) else {
+            return nil
+        }
+        return Image(nsImage: image)
+#elseif os(iOS)
+        guard let image = UIImage(contentsOfFile: path) else {
+            return nil
+        }
+        return Image(uiImage: image)
+#else
+        return nil
+#endif
+    }
+}
+
+private struct PageRowFileAttachmentPill: View {
+    let attachment: AttachmentSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(attachment.originalFilename)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(fileExtension)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Color.secondary.opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .frame(width: 108, height: 72, alignment: .leading)
+        .padding(.horizontal, 10)
+        .background(Color.secondary.opacity(0.055))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .accessibilityLabel("文件附件")
+        .accessibilityValue(attachment.originalFilename)
+    }
+
+    private var fileExtension: String {
+        let ext = (attachment.originalFilename as NSString).pathExtension
+        return ext.isEmpty ? "文件" : ext.uppercased()
     }
 }
 
@@ -1849,7 +2126,7 @@ private struct ArchivedPageRow: View {
                 Image(systemName: "arrow.uturn.backward")
             }
             .buttonStyle(.borderless)
-            .help("Restore")
+            .help("恢复")
             .accessibilityIdentifier("editor.restore-page.\(page.id)")
 
             Button(role: .destructive) {
@@ -1858,7 +2135,7 @@ private struct ArchivedPageRow: View {
                 Image(systemName: "trash")
             }
             .buttonStyle(.borderless)
-            .help("Delete permanently")
+            .help("永久删除")
             .accessibilityIdentifier("editor.delete-archived-page.\(page.id)")
         }
         .padding(.vertical, 5)
@@ -1878,6 +2155,8 @@ private struct EditorCanvasView: View {
     let externalLinks: [ExternalLink]
     let conflicts: [ConflictSnapshot]
     let outlineItems: [PageOutlineItem]
+    let parentPageLink: PageParentLink?
+    let pageTagNames: [String]
     let pendingFocusBlockID: String?
     let canUndoTextEdit: Bool
     let onAddParagraphBlock: () -> String?
@@ -1890,6 +2169,7 @@ private struct EditorCanvasView: View {
     let onUndoTextEdit: () -> Void
     let onFocusCanvas: () -> String?
     let onMoveBlock: (String, Int) -> Void
+    let onMoveBlocks: ([String], Int) -> Void
     let onMoveBlockByKeyboard: (String, BlockKeyboardMoveDirection) -> Bool
     let onInsertBlockAfter: (String) -> Bool
     let onSplitTextBlockAtSelection: (String, EditorTextSelection) -> EditorTextSelection?
@@ -1901,6 +2181,7 @@ private struct EditorCanvasView: View {
     let onSelectBacklink: (Backlink) -> Void
     let onSelectOutlineItem: (PageOutlineItem) -> Void
     let onOpenPageReference: (String) -> Void
+    let onOpenParentPage: () -> Bool
     let onOpenBlockReference: (String, String) -> Void
     let onAcceptConflict: (ConflictSnapshot) -> Void
     let onAcceptAllConflicts: () -> Void
@@ -1915,6 +2196,7 @@ private struct EditorCanvasView: View {
     let onBlockTextChange: (String, String) -> Void
     let onTableRowsChange: (String, [[String]]) -> Void
     let onBlockTypeChange: (String, BlockType) -> Void
+    let onConvertBlockToPage: (String) -> Void
     let onTaskItemCompletionChange: (String, Bool) -> Void
     let onCodeBlockLineWrappingChange: (String, Bool) -> Void
     let onToggleBlockExpansion: (String) -> Void
@@ -1936,15 +2218,17 @@ private struct EditorCanvasView: View {
 #endif
     @StateObject private var editorSession = EditorSession()
     @State private var pendingFocusRequest: BlockFocusRequest?
+    @State private var activeBlockDropTarget: BlockDropTarget?
     @State private var scrollMetricsTracker = EditorCanvasScrollMetricsTracker(pageID: nil, blockCount: 0)
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
+            LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
                 HStack(alignment: .center, spacing: 12) {
-                    TextField("Untitled", text: pageTitleBinding)
+                    TextField("未命名", text: pageTitleBinding)
                         .textFieldStyle(.plain)
                         .font(.largeTitle.weight(.semibold))
+                        .padding(.leading, CGFloat(EditorBlockChrome.actionColumnWidth + EditorBlockChrome.actionColumnSpacing + 4))
                         .disabled(page == nil)
                         .accessibilityIdentifier("editor.page-title")
 
@@ -1958,120 +2242,8 @@ private struct EditorCanvasView: View {
                         Image(systemName: "plus")
                     }
                     .buttonStyle(.borderless)
-                    .help("New block")
+                    .help("新增块")
                     .accessibilityIdentifier("editor.add-block")
-                    .disabled(page == nil)
-
-                    Menu {
-                        ForEach(pageReferenceTargets) { targetPage in
-                            Button {
-                                onAddPageReference(targetPage.id)
-                            } label: {
-                                Label(targetPage.title, systemImage: "doc.text")
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "doc.badge.plus")
-                    }
-                    .menuStyle(.borderlessButton)
-                    .help("Insert page reference")
-                    .accessibilityIdentifier("editor.insert-page-reference")
-                    .disabled(pageReferenceTargets.isEmpty)
-
-                    Menu {
-                        ForEach(blockReferenceTargets) { targetBlock in
-                            Button {
-                                onAddBlockReference(targetBlock.id)
-                            } label: {
-                                Label(blockReferenceTitle(for: targetBlock), systemImage: "text.quote")
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "text.badge.plus")
-                    }
-                    .menuStyle(.borderlessButton)
-                    .help("Insert block reference")
-                    .accessibilityIdentifier("editor.insert-block-reference")
-                    .disabled(blockReferenceTargets.isEmpty)
-
-                    Button {
-                        _ = presentInlineLinkInsertionFromCurrentTarget()
-                    } label: {
-                        Image(systemName: "link.badge.plus")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Insert link")
-                    .accessibilityIdentifier("editor.insert-markdown-link")
-                    .disabled(inlineLinkToolbarTargetBlockID == nil)
-
-                    Button {
-                        applyMarkdownInlineFormat(.bold)
-                    } label: {
-                        Image(systemName: "bold")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Bold")
-                    .accessibilityIdentifier("editor.inline-format.bold")
-                    .disabled(inlineFormatTarget == nil)
-
-                    Button {
-                        applyMarkdownInlineFormat(.italic)
-                    } label: {
-                        Image(systemName: "italic")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Italic")
-                    .accessibilityIdentifier("editor.inline-format.italic")
-                    .disabled(inlineFormatTarget == nil)
-
-                    Button {
-                        applyMarkdownInlineFormat(.strikethrough)
-                    } label: {
-                        Image(systemName: "strikethrough")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Strikethrough")
-                    .accessibilityIdentifier("editor.inline-format.strikethrough")
-                    .disabled(inlineFormatTarget == nil)
-
-                    Button {
-                        applyMarkdownInlineFormat(.code)
-                    } label: {
-                        Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Code")
-                    .accessibilityIdentifier("editor.inline-format.code")
-                    .disabled(inlineFormatTarget == nil)
-
-                    Button {
-                        onUndoTextEdit()
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Undo text edit")
-                    .accessibilityIdentifier("editor.undo-text-edit")
-                    .disabled(!canUndoTextEdit)
-
-                    Button {
-                        handleMarkdownImportButton()
-                    } label: {
-                        Image(systemName: "square.and.arrow.down")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Import Markdown")
-                    .accessibilityIdentifier("editor.import-markdown")
-                    .disabled(page == nil)
-
-                    Button {
-                        handleMarkdownExportButton()
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Export Markdown")
-                    .accessibilityIdentifier("editor.export-markdown")
                     .disabled(page == nil)
 
                     Button {
@@ -2080,8 +2252,28 @@ private struct EditorCanvasView: View {
                         Image(systemName: "paperclip")
                     }
                     .buttonStyle(.borderless)
-                    .help("Insert attachment")
+                    .help("插入附件")
                     .accessibilityIdentifier("editor.insert-attachment")
+                    .disabled(page == nil)
+
+                    pageActionsMenu
+                }
+
+                if !pageTagNames.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(pageTagNames, id: \.self) { tagName in
+                            Text(tagName)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Color(red: 0.45, green: 0.28, blue: 0.70))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color(red: 0.45, green: 0.28, blue: 0.70).opacity(0.10))
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .padding(.leading, CGFloat(EditorBlockChrome.actionColumnWidth + EditorBlockChrome.actionColumnSpacing + 4))
+                    .accessibilityLabel("页面标签")
+                    .accessibilityValue(pageTagNames.joined(separator: ", "))
                 }
 
                 if isInlineLinkPopoverPresented {
@@ -2121,13 +2313,32 @@ private struct EditorCanvasView: View {
 #endif
 
                 ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
+                    let dragPayloadBlockIDs = BlockDragPayloadResolver.payloadBlockIDs(
+                        rootBlockID: block.id,
+                        blocks: blocks
+                    )
+
+                    if index == 0 {
+                        BlockDropSlot(
+                            destinationBlockID: block.id,
+                            slotKind: .before,
+                            activeDropTarget: $activeBlockDropTarget,
+                            moveDroppedBlocks: moveDroppedBlocks
+                        )
+                    }
+
                     BlockRowView(
                         block: block,
                         attachment: attachment(for: block),
                         attachmentPreviewGenerationStatus: attachmentPreviewGenerationStatus(for: block),
+                        pageReferencePreviewText: PageReferencePreviewResolver.previewText(
+                            targetPageID: block.pageReferenceTargetPageID,
+                            blocks: allBlocks
+                        ),
                         editorSession: editorSession,
                         nestingLevel: nestingLevel(for: block),
                         listOrdinal: ListBlockOrdinalResolver.ordinal(for: block, at: index, in: blocks),
+                        dragPayloadBlockIDs: dragPayloadBlockIDs,
                         canMoveUp: index > 0,
                         canMoveDown: index < blocks.count - 1,
                         onMoveUp: {
@@ -2184,6 +2395,13 @@ private struct EditorCanvasView: View {
                         onOutdent: {
                             onOutdentBlock(block.id)
                         },
+                        onPasteAttachmentURLs: { urls in
+                            guard !urls.isEmpty else {
+                                return false
+                            }
+                            urls.forEach(onImportAttachment)
+                            return true
+                        },
                         onDelete: {
                             onDeleteBlock(block.id)
                         },
@@ -2195,6 +2413,9 @@ private struct EditorCanvasView: View {
                         },
                         onChangeType: { type in
                             onBlockTypeChange(block.id, type)
+                        },
+                        onConvertToPage: {
+                            onConvertBlockToPage(block.id)
                         },
                         onTaskItemCompletionChange: { isCompleted in
                             onTaskItemCompletionChange(block.id, isCompleted)
@@ -2209,6 +2430,8 @@ private struct EditorCanvasView: View {
                             onRetryAttachmentPreview(attachmentID)
                         },
                         isToggleBlockExpanded: isToggleBlockExpanded(block.id),
+                        isBlockSelected: editorSession.selectedBlockIDs.contains(block.id),
+                        dropPlacement: activeBlockDropTarget?.blockID == block.id ? activeBlockDropTarget?.placement : nil,
                         focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
                         focusSelection: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.selection : nil,
                         onFocusRequestHandled: {
@@ -2218,6 +2441,21 @@ private struct EditorCanvasView: View {
                             if pendingFocusBlockID == block.id {
                                 onPendingBlockFocusHandled()
                             }
+                        },
+                        onSelectCurrentBlock: {
+                            editorSession.selectBlocks([block.id])
+                        },
+                        onSelectAllBlocksByKeyboard: {
+                            let blockIDs = Set(blocks.map(\.id))
+                            guard !blockIDs.isEmpty else {
+                                return false
+                            }
+                            editorSession.selectBlocks(blockIDs)
+                            return true
+                        },
+                        onClearDropTarget: {
+                            activeBlockDropTarget = BlockDropTargetLifecycleReducer
+                                .targetAfterEditorInteraction(current: activeBlockDropTarget)
                         },
                         onTableRowsChange: { rows in
                             onTableRowsChange(block.id, rows)
@@ -2231,9 +2469,13 @@ private struct EditorCanvasView: View {
                     .onDisappear {
                         scheduleVisibleBlockDisappeared(block.id)
                     }
-                    .dropDestination(for: String.self) { draggedBlockIDs, _ in
-                        moveDroppedBlocks(draggedBlockIDs, destinationBlockID: block.id)
-                    }
+
+                    BlockDropSlot(
+                        destinationBlockID: block.id,
+                        slotKind: .after,
+                        activeDropTarget: $activeBlockDropTarget,
+                        moveDroppedBlocks: moveDroppedBlocks
+                    )
                 }
 
                 if !outlineItems.isEmpty {
@@ -2267,7 +2509,8 @@ private struct EditorCanvasView: View {
                         focusCanvas()
                     }
                     .dropDestination(for: String.self) { draggedBlockIDs, _ in
-                        moveDroppedBlocksToEnd(draggedBlockIDs)
+                        activeBlockDropTarget = nil
+                        return moveDroppedBlocksToEnd(draggedBlockIDs)
                     }
                     .accessibilityIdentifier("editor.canvas-edit-region")
             }
@@ -2276,6 +2519,10 @@ private struct EditorCanvasView: View {
             .padding(.vertical, 36)
         }
         .accessibilityIdentifier("editor.canvas-scroll")
+        .onChange(of: editorSession.focusedBlockID) { _, _ in
+            activeBlockDropTarget = BlockDropTargetLifecycleReducer
+                .targetAfterEditorInteraction(current: activeBlockDropTarget)
+        }
 #if DEBUG
         .overlay(alignment: .topLeading) {
             scrollMetricsDebugProbe
@@ -2284,13 +2531,30 @@ private struct EditorCanvasView: View {
         .background(Color.white)
 #if os(macOS)
         .background(
+            DropTargetCleanupEventBridge(isEnabled: activeBlockDropTarget != nil) {
+                activeBlockDropTarget = nil
+            }
+            .frame(width: 0, height: 0)
+        )
+        .onPasteCommand(of: [.fileURL, .png, .jpeg, .tiff]) { _ in
+            let attachmentURLs = MacPasteboardAttachmentResolver.attachmentURLs(from: .general)
+            guard !attachmentURLs.isEmpty else {
+                return
+            }
+            attachmentURLs.forEach(onImportAttachment)
+        }
+#endif
+#if os(macOS)
+        .background(
             MacEditorKeyboardShortcutBridge {
                 presentInlineLinkInsertionFromKeyboardShortcut()
             }
         )
 #endif
-        .navigationTitle(page?.title ?? "Editor")
+        .navigationTitle(page?.title ?? "编辑器")
         .focusedValue(\.insertMarkdownLinkAction, insertMarkdownLinkAction)
+        .focusedValue(\.promoteDiarySelectionAction, promoteCurrentBlockToPageAction)
+        .focusedValue(\.openParentPageAction, openParentPageAction)
         .onAppear {
             scheduleScrollMetricsReset()
             schedulePendingFocusIfNeeded(pendingFocusBlockID)
@@ -2322,7 +2586,7 @@ private struct EditorCanvasView: View {
             isPresented: $isMarkdownExporterPresented,
             document: markdownExportDocument,
             contentType: MarkdownFileDocument.markdownContentType,
-            defaultFilename: "\(page?.title ?? "Page").md"
+            defaultFilename: "\(page?.title ?? "页面").md"
         ) { result in
             switch result {
             case .success(let destinationURL):
@@ -2362,6 +2626,118 @@ private struct EditorCanvasView: View {
         pages.filter { targetPage in
             targetPage.id != page?.id
         }
+    }
+
+    private var pageActionsMenu: some View {
+        Menu {
+            Section("块") {
+                Button {
+                    if let blockID = onAddParagraphBlock() {
+                        pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+                    }
+                } label: {
+                    Label("新增文本块", systemImage: "plus")
+                }
+
+                Menu {
+                    ForEach(pageReferenceTargets) { targetPage in
+                        Button {
+                            onAddPageReference(targetPage.id)
+                        } label: {
+                            Label(targetPage.title, systemImage: "doc.text")
+                        }
+                    }
+                } label: {
+                    Label("页面引用", systemImage: "doc.badge.plus")
+                }
+                .disabled(pageReferenceTargets.isEmpty)
+
+                Menu {
+                    ForEach(blockReferenceTargets) { targetBlock in
+                        Button {
+                            onAddBlockReference(targetBlock.id)
+                        } label: {
+                            Label(blockReferenceTitle(for: targetBlock), systemImage: "text.quote")
+                        }
+                    }
+                } label: {
+                    Label("块引用", systemImage: "text.badge.plus")
+                }
+                .disabled(blockReferenceTargets.isEmpty)
+
+                Button {
+                    handleAttachmentImportButton()
+                } label: {
+                    Label("附件", systemImage: "paperclip")
+                }
+                .disabled(page == nil)
+            }
+
+            Section("文本") {
+                Button {
+                    _ = presentInlineLinkInsertionFromCurrentTarget()
+                } label: {
+                    Label("链接", systemImage: "link")
+                }
+                .disabled(inlineLinkToolbarTargetBlockID == nil)
+
+                Button {
+                    applyMarkdownInlineFormat(.bold)
+                } label: {
+                    Label("加粗", systemImage: "bold")
+                }
+                .disabled(inlineFormatTarget == nil)
+
+                Button {
+                    applyMarkdownInlineFormat(.italic)
+                } label: {
+                    Label("斜体", systemImage: "italic")
+                }
+                .disabled(inlineFormatTarget == nil)
+
+                Button {
+                    applyMarkdownInlineFormat(.strikethrough)
+                } label: {
+                    Label("删除线", systemImage: "strikethrough")
+                }
+                .disabled(inlineFormatTarget == nil)
+
+                Button {
+                    applyMarkdownInlineFormat(.code)
+                } label: {
+                    Label("代码", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+                .disabled(inlineFormatTarget == nil)
+            }
+
+            Section("页面") {
+                Button {
+                    onUndoTextEdit()
+                } label: {
+                    Label("撤销编辑", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(!canUndoTextEdit)
+
+                Button {
+                    handleMarkdownImportButton()
+                } label: {
+                    Label("导入 Markdown", systemImage: "square.and.arrow.down")
+                }
+                .disabled(page == nil)
+
+                Button {
+                    handleMarkdownExportButton()
+                } label: {
+                    Label("导出 Markdown", systemImage: "square.and.arrow.up")
+                }
+                .disabled(page == nil)
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .help("更多")
+        .accessibilityIdentifier("editor.page-actions")
     }
 
     private var blockReferenceTargets: [BlockSnapshot] {
@@ -2433,6 +2809,30 @@ private struct EditorCanvasView: View {
 
         return {
             _ = presentInlineLinkInsertionFromCurrentTarget()
+        }
+    }
+
+    private var promoteCurrentBlockToPageAction: (() -> Void)? {
+        guard let blockID = BlockPromotionCommandResolver.promotableBlockID(
+            selection: editorSession.textSelection,
+            focusedBlockID: editorSession.focusedBlockID,
+            blocks: blocks
+        ) else {
+            return nil
+        }
+
+        return {
+            onConvertBlockToPage(blockID)
+        }
+    }
+
+    private var openParentPageAction: (() -> Void)? {
+        guard parentPageLink != nil else {
+            return nil
+        }
+
+        return {
+            _ = onOpenParentPage()
         }
     }
 
@@ -2519,7 +2919,7 @@ private struct EditorCanvasView: View {
 
     private var inlineLinkPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
-            TextField("Label", text: $inlineLinkLabel)
+            TextField("文本", text: $inlineLinkLabel)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 240)
                 .accessibilityIdentifier("editor.insert-markdown-link.label")
@@ -2536,17 +2936,17 @@ private struct EditorCanvasView: View {
                     Image(systemName: "xmark")
                 }
                 .buttonStyle(.borderless)
-                .help("Cancel")
+                .help("取消")
                 .accessibilityIdentifier("editor.insert-markdown-link.cancel")
 
                 if isEditingInlineLink {
                     Button(role: .destructive) {
                         removeInlineLink()
                     } label: {
-                        Label("Remove Link", systemImage: "link.badge.minus")
+                        Label("移除链接", systemImage: "link.badge.minus")
                     }
                     .buttonStyle(.borderless)
-                    .help("Remove link")
+                    .help("移除链接")
                     .accessibilityIdentifier("editor.insert-markdown-link.remove")
                 }
 
@@ -2554,7 +2954,7 @@ private struct EditorCanvasView: View {
                 Button {
                     insertInlineLink()
                 } label: {
-                    Label(isEditingInlineLink ? "Update Link" : "Insert Link", systemImage: "link")
+                    Label(isEditingInlineLink ? "更新链接" : "插入链接", systemImage: "link")
                 }
                 .disabled(MarkdownInlineLinkComposer.markdown(label: inlineLinkLabel, url: inlineLinkURL) == nil)
                 .accessibilityIdentifier("editor.insert-markdown-link.confirm")
@@ -2564,7 +2964,7 @@ private struct EditorCanvasView: View {
     }
 
     private func blockReferenceTitle(for block: BlockSnapshot) -> String {
-        let pageTitle = pages.first { $0.id == block.pageID }?.title ?? "Page"
+        let pageTitle = pages.first { $0.id == block.pageID }?.title ?? "页面"
         return "\(pageTitle): \(block.textPlain)"
     }
 
@@ -2760,31 +3160,48 @@ private struct EditorCanvasView: View {
         return true
     }
 
-    private func moveDroppedBlocks(_ draggedBlockIDs: [String], destinationBlockID: String) -> Bool {
-        guard let draggedBlockID = draggedBlockIDs.first,
+    private func moveDroppedBlocks(
+        _ draggedBlockIDs: [String],
+        destinationBlockID: String,
+        placement: BlockDropPlacement
+    ) -> Bool {
+        let movedBlockIDs = visibleDraggedBlockIDs(from: draggedBlockIDs)
+        guard let draggedBlockID = movedBlockIDs.first,
               let targetIndex = BlockDragReorderResolver.targetIndex(
-                draggedBlockID: draggedBlockID,
+                draggedBlockIDs: movedBlockIDs,
                 destinationBlockID: destinationBlockID,
-                visibleBlockIDs: blocks.map(\.id)
+                visibleBlockIDs: blocks.map(\.id),
+                placement: placement
               ) else {
             return false
         }
 
-        onMoveBlock(draggedBlockID, targetIndex)
+        onMoveBlocks(movedBlockIDs, targetIndex)
+        if placement == .childAfter {
+            _ = onIndentBlock(draggedBlockID)
+        }
+        pendingFocusRequest = BlockFocusRequest(blockID: draggedBlockID)
         return true
     }
 
     private func moveDroppedBlocksToEnd(_ draggedBlockIDs: [String]) -> Bool {
-        guard let draggedBlockID = draggedBlockIDs.first,
+        let movedBlockIDs = visibleDraggedBlockIDs(from: draggedBlockIDs)
+        guard let draggedBlockID = movedBlockIDs.first,
               let targetIndex = BlockDragReorderResolver.endTargetIndex(
-                draggedBlockID: draggedBlockID,
+                draggedBlockIDs: movedBlockIDs,
                 visibleBlockIDs: blocks.map(\.id)
               ) else {
             return false
         }
 
-        onMoveBlock(draggedBlockID, targetIndex)
+        onMoveBlocks(movedBlockIDs, targetIndex)
+        pendingFocusRequest = BlockFocusRequest(blockID: draggedBlockID)
         return true
+    }
+
+    private func visibleDraggedBlockIDs(from draggedBlockIDs: [String]) -> [String] {
+        let draggedBlockIDSet = Set(draggedBlockIDs)
+        return blocks.map(\.id).filter { draggedBlockIDSet.contains($0) }
     }
 
     private func attachment(for block: BlockSnapshot) -> AttachmentSnapshot? {
@@ -2959,7 +3376,7 @@ private struct BacklinksPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Backlinks")
+            Text("反向链接")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
@@ -2999,7 +3416,7 @@ private struct ExternalLinksPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("External Links")
+            Text("外部链接")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
@@ -3050,7 +3467,7 @@ private struct OutlinePanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Outline")
+            Text("大纲")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
@@ -3074,8 +3491,8 @@ private struct OutlinePanel: View {
                 .buttonStyle(.plain)
                 .padding(.vertical, 3)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("Outline heading \(item.title)")
-                .accessibilityValue("Level \(item.level)")
+                .accessibilityLabel("大纲标题 \(item.title)")
+                .accessibilityValue("\(item.level) 级")
                 .accessibilityIdentifier("editor.outline.\(item.blockID)")
             }
         }
@@ -3139,7 +3556,7 @@ private struct ConflictPanel: View {
     }
 
     private var headerTitle: some View {
-        Text("Sync Conflicts")
+        Text("同步冲突")
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
     }
@@ -3149,7 +3566,7 @@ private struct ConflictPanel: View {
         Button {
             mergeDrafts.useLocalText(for: conflicts)
         } label: {
-            Label("Draft All Local", systemImage: "square.and.pencil")
+            Label("全部使用本地草稿", systemImage: "square.and.pencil")
         }
         .buttonStyle(.borderless)
         .disabled(conflicts.isEmpty)
@@ -3158,7 +3575,7 @@ private struct ConflictPanel: View {
         Button {
             mergeDrafts.useRemoteText(for: conflicts)
         } label: {
-            Label("Draft All Remote", systemImage: "square.and.pencil")
+            Label("全部使用远端草稿", systemImage: "square.and.pencil")
         }
         .buttonStyle(.borderless)
         .disabled(conflicts.isEmpty)
@@ -3167,7 +3584,7 @@ private struct ConflictPanel: View {
         Button {
             onResolveAllManually(currentMergedTexts())
         } label: {
-            Label("Apply All Merged", systemImage: "checkmark.circle")
+            Label("应用全部合并", systemImage: "checkmark.circle")
         }
         .buttonStyle(.borderless)
         .disabled(conflicts.isEmpty)
@@ -3176,7 +3593,7 @@ private struct ConflictPanel: View {
         Button {
             onAcceptAllLocalConflicts()
         } label: {
-            Label("Use All Local", systemImage: "arrow.up.doc")
+            Label("全部保留本地", systemImage: "arrow.up.doc")
         }
         .buttonStyle(.borderless)
         .disabled(conflicts.isEmpty)
@@ -3185,7 +3602,7 @@ private struct ConflictPanel: View {
         Button {
             onAcceptAllConflicts()
         } label: {
-            Label("Use All Remote", systemImage: "arrow.down.doc")
+            Label("全部采用远端", systemImage: "arrow.down.doc")
         }
         .buttonStyle(.borderless)
         .disabled(conflicts.isEmpty)
@@ -3245,9 +3662,9 @@ private struct ConflictResolutionRow: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .top, spacing: 12) {
-                        conflictTextColumn(title: "Local", text: conflict.localTextPlain)
+                        conflictTextColumn(title: "本地", text: conflict.localTextPlain)
                         conflictTextColumn(
-                            title: "Remote r\(conflict.remoteRevision)",
+                            title: "远端 r\(conflict.remoteRevision)",
                             text: conflict.remoteTextPlain
                         )
                     }
@@ -3293,7 +3710,7 @@ private struct ConflictResolutionRow: View {
         Button {
             onUseLocalDraft(conflict)
         } label: {
-            Label("Edit Local", systemImage: "square.and.pencil")
+            Label("编辑本地", systemImage: "square.and.pencil")
         }
         .buttonStyle(.borderless)
         .accessibilityIdentifier("editor.conflict.\(conflict.id).draft-local")
@@ -3301,7 +3718,7 @@ private struct ConflictResolutionRow: View {
         Button {
             onUseRemoteDraft(conflict)
         } label: {
-            Label("Edit Remote", systemImage: "square.and.pencil")
+            Label("编辑远端", systemImage: "square.and.pencil")
         }
         .buttonStyle(.borderless)
         .accessibilityIdentifier("editor.conflict.\(conflict.id).draft-remote")
@@ -3312,7 +3729,7 @@ private struct ConflictResolutionRow: View {
         Button {
             onResolveManually(conflict, mergedText)
         } label: {
-            Label("Apply Merge", systemImage: "checkmark.circle")
+            Label("应用合并", systemImage: "checkmark.circle")
         }
         .buttonStyle(.borderless)
         .accessibilityIdentifier("editor.conflict.\(conflict.id).apply-merge")
@@ -3320,7 +3737,7 @@ private struct ConflictResolutionRow: View {
         Button {
             onAcceptLocalConflict(conflict)
         } label: {
-            Label("Use Local", systemImage: "arrow.up.doc")
+            Label("保留本地", systemImage: "arrow.up.doc")
         }
         .buttonStyle(.borderless)
         .accessibilityIdentifier("editor.conflict.\(conflict.id).accept-local")
@@ -3328,7 +3745,7 @@ private struct ConflictResolutionRow: View {
         Button {
             onAcceptConflict(conflict)
         } label: {
-            Label("Use Remote", systemImage: "arrow.down.doc")
+            Label("采用远端", systemImage: "arrow.down.doc")
         }
         .buttonStyle(.borderless)
         .accessibilityIdentifier("editor.conflict.\(conflict.id).accept-remote")
@@ -3477,6 +3894,32 @@ struct ListBlockChromeDescriptor: Equatable, Sendable {
     }
 }
 
+private struct ListMarkerGlyph: View {
+    let descriptor: ListBlockChromeDescriptor
+    let isNested: Bool
+
+    var body: some View {
+        Group {
+            if descriptor.marker.hasSuffix(".") {
+                Text(descriptor.marker)
+                    .font(.system(size: 15, weight: .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.primary)
+            } else if isNested {
+                Circle()
+                    .stroke(Color.primary, lineWidth: 1.7)
+                    .frame(width: 5.6, height: 5.6)
+            } else {
+                Circle()
+                    .fill(Color.primary)
+                    .frame(width: 5.6, height: 5.6)
+            }
+        }
+        .frame(width: CGFloat(EditorBlockChrome.listMarkerWidth), height: 21, alignment: .leading)
+        .accessibilityHidden(true)
+    }
+}
+
 struct ListBlockOrdinalResolver: Equatable, Sendable {
     static func ordinal(for block: BlockSnapshot, at index: Int, in blocks: [BlockSnapshot]) -> Int? {
         guard block.type == .orderedListItem,
@@ -3511,22 +3954,22 @@ struct HeadingBlockChromeDescriptor: Equatable, Sendable {
         switch block.type {
         case .heading1:
             level = 1
-            accessibilityLabel = "Heading 1 block"
+            accessibilityLabel = "一级标题块"
             accessibilityIdentifier = "editor.heading1.\(block.id)"
         case .heading2:
             level = 2
-            accessibilityLabel = "Heading 2 block"
+            accessibilityLabel = "二级标题块"
             accessibilityIdentifier = "editor.heading2.\(block.id)"
         case .heading3:
             level = 3
-            accessibilityLabel = "Heading 3 block"
+            accessibilityLabel = "三级标题块"
             accessibilityIdentifier = "editor.heading3.\(block.id)"
         default:
             level = 0
-            accessibilityLabel = "Text block"
+            accessibilityLabel = "文本块"
             accessibilityIdentifier = "editor.block.\(block.id)"
         }
-        accessibilityValue = block.textPlain.isEmpty ? "Empty" : block.textPlain
+        accessibilityValue = block.textPlain.isEmpty ? "空" : block.textPlain
     }
 }
 
@@ -3536,8 +3979,8 @@ struct DividerBlockChromeDescriptor: Equatable, Sendable {
     let accessibilityIdentifier: String
 
     init(block: BlockSnapshot) {
-        accessibilityLabel = "Divider block"
-        accessibilityValue = "Separator"
+        accessibilityLabel = "分割线块"
+        accessibilityValue = "分割线"
         accessibilityIdentifier = "editor.divider.\(block.id)"
     }
 }
@@ -3554,11 +3997,11 @@ struct AttachmentBlockChromeDescriptor: Equatable, Sendable {
     ) {
         let kindTitle = Self.kindTitle(for: block)
         let filename = block.textPlain.isEmpty
-            ? attachment?.originalFilename ?? "Untitled attachment"
+            ? attachment?.originalFilename ?? "未命名附件"
             : block.textPlain
         let previewState = attachment?.previewState(for: block) ?? .unavailable
 
-        accessibilityLabel = "\(kindTitle) attachment: \(filename)"
+        accessibilityLabel = "\(kindTitle)附件：\(filename)"
         accessibilityIdentifier = "editor.attachment.\(block.id)"
         let statusLabel = Self.statusLabel(
             attachment: attachment,
@@ -3574,34 +4017,34 @@ struct AttachmentBlockChromeDescriptor: Equatable, Sendable {
         previewState: AttachmentPreviewState
     ) -> String {
         guard attachment != nil else {
-            return "attachment unavailable"
+            return "附件不可用"
         }
 
         if case .failed = generationStatus {
-            return "preview failed"
+            return "预览失败"
         }
 
         if generationStatus == .generating || previewState == .pending {
-            return "generating preview"
+            return "正在生成预览"
         }
 
         if case .thumbnail = previewState {
-            return "preview ready"
+            return "预览就绪"
         }
 
-        return "ready"
+        return "就绪"
     }
 
     private static func kindTitle(for block: BlockSnapshot) -> String {
         switch block.type {
         case .attachmentImage:
-            return "Image"
+            return "图片"
         case .attachmentVideo:
-            return "Video"
+            return "视频"
         case .attachmentFile:
-            return "File"
+            return "文件"
         default:
-            return "Attachment"
+            return "附件"
         }
     }
 }
@@ -3610,9 +4053,11 @@ private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
     let attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus
+    let pageReferencePreviewText: String?
     @ObservedObject var editorSession: EditorSession
     let nestingLevel: Int
     let listOrdinal: Int?
+    let dragPayloadBlockIDs: [String]
     let canMoveUp: Bool
     let canMoveDown: Bool
     let onMoveUp: () -> Void
@@ -3626,29 +4071,40 @@ private struct BlockRowView: View {
     let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onIndent: () -> Bool
     let onOutdent: () -> Bool
+    let onPasteAttachmentURLs: ([URL]) -> Bool
     let onDelete: () -> Void
     let onOpenPageReference: (String) -> Void
     let onOpenBlockReference: (String, String) -> Void
     let onChangeType: (BlockType) -> Void
+    let onConvertToPage: () -> Void
     let onTaskItemCompletionChange: (Bool) -> Void
     let onCodeBlockLineWrappingChange: (Bool) -> Void
     let onToggleBlockExpansion: () -> Void
     let onRetryAttachmentPreview: (String) -> Void
     let isToggleBlockExpanded: Bool
+    let isBlockSelected: Bool
+    let dropPlacement: BlockDropPlacement?
     let focusRequestID: UUID?
     let focusSelection: EditorTextSelection?
     let onFocusRequestHandled: () -> Void
+    let onSelectCurrentBlock: () -> Void
+    let onSelectAllBlocksByKeyboard: () -> Bool
+    let onClearDropTarget: () -> Void
     let onTableRowsChange: ([[String]]) -> Void
     let onTextChange: (String) -> Void
+    @State private var isRowHovered = false
     @State private var rowFocusRequest: BlockFocusRequest?
+    @State private var slashCommandSelectionIndex = 0
 
     init(
         block: BlockSnapshot,
         attachment: AttachmentSnapshot? = nil,
         attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus = .idle,
+        pageReferencePreviewText: String? = nil,
         editorSession: EditorSession,
         nestingLevel: Int = 0,
         listOrdinal: Int? = nil,
+        dragPayloadBlockIDs: [String] = [],
         canMoveUp: Bool = false,
         canMoveDown: Bool = false,
         onMoveUp: @escaping () -> Void = {},
@@ -3662,27 +4118,36 @@ private struct BlockRowView: View {
         onMergeBlockWithNext: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onIndent: @escaping () -> Bool = { false },
         onOutdent: @escaping () -> Bool = { false },
+        onPasteAttachmentURLs: @escaping ([URL]) -> Bool = { _ in false },
         onDelete: @escaping () -> Void = {},
         onOpenPageReference: @escaping (String) -> Void = { _ in },
         onOpenBlockReference: @escaping (String, String) -> Void = { _, _ in },
         onChangeType: @escaping (BlockType) -> Void = { _ in },
+        onConvertToPage: @escaping () -> Void = {},
         onTaskItemCompletionChange: @escaping (Bool) -> Void = { _ in },
         onCodeBlockLineWrappingChange: @escaping (Bool) -> Void = { _ in },
         onToggleBlockExpansion: @escaping () -> Void = {},
         onRetryAttachmentPreview: @escaping (String) -> Void = { _ in },
         isToggleBlockExpanded: Bool = true,
+        isBlockSelected: Bool = false,
+        dropPlacement: BlockDropPlacement? = nil,
         focusRequestID: UUID? = nil,
         focusSelection: EditorTextSelection? = nil,
         onFocusRequestHandled: @escaping () -> Void = {},
+        onSelectCurrentBlock: @escaping () -> Void = {},
+        onSelectAllBlocksByKeyboard: @escaping () -> Bool = { false },
+        onClearDropTarget: @escaping () -> Void = {},
         onTableRowsChange: @escaping ([[String]]) -> Void = { _ in },
         onTextChange: @escaping (String) -> Void
     ) {
         self.block = block
         self.attachment = attachment
         self.attachmentPreviewGenerationStatus = attachmentPreviewGenerationStatus
+        self.pageReferencePreviewText = pageReferencePreviewText
         self.editorSession = editorSession
         self.nestingLevel = nestingLevel
         self.listOrdinal = listOrdinal
+        self.dragPayloadBlockIDs = dragPayloadBlockIDs
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
         self.onMoveUp = onMoveUp
@@ -3696,156 +4161,267 @@ private struct BlockRowView: View {
         self.onMergeBlockWithNext = onMergeBlockWithNext
         self.onIndent = onIndent
         self.onOutdent = onOutdent
+        self.onPasteAttachmentURLs = onPasteAttachmentURLs
         self.onDelete = onDelete
         self.onOpenPageReference = onOpenPageReference
         self.onOpenBlockReference = onOpenBlockReference
         self.onChangeType = onChangeType
+        self.onConvertToPage = onConvertToPage
         self.onTaskItemCompletionChange = onTaskItemCompletionChange
         self.onCodeBlockLineWrappingChange = onCodeBlockLineWrappingChange
         self.onToggleBlockExpansion = onToggleBlockExpansion
         self.onRetryAttachmentPreview = onRetryAttachmentPreview
         self.isToggleBlockExpanded = isToggleBlockExpanded
+        self.isBlockSelected = isBlockSelected
+        self.dropPlacement = dropPlacement
         self.focusRequestID = focusRequestID
         self.focusSelection = focusSelection
         self.onFocusRequestHandled = onFocusRequestHandled
+        self.onSelectCurrentBlock = onSelectCurrentBlock
+        self.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
+        self.onClearDropTarget = onClearDropTarget
         self.onTableRowsChange = onTableRowsChange
         self.onTextChange = onTextChange
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(spacing: 2) {
-                Image(systemName: "circle.grid.2x2")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .draggable(block.id)
-                    .accessibilityLabel("Block drag handle")
-                    .accessibilityValue(block.type.editorMenuTitle)
-                    .accessibilityIdentifier("editor.block.\(block.id).drag-handle")
-
-                if block.type.isTextEditable {
-                    Menu {
-                        ForEach(Self.textBlockMenuTypes, id: \.self) { type in
-                            Button {
-                                onChangeType(type)
-                            } label: {
-                                Label(type.editorMenuTitle, systemImage: type.editorMenuSystemImage)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "textformat")
-                    }
-                    .menuStyle(.borderlessButton)
-                    .help("Block type")
-                    .accessibilityLabel("Change block type")
-                    .accessibilityValue(block.type.editorMenuTitle)
-                    .accessibilityIdentifier("editor.block.\(block.id).type-menu")
-                }
-
-                Button {
-                    onMoveUp()
-                } label: {
-                    Image(systemName: "chevron.up")
-                }
-                .buttonStyle(.borderless)
-                .disabled(!canMoveUp)
-                .help("Move up")
-                .accessibilityLabel("Move block up")
-                .accessibilityValue(controlAvailabilityValue(canMoveUp))
-                .accessibilityIdentifier("editor.block.\(block.id).move-up")
-
-                Button {
-                    onMoveDown()
-                } label: {
-                    Image(systemName: "chevron.down")
-                }
-                .buttonStyle(.borderless)
-                .disabled(!canMoveDown)
-                .help("Move down")
-                .accessibilityLabel("Move block down")
-                .accessibilityValue(controlAvailabilityValue(canMoveDown))
-                .accessibilityIdentifier("editor.block.\(block.id).move-down")
-
-                Button {
-                    _ = onOutdent()
-                } label: {
-                    Image(systemName: "decrease.indent")
-                }
-                .buttonStyle(.borderless)
-                .disabled(nestingLevel == 0)
-                .help("Outdent")
-                .accessibilityLabel("Outdent block")
-                .accessibilityValue(controlAvailabilityValue(nestingLevel > 0))
-                .accessibilityIdentifier("editor.block.\(block.id).outdent")
-
-                Button {
-                    _ = onIndent()
-                } label: {
-                    Image(systemName: "increase.indent")
-                }
-                .buttonStyle(.borderless)
-                .disabled(!canMoveUp)
-                .help("Indent")
-                .accessibilityLabel("Indent block")
-                .accessibilityValue(controlAvailabilityValue(canMoveUp))
-                .accessibilityIdentifier("editor.block.\(block.id).indent")
-
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .help("Delete")
-                .accessibilityLabel("Delete block")
-                .accessibilityValue(controlAvailabilityValue(true))
-                .accessibilityIdentifier("editor.block.\(block.id).delete")
-            }
-            .frame(width: 24)
-            .padding(.top, 1)
-
-            if block.type == .table {
-                StructuredTableBlockEditor(
-                    blockID: block.id,
-                    text: block.textPlain,
-                    rows: block.tableRows,
-                    onRowsChange: onTableRowsChange
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else if block.type.isTextEditable {
-                textEditableBlockContent
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else if block.type == .pageReference {
-                PageReferenceBlockRow(block: block, onOpenPageReference: onOpenPageReference)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if block.type == .blockReference {
-                BlockReferenceBlockRow(block: block, onOpenBlockReference: onOpenBlockReference)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if block.type == .divider {
-                let descriptor = DividerBlockChromeDescriptor(block: block)
-                Divider()
-                    .padding(.vertical, 10)
-                    .accessibilityLabel(descriptor.accessibilityLabel)
-                    .accessibilityValue(descriptor.accessibilityValue)
-                    .accessibilityIdentifier(descriptor.accessibilityIdentifier)
-            } else {
-                AttachmentBlockRow(
-                    block: block,
-                    attachment: attachment,
-                    generationStatus: attachmentPreviewGenerationStatus,
-                    onRetryPreview: onRetryAttachmentPreview
-                )
+        HStack(alignment: .top, spacing: CGFloat(EditorBlockChrome.actionColumnSpacing)) {
+            blockActionColumn
+            blockContent
+        }
+        .overlay(alignment: dropIndicatorAlignment) {
+            if let dropPlacement {
+                BlockDropIndicator(placement: dropPlacement)
+                    .padding(.leading, dropIndicatorLeadingPadding(for: dropPlacement))
             }
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, CGFloat(EditorBlockChrome.rowVerticalPadding))
         .padding(.leading, CGFloat(nestingLevel) * 24)
+        .padding(.horizontal, 4)
+        .background(rowBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .contentShape(Rectangle())
+        .contextMenu {
+            blockContextCommands
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(rowAccessibilityIdentifier)
+        .accessibilityLabel(rowAccessibilityValue)
+        .accessibilityValue(rowAccessibilityValue)
         .simultaneousGesture(
             TapGesture().onEnded {
                 requestRowFocus()
             }
+        )
+#if os(macOS)
+        .onHover { hovering in
+            isRowHovered = hovering
+        }
+#endif
+        .animation(.easeInOut(duration: 0.12), value: isRowActive)
+        .animation(.easeInOut(duration: 0.12), value: isBlockSelected)
+        .onAppear {
+            handleNonEditableFocusRequestIfNeeded(effectiveFocusRequestID)
+        }
+        .onChange(of: effectiveFocusRequestID) { _, requestID in
+            handleNonEditableFocusRequestIfNeeded(requestID)
+        }
+    }
+
+    @ViewBuilder
+    private var blockContent: some View {
+        if block.type == .table {
+            StructuredTableBlockEditor(
+                blockID: block.id,
+                text: block.textPlain,
+                rows: block.tableRows,
+                onRowsChange: onTableRowsChange
+            )
+            .onTapGesture {
+                onClearDropTarget()
+            }
+        } else if block.type.isTextEditable {
+            VStack(alignment: .leading, spacing: 4) {
+                textEditableBlockContent
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                slashCommandMenu
+            }
+        } else if block.type == .pageReference {
+            PageReferenceBlockRow(
+                block: block,
+                previewText: pageReferencePreviewText,
+                onOpenPageReference: onOpenPageReference
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if block.type == .blockReference {
+            BlockReferenceBlockRow(block: block, onOpenBlockReference: onOpenBlockReference)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if block.type == .divider {
+            let descriptor = DividerBlockChromeDescriptor(block: block)
+            Divider()
+                .padding(.vertical, 10)
+                .accessibilityLabel(descriptor.accessibilityLabel)
+                .accessibilityValue(descriptor.accessibilityValue)
+                .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+        } else {
+            AttachmentBlockRow(
+                block: block,
+                attachment: attachment,
+                generationStatus: attachmentPreviewGenerationStatus,
+                onRetryPreview: onRetryAttachmentPreview
+            )
+        }
+    }
+
+    private var rowBackground: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(rowBackgroundColor)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(isBlockSelected ? Color.accentColor.opacity(0.28) : Color.clear, lineWidth: 1)
+            )
+    }
+
+    private var rowBackgroundColor: Color {
+        if isBlockSelected {
+            return Color.accentColor.opacity(0.08)
+        }
+        if isRowActive {
+            return Color.secondary.opacity(0.045)
+        }
+        return Color.clear
+    }
+
+    private var isRowActive: Bool {
+        isRowHovered || isBlockSelected || editorSession.focusedBlockID == block.id
+    }
+
+    private var blockActionOpacity: Double {
+        isRowActive ? 1 : EditorBlockChrome.inactiveHandleOpacity
+    }
+
+    private var blockActionColumn: some View {
+        Image(systemName: "circle.grid.2x2")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .draggable(dragPayloadText) {
+                DragPreviewBlock(block: block)
+            }
+            .accessibilityLabel("块拖拽手柄")
+            .accessibilityValue(block.type.editorMenuTitle)
+            .accessibilityIdentifier("editor.block.\(block.id).drag-handle")
+            .frame(width: CGFloat(EditorBlockChrome.dragHandleWidth), height: 20)
+            .contentShape(Rectangle())
+            .padding(.top, 2)
+            .opacity(blockActionOpacity)
+    }
+
+    private var dragPayloadText: String {
+        let payloadBlockIDs = dragPayloadBlockIDs.isEmpty ? [block.id] : dragPayloadBlockIDs
+        return payloadBlockIDs.joined(separator: "\n")
+    }
+
+    private var dropIndicatorAlignment: Alignment {
+        switch dropPlacement {
+        case .before:
+            return .topLeading
+        case .after, .childAfter, nil:
+            return .bottomLeading
+        }
+    }
+
+    private func dropIndicatorLeadingPadding(for placement: BlockDropPlacement) -> CGFloat {
+        placement == .childAfter ? 28 : 0
+    }
+
+    @ViewBuilder
+    private var slashCommandMenu: some View {
+        let commands = SlashCommandResolver.matchingCommands(for: block.textPlain)
+        if editorSession.focusedBlockID == block.id,
+           block.textPlain.hasPrefix("/"),
+           !commands.isEmpty {
+            SlashCommandMenu(
+                commands: commands,
+                selectedIndex: clampedSlashCommandSelectionIndex(for: commands),
+                onHover: { index in
+                    slashCommandSelectionIndex = index
+                },
+                onSelect: applySlashCommand
+            )
+            .padding(.top, 2)
+        }
+    }
+
+    @ViewBuilder
+    private var blockContextCommands: some View {
+        Button {
+            _ = onInsertBlockAfter(blockEndSelection)
+        } label: {
+            Label("下方新增", systemImage: "plus")
+        }
+
+        if block.type.isTextEditable {
+            Divider()
+
+            Button {
+                onConvertToPage()
+            } label: {
+                Label("页面", systemImage: "doc.text")
+            }
+
+            ForEach(Self.textBlockMenuTypes, id: \.self) { type in
+                Button {
+                    onChangeType(type)
+                } label: {
+                    Label(type.editorMenuTitle, systemImage: type.editorMenuSystemImage)
+                }
+            }
+        }
+
+        Divider()
+
+        Button {
+            onMoveUp()
+        } label: {
+            Label("上移", systemImage: "chevron.up")
+        }
+        .disabled(!canMoveUp)
+
+        Button {
+            onMoveDown()
+        } label: {
+            Label("下移", systemImage: "chevron.down")
+        }
+        .disabled(!canMoveDown)
+
+        Button {
+            _ = onOutdent()
+        } label: {
+            Label("减少缩进", systemImage: "decrease.indent")
+        }
+        .disabled(nestingLevel == 0)
+
+        Button {
+            _ = onIndent()
+        } label: {
+            Label("增加缩进", systemImage: "increase.indent")
+        }
+        .disabled(!canMoveUp)
+
+        Divider()
+
+        Button(role: .destructive) {
+            onDelete()
+        } label: {
+            Label("删除", systemImage: "trash")
+        }
+    }
+
+    private var blockEndSelection: EditorTextSelection {
+        EditorTextSelection(
+            blockID: block.id,
+            location: (block.textPlain as NSString).length,
+            length: 0
         )
     }
 
@@ -3868,6 +4444,12 @@ private struct BlockRowView: View {
         }
     }
 
+    private var rowAccessibilityValue: String {
+        let selectionState = isBlockSelected ? "当前块已选中" : "当前块未选中"
+        let content = block.textPlain.isEmpty ? "空" : block.textPlain
+        return "\(content), \(selectionState)"
+    }
+
     @ViewBuilder
     private var textEditableBlockContent: some View {
         if block.type == .heading1 || block.type == .heading2 || block.type == .heading3 {
@@ -3881,21 +4463,15 @@ private struct BlockRowView: View {
                 .accessibilityAddTraits(.isHeader)
         } else if block.type == .unorderedListItem || block.type == .orderedListItem {
             let descriptor = ListBlockChromeDescriptor(block: block, ordinal: listOrdinal)
-            HStack(alignment: .top, spacing: 8) {
-                Text(descriptor.marker)
-                    .font(.callout.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, alignment: .trailing)
+            HStack(alignment: .top, spacing: CGFloat(EditorBlockChrome.listTextSpacing)) {
+                ListMarkerGlyph(descriptor: descriptor, isNested: block.parentBlockID != nil)
                     .padding(.top, 2)
-                    .accessibilityHidden(true)
 
                 nativeTextBlockEditor
             }
-            .padding(.vertical, 5)
-            .padding(.horizontal, 8)
-            .background(Color.secondary.opacity(0.03))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .padding(.vertical, CGFloat(EditorBlockChrome.listVerticalPadding))
+            .padding(.horizontal, CGFloat(EditorBlockChrome.listHorizontalPadding))
+            .background(Color.secondary.opacity(EditorBlockChrome.listBackgroundOpacity))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(descriptor.accessibilityLabel)
             .accessibilityValue(descriptor.accessibilityValue)
@@ -3917,7 +4493,7 @@ private struct BlockRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(taskBlockAccessibilityLabel)
-            .accessibilityValue(block.taskItemIsCompleted ? "Completed" : "Incomplete")
+            .accessibilityValue(block.taskItemIsCompleted ? "已完成" : "未完成")
             .accessibilityIdentifier("editor.task.\(block.id)")
         } else if block.type == .codeBlock {
             VStack(alignment: .leading, spacing: 6) {
@@ -3936,7 +4512,7 @@ private struct BlockRowView: View {
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
-            .background(Color(red: 0.98, green: 0.98, blue: 0.96))
+            .background(Color(red: 0.965, green: 0.968, blue: 0.972))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
@@ -3944,7 +4520,7 @@ private struct BlockRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(codeBlockAccessibilityLabel)
-            .accessibilityValue(block.codeBlockLineWrapping ? "Line wrap enabled" : "Line wrap disabled")
+            .accessibilityValue(block.codeBlockLineWrapping ? "已开启自动换行" : "已关闭自动换行")
             .accessibilityIdentifier("editor.code.\(block.id)")
         } else if block.type == .toggle {
             HStack(alignment: .top, spacing: 8) {
@@ -3963,17 +4539,11 @@ private struct BlockRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(toggleBlockAccessibilityLabel)
-            .accessibilityValue(isToggleBlockExpanded ? "Expanded" : "Collapsed")
+            .accessibilityValue(isToggleBlockExpanded ? "已展开" : "已折叠")
             .accessibilityIdentifier("editor.toggle.\(block.id)")
         } else if block.type == .callout {
             HStack(alignment: .top, spacing: 8) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.accentColor.opacity(0.35))
-                    .frame(width: 3)
-                    .padding(.vertical, 3)
-                    .accessibilityHidden(true)
-
-                Image(systemName: "exclamationmark.bubble")
+                Image(systemName: "text.bubble")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.top, 2)
@@ -3983,11 +4553,15 @@ private struct BlockRowView: View {
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
-            .background(Color.secondary.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .background(Color(red: 0.964, green: 0.968, blue: 0.974))
+            .overlay(
+                RoundedRectangle(cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius))
+                    .stroke(Color.secondary.opacity(0.10), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius)))
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Callout block")
-            .accessibilityValue(block.textPlain.isEmpty ? "Empty" : block.textPlain)
+            .accessibilityLabel("提示块")
+            .accessibilityValue(block.textPlain.isEmpty ? "空" : block.textPlain)
             .accessibilityIdentifier("editor.callout.\(block.id)")
         } else if block.type == .quote {
             let descriptor = QuoteBlockChromeDescriptor(block: block)
@@ -4008,7 +4582,7 @@ private struct BlockRowView: View {
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
-            .background(Color.secondary.opacity(0.04))
+            .background(Color(red: 0.966, green: 0.969, blue: 0.974))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(descriptor.accessibilityLabel)
@@ -4045,9 +4619,9 @@ private struct BlockRowView: View {
         }
         .buttonStyle(.borderless)
         .foregroundStyle(block.taskItemIsCompleted ? .green : .secondary)
-        .help(block.taskItemIsCompleted ? "Mark incomplete" : "Mark complete")
-        .accessibilityLabel(block.taskItemIsCompleted ? "Mark task incomplete" : "Mark task complete")
-        .accessibilityValue(block.taskItemIsCompleted ? "Completed" : "Incomplete")
+        .help(block.taskItemIsCompleted ? "标记未完成" : "标记完成")
+        .accessibilityLabel(block.taskItemIsCompleted ? "标记任务未完成" : "标记任务完成")
+        .accessibilityValue(block.taskItemIsCompleted ? "已完成" : "未完成")
         .accessibilityIdentifier("editor.block.\(block.id).task-toggle")
     }
 
@@ -4059,9 +4633,9 @@ private struct BlockRowView: View {
         }
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
-        .help(isToggleBlockExpanded ? "Collapse" : "Expand")
-        .accessibilityLabel(isToggleBlockExpanded ? "Collapse toggle block" : "Expand toggle block")
-        .accessibilityValue(isToggleBlockExpanded ? "Expanded" : "Collapsed")
+        .help(isToggleBlockExpanded ? "折叠" : "展开")
+        .accessibilityLabel(isToggleBlockExpanded ? "折叠块" : "展开块")
+        .accessibilityValue(isToggleBlockExpanded ? "已展开" : "已折叠")
         .accessibilityIdentifier("editor.block.\(block.id).toggle-expansion")
     }
 
@@ -4073,22 +4647,22 @@ private struct BlockRowView: View {
         }
         .buttonStyle(.borderless)
         .foregroundStyle(block.codeBlockLineWrapping ? .primary : .secondary)
-        .help(block.codeBlockLineWrapping ? "Disable line wrap" : "Enable line wrap")
-        .accessibilityLabel(block.codeBlockLineWrapping ? "Disable code line wrap" : "Enable code line wrap")
-        .accessibilityValue(block.codeBlockLineWrapping ? "Line wrap enabled" : "Line wrap disabled")
+        .help(block.codeBlockLineWrapping ? "关闭自动换行" : "开启自动换行")
+        .accessibilityLabel(block.codeBlockLineWrapping ? "关闭代码自动换行" : "开启代码自动换行")
+        .accessibilityValue(block.codeBlockLineWrapping ? "已开启自动换行" : "已关闭自动换行")
         .accessibilityIdentifier("editor.block.\(block.id).code-wrap")
     }
 
     private var codeBlockAccessibilityLabel: String {
-        block.codeBlockLineWrapping ? "Code block, Line wrap enabled" : "Code block, Line wrap disabled"
+        block.codeBlockLineWrapping ? "代码块，已开启自动换行" : "代码块，已关闭自动换行"
     }
 
     private var toggleBlockAccessibilityLabel: String {
-        isToggleBlockExpanded ? "Toggle block, Expanded" : "Toggle block, Collapsed"
+        isToggleBlockExpanded ? "折叠块，已展开" : "折叠块，已折叠"
     }
 
     private var taskBlockAccessibilityLabel: String {
-        block.taskItemIsCompleted ? "Task block, Completed" : "Task block, Incomplete"
+        block.taskItemIsCompleted ? "任务块，已完成" : "任务块，未完成"
     }
 
     private var nativeTextBlockEditor: some View {
@@ -4109,13 +4683,25 @@ private struct BlockRowView: View {
             onInsertBlockAfter: onInsertBlockAfter,
             onMergeBlockWithPrevious: onMergeBlockWithPrevious,
             onMergeBlockWithNext: onMergeBlockWithNext,
-            onTextChange: onTextChange
+            onSlashCommandNavigationByKeyboard: handleSlashCommandNavigation,
+            onSlashCommandSelectionByKeyboard: selectCurrentSlashCommand,
+            onPasteAttachmentURLs: onPasteAttachmentURLs,
+            onSelectAllBlocksByKeyboard: onSelectAllBlocksByKeyboard,
+            onCancelSelectionByKeyboard: {
+                let hadBlockSelection = !editorSession.selectedBlockIDs.isEmpty
+                editorSession.clearBlockSelection()
+                return hadBlockSelection
+            },
+            onTextChange: { text in
+                onClearDropTarget()
+                onTextChange(text)
+            }
         )
         .accessibilityIdentifier("editor.text.\(block.id)")
     }
 
     private func controlAvailabilityValue(_ isAvailable: Bool) -> String {
-        isAvailable ? "Available" : "Unavailable"
+        isAvailable ? "可用" : "不可用"
     }
 
     private func handleKeyboardIndentation(_ direction: BlockKeyboardIndentationDirection) -> Bool {
@@ -4143,22 +4729,373 @@ private struct BlockRowView: View {
         .toggle
     ]
 
+    private func applySlashCommand(_ command: SlashCommandDescriptor) {
+        slashCommandSelectionIndex = 0
+        switch command.type {
+        case .pageReference:
+            onTextChange("")
+            onConvertToPage()
+        case .attachmentFile, .attachmentImage, .attachmentVideo:
+            break
+        default:
+            onTextChange("")
+            onChangeType(command.type)
+            rowFocusRequest = BlockFocusRequest(blockID: block.id)
+        }
+    }
+
+    private func handleSlashCommandNavigation(_ direction: BlockKeyboardMoveDirection) -> Bool {
+        let commands = SlashCommandResolver.matchingCommands(for: block.textPlain)
+        guard editorSession.focusedBlockID == block.id,
+              block.textPlain.hasPrefix("/"),
+              !commands.isEmpty else {
+            return false
+        }
+
+        let currentIndex = clampedSlashCommandSelectionIndex(for: commands)
+        switch direction {
+        case .up:
+            slashCommandSelectionIndex = max(0, currentIndex - 1)
+        case .down:
+            slashCommandSelectionIndex = min(commands.count - 1, currentIndex + 1)
+        }
+        return true
+    }
+
+    private func selectCurrentSlashCommand() -> Bool {
+        let commands = SlashCommandResolver.matchingCommands(for: block.textPlain)
+        guard editorSession.focusedBlockID == block.id,
+              block.textPlain.hasPrefix("/"),
+              !commands.isEmpty else {
+            return false
+        }
+
+        applySlashCommand(commands[clampedSlashCommandSelectionIndex(for: commands)])
+        return true
+    }
+
+    private func clampedSlashCommandSelectionIndex(for commands: [SlashCommandDescriptor]) -> Int {
+        guard !commands.isEmpty else {
+            return 0
+        }
+        return min(max(slashCommandSelectionIndex, 0), commands.count - 1)
+    }
+
     private func requestRowFocus() {
+        onClearDropTarget()
         guard block.type.isTextEditable else {
+            onSelectCurrentBlock()
             return
         }
 
-        rowFocusRequest = BlockFocusRequest(blockID: block.id)
-        EditorLog.focus.debug(
-            "editor_focus_request_scheduled block_id=\(block.id, privacy: .public) source=row_tap"
-        )
+        DispatchQueue.main.async {
+            let selection = editorSession.textSelection?.blockID == block.id ? editorSession.textSelection : nil
+            rowFocusRequest = BlockFocusRequest(blockID: block.id, selection: selection)
+            EditorLog.focus.debug(
+                "editor_focus_request_scheduled block_id=\(block.id, privacy: .public) source=row_tap"
+            )
+        }
     }
 
     private func handleFocusRequestHandled() {
+        onClearDropTarget()
         if rowFocusRequest?.blockID == block.id {
             rowFocusRequest = nil
         }
         onFocusRequestHandled()
+    }
+
+    private func handleNonEditableFocusRequestIfNeeded(_ requestID: UUID?) {
+        guard requestID != nil,
+              !block.type.isTextEditable else {
+            return
+        }
+
+        onSelectCurrentBlock()
+        handleFocusRequestHandled()
+    }
+}
+
+private enum BlockDropSlotKind: Equatable {
+    case before
+    case after
+}
+
+private struct BlockDropSlot: View {
+    let destinationBlockID: String
+    let slotKind: BlockDropSlotKind
+    @Binding var activeDropTarget: BlockDropTarget?
+    let moveDroppedBlocks: ([String], String, BlockDropPlacement) -> Bool
+
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: CGFloat(EditorBlockChrome.dropSlotHeight))
+            .contentShape(Rectangle())
+            .onDrop(
+                of: [UTType.plainText.identifier, UTType.text.identifier],
+                delegate: EditorBlockDropDelegate(
+                    destinationBlockID: destinationBlockID,
+                    slotKind: slotKind,
+                    activeDropTarget: $activeDropTarget,
+                    moveDroppedBlocks: moveDroppedBlocks
+                )
+            )
+            .accessibilityHidden(true)
+    }
+}
+
+private struct EditorBlockDropDelegate: DropDelegate {
+    let destinationBlockID: String
+    let slotKind: BlockDropSlotKind
+    @Binding var activeDropTarget: BlockDropTarget?
+    let moveDroppedBlocks: ([String], String, BlockDropPlacement) -> Bool
+
+    func validateDrop(info: DropInfo) -> Bool {
+        !info.itemProviders(for: [UTType.plainText.identifier, UTType.text.identifier]).isEmpty
+    }
+
+    func dropEntered(info: DropInfo) {
+        updateTarget(for: info)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        updateTarget(for: info)
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        clearTargetIfNeeded()
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let placement = updateTarget(for: info)
+        guard let provider = info.itemProviders(for: [UTType.plainText.identifier, UTType.text.identifier]).first,
+              let typeIdentifier = provider.registeredTypeIdentifiers.first(where: { identifier in
+                  UTType(identifier)?.conforms(to: .text) == true
+              }) else {
+            clearTargetIfNeeded()
+            return false
+        }
+
+        activeDropTarget = nil
+        provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
+            let blockIDs = Self.blockIDs(from: item)
+            DispatchQueue.main.async {
+                guard !blockIDs.isEmpty else {
+                    return
+                }
+                _ = moveDroppedBlocks(blockIDs, destinationBlockID, placement)
+            }
+        }
+        return true
+    }
+
+    @discardableResult
+    private func updateTarget(for info: DropInfo) -> BlockDropPlacement {
+        let placement = placement(for: info)
+        let target = BlockDropTarget(blockID: destinationBlockID, placement: placement)
+        if activeDropTarget != target {
+            activeDropTarget = target
+        }
+        return placement
+    }
+
+    private func placement(for info: DropInfo) -> BlockDropPlacement {
+        switch slotKind {
+        case .before:
+            return .before
+        case .after:
+            return info.location.x >= BlockDropPlacementResolver.indentationThreshold ? .childAfter : .after
+        }
+    }
+
+    private func clearTargetIfNeeded() {
+        guard activeDropTarget?.blockID == destinationBlockID else {
+            return
+        }
+        activeDropTarget = nil
+    }
+
+    nonisolated private static func blockIDs(from item: NSSecureCoding?) -> [String] {
+        let text: String?
+        if let string = item as? String {
+            text = string
+        } else if let string = item as? NSString {
+            text = string as String
+        } else if let data = item as? Data {
+            text = String(data: data, encoding: .utf8)
+        } else {
+            text = nil
+        }
+
+        return text?
+            .split(whereSeparator: { $0 == "\n" || $0 == "," })
+            .map(String.init)
+            .filter { !$0.isEmpty } ?? []
+    }
+}
+
+private struct BlockDropIndicator: View {
+    let placement: BlockDropPlacement
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(indicatorColor)
+                .frame(width: 5, height: 5)
+
+            Capsule()
+                .fill(indicatorColor)
+                .frame(maxWidth: 520)
+                .frame(height: 2)
+
+            if placement == .childAfter {
+                Text("缩进一级")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(indicatorColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(indicatorColor.opacity(0.08))
+                    .clipShape(Capsule())
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier("editor.block-drop-indicator")
+    }
+
+    private var indicatorColor: Color {
+        placement == .childAfter ? Color.accentColor.opacity(0.78) : Color.accentColor.opacity(0.58)
+    }
+
+    private var accessibilityLabel: String {
+        switch placement {
+        case .before:
+            return "拖拽到块上方"
+        case .after:
+            return "拖拽到块下方"
+        case .childAfter:
+            return "拖拽为下级块"
+        }
+    }
+}
+
+private struct DragPreviewBlock: View {
+    let block: BlockSnapshot
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: 34)
+
+            HStack(spacing: 9) {
+                Image(systemName: block.type.editorMenuSystemImage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                Text(previewText)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(width: 260, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(.regularMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .shadow(color: Color.black.opacity(0.13), radius: 12, x: 0, y: 7)
+        }
+        .frame(width: 330, alignment: .leading)
+        .offset(x: 12, y: 8)
+    }
+
+    private var previewText: String {
+        let trimmed = block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? block.type.editorMenuTitle : trimmed
+    }
+}
+
+private struct SlashCommandMenu: View {
+    let commands: [SlashCommandDescriptor]
+    let selectedIndex: Int
+    let onHover: (Int) -> Void
+    let onSelect: (SlashCommandDescriptor) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(commands.enumerated()), id: \.element.id) { index, command in
+                        Button {
+                            onSelect(command)
+                        } label: {
+                            HStack(spacing: 9) {
+                                Image(systemName: command.type.editorMenuSystemImage)
+                                    .font(.callout)
+                                    .foregroundStyle(index == selectedIndex ? Color.accentColor : .secondary)
+                                    .frame(width: 18)
+
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(command.title)
+                                        .font(.callout.weight(.medium))
+                                        .foregroundStyle(.primary)
+                                    Text(command.subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer(minLength: 12)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(index == selectedIndex ? Color.accentColor.opacity(0.08) : Color.clear)
+                            )
+                            .contentShape(Rectangle())
+                        }
+                        .id(command.id)
+                        .buttonStyle(.plain)
+                        .disabled(command.type == .attachmentFile)
+                        .onHover { hovering in
+                            if hovering {
+                                onHover(index)
+                            }
+                        }
+                        .accessibilityIdentifier("editor.slash-command.\(command.id)")
+                    }
+                }
+                .padding(.vertical, 5)
+            }
+            .frame(maxHeight: 278)
+            .onChange(of: selectedIndex) { _, index in
+                guard commands.indices.contains(index) else {
+                    return
+                }
+                withAnimation(.easeOut(duration: 0.08)) {
+                    proxy.scrollTo(commands[index].id, anchor: .center)
+                }
+            }
+        }
+        .frame(width: 260, alignment: .leading)
+        .background(Color.white)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 6)
+        .accessibilityValue("可滚动，\(commands.count) 项")
+        .accessibilityIdentifier("editor.slash-command-menu")
     }
 }
 
@@ -4167,6 +5104,8 @@ private struct StructuredTableBlockEditor: View {
     let text: String
     let rows: [[String]]
     let onRowsChange: ([[String]]) -> Void
+    @State private var isTableHovered = false
+    @State private var selection = TableSelection.empty
 
     private var table: MarkdownTableDocument {
         MarkdownTableDocument(rows: editableRows)
@@ -4175,96 +5114,98 @@ private struct StructuredTableBlockEditor: View {
     var body: some View {
         let rows = editableRows
         let tableDimensions = tableDimensionAccessibilityValue(rows: rows)
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Label("Table", systemImage: "tablecells")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
+        let viewportWidth = tableViewportWidth(rows: rows)
+        let contentHeight = tableContentHeight(rows: rows)
+        let columnCount = tableColumnCount(rows: rows)
 
-                Spacer(minLength: 8)
-
-                Button {
-                    appendRow()
-                } label: {
-                    Image(systemName: "plus.square")
-                }
-                .buttonStyle(.borderless)
-                .help("Add row")
-                .accessibilityLabel("Add table row")
-                .accessibilityValue(tableDimensions)
-                .accessibilityIdentifier("editor.table.\(blockID).add-row")
-
-                Button {
-                    appendColumn()
-                } label: {
-                    Image(systemName: "plus.rectangle.portrait")
-                }
-                .buttonStyle(.borderless)
-                .help("Add column")
-                .accessibilityLabel("Add table column")
-                .accessibilityValue(tableDimensions)
-                .accessibilityIdentifier("editor.table.\(blockID).add-column")
-
-                Button {
-                    removeLastRow()
-                } label: {
-                    Image(systemName: "minus.square")
-                }
-                .buttonStyle(.borderless)
-                .help("Remove last row")
-                .accessibilityLabel("Remove last table row")
-                .accessibilityValue(tableDimensions)
-                .accessibilityIdentifier("editor.table.\(blockID).remove-row")
-
-                Button {
-                    removeLastColumn()
-                } label: {
-                    Image(systemName: "minus.rectangle.portrait")
-                }
-                .buttonStyle(.borderless)
-                .help("Remove last column")
-                .accessibilityLabel("Remove last table column")
-                .accessibilityValue(tableDimensions)
-                .accessibilityIdentifier("editor.table.\(blockID).remove-column")
-            }
-
+        ZStack(alignment: .topLeading) {
             ScrollView(.horizontal, showsIndicators: false) {
-                Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
-                    ForEach(rows.indices, id: \.self) { rowIndex in
-                        GridRow {
-                            ForEach(rows[rowIndex].indices, id: \.self) { columnIndex in
-                                TextField(
-                                    "",
-                                    text: cellBinding(row: rowIndex, column: columnIndex)
-                                )
-                                .textFieldStyle(.plain)
-                                .font(rowIndex == 0 ? .callout.weight(.semibold) : .callout)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                .frame(minWidth: 96, alignment: .leading)
-                                .background(rowIndex == 0 ? Color.secondary.opacity(0.08) : Color.white)
-                                .overlay(
-                                    Rectangle()
-                                        .stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
-                                )
-                                .accessibilityIdentifier("editor.table.\(blockID).cell.\(rowIndex).\(columnIndex)")
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 0) {
+                        Color.clear
+                            .frame(
+                                width: CGFloat(TableBlockChrome.selectorWidth),
+                                height: CGFloat(TableBlockChrome.selectorHeight)
+                            )
+
+                        ForEach(0..<columnCount, id: \.self) { columnIndex in
+                            columnSelector(columnIndex)
+                        }
+                    }
+
+                    HStack(alignment: .top, spacing: 0) {
+                        VStack(spacing: 0) {
+                            ForEach(rows.indices, id: \.self) { rowIndex in
+                                rowSelector(rowIndex)
+                            }
+                        }
+
+                        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+                            ForEach(rows.indices, id: \.self) { rowIndex in
+                                GridRow(alignment: .top) {
+                                    ForEach(0..<columnCount, id: \.self) { columnIndex in
+                                        tableCell(
+                                            row: rowIndex,
+                                            column: columnIndex,
+                                            rowCount: rows.count,
+                                            columnCount: columnCount
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                .fixedSize()
             }
+            .frame(
+                width: viewportWidth + CGFloat(TableBlockChrome.selectorWidth),
+                height: contentHeight + CGFloat(TableBlockChrome.selectorHeight)
+            )
+            .background(Color.white)
+            .overlay(
+                RoundedRectangle(cornerRadius: CGFloat(TableBlockChrome.cornerRadius), style: .continuous)
+                    .stroke(Color.secondary.opacity(TableBlockChrome.outerBorderOpacity), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: CGFloat(TableBlockChrome.cornerRadius), style: .continuous))
         }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 8)
-        .background(Color.secondary.opacity(0.04))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+        .overlay(alignment: .bottomLeading) {
+            tablePrimaryControl(
+                systemImage: "plus",
+                help: "新增行",
+                accessibilityLabel: "新增表格行",
+                accessibilityValue: tableDimensions,
+                accessibilityIdentifier: "editor.table.\(blockID).add-row",
+                action: appendRow
+            )
+            .padding(.leading, CGFloat(TableBlockChrome.selectorWidth) + 74)
+            .offset(y: 13)
+        }
+        .overlay(alignment: .trailing) {
+            tablePrimaryControl(
+                systemImage: "plus",
+                help: "新增列",
+                accessibilityLabel: "新增表格列",
+                accessibilityValue: tableDimensions,
+                accessibilityIdentifier: "editor.table.\(blockID).add-column",
+                action: appendColumn
+            )
+            .offset(x: 13)
+        }
+        .padding(.vertical, 4)
+        .onHover { hovering in
+            isTableHovered = hovering
+        }
+#if os(macOS)
+        .background(
+            TableDeleteKeyBridge(isEnabled: !selection.isEmpty) {
+                deleteSelection()
+            }
+            .frame(width: 0, height: 0)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+#endif
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Table block, \(tableDimensions)")
+        .accessibilityLabel("表格块，\(tableDimensions)")
         .accessibilityValue(tableDimensions)
         .accessibilityIdentifier("editor.table.\(blockID)")
     }
@@ -4285,9 +5226,21 @@ private struct StructuredTableBlockEditor: View {
     private func tableDimensionAccessibilityValue(rows: [[String]]) -> String {
         let rowCount = rows.count
         let columnCount = rows.map(\.count).max() ?? 0
-        let rowLabel = rowCount == 1 ? "row" : "rows"
-        let columnLabel = columnCount == 1 ? "column" : "columns"
-        return "\(rowCount) \(rowLabel), \(columnCount) \(columnLabel)"
+        return "\(rowCount) 行，\(columnCount) 列"
+    }
+
+    private func tableViewportWidth(rows: [[String]]) -> CGFloat {
+        let columnCount = tableColumnCount(rows: rows)
+        let contentWidth = CGFloat(columnCount) * CGFloat(TableBlockChrome.cellWidth)
+        return min(contentWidth, CGFloat(TableBlockChrome.maxViewportWidth))
+    }
+
+    private func tableContentHeight(rows: [[String]]) -> CGFloat {
+        CGFloat(max(rows.count, 1)) * CGFloat(TableBlockChrome.cellHeight)
+    }
+
+    private func tableColumnCount(rows: [[String]]) -> Int {
+        max(rows.map(\.count).max() ?? 1, 1)
     }
 
     private func cellBinding(row rowIndex: Int, column columnIndex: Int) -> Binding<String> {
@@ -4303,6 +5256,117 @@ private struct StructuredTableBlockEditor: View {
             updatedTable.updateCell(row: rowIndex, column: columnIndex, text: value)
             onRowsChange(updatedTable.rows)
         }
+    }
+
+    private func tableCell(
+        row rowIndex: Int,
+        column columnIndex: Int,
+        rowCount: Int,
+        columnCount: Int
+    ) -> some View {
+        TextField(
+            "",
+            text: cellBinding(row: rowIndex, column: columnIndex)
+        )
+        .textFieldStyle(.plain)
+        .font(.system(size: 14, weight: rowIndex == 0 ? .semibold : .regular))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(
+            width: CGFloat(TableBlockChrome.cellWidth),
+            height: CGFloat(TableBlockChrome.cellHeight),
+            alignment: .topLeading
+        )
+        .background(cellBackgroundColor(row: rowIndex, column: columnIndex))
+        .overlay(alignment: .trailing) {
+            if columnIndex < columnCount - 1 {
+                Rectangle()
+                    .fill(Color.secondary.opacity(TableBlockChrome.gridLineOpacity))
+                    .frame(width: 1)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if rowIndex < rowCount - 1 {
+                Rectangle()
+                    .fill(Color.secondary.opacity(TableBlockChrome.gridLineOpacity))
+                    .frame(height: 1)
+            }
+        }
+        .onTapGesture {
+            selection = .empty
+        }
+        .accessibilityIdentifier("editor.table.\(blockID).cell.\(rowIndex).\(columnIndex)")
+    }
+
+    private func cellBackgroundColor(row rowIndex: Int, column columnIndex: Int) -> Color {
+        if selection.rows.contains(rowIndex) || selection.columns.contains(columnIndex) {
+            return Color.accentColor.opacity(0.08)
+        }
+        return rowIndex == 0 ? Color.secondary.opacity(0.012) : Color.white
+    }
+
+    private func rowSelector(_ rowIndex: Int) -> some View {
+        Button {
+            selection = TableSelectionReducer.selectionAfterSelectingRow(
+                rowIndex,
+                current: selection,
+                extend: isShiftPressed
+            )
+        } label: {
+            Capsule()
+                .fill(selection.rows.contains(rowIndex) ? Color.accentColor : Color.secondary.opacity(0.34))
+                .frame(width: 12, height: selection.rows.contains(rowIndex) ? 3 : 2)
+        }
+        .buttonStyle(.borderless)
+        .frame(
+            width: CGFloat(TableBlockChrome.selectorWidth),
+            height: CGFloat(TableBlockChrome.cellHeight)
+        )
+        .contentShape(Rectangle())
+        .help("选择第 \(rowIndex + 1) 行")
+        .accessibilityLabel("选择第 \(rowIndex + 1) 行")
+        .accessibilityIdentifier("editor.table.\(blockID).row-selector.\(rowIndex)")
+    }
+
+    private func columnSelector(_ columnIndex: Int) -> some View {
+        Button {
+            selection = TableSelectionReducer.selectionAfterSelectingColumn(
+                columnIndex,
+                current: selection,
+                extend: isShiftPressed
+            )
+        } label: {
+            Capsule()
+                .fill(selection.columns.contains(columnIndex) ? Color.accentColor : Color.secondary.opacity(0.34))
+                .frame(width: selection.columns.contains(columnIndex) ? 30 : 24, height: 2)
+        }
+        .buttonStyle(.borderless)
+        .frame(
+            width: CGFloat(TableBlockChrome.cellWidth),
+            height: CGFloat(TableBlockChrome.selectorHeight)
+        )
+        .contentShape(Rectangle())
+        .help("选择第 \(columnIndex + 1) 列")
+        .accessibilityLabel("选择第 \(columnIndex + 1) 列")
+        .accessibilityIdentifier("editor.table.\(blockID).column-selector.\(columnIndex)")
+    }
+
+    private func tablePrimaryControl(
+        systemImage: String,
+        help: String,
+        accessibilityLabel: String,
+        accessibilityValue: String,
+        accessibilityIdentifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        TableInsertControl(
+            systemImage: systemImage,
+            help: help,
+            accessibilityLabel: accessibilityLabel,
+            accessibilityValue: accessibilityValue,
+            accessibilityIdentifier: accessibilityIdentifier,
+            action: action
+        )
     }
 
     private func appendRow() {
@@ -4329,17 +5393,218 @@ private struct StructuredTableBlockEditor: View {
         onRowsChange(updatedTable.rows)
     }
 
+    private func deleteSelection() {
+        guard !selection.isEmpty else {
+            return
+        }
+        let updatedRows = TableSelectionReducer.rowsAfterDeletingSelection(selection, from: editableRows)
+        selection = .empty
+        onRowsChange(updatedRows)
+    }
+
+    private var isShiftPressed: Bool {
+#if os(macOS)
+        NSEvent.modifierFlags.contains(.shift)
+#else
+        false
+#endif
+    }
+
     private func normalizedTable() -> MarkdownTableDocument {
         table
     }
 }
 
+private struct TableInsertControl: View {
+    let systemImage: String
+    let help: String
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let accessibilityIdentifier: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(
+                        width: isHovered ? 18 : CGFloat(TableBlockChrome.insertControlVisibleDiameter),
+                        height: isHovered ? 18 : CGFloat(TableBlockChrome.insertControlVisibleDiameter)
+                    )
+
+                if isHovered {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.white)
+                }
+            }
+            .frame(
+                width: CGFloat(TableBlockChrome.primaryControlDiameter),
+                height: CGFloat(TableBlockChrome.primaryControlDiameter)
+            )
+            .contentShape(Circle())
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(accessibilityValue)
+        .accessibilityIdentifier(accessibilityIdentifier)
+#if os(macOS)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+#endif
+    }
+}
+
+#if os(macOS)
+private struct TableDeleteKeyBridge: NSViewRepresentable {
+    let isEnabled: Bool
+    let onDelete: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onDelete: onDelete)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.install()
+        return NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.onDelete = onDelete
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    @MainActor
+    final class Coordinator {
+        var isEnabled = false
+        var onDelete: () -> Void
+        private var monitor: Any?
+
+        init(onDelete: @escaping () -> Void) {
+            self.onDelete = onDelete
+        }
+
+        func install() {
+            guard monitor == nil else {
+                return
+            }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else {
+                    return event
+                }
+                guard isEnabled, (event.keyCode == 51 || event.keyCode == 117) else {
+                    return event
+                }
+                onDelete()
+                return nil
+            }
+        }
+
+        func uninstall() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            monitor = nil
+        }
+    }
+}
+
+private struct DropTargetCleanupEventBridge: NSViewRepresentable {
+    let isEnabled: Bool
+    let onClear: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onClear: onClear)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.install()
+        return NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.onClear = onClear
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    @MainActor
+    final class Coordinator {
+        var isEnabled = false
+        var onClear: () -> Void
+        private var eventMonitor: Any?
+        private var resignObserver: NSObjectProtocol?
+
+        init(onClear: @escaping () -> Void) {
+            self.onClear = onClear
+        }
+
+        func install() {
+            if eventMonitor == nil {
+                eventMonitor = NSEvent.addLocalMonitorForEvents(
+                    matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .keyDown]
+                ) { [weak self] event in
+                    self?.clearIfNeeded()
+                    return event
+                }
+            }
+            if resignObserver == nil {
+                resignObserver = NotificationCenter.default.addObserver(
+                    forName: NSApplication.didResignActiveNotification,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.clearIfNeeded()
+                    }
+                }
+            }
+        }
+
+        func uninstall() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+            }
+            if let resignObserver {
+                NotificationCenter.default.removeObserver(resignObserver)
+            }
+            eventMonitor = nil
+            resignObserver = nil
+        }
+
+        private func clearIfNeeded() {
+            guard isEnabled else {
+                return
+            }
+            onClear()
+        }
+    }
+}
+#endif
+
 private struct PageReferenceBlockRow: View {
     let block: BlockSnapshot
+    let previewText: String?
     let onOpenPageReference: (String) -> Void
 
     private var titleText: String {
-        block.textPlain.isEmpty ? "Untitled" : block.textPlain
+        block.textPlain.isEmpty ? "未命名" : block.textPlain
+    }
+
+    private var normalizedPreviewText: String? {
+        let trimmed = previewText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     var body: some View {
@@ -4350,19 +5615,22 @@ private struct PageReferenceBlockRow: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "doc.text")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                     .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Page")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
                     Text(titleText)
                         .font(.callout.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+
+                    if let normalizedPreviewText {
+                        Text(normalizedPreviewText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
 
                 Spacer(minLength: 8)
@@ -4371,19 +5639,13 @@ private struct PageReferenceBlockRow: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 7)
-            .padding(.horizontal, 8)
-            .background(Color.accentColor.opacity(0.06))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .padding(.vertical, 4)
+            .padding(.horizontal, 2)
         }
         .buttonStyle(.plain)
         .disabled(block.pageReferenceTargetPageID == nil)
-        .accessibilityLabel("Page reference: \(titleText)")
-        .accessibilityValue(block.pageReferenceTargetPageID == nil ? "Unavailable" : "Open page")
+        .accessibilityLabel("页面引用：\(titleText)")
+        .accessibilityValue(block.pageReferenceTargetPageID == nil ? "不可用" : "打开页面")
         .accessibilityIdentifier("editor.page-reference.\(block.id)")
     }
 }
@@ -4393,7 +5655,7 @@ private struct BlockReferenceBlockRow: View {
     let onOpenBlockReference: (String, String) -> Void
 
     private var titleText: String {
-        block.textPlain.isEmpty ? "Referenced block" : block.textPlain
+        block.textPlain.isEmpty ? "引用块" : block.textPlain
     }
 
     var body: some View {
@@ -4410,7 +5672,7 @@ private struct BlockReferenceBlockRow: View {
                     .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Block")
+                    Text("块")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
 
@@ -4437,11 +5699,11 @@ private struct BlockReferenceBlockRow: View {
         }
         .buttonStyle(.plain)
         .disabled(block.pageReferenceTargetPageID == nil || block.blockReferenceTargetBlockID == nil)
-        .accessibilityLabel("Block reference: \(titleText)")
+        .accessibilityLabel("块引用：\(titleText)")
         .accessibilityValue(
             block.pageReferenceTargetPageID == nil || block.blockReferenceTargetBlockID == nil
-                ? "Unavailable"
-                : "Open referenced block"
+                ? "不可用"
+                : "打开引用块"
         )
         .accessibilityIdentifier("editor.block-reference.\(block.id)")
     }
@@ -4451,41 +5713,41 @@ private extension BlockType {
     var editorMenuTitle: String {
         switch self {
         case .paragraph:
-            return "Paragraph"
+            return "正文"
         case .heading1:
-            return "Heading 1"
+            return "一级标题"
         case .heading2:
-            return "Heading 2"
+            return "二级标题"
         case .heading3:
-            return "Heading 3"
+            return "三级标题"
         case .unorderedListItem:
-            return "Bulleted List"
+            return "无序列表"
         case .orderedListItem:
-            return "Numbered List"
+            return "有序列表"
         case .taskItem:
-            return "Task"
+            return "任务"
         case .quote:
-            return "Quote"
+            return "引用"
         case .codeBlock:
-            return "Code"
+            return "代码"
         case .callout:
-            return "Callout"
+            return "提示"
         case .toggle:
-            return "Toggle"
+            return "折叠"
         case .table:
-            return "Table"
+            return "表格"
         case .divider:
-            return "Divider"
+            return "分割线"
         case .pageReference:
-            return "Page Reference"
+            return "页面引用"
         case .blockReference:
-            return "Block Reference"
+            return "块引用"
         case .attachmentImage:
-            return "Image"
+            return "图片"
         case .attachmentVideo:
-            return "Video"
+            return "视频"
         case .attachmentFile:
-            return "File"
+            return "文件"
         }
     }
 
@@ -4543,6 +5805,42 @@ private struct AttachmentBlockRow: View {
             attachment: attachment,
             generationStatus: generationStatus
         )
+        if block.type == .attachmentImage, let thumbnailImage {
+            imageAttachmentBody(thumbnailImage: thumbnailImage, descriptor: descriptor)
+        } else {
+            compactAttachmentBody(descriptor: descriptor)
+        }
+    }
+
+    private func imageAttachmentBody(
+        thumbnailImage: Image,
+        descriptor: AttachmentBlockChromeDescriptor
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            thumbnailImage
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 460, maxHeight: 280, alignment: .leading)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                )
+                .accessibilityHidden(true)
+
+            Text(block.textPlain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+        .accessibilityLabel(descriptor.accessibilityLabel)
+        .accessibilityValue(descriptor.accessibilityValue)
+    }
+
+    private func compactAttachmentBody(descriptor: AttachmentBlockChromeDescriptor) -> some View {
         HStack(spacing: 10) {
             if let thumbnailImage {
                 thumbnailImage
@@ -4565,7 +5863,7 @@ private struct AttachmentBlockRow: View {
                     .frame(width: 52, height: 40)
                     .background(Color.white.opacity(0.65))
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .accessibilityLabel("Generating attachment preview")
+                    .accessibilityLabel("正在生成附件预览")
                     .accessibilityIdentifier("editor.attachment.\(block.id).preview-pending")
             } else {
                 Image(systemName: iconName)
@@ -4593,15 +5891,15 @@ private struct AttachmentBlockRow: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .help("Retry preview")
-                .accessibilityLabel("Retry attachment preview")
+                .help("重试预览")
+                .accessibilityLabel("重试附件预览")
                 .accessibilityIdentifier("editor.attachment.\(block.id).preview-retry")
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(red: 0.97, green: 0.97, blue: 0.95))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color(red: 0.965, green: 0.968, blue: 0.972))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .accessibilityIdentifier(descriptor.accessibilityIdentifier)
         .accessibilityLabel(descriptor.accessibilityLabel)
         .accessibilityValue(descriptor.accessibilityValue)
@@ -4657,18 +5955,18 @@ private struct AttachmentBlockRow: View {
 
     private var kindLabel: String {
         if isPreviewFailed {
-            return "Preview failed"
+            return "预览失败"
         }
 
         switch block.type {
         case .attachmentImage:
-            return isPreviewPending ? "Image, generating preview" : "Image"
+            return isPreviewPending ? "图片，正在生成预览" : "图片"
         case .attachmentVideo:
-            return isPreviewPending ? "Video, generating preview" : "Video"
+            return isPreviewPending ? "视频，正在生成预览" : "视频"
         case .attachmentFile:
-            return "File"
+            return "文件"
         default:
-            return "Text"
+            return "文本"
         }
     }
 }
@@ -4677,8 +5975,8 @@ private struct AttachmentBlockRow: View {
     EditorShellView(
         viewModel: WorkspaceViewModel(
             snapshot: WorkspaceSnapshot(
-                workspaces: [WorkspaceSummary(id: "workspace-local", name: "Local")],
-                pages: [PageSummary(id: "page-welcome", workspaceID: "workspace-local", title: "Welcome")],
+                workspaces: [WorkspaceSummary(id: "workspace-local", name: "本地")],
+                pages: [PageSummary(id: "page-welcome", workspaceID: "workspace-local", title: "欢迎")],
                 blocks: [
                     BlockSnapshot(
                         id: "block-welcome-001",
@@ -4686,7 +5984,7 @@ private struct AttachmentBlockRow: View {
                         parentBlockID: nil,
                         orderKey: "000001",
                         type: .paragraph,
-                        textPlain: "Start writing in blocks."
+                        textPlain: "开始用块写作。"
                     )
                 ],
                 attachments: [],

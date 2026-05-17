@@ -1,14 +1,31 @@
 # Block-First Information Architecture Implementation Plan
 
+> **Historical status:** This plan is retained as execution history. Do not use it as the active plan for Diary, `Cmd+]`, page hierarchy, or Craft-like block UX. Use `docs/superpowers/specs/2026-05-17-craft-like-block-editor-realignment.md` instead.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the visible Notebook-first editor flow with a block-first writing flow: launch into a fast diary editor, show normal pages in All Documents sorted by update time, organize pages with nested tags, and promote selected diary text into a page with `Cmd+]`.
+**Historical Goal:** Replace the visible Notebook-first editor flow with a block-first writing flow: launch into a fast diary editor, show normal pages in All Documents sorted by update time, organize pages with nested tags, and promote selected diary text into a page with `Cmd+]`. This goal was valid for the completed 2026-05-16 slice but is superseded for future work.
 
 **Architecture:** Keep the existing SQLite, PageRepository, WorkspaceViewModel, SearchRepository, NativeTextBlockEditor, and SwiftUI shell foundations. Add focused tag and diary storage boundaries, then move the shell's primary navigation to Diary, All Documents, Favorites, Tags, Search, and Archive while leaving existing Notebook rows as compatibility data behind the visible route.
 
 **Tech Stack:** Swift 6, SwiftUI, XCTest, SQLite3 FTS5, native AppKit/UIKit text wrappers, macOS UI automation through `EditorMacUITests`, cached UI test loop through `scripts/mac_ui_test.sh`.
 
 ---
+
+## 2026-05-17 Product Realignment
+
+This plan completed the first block-first information-architecture migration, but it must not be extended as-is for the next UX slice. The user corrected the target toward a Craft-like daily-page block editor:
+
+- Diary must not stay as one large plain text editor.
+- Diary creates one normal page per day with a diary-derived title.
+- Daily diary pages appear in All Documents and support normal page properties: tags, favorite, archive, search, sync, and child pages.
+- Diary and normal pages share the same block-row editing surface.
+- The permanent format toolbar is not the desired primary interaction.
+- Each row should behave like a block, support drag, and support `变成... > 页面`.
+- `Cmd+]` applies to the focused block in any page, not selected diary text only.
+- Visible product copy should be Chinese.
+
+Future implementation should follow `docs/superpowers/specs/2026-05-17-craft-like-block-editor-realignment.md` before resuming deeper performance or toolbar-first UI coverage. Historical steps below that mention `editor.diary.text`, "Diary text does not appear in All Documents", or diary-only text promotion are kept only as execution history and are not active instructions.
 
 ## Source Spec
 

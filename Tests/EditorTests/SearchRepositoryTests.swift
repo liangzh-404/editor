@@ -34,8 +34,8 @@ final class SearchRepositoryTests: XCTestCase {
         let repository = SearchRepository(database: database)
         try repository.rebuildIndex()
 
-        XCTAssertTrue(try repository.search("Welcome").contains(SearchResult(entityType: "page", entityID: pageID, title: "Welcome", snippet: "Welcome", destinationPageID: pageID)))
-        XCTAssertTrue(try repository.search("Alpha").contains(SearchResult(entityType: "block", entityID: blockID, title: "Welcome", snippet: "Alpha searchable block", destinationPageID: pageID)))
+        XCTAssertTrue(try repository.search("欢迎").contains(SearchResult(entityType: "page", entityID: pageID, title: "欢迎", snippet: "欢迎", destinationPageID: pageID)))
+        XCTAssertTrue(try repository.search("Alpha").contains(SearchResult(entityType: "block", entityID: blockID, title: "欢迎", snippet: "Alpha searchable block", destinationPageID: pageID)))
         XCTAssertTrue(try repository.search("invoice").contains(SearchResult(entityType: "attachment", entityID: attachment.id, title: "invoice-2026.pdf", snippet: "invoice-2026.pdf", destinationPageID: pageID)))
     }
 
@@ -85,24 +85,37 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertLessThan(result.snippet.count, longText.count)
     }
 
-    func testSearchFindsDiaryEntriesWithDiaryResultType() throws {
+    func testSearchFindsDailyDiaryContentAsNormalBlockResult() throws {
         let database = try migratedDatabase()
         defer { database.close() }
         let pageRepository = PageRepository(database: database)
         let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
         let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
         let diaryRepository = DiaryRepository(database: database)
-        let entry = try diaryRepository.activeEntry(workspaceID: workspaceID)
-        try diaryRepository.updateEntryText(entryID: entry.id, text: "Private searchable diary capture")
+        let page = try diaryRepository.openDailyPage(
+            workspaceID: workspaceID,
+            date: Self.date(year: 2026, month: 5, day: 16),
+            calendar: Self.gregorianCalendar
+        )
+        let dailyBlockID = try XCTUnwrap(
+            try pageRepository.loadWorkspaceSnapshot()
+                .blocks
+                .first { $0.pageID == page.id }?
+                .id
+        )
+        try pageRepository.updateBlockText(blockID: dailyBlockID, text: "Private searchable diary capture")
 
-        let results = try SearchRepository(database: database).search("private searchable")
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
 
-        XCTAssertEqual(results.first?.entityType, "diary")
-        XCTAssertEqual(results.first?.entityID, entry.id)
-        XCTAssertNil(results.first?.destinationPageID)
+        let results = try repository.search("private searchable")
+
+        XCTAssertEqual(results.first?.entityType, "block")
+        XCTAssertEqual(results.first?.entityID, dailyBlockID)
+        XCTAssertEqual(results.first?.destinationPageID, page.id)
     }
 
-    func testRebuildIndexFindsExistingDiaryEntries() throws {
+    func testRebuildIndexDoesNotExposeLegacyDiaryEntriesAfterDailyPageMigration() throws {
         let database = try migratedDatabase()
         defer { database.close() }
         let pageRepository = PageRepository(database: database)
@@ -111,14 +124,20 @@ final class SearchRepositoryTests: XCTestCase {
         let diaryRepository = DiaryRepository(database: database)
         let entry = try diaryRepository.activeEntry(workspaceID: workspaceID)
         try diaryRepository.updateEntryText(entryID: entry.id, text: "Rebuild diary searchable")
+        let dailyPage = try diaryRepository.openDailyPage(
+            workspaceID: workspaceID,
+            date: Self.date(year: 2026, month: 5, day: 16),
+            calendar: Self.gregorianCalendar
+        )
 
         let repository = SearchRepository(database: database)
         try database.execute("DELETE FROM search_index")
         try repository.rebuildIndex()
 
         XCTAssertTrue(try repository.search("rebuild diary").contains { result in
-            result.entityType == "diary" && result.entityID == entry.id
+            result.entityType == "block" && result.destinationPageID == dailyPage.id
         })
+        XCTAssertFalse(try repository.search("rebuild diary").contains { $0.entityType == "diary" })
     }
 
     func testUpdateBlockIndexReplacesOnlyChangedBlockEntry() throws {
@@ -145,6 +164,17 @@ final class SearchRepositoryTests: XCTestCase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)
         return database
+    }
+
+    private static var gregorianCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "zh_Hans_CN")
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private static func date(year: Int, month: Int, day: Int) -> Date {
+        gregorianCalendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
 
     private func makeSourceFile(name: String, contents: String) throws -> URL {

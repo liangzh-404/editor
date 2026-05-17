@@ -3,6 +3,12 @@
 Date: 2026-05-12
 Status: Incomplete
 
+## 2026-05-17 UX Correction
+
+The active Diary and Craft-like block-editor direction is now `docs/superpowers/specs/2026-05-17-craft-like-block-editor-realignment.md`.
+
+Historical audit rows below may mention a plain-text Diary lane, diary text excluded from All Documents, toolbar-first UI tests, or `Cmd+]` promotion from selected diary text. Treat those as completed historical slices only, not as active product requirements. The current target is: Diary creates one normal page per day; that daily diary page appears in All Documents and supports normal page properties; `Cmd+]` converts the focused block in any page into a child page.
+
 ## Objective
 
 Implement the approved editor architecture so the app supports the full requested feature set:
@@ -749,9 +755,33 @@ Implement the approved editor architecture so the app supports the full requeste
 - The macOS diary editor now passes `entry?.textPlain` directly into `PlatformDiaryTextEditor` and sends user edits through `onTextChange`; the iOS `TextEditor` path keeps the existing `@State` binding/sync behavior. Selection state is still exposed for the menu command, but no-op selected-text publications are ignored.
 - GREEN evidence: a manual Debug `EditorMac` launch with `OS_ACTIVITY_DT_MODE=YES` emitted no SwiftUI runtime warning; `scripts/mac_ui_test.sh rerun testLaunchStartsInBlankDiaryEditorForFastTyping testCommandRightBracketPromotesSelectedDiaryTextToPage` passed 2 tests and the updated checker reported `No forbidden SwiftUI runtime issues found`; latest `scripts/block_first_final_regression.sh non-ui` passed with focused unit tests reporting 11.554s, then macOS/iOS builds and `git diff --check`; latest `scripts/block_first_final_regression.sh ui` passed 6 macOS UI tests with xcodebuild reporting 105.494s and the updated checker reporting no forbidden SwiftUI runtime issues. The `Cmd+]` xcresult still reports the separate Xcode internal QoS priority-inversion warning, and a main-queue deferral experiment did not remove it, so it remains tracked separately rather than hidden by the SwiftUI gate.
 
+## Recent Craft-Like Block Chrome Realignment
+
+- Reproduction/evidence: Computer Use inspection of the local app showed the page canvas still had a permanent format/action toolbar and every block carried an always-visible vertical type/move/indent/delete strip; local Craft inspection showed clean block rows, left drag handles, contextual `变成...` actions, and an empty-block hint shaped like `按 "/" 快速操作`.
+- `EditorCanvasView` now keeps the page canvas quiet by leaving only `+` and a compact `更多` page menu at the top. Link, inline format, undo, import/export, attachment, page reference, and block reference actions remain available but no longer dominate the default writing surface.
+- `BlockRowView` now uses a Craft-like row treatment: subtle hover/focus highlight, lightweight left drag handle, and a compact `块操作` menu that appears contextually instead of rendering the old vertical tool strip on every block.
+- Core block actions in the contextual menu are Chinese and writing-flow oriented: `下方新增`, `变成...`, `上移`, `下移`, `减少缩进`, `增加缩进`, and `删除`. The `变成...` submenu localizes supported block types such as `正文`, `一级标题`, `任务`, `表格`, `提示`, and `折叠`.
+- Empty text blocks now show the Chinese placeholder `按 "/" 快速操作`, establishing the visual contract for the next slash-command implementation.
+- The primary visible shell, page-list labels, sync status copy, page title placeholder, link panel labels, block/table/outline semantics, and default seed data are now localized to Chinese. Existing untouched default seed rows migrate conservatively from `Local` / `Notebook` / `Welcome` / `Start writing in blocks.` to `本地` / `笔记本` / `欢迎` / `开始用块写作。`, including the old default block prefix when the user had only appended text.
+- The contextual conversion menu now includes `变成... > 页面` for text-editable blocks. It creates a normal page titled from the block text, replaces the source block with a lightweight page-reference row, records the backlink, queues page/block sync changes, and opens the created page for editing.
+- UI coverage was realigned with the new surface: `testBlockContextMenuShowsChineseCoreActions` verifies the contextual Chinese block actions, the page-actions link tests verify link insert/update/remove through `更多 -> 链接`, and the final block-core UI gate stops depending on toolbar-first inline-format tests.
+- GREEN evidence: after the text-block-to-page slice, the focused conversion unit tests passed with xcodebuild reporting 1.063s; `scripts/mac_ui_test.sh run testBlockContextMenuConvertsTextBlockToPage` passed with xcodebuild reporting 21.457s and no forbidden SwiftUI runtime issues; `scripts/block_first_final_regression.sh non-ui` passed focused unit tests with xcodebuild reporting 11.052s, then `EditorMac` build, `EditorIOS` build, and `git diff --check`; `scripts/block_first_final_regression.sh ui` passed the focused macOS UI suite with xcodebuild reporting 234.037s and no forbidden SwiftUI runtime issues. Manual Debug app relaunch showed the visible shell in Chinese, the default page as `欢迎`, and the old default block prefix migrated to `开始用块写作。` in the current local store.
+- Remaining gap: Diary is still a raw `editor.diary.text` surface, mouse drag reorder needs real drop feedback/UI coverage, slash commands are only represented by the placeholder, text-block-to-page does not yet move nested child blocks into the created page, and residual AppKit/system accessibility names such as menu-bar labels remain outside this custom shell localization pass.
+
 ## Next Implementation Slice
 
-The block-first UI/UX path in `docs/superpowers/specs/2026-05-16-block-first-information-architecture-design.md` has landed through `docs/superpowers/plans/2026-05-16-block-first-information-architecture.md`. The next concrete gaps should stay in this order:
+The block-first information-architecture path in `docs/superpowers/specs/2026-05-16-block-first-information-architecture-design.md` has landed, and the first Craft-like chrome reset has removed the most visible toolbar-first mismatch. The active UX target remains `docs/superpowers/specs/2026-05-17-craft-like-block-editor-realignment.md`, based on the user correction and local Craft observation on 2026-05-17.
 
-1. Keep the 22-test `scripts/block_first_final_regression.sh ui` suite in the normal final gate now that local UIAutomation is ready.
-2. Resume deeper performance optimization and broader UI automation from the remaining audit partials, using the passing block-first UI suite as the current baseline.
+The next concrete gaps should stay in this order:
+
+1. Add daily diary page metadata and child-page relation storage while keeping `pages` as the only document source of truth.
+2. Replace the raw Diary `NSTextView` surface with today's normal diary page in the same block-row editor used by all pages; diary pages must appear in All Documents and normal tag/favorite/archive/search flows.
+3. Add a shared editor command dispatcher so `Cmd+]`, `Cmd+[`, block menus, slash commands, and menu-bar commands operate on the focused block/page context.
+4. Deepen text-block-to-page behavior so `Cmd+]` and `变成... > 页面` create a child page, leave a page-reference row in the parent, move nested child blocks into the new page, and show the new page in All Documents.
+5. Finish residual Chinese localization for custom labels exposed only through accessibility/test surfaces, while leaving macOS system menu labels to platform localization.
+6. Turn the current drag-handle affordance into real mouse drag reorder with visible drop feedback, persistence proof, and UI coverage.
+7. Implement a minimal slash command menu behind the existing `按 "/" 快速操作` placeholder, starting with type conversion, insert attachment/reference, and page conversion.
+8. Add live Markdown shortcut transforms for heading, list, task, quote, and code block prefixes.
+9. Continue visual polish for row spacing, hover/focus states, and contextual actions so the editor stays clean while keeping add/change/delete/drag reachable.
+10. Rebuild remaining toolbar-era UI tests around the new Chinese, daily-diary-page, contextual-action, slash, drag, markdown-shortcut, and block-to-page scenarios.
+11. Resume deeper performance optimization after the editor body matches the Craft-like block interaction target.

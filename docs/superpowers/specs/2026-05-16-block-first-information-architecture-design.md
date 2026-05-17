@@ -1,7 +1,18 @@
 # Block-First Information Architecture Design
 
 Date: 2026-05-16
-Status: Proposed for implementation planning
+Status: Historical / superseded for Diary and editor UX
+
+2026-05-17 realignment: this spec correctly moved the app away from Notebook-first navigation, but its Diary model is no longer valid. Do not continue implementation from this document for Diary, `Cmd+]`, page hierarchy, or block UX.
+
+Active source of truth: `docs/superpowers/specs/2026-05-17-craft-like-block-editor-realignment.md`.
+
+Key correction:
+
+- Diary is not a plain-text capture lane.
+- Diary creates one normal page per day with a diary-derived title.
+- Daily diary pages appear in All Documents and support normal page properties such as tags, favorite, archive, search, sync, and child pages.
+- `Cmd+]` applies to the focused block in any page, not only selected text inside a diary text editor.
 
 ## Context
 

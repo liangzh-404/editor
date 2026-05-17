@@ -25,18 +25,10 @@ UI_TESTS=(
     "testForwardDeleteAtEndMergesTextBlockWithNextBlock"
     "testBoundaryArrowKeysMoveFocusBetweenTextBlocks"
     "testAddButtonCreatesNextBlockAndKeepsTypingInEditor"
-    "testItalicToolbarInsertsPlaceholderAndKeepsTypingInEditor"
-    "testBoldToolbarInsertsPlaceholderAndKeepsTypingInEditor"
-    "testCodeToolbarInsertsPlaceholderAndKeepsTypingInEditor"
-    "testStrikethroughToolbarInsertsPlaceholderAndKeepsTypingInEditor"
-    "testInlineLinkPanelReplacesSelectionAndKeepsLabelSelected"
+    "testBlockContextMenuShowsChineseCoreActions"
+    "testBlockContextMenuConvertsTextBlockToPage"
     "testCommandRightBracketPromotesSelectedDiaryTextToPage"
     "testPageFavoriteToggleUpdatesSidebarAndRowState"
-    "testMarkdownImportToolbarRendersAndExportsMultilineQuoteAndCalloutBlocks"
-    "testMarkdownExportToolbarCapturesCurrentPageMarkdown"
-    "testCommandKOpensInlineLinkPanelForSelection"
-    "testCommandKUpdatesExistingInlineLinkUnderSelection"
-    "testCommandKRemovesExistingInlineLinkUnderSelection"
 )
 
 usage() {
