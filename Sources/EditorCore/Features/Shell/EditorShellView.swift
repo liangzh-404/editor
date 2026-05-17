@@ -118,6 +118,7 @@ private struct ThreeColumnEditorShell: View {
                     allBlocks: viewModel.snapshot.blocks,
                     attachments: viewModel.snapshot.attachments,
                     attachmentPreviewGenerationStatuses: viewModel.attachmentPreviewGenerationStatuses,
+                    markdownImportStatusText: viewModel.markdownImportStatusText,
                     backlinks: viewModel.selectedPageBacklinks,
                     externalLinks: viewModel.selectedPageExternalLinks,
                     conflicts: viewModel.selectedPageConflicts,
@@ -525,6 +526,7 @@ private struct CompactPageDestination: View {
                 allBlocks: viewModel.snapshot.blocks,
                 attachments: viewModel.snapshot.attachments,
                 attachmentPreviewGenerationStatuses: viewModel.attachmentPreviewGenerationStatuses,
+                markdownImportStatusText: viewModel.markdownImportStatusText,
                 backlinks: viewModel.selectedPageBacklinks,
                 externalLinks: viewModel.selectedPageExternalLinks,
                 conflicts: viewModel.selectedPageConflicts,
@@ -1828,6 +1830,7 @@ private struct EditorCanvasView: View {
     let allBlocks: [BlockSnapshot]
     let attachments: [AttachmentSnapshot]
     let attachmentPreviewGenerationStatuses: [String: AttachmentPreviewGenerationStatus]
+    let markdownImportStatusText: String?
     let backlinks: [Backlink]
     let externalLinks: [ExternalLink]
     let conflicts: [ConflictSnapshot]
@@ -2040,6 +2043,27 @@ private struct EditorCanvasView: View {
 
                 if isInlineLinkPopoverPresented {
                     inlineLinkPopover
+                }
+
+                if let markdownImportStatusText {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+
+                        Text(markdownImportStatusText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 8)
+                    .background(Color.orange.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .accessibilityIdentifier("editor.markdown-import-status")
                 }
 
 #if DEBUG

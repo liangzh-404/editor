@@ -1194,6 +1194,35 @@ final class WorkspaceViewModelTests: XCTestCase {
             ]
         )
         XCTAssertEqual(viewModel.snapshot.attachments, [])
+        XCTAssertEqual(viewModel.markdownImportStatusText, "Missing attachment: missing.txt")
+    }
+
+    @MainActor
+    func testPlainMarkdownImportClearsPreviousMarkdownImportStatus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            attachmentRepository: attachmentRepository
+        )
+        try viewModel.load()
+        let packageDirectory = makeTemporaryDirectory()
+        let markdownURL = packageDirectory.appendingPathComponent("Welcome.md")
+        try "[missing.txt](Attachments/source-attachment/missing.txt)"
+            .write(to: markdownURL, atomically: true, encoding: .utf8)
+        try viewModel.importMarkdownPackageToCurrentPage(markdownURL: markdownURL)
+        XCTAssertEqual(viewModel.markdownImportStatusText, "Missing attachment: missing.txt")
+
+        try viewModel.importMarkdownToCurrentPage("Plain import")
+
+        XCTAssertNil(viewModel.markdownImportStatusText)
     }
 
     @MainActor

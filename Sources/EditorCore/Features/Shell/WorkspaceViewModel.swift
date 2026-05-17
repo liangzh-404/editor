@@ -45,6 +45,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var canUndoTextEdit = false
     @Published private(set) var canUndoPageArchive = false
     @Published private(set) var attachmentPreviewGenerationStatuses: [String: AttachmentPreviewGenerationStatus] = [:]
+    @Published private(set) var markdownImportStatusText: String?
 
     private let repository: PageRepository?
     private let diaryRepository: DiaryRepository?
@@ -1974,6 +1975,7 @@ final class WorkspaceViewModel: ObservableObject {
 
         try repository.importMarkdown(pageID: selectedPageID, markdown: markdown)
         try load()
+        markdownImportStatusText = nil
     }
 
     func importMarkdownPackageToCurrentPage(markdownURL: URL) throws {
@@ -1987,6 +1989,7 @@ final class WorkspaceViewModel: ObservableObject {
         let markdown = try String(contentsOf: markdownURL, encoding: .utf8)
         let packageDirectory = markdownURL.deletingLastPathComponent()
         var importedAttachments: [AttachmentImportResult] = []
+        var missingAttachmentNames: [String] = []
         try repository.importMarkdown(pageID: selectedPageID, markdown: markdown) { [attachmentRepository] draft in
             guard let relativePath = draft.attachmentRelativePath else {
                 return nil
@@ -1998,6 +2001,7 @@ final class WorkspaceViewModel: ObservableObject {
                 packageDirectory: packageDirectory,
                 relativePath: relativePath
             ) else {
+                missingAttachmentNames.append(draft.textPlain)
                 return nil
             }
 
@@ -2011,6 +2015,7 @@ final class WorkspaceViewModel: ObservableObject {
             return result
         }
         try load()
+        markdownImportStatusText = Self.markdownImportStatusText(missingAttachmentNames: missingAttachmentNames)
         for result in importedAttachments {
             scheduleMissingAttachmentThumbnail(attachmentID: result.attachment.id)
         }
@@ -2139,6 +2144,17 @@ final class WorkspaceViewModel: ObservableObject {
             return nil
         }
         return sourceURL
+    }
+
+    private static func markdownImportStatusText(missingAttachmentNames: [String]) -> String? {
+        guard !missingAttachmentNames.isEmpty else {
+            return nil
+        }
+        let uniqueNames = Array(Set(missingAttachmentNames)).sorted()
+        if uniqueNames.count == 1 {
+            return "Missing attachment: \(uniqueNames[0])"
+        }
+        return "Missing attachments: \(uniqueNames.joined(separator: ", "))"
     }
 
     private func scheduleMissingAttachmentThumbnail(attachmentID: String) {
