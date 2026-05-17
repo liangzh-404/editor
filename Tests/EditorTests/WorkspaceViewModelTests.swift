@@ -506,6 +506,30 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAsteriskTaskMarkdownShortcutUpdatesBlockCompletion() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "* [X] ")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .taskItem)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.taskItemIsCompleted, true)
+
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.type, .taskItem)
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "")
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.taskItemIsCompleted, true)
+    }
+
+    @MainActor
     func testChangeBlockTypeRefreshesVisibleBlockAndQueuesSyncChange() throws {
         let database = try migratedDatabase()
         defer { database.close() }

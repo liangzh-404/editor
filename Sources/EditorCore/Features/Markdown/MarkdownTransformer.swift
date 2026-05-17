@@ -1059,13 +1059,23 @@ enum MarkdownTransformer {
             return MarkdownShortcutTransform(type: .heading3, textPlain: "")
         case "- ":
             return MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
+        case "* ", "+ ":
+            return MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
         case "1. ":
             return MarkdownShortcutTransform(type: .orderedListItem, textPlain: "")
         case "> ":
             return MarkdownShortcutTransform(type: .quote, textPlain: "")
         case "- [ ] ":
             return MarkdownShortcutTransform(type: .taskItem, textPlain: "")
+        case "* [ ] ", "+ [ ] ":
+            return MarkdownShortcutTransform(type: .taskItem, textPlain: "")
         case "- [x] ", "- [X] ":
+            return MarkdownShortcutTransform(
+                type: .taskItem,
+                textPlain: "",
+                taskItemIsCompleted: true
+            )
+        case "* [x] ", "* [X] ", "+ [x] ", "+ [X] ":
             return MarkdownShortcutTransform(
                 type: .taskItem,
                 textPlain: "",
@@ -1256,18 +1266,11 @@ enum MarkdownTransformer {
         if line.hasPrefix("# ") {
             return MarkdownBlockDraft(type: .heading1, textPlain: String(line.dropFirst(2)))
         }
-        if line.hasPrefix("- [ ] ") {
-            return MarkdownBlockDraft(type: .taskItem, textPlain: String(line.dropFirst(6)))
+        if let taskItemDraft = taskItemDraft(for: line) {
+            return taskItemDraft
         }
-        if line.hasPrefix("- [x] ") || line.hasPrefix("- [X] ") {
-            return MarkdownBlockDraft(
-                type: .taskItem,
-                textPlain: String(line.dropFirst(6)),
-                taskItemIsCompleted: true
-            )
-        }
-        if line.hasPrefix("- ") {
-            return MarkdownBlockDraft(type: .unorderedListItem, textPlain: String(line.dropFirst(2)))
+        if let unorderedListText = unorderedListItemText(for: line) {
+            return MarkdownBlockDraft(type: .unorderedListItem, textPlain: unorderedListText)
         }
         if let orderedListText = orderedListItemText(for: line) {
             return MarkdownBlockDraft(type: .orderedListItem, textPlain: orderedListText)
@@ -1295,6 +1298,27 @@ enum MarkdownTransformer {
         }
 
         return MarkdownBlockDraft(type: .paragraph, textPlain: line)
+    }
+
+    private static func taskItemDraft(for line: String) -> MarkdownBlockDraft? {
+        for marker in ["- [ ] ", "* [ ] ", "+ [ ] "] where line.hasPrefix(marker) {
+            return MarkdownBlockDraft(type: .taskItem, textPlain: String(line.dropFirst(marker.count)))
+        }
+        for marker in ["- [x] ", "- [X] ", "* [x] ", "* [X] ", "+ [x] ", "+ [X] "] where line.hasPrefix(marker) {
+            return MarkdownBlockDraft(
+                type: .taskItem,
+                textPlain: String(line.dropFirst(marker.count)),
+                taskItemIsCompleted: true
+            )
+        }
+        return nil
+    }
+
+    private static func unorderedListItemText(for line: String) -> String? {
+        for marker in ["- ", "* ", "+ "] where line.hasPrefix(marker) {
+            return String(line.dropFirst(marker.count))
+        }
+        return nil
     }
 
     private static func orderedListItemText(for line: String) -> String? {

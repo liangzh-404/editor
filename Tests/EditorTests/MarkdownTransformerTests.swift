@@ -20,6 +20,14 @@ final class MarkdownTransformerTests: XCTestCase {
             MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
         )
         XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "* "),
+            MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "+ "),
+            MarkdownShortcutTransform(type: .unorderedListItem, textPlain: "")
+        )
+        XCTAssertEqual(
             MarkdownTransformer.shortcutTransform(for: "2. "),
             MarkdownShortcutTransform(type: .orderedListItem, textPlain: "")
         )
@@ -36,7 +44,19 @@ final class MarkdownTransformerTests: XCTestCase {
             MarkdownShortcutTransform(type: .taskItem, textPlain: "")
         )
         XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "* [ ] "),
+            MarkdownShortcutTransform(type: .taskItem, textPlain: "")
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "+ [ ] "),
+            MarkdownShortcutTransform(type: .taskItem, textPlain: "")
+        )
+        XCTAssertEqual(
             MarkdownTransformer.shortcutTransform(for: "- [x] "),
+            MarkdownShortcutTransform(type: .taskItem, textPlain: "", taskItemIsCompleted: true)
+        )
+        XCTAssertEqual(
+            MarkdownTransformer.shortcutTransform(for: "* [X] "),
             MarkdownShortcutTransform(type: .taskItem, textPlain: "", taskItemIsCompleted: true)
         )
         XCTAssertEqual(
@@ -89,9 +109,13 @@ final class MarkdownTransformerTests: XCTestCase {
 
                     Body paragraph
 
-                    - Item
+                    * Item
+
+                    + Next item
 
                     - [ ] Task
+
+                    * [x] Done
 
                     > Quote
 
@@ -104,7 +128,9 @@ final class MarkdownTransformerTests: XCTestCase {
                 MarkdownBlockDraft(type: .heading3, textPlain: "Detail"),
                 MarkdownBlockDraft(type: .paragraph, textPlain: "Body paragraph"),
                 MarkdownBlockDraft(type: .unorderedListItem, textPlain: "Item"),
+                MarkdownBlockDraft(type: .unorderedListItem, textPlain: "Next item"),
                 MarkdownBlockDraft(type: .taskItem, textPlain: "Task"),
+                MarkdownBlockDraft(type: .taskItem, textPlain: "Done", taskItemIsCompleted: true),
                 MarkdownBlockDraft(type: .quote, textPlain: "Quote"),
                 MarkdownBlockDraft(type: .divider, textPlain: "")
             ]
@@ -118,11 +144,14 @@ final class MarkdownTransformerTests: XCTestCase {
                     """
                     - [x] Done
 
-                    - [ ] Todo
+                    * [X] Done too
+
+                    + [ ] Todo
                     """
             ),
             [
                 MarkdownBlockDraft(type: .taskItem, textPlain: "Done", taskItemIsCompleted: true),
+                MarkdownBlockDraft(type: .taskItem, textPlain: "Done too", taskItemIsCompleted: true),
                 MarkdownBlockDraft(type: .taskItem, textPlain: "Todo", taskItemIsCompleted: false)
             ]
         )
