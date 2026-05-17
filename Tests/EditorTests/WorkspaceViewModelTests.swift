@@ -1295,6 +1295,35 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testImportMarkdownToCurrentPagePreservesPageRouteAfterDiaryLaunch() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database)
+        )
+        try viewModel.load()
+        viewModel.selectPage(id: pageID)
+
+        try viewModel.importMarkdownToCurrentPage(
+            """
+            # Imported
+
+            Body
+            """
+        )
+
+        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+        XCTAssertEqual(viewModel.selectedPageID, pageID)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.heading1, .paragraph])
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Imported", "Body"])
+    }
+
+    @MainActor
     func testSelectedPageOutlineTracksHeadingBlocksAndSelectionFocus() throws {
         let database = try migratedDatabase()
         defer { database.close() }

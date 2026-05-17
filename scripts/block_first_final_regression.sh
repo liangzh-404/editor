@@ -19,6 +19,7 @@ UI_TESTS=(
     "testAllDocumentsListShowsPagesSortedByUpdatedTime"
     "testCommandRightBracketPromotesSelectedDiaryTextToPage"
     "testPageFavoriteToggleUpdatesSidebarAndRowState"
+    "testMarkdownImportToolbarRendersAndExportsMultilineQuoteAndCalloutBlocks"
     "testMarkdownExportToolbarCapturesCurrentPageMarkdown"
 )
 

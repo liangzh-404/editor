@@ -66,6 +66,39 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    private func openWelcomePageForPageToolbarActions(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let allDocuments = app.buttons["editor.collection.all-documents"]
+        XCTAssertTrue(
+            allDocuments.waitForExistence(timeout: 5),
+            "All Documents should be visible before using page toolbar actions",
+            file: file,
+            line: line
+        )
+        allDocuments.click()
+
+        let welcome = app.element(identifier: "editor.page-row.page-welcome")
+        XCTAssertTrue(
+            welcome.waitForExistence(timeout: 5),
+            "Welcome page row should be visible before using page toolbar actions",
+            file: file,
+            line: line
+        )
+        welcome.click()
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(
+            textView.waitForExistence(timeout: 5),
+            "Welcome block should be loaded before using page toolbar actions",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
     func testLaunchStartsInBlankDiaryEditorForFastTyping() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
@@ -1575,6 +1608,8 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_UI_TEST_MARKDOWN_IMPORT_TEXT"] = "# Imported Heading\n\nImported paragraph from toolbar"
         app.launch()
 
+        openWelcomePageForPageToolbarActions(in: app)
+
         let importButton = app.buttons["editor.import-markdown"]
         XCTAssertTrue(importButton.waitForExistence(timeout: 5), "Markdown import toolbar button should be visible")
         importButton.click()
@@ -1584,7 +1619,99 @@ final class EditorMacEditingUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(
             importedParagraph.waitForExistence(timeout: 5),
-            "Clicking the Markdown import toolbar button should import the fixture file into the editor"
+            "Clicking the Markdown import toolbar button should import the fixture file into the editor; textViews=\(textViewValues(in: app))"
+        )
+    }
+
+    @MainActor
+    func testMarkdownImportToolbarRendersAndExportsMultilineQuoteAndCalloutBlocks() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launchEnvironment["EDITOR_UI_TEST_MARKDOWN_IMPORT_TEXT"] = """
+        > First quote line
+        > second quote line
+
+        > [!NOTE] First callout line
+        > second callout line
+
+        Body after blocks
+        """
+        app.launchEnvironment["EDITOR_UI_TEST_MARKDOWN_EXPORT_CAPTURE"] = "1"
+        app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
+
+        let importButton = app.buttons["editor.import-markdown"]
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5), "Markdown import toolbar button should be visible")
+        importButton.click()
+
+        let quote = app.element(identifierPrefix: "editor.quote.")
+        XCTAssertTrue(
+            quote.waitForExistence(timeout: 5),
+            "Markdown import should render a semantic quote block; textViews=\(textViewValues(in: app))"
+        )
+        XCTAssertTrue(
+            quote.waitForLabelOrValue(containing: "Quote block", timeout: 5),
+            "Imported quote block should expose semantic quote chrome"
+        )
+
+        let quoteText = app.textViews
+            .matching(NSPredicate(format: "value CONTAINS %@", "First quote line"))
+            .firstMatch
+        XCTAssertTrue(
+            quoteText.waitForExistence(timeout: 5),
+            "Imported quote block should keep its first line in the native text view; textViews=\(textViewValues(in: app))"
+        )
+        XCTAssertTrue(
+            quoteText.waitForValue(containing: "second quote line", timeout: 5),
+            "Imported quote block should preserve its continuation line"
+        )
+
+        let callout = app.element(identifierPrefix: "editor.callout.")
+        XCTAssertTrue(callout.waitForExistence(timeout: 5), "Markdown import should render a semantic callout block")
+        XCTAssertTrue(
+            callout.waitForLabelOrValue(containing: "Callout block", timeout: 5),
+            "Imported callout block should expose semantic callout chrome"
+        )
+
+        let calloutText = app.textViews
+            .matching(NSPredicate(format: "value CONTAINS %@", "First callout line"))
+            .firstMatch
+        XCTAssertTrue(
+            calloutText.waitForExistence(timeout: 5),
+            "Imported callout block should keep its first line in the native text view; textViews=\(textViewValues(in: app))"
+        )
+        XCTAssertTrue(
+            calloutText.waitForValue(containing: "second callout line", timeout: 5),
+            "Imported callout block should preserve its continuation line"
+        )
+
+        let body = app.textViews
+            .matching(NSPredicate(format: "value CONTAINS %@", "Body after blocks"))
+            .firstMatch
+        XCTAssertTrue(body.waitForExistence(timeout: 5), "Markdown import should keep following body text")
+
+        let exportButton = app.buttons["editor.export-markdown"]
+        XCTAssertTrue(exportButton.waitForExistence(timeout: 5), "Markdown export toolbar button should be visible")
+        exportButton.click()
+
+        let exportedMarkdown = app.staticTexts["editor.markdown-export-test-output"]
+        XCTAssertTrue(exportedMarkdown.waitForExistence(timeout: 5), "Markdown export should publish captured test output")
+        XCTAssertTrue(
+            exportedMarkdown.waitForLabelOrValue(containing: "> First quote line", timeout: 5),
+            "Exported Markdown should keep the quote prefix on the first line"
+        )
+        XCTAssertTrue(
+            exportedMarkdown.waitForLabelOrValue(containing: "> second quote line", timeout: 5),
+            "Exported Markdown should keep the quote prefix on continuation lines"
+        )
+        XCTAssertTrue(
+            exportedMarkdown.waitForLabelOrValue(containing: "> [!NOTE] First callout line", timeout: 5),
+            "Exported Markdown should keep the callout marker on the first line"
+        )
+        XCTAssertTrue(
+            exportedMarkdown.waitForLabelOrValue(containing: "> second callout line", timeout: 5),
+            "Exported Markdown should keep the callout prefix on continuation lines"
         )
     }
 
@@ -1595,6 +1722,8 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_UI_TEST_MARKDOWN_IMPORT_TEXT"] =
             "# Imported Heading\n\n## Imported Section\n\n### Imported Detail\n\nImported paragraph from toolbar"
         app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
 
         let importButton = app.buttons["editor.import-markdown"]
         XCTAssertTrue(importButton.waitForExistence(timeout: 5), "Markdown import toolbar button should be visible")
@@ -1636,13 +1765,7 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_UI_TEST_MARKDOWN_EXPORT_CAPTURE"] = "1"
         app.launch()
 
-        let allDocuments = app.buttons["editor.collection.all-documents"]
-        XCTAssertTrue(allDocuments.waitForExistence(timeout: 5), "All Documents should be visible before exporting a page")
-        allDocuments.click()
-
-        let welcome = app.element(identifier: "editor.page-row.page-welcome")
-        XCTAssertTrue(welcome.waitForExistence(timeout: 5), "Welcome page row should be visible before exporting")
-        welcome.click()
+        openWelcomePageForPageToolbarActions(in: app)
 
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome block should be loaded before exporting")
@@ -1926,6 +2049,17 @@ private extension XCUIApplication {
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: self)
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
+}
+
+@MainActor
+private func textViewValues(in application: XCUIApplication) -> String {
+    application.textViews.allElementsBoundByIndex
+        .map { element in
+            let identifier = element.identifier.isEmpty ? "<no-id>" : element.identifier
+            let value = element.value as? String ?? element.label
+            return "\(identifier)=\(value)"
+        }
+        .joined(separator: " | ")
 }
 
 private extension String {

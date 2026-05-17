@@ -1204,12 +1204,12 @@ Run:
 
 ```bash
 scripts/mac_ui_test.sh build
-scripts/mac_ui_test.sh rerun testLaunchStartsInBlankDiaryEditorForFastTyping testAllDocumentsListShowsPagesSortedByUpdatedTime testCommandRightBracketPromotesSelectedDiaryTextToPage testPageFavoriteToggleUpdatesSidebarAndRowState testMarkdownExportToolbarCapturesCurrentPageMarkdown
+scripts/mac_ui_test.sh rerun testLaunchStartsInBlankDiaryEditorForFastTyping testAllDocumentsListShowsPagesSortedByUpdatedTime testCommandRightBracketPromotesSelectedDiaryTextToPage testPageFavoriteToggleUpdatesSidebarAndRowState testMarkdownImportToolbarRendersAndExportsMultilineQuoteAndCalloutBlocks testMarkdownExportToolbarCapturesCurrentPageMarkdown
 ```
 
 Expected: PASS.
 
-Current status: PASS. After enabling local macOS automation access, `scripts/block_first_final_regression.sh doctor` reported Developer mode enabled, System Events UI elements enabled, `_developer` membership present, and "macOS UI Automation preflight is ready." The first focused UI suite reached business test cases and failed only `testMarkdownExportToolbarCapturesCurrentPageMarkdown` because the test still assumed the Welcome page editor was visible at launch; the block-first shell correctly launches into Diary. The test now explicitly opens All Documents and selects Welcome before exporting. A refreshed single rerun of `testMarkdownExportToolbarCapturesCurrentPageMarkdown` passed after rebuilding the cached xctestrun, and the latest full `scripts/block_first_final_regression.sh ui` passed with xcodebuild reporting 85.504s.
+Current status: PASS. After enabling local macOS automation access, `scripts/block_first_final_regression.sh doctor` reported Developer mode enabled, System Events UI elements enabled, `_developer` membership present, and "macOS UI Automation preflight is ready." The first focused UI suite reached business test cases and failed only `testMarkdownExportToolbarCapturesCurrentPageMarkdown` because the test still assumed the Welcome page editor was visible at launch; the block-first shell correctly launches into Diary. The test now explicitly opens All Documents and selects Welcome before exporting. A refreshed single rerun of `testMarkdownExportToolbarCapturesCurrentPageMarkdown` passed after rebuilding the cached xctestrun, and a full `scripts/block_first_final_regression.sh ui` passed with xcodebuild reporting 85.504s. The latest refreshed UI gate now includes multiline quote/callout Markdown import-render-export coverage and passed 6 tests with xcodebuild reporting 98.792s.
 
 - [x] **Step 4: Run app builds**
 

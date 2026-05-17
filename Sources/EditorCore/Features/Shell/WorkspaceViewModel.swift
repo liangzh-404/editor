@@ -57,6 +57,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let conflictRepository: ConflictRepository?
     private let syncEngine: SyncEngine?
     private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
+    private var hasLoadedSnapshot = false
     private var didRequestInitialEditorFocus = false
     private var textEditUndoStack: [TextEditUndoSnapshot] = []
     private var pageArchiveUndoStack: [PageArchiveUndoSnapshot] = []
@@ -204,9 +205,22 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        let previousSelectedCollection = selectedCollection
+        let previousSelectedPageID = selectedPageID
+        let shouldRestorePreviousSelection = hasLoadedSnapshot
+        let shouldLaunchIntoDiary = !hasLoadedSnapshot && diaryRepository != nil
         let loadedSnapshot = try repository.loadWorkspaceSnapshot()
         apply(snapshot: loadedSnapshot)
-        try applyDiaryLaunchStateIfAvailable()
+        try refreshActiveDiaryEntryIfAvailable()
+        if shouldLaunchIntoDiary {
+            selectCollection(.diary)
+        } else if shouldRestorePreviousSelection {
+            restoreSelectionAfterReload(
+                collection: previousSelectedCollection,
+                pageID: previousSelectedPageID
+            )
+        }
+        hasLoadedSnapshot = true
         try refreshDerivedState(rebuildSearchIndex: true)
         requestInitialEditorFocusIfNeeded(source: "load")
     }
@@ -2221,14 +2235,40 @@ final class WorkspaceViewModel: ObservableObject {
         activeDiaryEntry = snapshot.activeDiaryEntry
     }
 
-    private func applyDiaryLaunchStateIfAvailable() throws {
+    private func refreshActiveDiaryEntryIfAvailable() throws {
         guard let diaryRepository, let selectedWorkspaceID else {
             return
         }
 
         activeDiaryEntry = try diaryRepository.activeEntry(workspaceID: selectedWorkspaceID)
-        selectedCollection = .diary
-        selectedPageID = nil
+    }
+
+    private func restoreSelectionAfterReload(collection: WorkspaceCollection, pageID: String?) {
+        selectedCollection = collection
+        if collection == .diary {
+            selectedPageID = nil
+            selectedPageBacklinks = []
+            selectedPageExternalLinks = []
+            selectedPageConflicts = []
+            return
+        }
+
+        guard let pageID, canRestoreSelection(pageID: pageID, in: collection) else {
+            return
+        }
+
+        selectedPageID = pageID
+    }
+
+    private func canRestoreSelection(pageID: String, in collection: WorkspaceCollection) -> Bool {
+        switch collection {
+        case .diary:
+            return false
+        case .archive:
+            return snapshot.archivedPages.contains { $0.id == pageID }
+        case .allDocuments, .favorites, .tag, .search:
+            return snapshot.pages.contains { $0.id == pageID }
+        }
     }
 
     private func requestFocusForInitialEmptyBlockIfNeeded(source: String) {
