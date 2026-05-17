@@ -313,6 +313,12 @@ private struct ThreeColumnEditorShell: View {
                     onImportAttachment: { sourceURL in
                         viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
                     },
+                    onImportAttachmentsAfterBlock: { sourceURLs, blockID in
+                        viewModel.importAttachmentsForCurrentPage(
+                            sourceURLs: sourceURLs,
+                            afterBlockID: blockID
+                        )
+                    },
                     onRetryAttachmentPreview: { attachmentID in
                         viewModel.retryAttachmentPreviewGeneration(attachmentID: attachmentID)
                     },
@@ -1228,6 +1234,12 @@ private struct CompactPageDestination: View {
                 },
                 onImportAttachment: { sourceURL in
                     viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL)
+                },
+                onImportAttachmentsAfterBlock: { sourceURLs, blockID in
+                    viewModel.importAttachmentsForCurrentPage(
+                        sourceURLs: sourceURLs,
+                        afterBlockID: blockID
+                    )
                 },
                 onRetryAttachmentPreview: { attachmentID in
                     viewModel.retryAttachmentPreviewGeneration(attachmentID: attachmentID)
@@ -2684,6 +2696,7 @@ private struct EditorCanvasView: View {
     let onToggleBlockExpansion: (String) -> Void
     let isToggleBlockExpanded: (String) -> Bool
     let onImportAttachment: (URL) -> Void
+    let onImportAttachmentsAfterBlock: ([URL], String) -> Bool
     let onRetryAttachmentPreview: (String) -> Void
     let onPendingBlockFocusHandled: () -> Void
     @State private var isAttachmentImporterPresented = false
@@ -2881,8 +2894,7 @@ private struct EditorCanvasView: View {
                             guard !urls.isEmpty else {
                                 return false
                             }
-                            urls.forEach(onImportAttachment)
-                            return true
+                            return onImportAttachmentsAfterBlock(urls, block.id)
                         },
                         onDelete: {
                             onDeleteBlock(block.id)

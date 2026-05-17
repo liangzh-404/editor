@@ -488,6 +488,93 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUIAttachmentPasteInsertsAfterSourceBlockInsteadOfAppendingToEnd() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try pageRepository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                """
+        )
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let sourceURL = try makeSourceFile(name: "screen.png", data: Self.onePixelPNGData)
+
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil
+        )
+        try viewModel.load()
+        let firstBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        let result = try XCTUnwrap(
+            viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL, afterBlockID: firstBlockID)
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph, .attachmentImage, .paragraph])
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["First", "screen.png", "Second"])
+        XCTAssertEqual(viewModel.visibleBlocks[1].id, result.block.id)
+    }
+
+    @MainActor
+    func testUIAttachmentBatchPastePreservesSourceOrderAfterSourceBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try pageRepository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                First
+                Second
+                """
+        )
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let firstSourceURL = try makeSourceFile(name: "one.png", data: Self.onePixelPNGData)
+        let secondSourceURL = try makeSourceFile(name: "two.png", data: Self.onePixelPNGData)
+
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil
+        )
+        try viewModel.load()
+        let firstBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        XCTAssertTrue(
+            viewModel.importAttachmentsForCurrentPage(
+                sourceURLs: [firstSourceURL, secondSourceURL],
+                afterBlockID: firstBlockID
+            )
+        )
+
+        XCTAssertEqual(
+            viewModel.visibleBlocks.map(\.textPlain),
+            ["First", "one.png", "two.png", "Second"]
+        )
+        XCTAssertEqual(
+            viewModel.visibleBlocks.map(\.type),
+            [.paragraph, .attachmentImage, .attachmentImage, .paragraph]
+        )
+    }
+
+    @MainActor
     func testUIAttachmentImportSchedulesBackgroundThumbnailGeneration() throws {
         let database = try migratedDatabase()
         defer { database.close() }

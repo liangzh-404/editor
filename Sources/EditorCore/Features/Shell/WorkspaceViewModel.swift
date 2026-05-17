@@ -2489,19 +2489,68 @@ final class WorkspaceViewModel: ObservableObject {
         refreshSearchResults()
     }
 
-    func importAttachmentForCurrentPage(sourceURL: URL) {
+    @discardableResult
+    func importAttachmentForCurrentPage(
+        sourceURL: URL,
+        afterBlockID: String? = nil
+    ) -> AttachmentImportResult? {
         do {
             let result = try importAttachment(
                 sourceURL: sourceURL,
                 thumbnailPolicy: .deferred
             )
+            if let afterBlockID {
+                try moveImportedAttachmentBlock(result.block.id, afterBlockID: afterBlockID)
+            }
             scheduleMissingAttachmentThumbnail(attachmentID: result.attachment.id)
             EditorLog.attachment.debug("attachment_import_visible source=\(sourceURL.lastPathComponent, privacy: .public)")
+            return result
         } catch {
             EditorLog.attachment.error(
                 "attachment_import_failed source=\(sourceURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
+            return nil
         }
+    }
+
+    @discardableResult
+    func importAttachmentsForCurrentPage(
+        sourceURLs: [URL],
+        afterBlockID: String
+    ) -> Bool {
+        guard !sourceURLs.isEmpty else {
+            return false
+        }
+
+        var insertionAnchorBlockID = afterBlockID
+        var didImportAttachment = false
+        for sourceURL in sourceURLs {
+            guard let result = importAttachmentForCurrentPage(
+                sourceURL: sourceURL,
+                afterBlockID: insertionAnchorBlockID
+            ) else {
+                continue
+            }
+            insertionAnchorBlockID = result.block.id
+            didImportAttachment = true
+        }
+        return didImportAttachment
+    }
+
+    private func moveImportedAttachmentBlock(
+        _ blockID: String,
+        afterBlockID: String
+    ) throws {
+        guard blockID != afterBlockID else {
+            return
+        }
+
+        let remainingBlocks = visibleBlocks.filter { $0.id != blockID }
+        guard let anchorIndex = remainingBlocks.firstIndex(where: { $0.id == afterBlockID }) else {
+            return
+        }
+
+        try moveBlock(blockID: blockID, toIndex: anchorIndex + 1)
     }
 
     private func visibleAttachmentSnapshots() -> [AttachmentSnapshot] {
