@@ -297,6 +297,33 @@ final class NativeTextBlockEditorTests: XCTestCase {
 #endif
     }
 
+    func testCommandVPasteShortcutResolverRequiresOnlyCommandV() {
+        XCTAssertTrue(
+            CommandVPasteShortcutResolver.requestsAttachmentPaste(
+                input: "v",
+                modifiers: [.command]
+            )
+        )
+        XCTAssertTrue(
+            CommandVPasteShortcutResolver.requestsAttachmentPaste(
+                input: "V",
+                modifiers: [.command]
+            )
+        )
+        XCTAssertFalse(
+            CommandVPasteShortcutResolver.requestsAttachmentPaste(
+                input: "v",
+                modifiers: []
+            )
+        )
+        XCTAssertFalse(
+            CommandVPasteShortcutResolver.requestsAttachmentPaste(
+                input: "v",
+                modifiers: [.command, .shift]
+            )
+        )
+    }
+
     func testBlockKeyboardShortcutResolverHandlesCommandOptionArrowsOnly() {
         XCTAssertEqual(
             BlockKeyboardShortcutResolver.moveDirection(

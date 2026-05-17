@@ -3391,6 +3391,17 @@ private struct EditorCanvasView: View {
                 }
             )
         )
+#elseif os(iOS)
+        .background(
+            IOSEditorKeyboardShortcutBridge(
+                isEnabled: !editorSession.selectedBlockIDs.isEmpty,
+                onPasteAttachments: {
+                    let attachmentURLs = IOSPasteboardAttachmentResolver.attachmentURLs(from: .general)
+                    return importPastedAttachments(attachmentURLs)
+                }
+            )
+            .frame(width: 0, height: 0)
+        )
 #endif
         .navigationTitle(page?.title ?? "编辑器")
         .focusedValue(\.insertMarkdownLinkAction, insertMarkdownLinkAction)
@@ -4297,6 +4308,68 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
 
         deinit {
             uninstall()
+        }
+    }
+}
+#elseif os(iOS)
+private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
+    let isEnabled: Bool
+    let onPasteAttachments: () -> Bool
+
+    func makeUIView(context: Context) -> ShortcutCaptureView {
+        let view = ShortcutCaptureView(frame: .zero)
+        view.isEnabled = isEnabled
+        view.onPasteAttachments = onPasteAttachments
+        return view
+    }
+
+    func updateUIView(_ uiView: ShortcutCaptureView, context: Context) {
+        uiView.isEnabled = isEnabled
+        uiView.onPasteAttachments = onPasteAttachments
+        uiView.updateFirstResponderIfNeeded()
+    }
+
+    final class ShortcutCaptureView: UIView {
+        var isEnabled = false
+        var onPasteAttachments: () -> Bool = { false }
+        private var isCapturingKeyboard = false
+
+        override var canBecomeFirstResponder: Bool {
+            isEnabled
+        }
+
+        override var keyCommands: [UIKeyCommand]? {
+            guard isEnabled else {
+                return []
+            }
+
+            return [
+                UIKeyCommand(
+                    input: "v",
+                    modifierFlags: [.command],
+                    action: #selector(pasteAttachments)
+                )
+            ]
+        }
+
+        func updateFirstResponderIfNeeded() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                if self.isEnabled {
+                    self.becomeFirstResponder()
+                    self.isCapturingKeyboard = self.isFirstResponder
+                } else if self.isCapturingKeyboard {
+                    self.resignFirstResponder()
+                    self.isCapturingKeyboard = false
+                }
+            }
+        }
+
+        @objc private func pasteAttachments(_ sender: Any?) {
+            _ = onPasteAttachments()
         }
     }
 }

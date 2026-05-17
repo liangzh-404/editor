@@ -725,6 +725,15 @@ struct NativeTextBlockEditor: View {
     }
 }
 
+enum CommandVPasteShortcutResolver {
+    static func requestsAttachmentPaste(
+        input: String?,
+        modifiers: Set<BlockKeyboardShortcutModifier>
+    ) -> Bool {
+        modifiers == [.command] && input?.lowercased() == "v"
+    }
+}
+
 #if os(macOS)
 import AppKit
 
@@ -813,15 +822,14 @@ enum MacPasteKeyboardShortcutResolver {
         input: String?,
         modifiers: Set<BlockKeyboardShortcutModifier>
     ) -> Bool {
-        guard modifiers == [.command] else {
-            return false
-        }
-
-        if keyCode == vKeyCode {
+        if modifiers == [.command], keyCode == vKeyCode {
             return true
         }
 
-        return input?.lowercased() == "v"
+        return CommandVPasteShortcutResolver.requestsAttachmentPaste(
+            input: input,
+            modifiers: modifiers
+        )
     }
 }
 
