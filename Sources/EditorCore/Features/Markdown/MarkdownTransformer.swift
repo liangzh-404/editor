@@ -1144,7 +1144,7 @@ enum MarkdownTransformer {
                 continue
             }
 
-            if trimmedLine == "```" {
+            if isCodeFenceStart(trimmedLine) {
                 flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
                 codeLines = []
@@ -1331,6 +1331,10 @@ enum MarkdownTransformer {
         }
 
         return String(parts[1])
+    }
+
+    private static func isCodeFenceStart(_ line: String) -> Bool {
+        line.hasPrefix("```")
     }
 
     private static func isTableLine(_ line: String) -> Bool {
