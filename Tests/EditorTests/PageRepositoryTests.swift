@@ -436,6 +436,37 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().map(\.entityType), ["block", "block", "block"])
     }
 
+    func testImportMarkdownPersistsOuterPipeOptionalTableRows() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                Name | Status
+                --- | ---
+                Editor | Ready
+                """
+        )
+        let tableBlock = try XCTUnwrap(try repository.loadWorkspaceSnapshot().blocks.first)
+
+        XCTAssertEqual(tableBlock.type, .table)
+        XCTAssertEqual(tableBlock.tableRows, [["Name", "Status"], ["Editor", "Ready"]])
+        XCTAssertEqual(
+            tableBlock.textPlain,
+            """
+            Name | Status
+            --- | ---
+            Editor | Ready
+            """
+        )
+    }
+
     func testImportMarkdownPersistsTaskItemCompletionState() throws {
         let database = try migratedDatabase()
         defer { database.close() }

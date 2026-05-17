@@ -284,6 +284,30 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownSupportsTablesWithoutOuterPipes() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    Name | Status
+                    --- | ---
+                    Editor | Ready
+                    """
+            ),
+            [
+                MarkdownBlockDraft(
+                    type: .table,
+                    textPlain:
+                        """
+                        Name | Status
+                        --- | ---
+                        Editor | Ready
+                        """
+                )
+            ]
+        )
+    }
+
     func testImportMarkdownSupportsPageAndBlockReferenceBlocks() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(

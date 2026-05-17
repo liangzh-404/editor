@@ -1169,6 +1169,22 @@ enum MarkdownTransformer {
                 continue
             }
 
+            if isTableSeparatorLine(trimmedLine),
+               tableLines.isEmpty,
+               paragraphLines.count == 1,
+               paragraphLines[0].contains("|") {
+                tableLines.append(paragraphLines[0])
+                paragraphLines.removeAll()
+                tableLines.append(trimmedLine)
+                continue
+            }
+
+            if !tableLines.isEmpty,
+               isTableContinuationLine(trimmedLine) {
+                tableLines.append(trimmedLine)
+                continue
+            }
+
             if isTableLine(trimmedLine) {
                 flushParagraphLines(&paragraphLines, into: &drafts)
                 tableLines.append(trimmedLine)
@@ -1370,6 +1386,38 @@ enum MarkdownTransformer {
 
     private static func isTableLine(_ line: String) -> Bool {
         line.contains("|") && line.trimmingCharacters(in: .whitespaces).hasPrefix("|")
+    }
+
+    private static func isTableContinuationLine(_ line: String) -> Bool {
+        line.contains("|")
+    }
+
+    private static func isTableSeparatorLine(_ line: String) -> Bool {
+        guard line.contains("|") else {
+            return false
+        }
+
+        let cells = tableCells(from: line)
+        return cells.count >= 2 && cells.allSatisfy { cell in
+            let trimmedCell = cell.trimmingCharacters(in: .whitespaces)
+            return trimmedCell.contains("-") && trimmedCell.allSatisfy { character in
+                character == "-" || character == ":"
+            }
+        }
+    }
+
+    private static func tableCells(from line: String) -> [String] {
+        var content = line
+        if content.hasPrefix("|") {
+            content.removeFirst()
+        }
+        if content.hasSuffix("|") {
+            content.removeLast()
+        }
+
+        return content
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     private static func flushTableLines(
