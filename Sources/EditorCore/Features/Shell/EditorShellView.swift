@@ -1191,6 +1191,13 @@ enum CompactLibraryNavigationModel {
     }
 }
 
+struct CompactCollectionPageListItem: Identifiable, Equatable, Sendable {
+    let id: String
+    let page: PageSummary
+    let tagNames: [String]
+    let preview: PageListPreview
+}
+
 enum CompactCollectionPageListModel {
     static func pages(snapshot: WorkspaceSnapshot, collection: WorkspaceCollection) -> [PageSummary] {
         let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
@@ -1219,6 +1226,33 @@ enum CompactCollectionPageListModel {
         case .archive:
             return snapshot.archivedPages
         }
+    }
+
+    static func items(snapshot: WorkspaceSnapshot, collection: WorkspaceCollection) -> [CompactCollectionPageListItem] {
+        pages(snapshot: snapshot, collection: collection).map { page in
+            CompactCollectionPageListItem(
+                id: page.id,
+                page: page,
+                tagNames: tagNames(for: page, snapshot: snapshot),
+                preview: PageListPreviewResolver.preview(
+                    pageID: page.id,
+                    blocks: snapshot.blocks,
+                    attachments: snapshot.attachments
+                )
+            )
+        }
+    }
+
+    private static func tagNames(for page: PageSummary, snapshot: WorkspaceSnapshot) -> [String] {
+        let tagIDs = Set(
+            snapshot.pageTags
+                .filter { $0.pageID == page.id }
+                .map(\.tagID)
+        )
+
+        return snapshot.tags
+            .filter { tagIDs.contains($0.id) }
+            .map(\.name)
     }
 }
 
@@ -2276,21 +2310,29 @@ private struct CompactCollectionPageListView: View {
     let collection: WorkspaceCollection
 
     var body: some View {
-        List {
-            ForEach(pages) { page in
-                NavigationLink(value: CompactRoute.page(page.id)) {
-                    PageRow(page: page, isSelected: viewModel.selectedPageID == page.id)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(items) { item in
+                    NavigationLink(value: CompactRoute.page(item.page.id)) {
+                        CompactRecentPageCard(
+                            page: item.page,
+                            tagNames: item.tagNames,
+                            preview: item.preview
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("editor.page.\(item.page.id)")
                 }
-                .accessibilityIdentifier("editor.page.\(page.id)")
             }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
         }
         .navigationTitle(navigationTitle)
-        .scrollContentBackground(.hidden)
-        .background(Color.white)
+        .background(Color(red: 0.965, green: 0.958, blue: 0.948))
     }
 
-    private var pages: [PageSummary] {
-        CompactCollectionPageListModel.pages(
+    private var items: [CompactCollectionPageListItem] {
+        CompactCollectionPageListModel.items(
             snapshot: viewModel.snapshot,
             collection: collection
         )

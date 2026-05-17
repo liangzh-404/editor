@@ -387,6 +387,51 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testCompactCollectionPageListItemsIncludePreviewAndTags() {
+        let workspaceID = "workspace"
+        let page = PageSummary(
+            id: "page-a",
+            workspaceID: workspaceID,
+            title: "带预览的文档",
+            isFavorite: true
+        )
+        let tag = TagSummary(
+            id: "tag-life",
+            workspaceID: workspaceID,
+            parentTagID: nil,
+            name: "生活",
+            path: "生活"
+        )
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [page],
+            blocks: [
+                BlockSnapshot(
+                    id: "block-text",
+                    pageID: page.id,
+                    parentBlockID: nil,
+                    orderKey: "1",
+                    type: .paragraph,
+                    textPlain: "这是一段用于列表预览的正文"
+                )
+            ],
+            attachments: [],
+            tags: [tag],
+            pageTags: [PageTagAssignment(pageID: page.id, tagID: tag.id)],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: page.id
+        )
+
+        let items = CompactCollectionPageListModel.items(
+            snapshot: snapshot,
+            collection: .favorites
+        )
+
+        XCTAssertEqual(items.map(\.page.id), [page.id])
+        XCTAssertEqual(items.first?.tagNames, ["生活"])
+        XCTAssertEqual(items.first?.preview.excerpt, "这是一段用于列表预览的正文")
+    }
+
     func testPastedAttachmentAnchorPrefersTextSelectionThenFocusedBlockThenLastVisibleSelection() {
         let visibleBlockIDs = ["first", "middle", "last"]
 

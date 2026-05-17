@@ -48,6 +48,28 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneAllDocumentsShowsPreviewCardList() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let homeBackButton = app.navigationBars.buttons["近期打开"]
+        XCTAssertTrue(homeBackButton.waitForExistence(timeout: 5), "Initial compact page should expose a back button to recent home")
+        homeBackButton.tap()
+
+        let allDocuments = app.buttons["editor.compact.all-documents"]
+        XCTAssertTrue(allDocuments.waitForExistence(timeout: 5), "Recent home should expose all documents")
+        allDocuments.tap()
+
+        let welcomePage = app.buttons["editor.page.page-welcome"]
+        XCTAssertTrue(welcomePage.waitForExistence(timeout: 5), "All documents should show the welcome page as a tappable preview card")
+
+        let preview = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "开始用块写作")
+        ).firstMatch
+        XCTAssertTrue(preview.waitForExistence(timeout: 5), "All documents card should include the document text preview")
+    }
+
+    @MainActor
     func testIPhoneWelcomeBlockAcceptsTypedText() {
         let app = XCUIApplication()
         app.launch()
