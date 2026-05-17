@@ -9,6 +9,7 @@ final class EditorMacEditingUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        addSystemPermissionInterruptionMonitor()
         MainActor.assumeIsolated {
             Self.terminateRunningEditorMacApplications()
         }
@@ -30,6 +31,31 @@ final class EditorMacEditingUITests: XCTestCase {
             try? FileManager.default.removeItem(at: appSupportDirectory)
         }
         appSupportDirectory = nil
+    }
+
+    private func addSystemPermissionInterruptionMonitor() {
+        addUIInterruptionMonitor(withDescription: "系统权限弹窗") { alert in
+            let hasChineseAppDataPrompt = alert.staticTexts
+                .matching(NSPredicate(format: "label CONTAINS %@", "访问其他App的数据"))
+                .firstMatch
+                .exists
+            let hasEnglishAppDataPrompt = alert.staticTexts
+                .matching(NSPredicate(format: "label CONTAINS[c] %@", "access data from other apps"))
+                .firstMatch
+                .exists
+            guard hasChineseAppDataPrompt || hasEnglishAppDataPrompt else {
+                return false
+            }
+
+            let allowButton = alert.buttons["允许"].exists
+                ? alert.buttons["允许"]
+                : alert.buttons["Allow"]
+            guard allowButton.exists else {
+                return false
+            }
+            allowButton.click()
+            return true
+        }
     }
 
     private static func currentUserHomeDirectory() throws -> URL {
@@ -1628,12 +1654,14 @@ final class EditorMacEditingUITests: XCTestCase {
         let addColumnButton = app.element(identifier: "editor.table.block-welcome-001.add-column")
         let removeRowButton = app.element(identifier: "editor.table.block-welcome-001.remove-row")
         let removeColumnButton = app.element(identifier: "editor.table.block-welcome-001.remove-column")
+        let secondRowSelector = app.element(identifier: "editor.table.block-welcome-001.row-selector.1")
+        let secondColumnSelector = app.element(identifier: "editor.table.block-welcome-001.column-selector.1")
 
         XCTAssertTrue(addRowButton.waitForExistence(timeout: 5), "Changing a block to Table should expose row controls")
         XCTAssertEqual(addRowButton.label, "新增表格行")
         XCTAssertEqual(addColumnButton.label, "新增表格列")
-        XCTAssertEqual(removeRowButton.label, "删除最后一行")
-        XCTAssertEqual(removeColumnButton.label, "删除最后一列")
+        XCTAssertFalse(removeRowButton.exists, "Table rows should not show permanent remove-row chrome")
+        XCTAssertFalse(removeColumnButton.exists, "Table columns should not show permanent remove-column chrome")
         XCTAssertTrue(
             addRowButton.waitForValue(containing: "1 行，1 列", timeout: 5),
             "Table controls should expose the initial table dimensions"
@@ -1651,16 +1679,28 @@ final class EditorMacEditingUITests: XCTestCase {
             "Adding a column should update the exposed table dimensions"
         )
 
-        removeRowButton.click()
+        XCTAssertTrue(secondRowSelector.waitForExistence(timeout: 5), "Added row should expose a quiet row selector")
+        secondRowSelector.click()
         XCTAssertTrue(
-            removeRowButton.waitForValue(containing: "1 行，2 列", timeout: 5),
-            "Removing a row should update the exposed table dimensions"
+            secondRowSelector.waitForValue(containing: "已选择", timeout: 5),
+            "Clicking a row selector should select that row before Delete"
+        )
+        app.typeKey(.delete, modifierFlags: [])
+        XCTAssertTrue(
+            addRowButton.waitForValue(containing: "1 行，2 列", timeout: 5),
+            "Deleting a selected row should update the exposed table dimensions"
         )
 
-        removeColumnButton.click()
+        XCTAssertTrue(secondColumnSelector.waitForExistence(timeout: 5), "Added column should expose a quiet column selector")
+        secondColumnSelector.click()
         XCTAssertTrue(
-            removeColumnButton.waitForValue(containing: "1 行，1 列", timeout: 5),
-            "Removing a column should update the exposed table dimensions"
+            secondColumnSelector.waitForValue(containing: "已选择", timeout: 5),
+            "Clicking a column selector should select that column before Delete"
+        )
+        app.typeKey(.delete, modifierFlags: [])
+        XCTAssertTrue(
+            addColumnButton.waitForValue(containing: "1 行，1 列", timeout: 5),
+            "Deleting a selected column should update the exposed table dimensions"
         )
     }
 

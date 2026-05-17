@@ -627,19 +627,20 @@ enum EditorBlockChrome {
 }
 
 enum TableBlockChrome {
-    static let cellWidth: Double = 142
-    static let cellHeight: Double = 46
+    static let cellWidth: Double = 136
+    static let cellHeight: Double = 42
     static let maxViewportWidth: Double = 620
-    static let cornerRadius: Double = 9
-    static let gridLineOpacity: Double = 0.13
-    static let outerBorderOpacity: Double = 0.18
-    static let primaryControlDiameter: Double = 18
-    static let insertControlVisibleDiameter: Double = 4
-    static let insertControlExpandedDiameter: Double = 12
-    static let insertControlEdgeOffset: Double = 0
+    static let cornerRadius: Double = 8
+    static let gridLineOpacity: Double = 0.10
+    static let outerBorderOpacity: Double = 0.14
+    static let primaryControlDiameter: Double = 16
+    static let insertControlVisibleDiameter: Double = 3
+    static let insertControlExpandedDiameter: Double = 10
+    static let insertControlEdgeOffset: Double = 8
     static let selectorWidth: Double = 12
     static let selectorHeight: Double = 12
     static let selectorIndicatorOpacity: Double = 0
+    static let selectorHitOpacity: Double = 0.001
 }
 
 enum MobileBlockSwipeAction: Equatable, Sendable {
@@ -5670,6 +5671,9 @@ private struct StructuredTableBlockEditor: View {
             isTableHovered = hovering
         }
 #if os(macOS)
+        .onDeleteCommand {
+            deleteSelection()
+        }
         .background(
             TableDeleteKeyBridge(isEnabled: !selection.isEmpty) {
                 deleteSelection()
@@ -5752,6 +5756,7 @@ private struct StructuredTableBlockEditor: View {
             height: tableContentHeight(rows: rows),
             alignment: .topLeading
         )
+        .zIndex(2)
     }
 
     private func cellBinding(row rowIndex: Int, column columnIndex: Int) -> Binding<String> {
@@ -5831,7 +5836,7 @@ private struct StructuredTableBlockEditor: View {
             )
         } label: {
             Rectangle()
-                .fill(Color.accentColor.opacity(TableBlockChrome.selectorIndicatorOpacity))
+                .fill(Color.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
                 .frame(
                     width: CGFloat(TableBlockChrome.selectorWidth),
                     height: CGFloat(TableBlockChrome.cellHeight)
@@ -5840,11 +5845,12 @@ private struct StructuredTableBlockEditor: View {
         .buttonStyle(.borderless)
         .contentShape(Rectangle())
         .offset(
-            x: -CGFloat(TableBlockChrome.selectorWidth) / 2,
+            x: 0,
             y: CGFloat(rowIndex) * CGFloat(TableBlockChrome.cellHeight)
         )
         .help("选择第 \(rowIndex + 1) 行")
         .accessibilityLabel("选择第 \(rowIndex + 1) 行")
+        .accessibilityValue(selection.rows.contains(rowIndex) ? "已选择" : "未选择")
         .accessibilityIdentifier("editor.table.\(blockID).row-selector.\(rowIndex)")
     }
 
@@ -5857,7 +5863,7 @@ private struct StructuredTableBlockEditor: View {
             )
         } label: {
             Rectangle()
-                .fill(Color.accentColor.opacity(TableBlockChrome.selectorIndicatorOpacity))
+                .fill(Color.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
                 .frame(
                     width: CGFloat(TableBlockChrome.cellWidth),
                     height: CGFloat(TableBlockChrome.selectorHeight)
@@ -5867,10 +5873,11 @@ private struct StructuredTableBlockEditor: View {
         .contentShape(Rectangle())
         .offset(
             x: CGFloat(columnIndex) * CGFloat(TableBlockChrome.cellWidth),
-            y: -CGFloat(TableBlockChrome.selectorHeight) / 2
+            y: 0
         )
         .help("选择第 \(columnIndex + 1) 列")
         .accessibilityLabel("选择第 \(columnIndex + 1) 列")
+        .accessibilityValue(selection.columns.contains(columnIndex) ? "已选择" : "未选择")
         .accessibilityIdentifier("editor.table.\(blockID).column-selector.\(columnIndex)")
     }
 
@@ -6052,55 +6059,69 @@ private struct TableDeleteKeyBridge: NSViewRepresentable {
     let isEnabled: Bool
     let onDelete: () -> Void
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onDelete: onDelete)
+    func makeNSView(context: Context) -> TableDeleteKeyCaptureView {
+        let view = TableDeleteKeyCaptureView(frame: .zero)
+        view.isEnabled = isEnabled
+        view.onDelete = onDelete
+        return view
     }
 
-    func makeNSView(context: Context) -> NSView {
-        context.coordinator.install()
-        return NSView(frame: .zero)
-    }
+    func updateNSView(_ nsView: TableDeleteKeyCaptureView, context: Context) {
+        nsView.isEnabled = isEnabled
+        nsView.onDelete = onDelete
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.isEnabled = isEnabled
-        context.coordinator.onDelete = onDelete
-    }
-
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        coordinator.uninstall()
-    }
-
-    @MainActor
-    final class Coordinator {
-        var isEnabled = false
-        var onDelete: () -> Void
-        private var monitor: Any?
-
-        init(onDelete: @escaping () -> Void) {
-            self.onDelete = onDelete
+        guard isEnabled else {
+            return
         }
 
-        func install() {
-            guard monitor == nil else {
+        DispatchQueue.main.async {
+            guard nsView.window?.firstResponder !== nsView else {
                 return
             }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self else {
-                    return event
-                }
-                guard isEnabled, (event.keyCode == 51 || event.keyCode == 117) else {
-                    return event
-                }
+            nsView.window?.makeFirstResponder(nsView)
+        }
+    }
+
+    final class TableDeleteKeyCaptureView: NSView {
+        var isEnabled = false
+        var onDelete: () -> Void
+
+        override init(frame frameRect: NSRect) {
+            self.onDelete = {}
+            super.init(frame: frameRect)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override var acceptsFirstResponder: Bool {
+            true
+        }
+
+        override func keyDown(with event: NSEvent) {
+            guard isEnabled, (event.keyCode == 51 || event.keyCode == 117) else {
+                nextResponder?.keyDown(with: event)
+                return
+            }
+            onDelete()
+        }
+
+        override func deleteBackward(_ sender: Any?) {
+            if isEnabled {
                 onDelete()
-                return nil
+            } else {
+                nextResponder?.tryToPerform(#selector(deleteBackward(_:)), with: sender)
             }
         }
 
-        func uninstall() {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
+        override func deleteForward(_ sender: Any?) {
+            if isEnabled {
+                onDelete()
+            } else {
+                nextResponder?.tryToPerform(#selector(deleteForward(_:)), with: sender)
             }
-            monitor = nil
         }
     }
 }

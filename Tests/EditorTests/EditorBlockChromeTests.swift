@@ -16,17 +16,18 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {
-        XCTAssertEqual(TableBlockChrome.cellWidth, 142)
-        XCTAssertEqual(TableBlockChrome.cellHeight, 46)
+        XCTAssertEqual(TableBlockChrome.cellWidth, 136)
+        XCTAssertEqual(TableBlockChrome.cellHeight, 42)
         XCTAssertEqual(TableBlockChrome.maxViewportWidth, 620)
-        XCTAssertEqual(TableBlockChrome.cornerRadius, 9)
-        XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.13)
-        XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.18)
-        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 18)
-        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 4)
-        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 12)
-        XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 0)
+        XCTAssertEqual(TableBlockChrome.cornerRadius, 8)
+        XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.10)
+        XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.14)
+        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 16)
+        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 3)
+        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 10)
+        XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 8)
         XCTAssertEqual(TableBlockChrome.selectorIndicatorOpacity, 0)
+        XCTAssertEqual(TableBlockChrome.selectorHitOpacity, 0.001)
     }
 
     func testMobileBlockSwipeResolverSeparatesSelectionFromIndenting() {
