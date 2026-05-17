@@ -1692,33 +1692,37 @@ struct SidebarNavigationModel: Equatable, Sendable {
 }
 
 enum SidebarChrome {
-    static let horizontalPadding: Double = 8
-    static let verticalPadding: Double = 10
-    static let sectionSpacing: Double = 8
-    static let rowSpacing: Double = 2
-    static let rowCornerRadius: Double = 13
-    static let rowVerticalPadding: Double = 8
-    static let nestedItemIndent: Double = 16
-    static let dividerOpacity: Double = 0.10
+    static let horizontalPadding: Double = 10
+    static let verticalPadding: Double = 12
+    static let sectionSpacing: Double = 10
+    static let rowSpacing: Double = 3
+    static let rowCornerRadius: Double = 14
+    static let rowVerticalPadding: Double = 9
+    static let nestedItemIndent: Double = 18
+    static let dividerOpacity: Double = 0.07
+    static let selectedFillOpacity: Double = 0.70
+    static let selectedStrokeOpacity: Double = 0.025
+    static let headerBadgeSize: Double = 30
+    static let headerBadgeCornerRadius: Double = 8
 
     static var backgroundColor: Color {
-        Color(red: 0.968, green: 0.962, blue: 0.952)
+        Color(red: 0.976, green: 0.970, blue: 0.960)
     }
 
     static var selectedFillColor: Color {
-        Color(red: 0.78, green: 0.75, blue: 0.70)
+        Color(red: 0.82, green: 0.79, blue: 0.74)
     }
 
     static var selectedForegroundColor: Color {
-        Color(red: 0.25, green: 0.23, blue: 0.34)
+        Color(red: 0.27, green: 0.25, blue: 0.39)
     }
 
     static var foregroundColor: Color {
-        Color(red: 0.35, green: 0.34, blue: 0.43)
+        Color(red: 0.38, green: 0.36, blue: 0.47)
     }
 
     static var mutedForegroundColor: Color {
-        Color(red: 0.54, green: 0.52, blue: 0.61)
+        Color(red: 0.57, green: 0.55, blue: 0.65)
     }
 }
 
@@ -1753,9 +1757,12 @@ private struct WorkspaceSidebar: View {
 
     private var sidebarHeader: some View {
         HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color(red: 0.78, green: 0.72, blue: 0.64))
-                .frame(width: 28, height: 28)
+            RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.headerBadgeCornerRadius), style: .continuous)
+                .fill(Color(red: 0.80, green: 0.70, blue: 0.61))
+                .frame(
+                    width: CGFloat(SidebarChrome.headerBadgeSize),
+                    height: CGFloat(SidebarChrome.headerBadgeSize)
+                )
                 .overlay {
                     Text("文")
                         .font(.caption.weight(.bold))
@@ -1929,11 +1936,11 @@ private struct CollectionRailButton: View {
                 .padding(.vertical, CGFloat(SidebarChrome.rowVerticalPadding))
                 .background(
                     RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
-                        .fill(item.isSelected ? SidebarChrome.selectedFillColor.opacity(0.78) : Color.clear)
+                        .fill(item.isSelected ? SidebarChrome.selectedFillColor.opacity(SidebarChrome.selectedFillOpacity) : Color.clear)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
-                        .stroke(item.isSelected ? Color.black.opacity(0.035) : Color.clear, lineWidth: 1)
+                        .stroke(item.isSelected ? Color.black.opacity(SidebarChrome.selectedStrokeOpacity) : Color.clear, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)

@@ -429,14 +429,18 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testSidebarChromeUsesCompactBearLikeRailMetrics() {
-        XCTAssertEqual(SidebarChrome.horizontalPadding, 8)
-        XCTAssertEqual(SidebarChrome.verticalPadding, 10)
-        XCTAssertEqual(SidebarChrome.sectionSpacing, 8)
-        XCTAssertEqual(SidebarChrome.rowSpacing, 2)
-        XCTAssertEqual(SidebarChrome.rowCornerRadius, 13)
-        XCTAssertEqual(SidebarChrome.rowVerticalPadding, 8)
-        XCTAssertEqual(SidebarChrome.nestedItemIndent, 16)
-        XCTAssertEqual(SidebarChrome.dividerOpacity, 0.10)
+        XCTAssertEqual(SidebarChrome.horizontalPadding, 10)
+        XCTAssertEqual(SidebarChrome.verticalPadding, 12)
+        XCTAssertEqual(SidebarChrome.sectionSpacing, 10)
+        XCTAssertEqual(SidebarChrome.rowSpacing, 3)
+        XCTAssertEqual(SidebarChrome.rowCornerRadius, 14)
+        XCTAssertEqual(SidebarChrome.rowVerticalPadding, 9)
+        XCTAssertEqual(SidebarChrome.nestedItemIndent, 18)
+        XCTAssertEqual(SidebarChrome.dividerOpacity, 0.07)
+        XCTAssertEqual(SidebarChrome.selectedFillOpacity, 0.70)
+        XCTAssertEqual(SidebarChrome.selectedStrokeOpacity, 0.025)
+        XCTAssertEqual(SidebarChrome.headerBadgeSize, 30)
+        XCTAssertEqual(SidebarChrome.headerBadgeCornerRadius, 8)
     }
 
     func testCompactLibraryNavigationRoutesRowsByCollectionAndIncludesDiary() {
