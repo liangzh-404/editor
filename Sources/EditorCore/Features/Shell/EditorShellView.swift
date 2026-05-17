@@ -3080,6 +3080,14 @@ private struct EditorCanvasView: View {
                     }
                     attachmentURLs.forEach(onImportAttachment)
                     return true
+                },
+                hasBlockSelection: {
+                    !editorSession.selectedBlockIDs.isEmpty
+                },
+                onCancelSelection: {
+                    let hadBlockSelection = !editorSession.selectedBlockIDs.isEmpty
+                    editorSession.clearBlockSelection()
+                    return hadBlockSelection
                 }
             )
         )
@@ -3843,9 +3851,54 @@ private struct EditorCanvasView: View {
 }
 
 #if os(macOS)
+enum MacEditorKeyboardShortcutAction: Equatable, Sendable {
+    case cancelSelection
+    case insertLink
+    case pasteAttachments
+}
+
+enum MacEditorKeyboardShortcutActionResolver {
+    static func action(
+        keyCode: UInt16,
+        input: String?,
+        modifiers: Set<BlockKeyboardShortcutModifier>,
+        hasBlockSelection: Bool,
+        hasPasteableAttachments: Bool
+    ) -> MacEditorKeyboardShortcutAction? {
+        if hasBlockSelection,
+           BlockSelectionCancelKeyboardResolver.requestsCancel(
+            keyCode: keyCode,
+            input: input,
+            modifiers: modifiers
+           ) {
+            return .cancelSelection
+        }
+
+        if MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(
+            input: input,
+            modifiers: modifiers
+        ) {
+            return .insertLink
+        }
+
+        if hasPasteableAttachments,
+           MacPasteKeyboardShortcutResolver.requestsAttachmentPaste(
+            keyCode: keyCode,
+            input: input,
+            modifiers: modifiers
+           ) {
+            return .pasteAttachments
+        }
+
+        return nil
+    }
+}
+
 private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
     let onInsertLink: () -> Bool
     let onPasteAttachments: () -> Bool
+    let hasBlockSelection: () -> Bool
+    let onCancelSelection: () -> Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -3854,6 +3907,8 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         context.coordinator.onInsertLink = onInsertLink
         context.coordinator.onPasteAttachments = onPasteAttachments
+        context.coordinator.hasBlockSelection = hasBlockSelection
+        context.coordinator.onCancelSelection = onCancelSelection
         context.coordinator.install()
         return NSView(frame: .zero)
     }
@@ -3861,6 +3916,8 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.onInsertLink = onInsertLink
         context.coordinator.onPasteAttachments = onPasteAttachments
+        context.coordinator.hasBlockSelection = hasBlockSelection
+        context.coordinator.onCancelSelection = onCancelSelection
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -3870,6 +3927,8 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
     final class Coordinator {
         var onInsertLink: (() -> Bool)?
         var onPasteAttachments: (() -> Bool)?
+        var hasBlockSelection: (() -> Bool)?
+        var onCancelSelection: (() -> Bool)?
         private var eventMonitor: Any?
 
         func install() {
@@ -3882,19 +3941,29 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
                     return event
                 }
 
-                if MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(
-                    input: event.charactersIgnoringModifiers,
-                    modifiers: event.blockKeyboardShortcutModifiers
-                ), self.onInsertLink?() == true {
-                    return nil
-                }
-
-                if MacPasteKeyboardShortcutResolver.requestsAttachmentPaste(
+                let action = MacEditorKeyboardShortcutActionResolver.action(
                     keyCode: event.keyCode,
                     input: event.charactersIgnoringModifiers,
-                    modifiers: event.blockKeyboardShortcutModifiers
-                ), self.onPasteAttachments?() == true {
-                    return nil
+                    modifiers: event.blockKeyboardShortcutModifiers,
+                    hasBlockSelection: self.hasBlockSelection?() == true,
+                    hasPasteableAttachments: true
+                )
+
+                switch action {
+                case .cancelSelection:
+                    if self.onCancelSelection?() == true {
+                        return nil
+                    }
+                case .insertLink:
+                    if self.onInsertLink?() == true {
+                        return nil
+                    }
+                case .pasteAttachments:
+                    if self.onPasteAttachments?() == true {
+                        return nil
+                    }
+                case nil:
+                    break
                 }
 
                 return event

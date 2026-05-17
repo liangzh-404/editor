@@ -430,6 +430,37 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testMacEditorKeyboardShortcutActionResolverCancelsSelectedBlocksWithEscape() {
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: BlockSelectionCancelKeyboardResolver.escapeKeyCode,
+                input: "\u{1B}",
+                modifiers: [],
+                hasBlockSelection: true,
+                hasPasteableAttachments: false
+            ),
+            .cancelSelection
+        )
+        XCTAssertNil(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: BlockSelectionCancelKeyboardResolver.escapeKeyCode,
+                input: "\u{1B}",
+                modifiers: [],
+                hasBlockSelection: false,
+                hasPasteableAttachments: false
+            )
+        )
+        XCTAssertNil(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: BlockSelectionCancelKeyboardResolver.escapeKeyCode,
+                input: "\u{1B}",
+                modifiers: [.command],
+                hasBlockSelection: true,
+                hasPasteableAttachments: false
+            )
+        )
+    }
+
     func testBlockKeyboardFocusResolverMovesOnlyAtTextBoundaries() {
         XCTAssertEqual(
             BlockKeyboardFocusResolver.focusDirection(
