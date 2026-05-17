@@ -290,6 +290,8 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
+        openWelcomePageForPageToolbarActions(in: app)
+
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before merging")
         let initialTextViewCount = app.textViews.count
@@ -344,6 +346,8 @@ final class EditorMacEditingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
 
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before merging")
@@ -402,6 +406,8 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
+        openWelcomePageForPageToolbarActions(in: app)
+
         let firstTextView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "Welcome text block should be visible")
         let initialTextViewCount = app.textViews.count
@@ -444,6 +450,8 @@ final class EditorMacEditingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
 
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before adding")
