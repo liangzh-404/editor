@@ -80,6 +80,28 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testCompactInitialNavigationResolverStartsOnSelectedPageWhenAvailable() {
+        XCTAssertEqual(
+            CompactInitialNavigationResolver.initialPageID(
+                selectedPageID: "recent-page",
+                availablePageIDs: ["recent-page", "older-page"]
+            ),
+            "recent-page"
+        )
+        XCTAssertNil(
+            CompactInitialNavigationResolver.initialPageID(
+                selectedPageID: "missing-page",
+                availablePageIDs: ["recent-page", "older-page"]
+            )
+        )
+        XCTAssertNil(
+            CompactInitialNavigationResolver.initialPageID(
+                selectedPageID: nil,
+                availablePageIDs: ["recent-page", "older-page"]
+            )
+        )
+    }
+
     func testTableSelectionDeletesRowsAndColumnsButKeepsOneCell() {
         let rows = [
             ["A", "B", "C"],

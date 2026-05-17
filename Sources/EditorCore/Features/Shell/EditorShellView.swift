@@ -357,8 +357,18 @@ private struct ThreeColumnEditorShell: View {
 
 private struct CompactEditorShell: View {
     @ObservedObject var viewModel: WorkspaceViewModel
-    @State private var path: [CompactRoute] = []
-    @State private var didPushInitialPage = false
+    @State private var path: [CompactRoute]
+    @State private var didPushInitialPage: Bool
+
+    init(viewModel: WorkspaceViewModel) {
+        self.viewModel = viewModel
+        let initialPageID = CompactInitialNavigationResolver.initialPageID(
+            selectedPageID: viewModel.selectedPageID,
+            availablePageIDs: viewModel.snapshot.pages.map(\.id)
+        )
+        _path = State(initialValue: initialPageID.map { [.page($0)] } ?? [])
+        _didPushInitialPage = State(initialValue: initialPageID != nil)
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -1067,6 +1077,19 @@ struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
 private enum CompactRoute: Hashable {
     case pages
     case page(String)
+}
+
+enum CompactInitialNavigationResolver {
+    static func initialPageID(
+        selectedPageID: String?,
+        availablePageIDs: [String]
+    ) -> String? {
+        guard let selectedPageID,
+              availablePageIDs.contains(selectedPageID) else {
+            return nil
+        }
+        return selectedPageID
+    }
 }
 
 private struct CompactPageDestination: View {
