@@ -619,6 +619,37 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testIOSEditorKeyboardShortcutBridgeActivationSeparatesPasteFromFocusMoves() {
+        XCTAssertTrue(
+            IOSEditorKeyboardShortcutBridgeActivationResolver.capturesPaste(
+                hasFocusedTextBlock: false,
+                hasCurrentPage: true
+            )
+        )
+        XCTAssertFalse(
+            IOSEditorKeyboardShortcutBridgeActivationResolver.capturesPaste(
+                hasFocusedTextBlock: true,
+                hasCurrentPage: true
+            )
+        )
+        XCTAssertFalse(
+            IOSEditorKeyboardShortcutBridgeActivationResolver.capturesPaste(
+                hasFocusedTextBlock: false,
+                hasCurrentPage: false
+            )
+        )
+        XCTAssertTrue(
+            IOSEditorKeyboardShortcutBridgeActivationResolver.capturesFocusMove(
+                hasBlockSelection: true
+            )
+        )
+        XCTAssertFalse(
+            IOSEditorKeyboardShortcutBridgeActivationResolver.capturesFocusMove(
+                hasBlockSelection: false
+            )
+        )
+    }
+
     func testBlockSelectionKeyboardAnchorResolverUsesSelectedBlockInDocumentOrder() {
         XCTAssertEqual(
             BlockSelectionKeyboardAnchorResolver.anchorBlockID(

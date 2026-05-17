@@ -723,6 +723,19 @@ enum IOSEditorKeyboardShortcutActionResolver {
     }
 }
 
+enum IOSEditorKeyboardShortcutBridgeActivationResolver {
+    static func capturesPaste(
+        hasFocusedTextBlock: Bool,
+        hasCurrentPage: Bool
+    ) -> Bool {
+        !hasFocusedTextBlock && hasCurrentPage
+    }
+
+    static func capturesFocusMove(hasBlockSelection: Bool) -> Bool {
+        hasBlockSelection
+    }
+}
+
 enum BlockSelectionKeyboardAnchorResolver {
     static func anchorBlockID(
         selectedBlockIDs: Set<String>,
@@ -3489,7 +3502,13 @@ private struct EditorCanvasView: View {
 #elseif os(iOS)
         .background(
             IOSEditorKeyboardShortcutBridge(
-                isEnabled: !editorSession.selectedBlockIDs.isEmpty,
+                isPasteEnabled: IOSEditorKeyboardShortcutBridgeActivationResolver.capturesPaste(
+                    hasFocusedTextBlock: editorSession.focusedBlockID != nil,
+                    hasCurrentPage: page != nil
+                ),
+                isFocusMoveEnabled: IOSEditorKeyboardShortcutBridgeActivationResolver.capturesFocusMove(
+                    hasBlockSelection: !editorSession.selectedBlockIDs.isEmpty
+                ),
                 onPasteAttachments: {
                     let attachmentURLs = IOSPasteboardAttachmentResolver.attachmentURLs(from: .general)
                     return importPastedAttachments(attachmentURLs)
@@ -4453,57 +4472,65 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
 }
 #elseif os(iOS)
 private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
-    let isEnabled: Bool
+    let isPasteEnabled: Bool
+    let isFocusMoveEnabled: Bool
     let onPasteAttachments: () -> Bool
     let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
 
     func makeUIView(context: Context) -> ShortcutCaptureView {
         let view = ShortcutCaptureView(frame: .zero)
-        view.isEnabled = isEnabled
+        view.isPasteEnabled = isPasteEnabled
+        view.isFocusMoveEnabled = isFocusMoveEnabled
         view.onPasteAttachments = onPasteAttachments
         view.onMoveFocus = onMoveFocus
         return view
     }
 
     func updateUIView(_ uiView: ShortcutCaptureView, context: Context) {
-        uiView.isEnabled = isEnabled
+        uiView.isPasteEnabled = isPasteEnabled
+        uiView.isFocusMoveEnabled = isFocusMoveEnabled
         uiView.onPasteAttachments = onPasteAttachments
         uiView.onMoveFocus = onMoveFocus
         uiView.updateFirstResponderIfNeeded()
     }
 
     final class ShortcutCaptureView: UIView {
-        var isEnabled = false
+        var isPasteEnabled = false
+        var isFocusMoveEnabled = false
         var onPasteAttachments: () -> Bool = { false }
         var onMoveFocus: (BlockKeyboardFocusDirection) -> Bool = { _ in false }
         private var isCapturingKeyboard = false
 
         override var canBecomeFirstResponder: Bool {
-            isEnabled
+            isPasteEnabled || isFocusMoveEnabled
         }
 
         override var keyCommands: [UIKeyCommand]? {
-            guard isEnabled else {
+            guard canBecomeFirstResponder else {
                 return []
             }
 
-            return [
-                UIKeyCommand(
+            var commands: [UIKeyCommand] = []
+            if isPasteEnabled {
+                commands.append(UIKeyCommand(
                     input: "v",
                     modifierFlags: [.command],
                     action: #selector(pasteAttachments)
-                ),
-                UIKeyCommand(
+                ))
+            }
+            if isFocusMoveEnabled {
+                commands.append(UIKeyCommand(
                     input: IOSEditorKeyboardShortcutActionResolver.upArrowInput,
                     modifierFlags: [],
                     action: #selector(moveFocusUp)
-                ),
-                UIKeyCommand(
+                ))
+                commands.append(UIKeyCommand(
                     input: IOSEditorKeyboardShortcutActionResolver.downArrowInput,
                     modifierFlags: [],
                     action: #selector(moveFocusDown)
-                )
-            ]
+                ))
+            }
+            return commands
         }
 
         func updateFirstResponderIfNeeded() {
@@ -4512,7 +4539,7 @@ private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
                     return
                 }
 
-                if self.isEnabled {
+                if self.canBecomeFirstResponder {
                     self.becomeFirstResponder()
                     self.isCapturingKeyboard = self.isFirstResponder
                 } else if self.isCapturingKeyboard {
