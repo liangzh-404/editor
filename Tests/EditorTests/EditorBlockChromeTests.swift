@@ -203,10 +203,17 @@ final class EditorBlockChromeTests: XCTestCase {
                 availablePageIDs: ["recent-page", "older-page"]
             )
         )
-        XCTAssertNil(
+        XCTAssertEqual(
             CompactInitialNavigationResolver.initialPageID(
                 selectedPageID: nil,
                 availablePageIDs: ["recent-page", "older-page"]
+            ),
+            "recent-page"
+        )
+        XCTAssertNil(
+            CompactInitialNavigationResolver.initialPageID(
+                selectedPageID: nil,
+                availablePageIDs: []
             )
         )
     }

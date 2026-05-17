@@ -395,6 +395,12 @@ private struct CompactEditorShell: View {
             .onAppear {
                 pushInitialPageIfNeeded()
             }
+            .onChange(of: viewModel.selectedPageID) { _, _ in
+                pushInitialPageIfNeeded()
+            }
+            .onChange(of: viewModel.snapshot.pages.map(\.id)) { _, _ in
+                pushInitialPageIfNeeded()
+            }
             .onChange(of: viewModel.pendingCompactPageNavigationID) { _, pageID in
                 guard let pageID = viewModel.consumePendingCompactPageNavigationID() ?? pageID else {
                     return
@@ -408,11 +414,14 @@ private struct CompactEditorShell: View {
         guard !didPushInitialPage else {
             return
         }
-        didPushInitialPage = true
 
-        guard let pageID = viewModel.selectedPageID else {
+        guard let pageID = CompactInitialNavigationResolver.initialPageID(
+            selectedPageID: viewModel.selectedPageID,
+            availablePageIDs: viewModel.snapshot.pages.map(\.id)
+        ) else {
             return
         }
+        didPushInitialPage = true
         pushPageIfNeeded(pageID)
     }
 
@@ -1351,11 +1360,12 @@ enum CompactInitialNavigationResolver {
         selectedPageID: String?,
         availablePageIDs: [String]
     ) -> String? {
-        guard let selectedPageID,
-              availablePageIDs.contains(selectedPageID) else {
-            return nil
+        if let selectedPageID,
+           availablePageIDs.contains(selectedPageID) {
+            return selectedPageID
         }
-        return selectedPageID
+
+        return availablePageIDs.first
     }
 }
 
