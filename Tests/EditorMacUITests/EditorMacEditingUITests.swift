@@ -2139,6 +2139,46 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testClickingImmediatelyBelowTrailingNonEditableBlockCreatesEditableBlock() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launchEnvironment["EDITOR_UI_TEST_ATTACHMENT_IMPORT_FILENAME"] = "trailing-attachment.txt"
+        app.launchEnvironment["EDITOR_UI_TEST_ATTACHMENT_IMPORT_CONTENTS"] = "Attachment before trailing editor hit area"
+        app.launch()
+
+        let attachmentButton = app.buttons["editor.insert-attachment"]
+        XCTAssertTrue(attachmentButton.waitForExistence(timeout: 5), "Attachment toolbar button should be visible")
+        attachmentButton.click()
+
+        let insertedAttachment = app.element(identifierPrefix: "editor.attachment.")
+        XCTAssertTrue(insertedAttachment.waitForExistence(timeout: 10), "Toolbar attachment import should render a trailing non-editable row")
+        let initialTextViewCount = app.textViews.count
+
+        let trailingInsertRegion = app.element(identifier: "editor.canvas-trailing-insert-region")
+        XCTAssertTrue(
+            trailingInsertRegion.waitForExistence(timeout: 5),
+            "The area immediately below the trailing block should be an addressable insert/focus hit region"
+        )
+        trailingInsertRegion.click()
+
+        let insertedTextView = app.textViews.element(boundBy: initialTextViewCount)
+        XCTAssertTrue(
+            insertedTextView.waitForExistence(timeout: 5),
+            "Clicking immediately below a trailing non-editable block should create a new editable block"
+        )
+        XCTAssertTrue(
+            insertedTextView.waitForKeyboardFocus(timeout: 5),
+            "The newly created trailing block should receive keyboard focus"
+        )
+
+        app.typeText("After attachment")
+        XCTAssertTrue(
+            insertedTextView.waitForValue(containing: "After attachment", timeout: 5),
+            "Typing after clicking the trailing hit region should continue in the new block"
+        )
+    }
+
+    @MainActor
     func testCommandVPastesImageFileAsAttachmentRow() throws {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

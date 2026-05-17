@@ -624,6 +624,7 @@ enum EditorBlockChrome {
     static let specialBlockCornerRadius: Double = 5
     static let dropTargetHeight: Double = 32
     static let dropSlotHeight: Double = 8
+    static let trailingInsertHitHeight: Double = 28
 }
 
 enum TableBlockChrome {
@@ -2914,6 +2915,12 @@ private struct EditorCanvasView: View {
                         activeDropTarget: $activeBlockDropTarget,
                         moveDroppedBlocks: moveDroppedBlocks
                     )
+                }
+
+                if !blocks.isEmpty {
+                    CanvasTrailingInsertRegion {
+                        focusCanvas()
+                    }
                 }
 
                 if !outlineItems.isEmpty {
@@ -5349,6 +5356,23 @@ private struct BlockDropSlot: View {
                 )
             )
             .accessibilityHidden(true)
+    }
+}
+
+private struct CanvasTrailingInsertRegion: View {
+    let onInsert: () -> Void
+
+    var body: some View {
+        Button(action: onInsert) {
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: CGFloat(EditorBlockChrome.trailingInsertHitHeight))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("在末尾继续编辑")
+        .accessibilityValue("点击后创建或聚焦末尾文本块")
+        .accessibilityIdentifier("editor.canvas-trailing-insert-region")
     }
 }
 

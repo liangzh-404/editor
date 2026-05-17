@@ -13,6 +13,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.inactiveHandleOpacity, 0)
         XCTAssertEqual(EditorBlockChrome.dropTargetHeight, 32)
         XCTAssertEqual(EditorBlockChrome.dropSlotHeight, 8)
+        XCTAssertEqual(EditorBlockChrome.trailingInsertHitHeight, 28)
     }
 
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {
