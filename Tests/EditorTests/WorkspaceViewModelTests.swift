@@ -63,6 +63,24 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadQueuesCompactInitialPageNavigationForEditableFirstScreen() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertEqual(viewModel.selectedCollection, .recent)
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, viewModel.selectedPageID)
+        XCTAssertEqual(viewModel.consumePendingCompactPageNavigationID(), viewModel.selectedPageID)
+        XCTAssertNil(viewModel.pendingCompactPageNavigationID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, viewModel.visibleBlocks.first?.id)
+    }
+
+    @MainActor
     func testSelectingDiaryRestoresDailyPageAndAllDocumentsExcludesIt() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -67,6 +67,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let diaryCalendar: Calendar
     private var hasLoadedSnapshot = false
     private var didRequestInitialEditorFocus = false
+    private var didRequestInitialCompactPageNavigation = false
     private var textEditUndoStack: [TextEditUndoSnapshot] = []
     private var pageArchiveUndoStack: [PageArchiveUndoSnapshot] = []
     private var pageNavigationBackStack: [PageNavigationHistoryEntry] = []
@@ -280,6 +281,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
         try refreshDerivedState(rebuildSearchIndex: true)
         requestInitialEditorFocusIfNeeded(source: "load")
+        requestInitialCompactPageNavigationIfNeeded(source: "load")
     }
 
     func refreshCloudKitAccountStatus() throws {
@@ -2696,6 +2698,19 @@ final class WorkspaceViewModel: ObservableObject {
         pendingFocusBlockID = block.id
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=\(source, privacy: .public)"
+        )
+    }
+
+    private func requestInitialCompactPageNavigationIfNeeded(source: String) {
+        guard !didRequestInitialCompactPageNavigation,
+              let selectedPageID else {
+            return
+        }
+
+        didRequestInitialCompactPageNavigation = true
+        pendingCompactPageNavigationID = selectedPageID
+        EditorLog.render.debug(
+            "compact_page_navigation_queued page_id=\(selectedPageID, privacy: .public) source=\(source, privacy: .public)"
         )
     }
 
