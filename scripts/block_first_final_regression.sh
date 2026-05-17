@@ -21,6 +21,8 @@ UI_TESTS=(
     "testPageFavoriteToggleUpdatesSidebarAndRowState"
     "testMarkdownImportToolbarRendersAndExportsMultilineQuoteAndCalloutBlocks"
     "testMarkdownExportToolbarCapturesCurrentPageMarkdown"
+    "testCommandKOpensInlineLinkPanelForSelection"
+    "testCommandKUpdatesExistingInlineLinkUnderSelection"
     "testCommandKRemovesExistingInlineLinkUnderSelection"
 )
 
