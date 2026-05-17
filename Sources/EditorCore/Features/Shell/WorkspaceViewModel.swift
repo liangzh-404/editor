@@ -2132,9 +2132,13 @@ final class WorkspaceViewModel: ObservableObject {
             return nil
         }
 
-        return pathComponents.reduce(packageDirectory) { partialURL, component in
+        let sourceURL = pathComponents.reduce(packageDirectory) { partialURL, component in
             partialURL.appendingPathComponent(String(component))
         }
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            return nil
+        }
+        return sourceURL
     }
 
     private func scheduleMissingAttachmentThumbnail(attachmentID: String) {

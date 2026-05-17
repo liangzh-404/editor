@@ -1160,6 +1160,43 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testImportMarkdownPackagePreservesMissingAttachmentLinksAsText() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            attachmentRepository: attachmentRepository
+        )
+        try viewModel.load()
+        let packageDirectory = makeTemporaryDirectory()
+        let markdownURL = packageDirectory.appendingPathComponent("Welcome.md")
+        try """
+        Imported intro
+
+        [missing.txt](Attachments/source-attachment/missing.txt)
+        """.write(to: markdownURL, atomically: true, encoding: .utf8)
+
+        try viewModel.importMarkdownPackageToCurrentPage(markdownURL: markdownURL)
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph, .paragraph])
+        XCTAssertEqual(
+            viewModel.visibleBlocks.map(\.textPlain),
+            [
+                "Imported intro",
+                "[missing.txt](Attachments/source-attachment/missing.txt)"
+            ]
+        )
+        XCTAssertEqual(viewModel.snapshot.attachments, [])
+    }
+
+    @MainActor
     func testImportMarkdownToCurrentPageRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }
