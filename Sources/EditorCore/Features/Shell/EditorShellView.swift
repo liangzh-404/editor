@@ -1360,12 +1360,10 @@ enum CompactInitialNavigationResolver {
         selectedPageID: String?,
         availablePageIDs: [String]
     ) -> String? {
-        if let selectedPageID,
-           availablePageIDs.contains(selectedPageID) {
-            return selectedPageID
-        }
-
-        return availablePageIDs.first
+        CompactPageNavigationResolver.initialPageID(
+            selectedPageID: selectedPageID,
+            availablePageIDs: availablePageIDs
+        )
     }
 }
 

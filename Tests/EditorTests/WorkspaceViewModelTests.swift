@@ -81,6 +81,53 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSnapshotInitializerQueuesCompactNavigationToFirstPageWhenSelectionIsMissing() {
+        let workspaceID = "workspace-local"
+        let notebookID = "notebook-local"
+        let firstPageID = "recent-page"
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [
+                WorkspaceSummary(id: workspaceID, name: "本地空间")
+            ],
+            notebooks: [
+                NotebookSummary(id: notebookID, workspaceID: workspaceID, name: "默认")
+            ],
+            pages: [
+                PageSummary(id: firstPageID, workspaceID: workspaceID, notebookID: notebookID, title: "最近页面"),
+                PageSummary(id: "older-page", workspaceID: workspaceID, notebookID: notebookID, title: "旧页面")
+            ],
+            blocks: [
+                BlockSnapshot(
+                    id: "first-block",
+                    pageID: firstPageID,
+                    parentBlockID: nil,
+                    orderKey: "000001",
+                    type: .paragraph,
+                    textPlain: ""
+                )
+            ],
+            attachments: [],
+            selectedWorkspaceID: workspaceID,
+            selectedNotebookID: notebookID,
+            selectedPageID: nil
+        )
+
+        let viewModel = WorkspaceViewModel(snapshot: snapshot)
+
+        XCTAssertEqual(
+            CompactPageNavigationResolver.initialPageID(
+                selectedPageID: nil,
+                availablePageIDs: snapshot.pages.map(\.id)
+            ),
+            firstPageID
+        )
+        XCTAssertEqual(viewModel.selectedCollection, .recent)
+        XCTAssertEqual(viewModel.selectedPageID, firstPageID)
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, firstPageID)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.id), ["first-block"])
+    }
+
+    @MainActor
     func testCreateNewDocumentForCompactUISelectsAndQueuesNavigationToEditablePage() throws {
         let database = try migratedDatabase()
         defer { database.close() }

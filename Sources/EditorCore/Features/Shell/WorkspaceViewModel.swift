@@ -31,6 +31,23 @@ private struct PageNavigationHistoryEntry: Equatable {
     let collection: WorkspaceCollection
 }
 
+enum CompactPageNavigationResolver {
+    static func initialPageID(
+        selectedPageID: String?,
+        availablePageIDs: [String]
+    ) -> String? {
+        if let selectedPageID {
+            guard availablePageIDs.contains(selectedPageID) else {
+                return nil
+            }
+
+            return selectedPageID
+        }
+
+        return availablePageIDs.first
+    }
+}
+
 @MainActor
 final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var snapshot: WorkspaceSnapshot
@@ -249,6 +266,7 @@ final class WorkspaceViewModel: ObservableObject {
         canUndoTextEdit = false
         canUndoPageArchive = false
         attachmentPreviewGenerationStatuses = [:]
+        requestInitialCompactPageNavigationIfNeeded(source: "snapshot")
     }
 
     func load() throws {
@@ -2796,14 +2814,20 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func requestInitialCompactPageNavigationIfNeeded(source: String) {
         guard !didRequestInitialCompactPageNavigation,
-              let selectedPageID else {
+              let pageID = CompactPageNavigationResolver.initialPageID(
+                selectedPageID: selectedPageID,
+                availablePageIDs: snapshot.pages.map(\.id)
+              ) else {
             return
         }
 
         didRequestInitialCompactPageNavigation = true
-        pendingCompactPageNavigationID = selectedPageID
+        if selectedPageID == nil {
+            selectPage(id: pageID, collection: .recent, recordHistory: false)
+        }
+        pendingCompactPageNavigationID = pageID
         EditorLog.render.debug(
-            "compact_page_navigation_queued page_id=\(selectedPageID, privacy: .public) source=\(source, privacy: .public)"
+            "compact_page_navigation_queued page_id=\(pageID, privacy: .public) source=\(source, privacy: .public)"
         )
     }
 
