@@ -1376,24 +1376,57 @@ struct SidebarNavigationModel: Equatable, Sendable {
     }
 }
 
+enum SidebarChrome {
+    static let horizontalPadding: Double = 8
+    static let verticalPadding: Double = 10
+    static let sectionSpacing: Double = 8
+    static let rowSpacing: Double = 2
+    static let rowCornerRadius: Double = 13
+    static let rowVerticalPadding: Double = 8
+    static let nestedItemIndent: Double = 16
+    static let dividerOpacity: Double = 0.10
+
+    static var backgroundColor: Color {
+        Color(red: 0.968, green: 0.962, blue: 0.952)
+    }
+
+    static var selectedFillColor: Color {
+        Color(red: 0.78, green: 0.75, blue: 0.70)
+    }
+
+    static var selectedForegroundColor: Color {
+        Color(red: 0.25, green: 0.23, blue: 0.34)
+    }
+
+    static var foregroundColor: Color {
+        Color(red: 0.35, green: 0.34, blue: 0.43)
+    }
+
+    static var mutedForegroundColor: Color {
+        Color(red: 0.54, green: 0.52, blue: 0.61)
+    }
+}
+
 private struct WorkspaceSidebar: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.sectionSpacing)) {
                 sidebarHeader
                 newDocumentButton
+                sidebarDivider
                 sidebarGroup(items: sidebarModel.primaryItems)
                 favoritePageShortcuts
                 tagGroup
+                sidebarDivider
                 sidebarGroup(items: sidebarModel.utilityItems)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 12)
+            .padding(.horizontal, CGFloat(SidebarChrome.horizontalPadding))
+            .padding(.vertical, CGFloat(SidebarChrome.verticalPadding))
         }
         .navigationTitle("编辑器")
-        .background(Color(red: 0.965, green: 0.960, blue: 0.950))
+        .background(SidebarChrome.backgroundColor)
     }
 
     private var sidebarModel: SidebarNavigationModel {
@@ -1417,10 +1450,10 @@ private struct WorkspaceSidebar: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Editor")
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(Color(red: 0.24, green: 0.23, blue: 0.30))
+                    .foregroundStyle(SidebarChrome.selectedForegroundColor)
                 Text("本地文档")
                     .font(.caption2)
-                    .foregroundStyle(Color(red: 0.50, green: 0.48, blue: 0.58))
+                    .foregroundStyle(SidebarChrome.mutedForegroundColor)
             }
 
             Spacer(minLength: 0)
@@ -1439,21 +1472,22 @@ private struct WorkspaceSidebar: View {
                 Image(systemName: "doc.badge.plus")
                     .font(.body.weight(.medium))
                     .frame(width: 22)
-                    .foregroundStyle(Color(red: 0.50, green: 0.48, blue: 0.58))
+                    .foregroundStyle(SidebarChrome.mutedForegroundColor)
                 Text("新建文档")
                     .font(.body.weight(.medium))
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(.vertical, CGFloat(SidebarChrome.rowVerticalPadding))
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(Color(red: 0.28, green: 0.27, blue: 0.34))
+        .foregroundStyle(SidebarChrome.foregroundColor)
         .accessibilityIdentifier("editor.sidebar.new-document")
     }
 
     private func sidebarGroup(items: [SidebarNavigationItem]) -> some View {
-        VStack(spacing: 4) {
+        VStack(spacing: CGFloat(SidebarChrome.rowSpacing)) {
             ForEach(items) { item in
                 CollectionRailButton(item: item) {
                     viewModel.selectCollection(item.collection)
@@ -1462,10 +1496,19 @@ private struct WorkspaceSidebar: View {
         }
     }
 
+    private var sidebarDivider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(SidebarChrome.dividerOpacity))
+            .frame(height: 1)
+            .padding(.horizontal, 8)
+            .accessibilityHidden(true)
+    }
+
     @ViewBuilder
     private var favoritePageShortcuts: some View {
         if !viewModel.snapshot.favoritePages.isEmpty {
-            VStack(spacing: 2) {
+            VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.rowSpacing)) {
+                SidebarSectionLabel("收藏")
                 ForEach(viewModel.snapshot.favoritePages) { page in
                     Button {
                         viewModel.selectPage(id: page.id)
@@ -1485,7 +1528,7 @@ private struct WorkspaceSidebar: View {
                         .padding(.vertical, 5)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(Color(red: 0.43, green: 0.41, blue: 0.50))
+                    .foregroundStyle(SidebarChrome.foregroundColor)
                     .accessibilityIdentifier("editor.favorite-page.\(page.id)")
                 }
             }
@@ -1514,7 +1557,7 @@ private struct WorkspaceSidebar: View {
                     CollectionRailButton(item: item) {
                         viewModel.selectCollection(item.collection)
                     }
-                    .padding(.leading, 18)
+                    .padding(.leading, CGFloat(SidebarChrome.nestedItemIndent))
                 }
             }
         }
@@ -1538,9 +1581,9 @@ private struct SidebarSectionLabel: View {
     var body: some View {
         Text(title)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(Color(red: 0.45, green: 0.43, blue: 0.52).opacity(0.68))
+            .foregroundStyle(SidebarChrome.mutedForegroundColor.opacity(0.78))
             .padding(.horizontal, 12)
-            .padding(.top, 4)
+            .padding(.top, 2)
     }
 }
 
@@ -1554,7 +1597,7 @@ private struct CollectionRailButton: View {
                 Image(systemName: item.systemImage)
                     .font(.body.weight(.medium))
                     .frame(width: 22)
-                    .foregroundStyle(item.isSelected ? Color(red: 0.40, green: 0.37, blue: 0.56) : Color(red: 0.54, green: 0.52, blue: 0.61))
+                    .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor : SidebarChrome.mutedForegroundColor)
                 Text(item.title)
                     .font(item.isSelected ? .body.weight(.semibold) : .body.weight(.medium))
                     .lineLimit(1)
@@ -1562,24 +1605,24 @@ private struct CollectionRailButton: View {
                 if item.showsCount {
                     Text("\(item.count)")
                         .font(.callout.weight(.medium))
-                        .foregroundStyle(item.isSelected ? Color(red: 0.42, green: 0.39, blue: 0.57) : Color(red: 0.58, green: 0.56, blue: 0.66))
+                        .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor.opacity(0.80) : SidebarChrome.mutedForegroundColor)
                         .monospacedDigit()
                 }
             }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+                .padding(.vertical, CGFloat(SidebarChrome.rowVerticalPadding))
                 .background(
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(item.isSelected ? Color(red: 0.79, green: 0.76, blue: 0.70).opacity(0.68) : Color.clear)
+                    RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
+                        .fill(item.isSelected ? SidebarChrome.selectedFillColor.opacity(0.78) : Color.clear)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
                         .stroke(item.isSelected ? Color.black.opacity(0.035) : Color.clear, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
-        .foregroundStyle(item.isSelected ? Color(red: 0.24, green: 0.22, blue: 0.32) : Color.primary.opacity(0.82))
+        .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor : SidebarChrome.foregroundColor)
         .accessibilityIdentifier(item.identifier)
         .accessibilityValue(item.isSelected ? "已选中，\(item.count)" : "未选中，\(item.count)")
     }

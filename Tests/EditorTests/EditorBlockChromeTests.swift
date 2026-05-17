@@ -290,6 +290,17 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(model.tagItems.map(\.count), [2, 1])
     }
 
+    func testSidebarChromeUsesCompactBearLikeRailMetrics() {
+        XCTAssertEqual(SidebarChrome.horizontalPadding, 8)
+        XCTAssertEqual(SidebarChrome.verticalPadding, 10)
+        XCTAssertEqual(SidebarChrome.sectionSpacing, 8)
+        XCTAssertEqual(SidebarChrome.rowSpacing, 2)
+        XCTAssertEqual(SidebarChrome.rowCornerRadius, 13)
+        XCTAssertEqual(SidebarChrome.rowVerticalPadding, 8)
+        XCTAssertEqual(SidebarChrome.nestedItemIndent, 16)
+        XCTAssertEqual(SidebarChrome.dividerOpacity, 0.10)
+    }
+
     private func block(id: String, parentBlockID: String?, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: id,
