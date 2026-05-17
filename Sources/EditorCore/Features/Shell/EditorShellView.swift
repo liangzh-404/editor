@@ -664,6 +664,27 @@ enum TableBlockChrome {
     static let selectorHitOpacity: Double = 0.0001
 }
 
+enum PastedAttachmentAnchorResolver {
+    static func anchorBlockID(
+        textSelection: EditorTextSelection?,
+        focusedBlockID: String?,
+        selectedBlockIDs: Set<String>,
+        visibleBlockIDs: [String]
+    ) -> String? {
+        if let blockID = textSelection?.blockID,
+           visibleBlockIDs.contains(blockID) {
+            return blockID
+        }
+
+        if let focusedBlockID,
+           visibleBlockIDs.contains(focusedBlockID) {
+            return focusedBlockID
+        }
+
+        return visibleBlockIDs.last { selectedBlockIDs.contains($0) }
+    }
+}
+
 enum MobileBlockSwipeAction: Equatable, Sendable {
     case select
     case indent
@@ -3149,10 +3170,7 @@ private struct EditorCanvasView: View {
         )
         .onPasteCommand(of: [.fileURL, .png, .jpeg, .tiff]) { _ in
             let attachmentURLs = MacPasteboardAttachmentResolver.attachmentURLs(from: .general)
-            guard !attachmentURLs.isEmpty else {
-                return
-            }
-            attachmentURLs.forEach(onImportAttachment)
+            _ = importPastedAttachments(attachmentURLs)
         }
 #endif
 #if os(macOS)
@@ -3163,11 +3181,7 @@ private struct EditorCanvasView: View {
                 },
                 onPasteAttachments: {
                     let attachmentURLs = MacPasteboardAttachmentResolver.attachmentURLs(from: .general)
-                    guard !attachmentURLs.isEmpty else {
-                        return false
-                    }
-                    attachmentURLs.forEach(onImportAttachment)
-                    return true
+                    return importPastedAttachments(attachmentURLs)
                 },
                 hasBlockSelection: {
                     !editorSession.selectedBlockIDs.isEmpty
@@ -3765,6 +3779,24 @@ private struct EditorCanvasView: View {
         }
 
         pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+    }
+
+    private func importPastedAttachments(_ attachmentURLs: [URL]) -> Bool {
+        guard !attachmentURLs.isEmpty else {
+            return false
+        }
+
+        if let anchorBlockID = PastedAttachmentAnchorResolver.anchorBlockID(
+            textSelection: editorSession.textSelection,
+            focusedBlockID: editorSession.focusedBlockID,
+            selectedBlockIDs: editorSession.selectedBlockIDs,
+            visibleBlockIDs: blocks.map(\.id)
+        ) {
+            return onImportAttachmentsAfterBlock(attachmentURLs, anchorBlockID)
+        }
+
+        attachmentURLs.forEach(onImportAttachment)
+        return true
     }
 
     private func focusAdjacentBlock(

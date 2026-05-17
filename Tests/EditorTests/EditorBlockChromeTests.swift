@@ -348,6 +348,46 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(SidebarChrome.dividerOpacity, 0.10)
     }
 
+    func testPastedAttachmentAnchorPrefersTextSelectionThenFocusedBlockThenLastVisibleSelection() {
+        let visibleBlockIDs = ["first", "middle", "last"]
+
+        XCTAssertEqual(
+            PastedAttachmentAnchorResolver.anchorBlockID(
+                textSelection: EditorTextSelection(blockID: "middle", location: 0, length: 0),
+                focusedBlockID: "first",
+                selectedBlockIDs: ["last"],
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            "middle"
+        )
+        XCTAssertEqual(
+            PastedAttachmentAnchorResolver.anchorBlockID(
+                textSelection: nil,
+                focusedBlockID: "middle",
+                selectedBlockIDs: ["last"],
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            "middle"
+        )
+        XCTAssertEqual(
+            PastedAttachmentAnchorResolver.anchorBlockID(
+                textSelection: nil,
+                focusedBlockID: nil,
+                selectedBlockIDs: ["first", "last"],
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            "last"
+        )
+        XCTAssertNil(
+            PastedAttachmentAnchorResolver.anchorBlockID(
+                textSelection: nil,
+                focusedBlockID: "missing",
+                selectedBlockIDs: ["also-missing"],
+                visibleBlockIDs: visibleBlockIDs
+            )
+        )
+    }
+
     private func block(id: String, parentBlockID: String?, text: String) -> BlockSnapshot {
         BlockSnapshot(
             id: id,
