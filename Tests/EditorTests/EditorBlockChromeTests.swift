@@ -13,9 +13,9 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testCraftThingsDesignTokensKeepDocumentTypographyInRange() {
-        XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 34)
-        XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 16)
-        XCTAssertEqual(EditorDesignTokens.Typography.bodyLineHeightMultiple, 1.64)
+        XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 30)
+        XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 15)
+        XCTAssertEqual(EditorDesignTokens.Typography.bodyLineHeightMultiple, 1.58)
         XCTAssertEqual(EditorDesignTokens.Layout.editorMaxWidth, 740)
     }
 
@@ -60,13 +60,15 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.rowVerticalPadding, 0)
         XCTAssertEqual(EditorBlockChrome.listVerticalPadding, 0)
         XCTAssertEqual(EditorBlockChrome.listBackgroundOpacity, 0)
-        XCTAssertEqual(EditorBlockChrome.listMarkerWidth, 22)
-        XCTAssertEqual(EditorBlockChrome.listTextSpacing, 4)
+        XCTAssertEqual(EditorBlockChrome.listMarkerWidth, 20)
+        XCTAssertEqual(EditorBlockChrome.listTextSpacing, 5)
+        XCTAssertEqual(EditorBlockChrome.listMarkerTopPadding, 0)
         XCTAssertEqual(EditorBlockChrome.actionColumnWidth, 18)
         XCTAssertEqual(EditorBlockChrome.actionColumnSpacing, 5)
         XCTAssertEqual(EditorBlockChrome.inactiveHandleOpacity, 0)
         XCTAssertEqual(EditorBlockChrome.dropTargetHeight, 32)
         XCTAssertEqual(EditorBlockChrome.dropSlotHeight, 8)
+        XCTAssertEqual(EditorBlockChrome.dropIndicatorAfterOffset, 7)
         XCTAssertEqual(EditorBlockChrome.trailingInsertHitHeight, 64)
     }
 
@@ -348,10 +350,20 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testTableSelectionClearsOnExternalInteraction() {
+        let selection = TableSelection(rows: [0], columns: [1])
+
+        XCTAssertEqual(
+            TableSelectionReducer.selectionAfterExternalInteraction(selection),
+            .empty
+        )
+    }
+
     func testDropTargetLifecycleClearsWhenEditorReceivesNormalInteraction() {
         let target = BlockDropTarget(blockID: "block-a", placement: .after)
 
         XCTAssertNil(BlockDropTargetLifecycleReducer.targetAfterEditorInteraction(current: target))
+        XCTAssertNil(BlockDropTargetLifecycleReducer.targetAfterDragEnded(current: target))
     }
 
     func testPageReferencePreviewUsesFirstNonEmptyChildBlock() {

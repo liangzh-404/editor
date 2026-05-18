@@ -63,9 +63,9 @@ enum EditorDesignTokens {
     }
 
     enum Typography {
-        static let documentTitleSize: Double = 34
-        static let bodySize: Double = 16
-        static let bodyLineHeightMultiple: Double = 1.64
+        static let documentTitleSize: Double = 30
+        static let bodySize: Double = 15
+        static let bodyLineHeightMultiple: Double = 1.58
     }
 
     enum Layout {
@@ -781,8 +781,9 @@ enum EditorBlockChrome {
     static let listVerticalPadding: Double = 0
     static let listHorizontalPadding: Double = 0
     static let listBackgroundOpacity: Double = 0
-    static let listMarkerWidth: Double = 22
-    static let listTextSpacing: Double = 4
+    static let listMarkerWidth: Double = 20
+    static let listTextSpacing: Double = 5
+    static let listMarkerTopPadding: Double = 0
     static let actionColumnWidth: Double = 18
     static let actionColumnSpacing: Double = 5
     static let dragHandleWidth: Double = 18
@@ -790,6 +791,7 @@ enum EditorBlockChrome {
     static let specialBlockCornerRadius: Double = 5
     static let dropTargetHeight: Double = 32
     static let dropSlotHeight: Double = 8
+    static let dropIndicatorAfterOffset: Double = 7
     static let trailingInsertHitHeight: Double = 64
 }
 
@@ -1090,6 +1092,10 @@ struct TableSelection: Equatable, Sendable {
 }
 
 enum TableSelectionReducer {
+    static func selectionAfterExternalInteraction(_ selection: TableSelection) -> TableSelection {
+        selection.isEmpty ? selection : .empty
+    }
+
     static func selectionAfterSelectingRow(
         _ row: Int,
         current: TableSelection,
@@ -1175,6 +1181,22 @@ struct BlockDropTarget: Equatable, Sendable {
 enum BlockDropTargetLifecycleReducer {
     static func targetAfterEditorInteraction(current: BlockDropTarget?) -> BlockDropTarget? {
         nil
+    }
+
+    static func targetAfterDragEnded(current: BlockDropTarget?) -> BlockDropTarget? {
+        nil
+    }
+}
+
+struct TransientSelectionResetRequest: Equatable, Sendable {
+    let id: UUID
+    let excludingBlockID: String?
+
+    static let none = TransientSelectionResetRequest(id: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!, excludingBlockID: nil)
+
+    init(id: UUID = UUID(), excludingBlockID: String? = nil) {
+        self.id = id
+        self.excludingBlockID = excludingBlockID
     }
 }
 
@@ -3269,6 +3291,7 @@ private struct EditorCanvasView: View {
     @StateObject private var editorSession = EditorSession()
     @State private var pendingFocusRequest: BlockFocusRequest?
     @State private var activeBlockDropTarget: BlockDropTarget?
+    @State private var transientSelectionResetRequest = TransientSelectionResetRequest.none
     @State private var scrollMetricsTracker = EditorCanvasScrollMetricsTracker(pageID: nil, blockCount: 0)
     @State private var isAuxiliaryRailCollapsed = false
 
@@ -3284,6 +3307,11 @@ private struct EditorCanvasView: View {
                         .padding(.leading, CGFloat(EditorBlockChrome.actionColumnWidth + EditorBlockChrome.actionColumnSpacing + 4))
                         .disabled(page == nil)
                         .accessibilityIdentifier("editor.page-title")
+                        .simultaneousGesture(
+                            TapGesture().onEnded {
+                                clearTransientSelections()
+                            }
+                        )
 
                     Spacer(minLength: 12)
 
@@ -3484,6 +3512,7 @@ private struct EditorCanvasView: View {
                         isToggleBlockExpanded: isToggleBlockExpanded(block.id),
                         isMobileSelectionModeActive: !editorSession.selectedBlockIDs.isEmpty,
                         isBlockSelected: editorSession.selectedBlockIDs.contains(block.id),
+                        selectionResetRequest: transientSelectionResetRequest,
                         dropPlacement: activeBlockDropTarget?.blockID == block.id ? activeBlockDropTarget?.placement : nil,
                         focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
                         focusSelection: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.selection : nil,
@@ -3517,6 +3546,9 @@ private struct EditorCanvasView: View {
                         onClearDropTarget: {
                             activeBlockDropTarget = BlockDropTargetLifecycleReducer
                                 .targetAfterEditorInteraction(current: activeBlockDropTarget)
+                        },
+                        onClearTransientSelections: { excludingBlockID in
+                            clearTransientSelections(excludingBlockID: excludingBlockID)
                         },
                         onTableRowsChange: { rows in
                             onTableRowsChange(block.id, rows)
@@ -3564,7 +3596,8 @@ private struct EditorCanvasView: View {
                         focusCanvas()
                     }
                     .dropDestination(for: String.self) { draggedBlockIDs, _ in
-                        activeBlockDropTarget = nil
+                        activeBlockDropTarget = BlockDropTargetLifecycleReducer
+                            .targetAfterDragEnded(current: activeBlockDropTarget)
                         return moveDroppedBlocksToEnd(draggedBlockIDs)
                     }
                     .accessibilityIdentifier("editor.canvas-edit-region")
@@ -3635,7 +3668,8 @@ private struct EditorCanvasView: View {
 #if os(macOS)
         .background(
             DropTargetCleanupEventBridge(isEnabled: activeBlockDropTarget != nil) {
-                activeBlockDropTarget = nil
+                activeBlockDropTarget = BlockDropTargetLifecycleReducer
+                    .targetAfterDragEnded(current: activeBlockDropTarget)
             }
             .frame(width: 0, height: 0)
         )
@@ -4330,13 +4364,19 @@ private struct EditorCanvasView: View {
     }
 
     private func focusCanvas() {
-        editorSession.clearBlockSelection()
-        activeBlockDropTarget = nil
+        clearTransientSelections()
         guard let blockID = onFocusCanvas() else {
             return
         }
 
         pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+    }
+
+    private func clearTransientSelections(excludingBlockID: String? = nil) {
+        editorSession.clearBlockSelection()
+        activeBlockDropTarget = BlockDropTargetLifecycleReducer
+            .targetAfterEditorInteraction(current: activeBlockDropTarget)
+        transientSelectionResetRequest = TransientSelectionResetRequest(excludingBlockID: excludingBlockID)
     }
 
     @discardableResult
@@ -5402,20 +5442,20 @@ private struct ListMarkerGlyph: View {
         Group {
             if descriptor.marker.hasSuffix(".") {
                 Text(descriptor.marker)
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.system(size: 15, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(Color.primary)
             } else if isNested {
                 Circle()
                     .stroke(Color.primary, lineWidth: 1.7)
-                    .frame(width: 5.8, height: 5.8)
+                    .frame(width: 5.4, height: 5.4)
             } else {
                 Circle()
                     .fill(Color.primary)
-                    .frame(width: 5.8, height: 5.8)
+                    .frame(width: 5.4, height: 5.4)
             }
         }
-        .frame(width: CGFloat(EditorBlockChrome.listMarkerWidth), height: 24, alignment: .trailing)
+        .frame(width: CGFloat(EditorBlockChrome.listMarkerWidth), height: 22, alignment: .trailing)
         .accessibilityHidden(true)
     }
 }
@@ -5606,6 +5646,7 @@ private struct BlockRowView: View {
     let isToggleBlockExpanded: Bool
     let isMobileSelectionModeActive: Bool
     let isBlockSelected: Bool
+    let selectionResetRequest: TransientSelectionResetRequest
     let dropPlacement: BlockDropPlacement?
     let focusRequestID: UUID?
     let focusSelection: EditorTextSelection?
@@ -5614,6 +5655,7 @@ private struct BlockRowView: View {
     let onToggleBlockSelection: () -> Void
     let onSelectAllBlocksByKeyboard: () -> Bool
     let onClearDropTarget: () -> Void
+    let onClearTransientSelections: (String?) -> Void
     let onTableRowsChange: ([[String]]) -> Void
     let onTextChange: (String) -> Void
     @State private var isRowHovered = false
@@ -5655,6 +5697,7 @@ private struct BlockRowView: View {
         isToggleBlockExpanded: Bool = true,
         isMobileSelectionModeActive: Bool = false,
         isBlockSelected: Bool = false,
+        selectionResetRequest: TransientSelectionResetRequest = .none,
         dropPlacement: BlockDropPlacement? = nil,
         focusRequestID: UUID? = nil,
         focusSelection: EditorTextSelection? = nil,
@@ -5663,6 +5706,7 @@ private struct BlockRowView: View {
         onToggleBlockSelection: @escaping () -> Void = {},
         onSelectAllBlocksByKeyboard: @escaping () -> Bool = { false },
         onClearDropTarget: @escaping () -> Void = {},
+        onClearTransientSelections: @escaping (String?) -> Void = { _ in },
         onTableRowsChange: @escaping ([[String]]) -> Void = { _ in },
         onTextChange: @escaping (String) -> Void
     ) {
@@ -5700,6 +5744,7 @@ private struct BlockRowView: View {
         self.isToggleBlockExpanded = isToggleBlockExpanded
         self.isMobileSelectionModeActive = isMobileSelectionModeActive
         self.isBlockSelected = isBlockSelected
+        self.selectionResetRequest = selectionResetRequest
         self.dropPlacement = dropPlacement
         self.focusRequestID = focusRequestID
         self.focusSelection = focusSelection
@@ -5708,6 +5753,7 @@ private struct BlockRowView: View {
         self.onToggleBlockSelection = onToggleBlockSelection
         self.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
         self.onClearDropTarget = onClearDropTarget
+        self.onClearTransientSelections = onClearTransientSelections
         self.onTableRowsChange = onTableRowsChange
         self.onTextChange = onTextChange
     }
@@ -5721,6 +5767,7 @@ private struct BlockRowView: View {
             if let dropPlacement {
                 BlockDropIndicator(placement: dropPlacement)
                     .padding(.leading, dropIndicatorLeadingPadding(for: dropPlacement))
+                    .offset(y: dropIndicatorVerticalOffset(for: dropPlacement))
             }
         }
         .padding(.vertical, CGFloat(EditorBlockChrome.rowVerticalPadding))
@@ -5789,6 +5836,10 @@ private struct BlockRowView: View {
                 text: block.textPlain,
                 rows: block.tableRows,
                 focusedBlockID: editorSession.focusedBlockID,
+                selectionResetRequest: selectionResetRequest,
+                onClearExternalSelections: {
+                    onClearTransientSelections(block.id)
+                },
                 onRowsChange: onTableRowsChange,
                 onMoveFocusByKeyboard: onMoveFocusByKeyboard
             )
@@ -5924,6 +5975,15 @@ private struct BlockRowView: View {
         placement == .childAfter ? 28 : 0
     }
 
+    private func dropIndicatorVerticalOffset(for placement: BlockDropPlacement) -> CGFloat {
+        switch placement {
+        case .before:
+            return -CGFloat(EditorBlockChrome.dropIndicatorAfterOffset)
+        case .after, .childAfter:
+            return CGFloat(EditorBlockChrome.dropIndicatorAfterOffset)
+        }
+    }
+
     @ViewBuilder
     private var slashCommandMenu: some View {
         let commands = SlashCommandResolver.matchingCommands(for: block.textPlain)
@@ -6055,7 +6115,7 @@ private struct BlockRowView: View {
             let descriptor = ListBlockChromeDescriptor(block: block, ordinal: listOrdinal)
             HStack(alignment: .top, spacing: CGFloat(EditorBlockChrome.listTextSpacing)) {
                 ListMarkerGlyph(descriptor: descriptor, isNested: block.parentBlockID != nil)
-                    .padding(.top, 3)
+                    .padding(.top, CGFloat(EditorBlockChrome.listMarkerTopPadding))
 
                 nativeTextBlockEditor
             }
@@ -6416,10 +6476,10 @@ private struct BlockRowView: View {
 
     private func requestRowFocus() {
         onClearDropTarget()
-        editorSession.clearBlockSelection()
         guard block.type != .table else {
             return
         }
+        onClearTransientSelections(nil)
         guard usesNativeTextEditor else {
             onSelectCurrentBlock()
             return
@@ -6777,6 +6837,8 @@ private struct StructuredTableBlockEditor: View {
     let text: String
     let rows: [[String]]
     let focusedBlockID: String?
+    let selectionResetRequest: TransientSelectionResetRequest
+    let onClearExternalSelections: () -> Void
     let onRowsChange: ([[String]]) -> Void
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     @State private var isTableHovered = false
@@ -6868,6 +6930,12 @@ private struct StructuredTableBlockEditor: View {
         .accessibilityLabel("表格块，\(tableDimensions)")
         .accessibilityValue(tableDimensions)
         .accessibilityIdentifier("editor.table.\(blockID)")
+        .onChange(of: selectionResetRequest) { _, request in
+            guard request.excludingBlockID != blockID else {
+                return
+            }
+            selection = TableSelectionReducer.selectionAfterExternalInteraction(selection)
+        }
         .onChange(of: focusedBlockID) { _, focusedBlockID in
             if focusedBlockID != blockID {
                 selection = .empty
@@ -7003,6 +7071,7 @@ private struct StructuredTableBlockEditor: View {
             }
         }
         .onTapGesture {
+            onClearExternalSelections()
             selection = .empty
         }
         .accessibilityIdentifier("editor.table.\(blockID).cell.\(rowIndex).\(columnIndex)")
@@ -7017,6 +7086,7 @@ private struct StructuredTableBlockEditor: View {
 
     private func rowSelector(_ rowIndex: Int, columnCount: Int) -> some View {
         Button {
+            onClearExternalSelections()
             selection = TableSelectionReducer.selectionAfterSelectingRow(
                 rowIndex,
                 current: selection,
@@ -7056,6 +7126,7 @@ private struct StructuredTableBlockEditor: View {
 
     private func columnSelector(_ columnIndex: Int) -> some View {
         Button {
+            onClearExternalSelections()
             selection = TableSelectionReducer.selectionAfterSelectingColumn(
                 columnIndex,
                 current: selection,
@@ -7527,6 +7598,7 @@ private struct DropTargetCleanupEventBridge: NSViewRepresentable {
         var isEnabled = false
         var onClear: () -> Void
         private var eventMonitor: Any?
+        private var globalMouseUpMonitor: Any?
         private var resignObserver: NSObjectProtocol?
 
         init(onClear: @escaping () -> Void) {
@@ -7540,6 +7612,13 @@ private struct DropTargetCleanupEventBridge: NSViewRepresentable {
                 ) { [weak self] event in
                     self?.clearIfNeeded()
                     return event
+                }
+            }
+            if globalMouseUpMonitor == nil {
+                globalMouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.clearIfNeeded()
+                    }
                 }
             }
             if resignObserver == nil {
@@ -7559,10 +7638,14 @@ private struct DropTargetCleanupEventBridge: NSViewRepresentable {
             if let eventMonitor {
                 NSEvent.removeMonitor(eventMonitor)
             }
+            if let globalMouseUpMonitor {
+                NSEvent.removeMonitor(globalMouseUpMonitor)
+            }
             if let resignObserver {
                 NotificationCenter.default.removeObserver(resignObserver)
             }
             eventMonitor = nil
+            globalMouseUpMonitor = nil
             resignObserver = nil
         }
 

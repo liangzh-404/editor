@@ -237,7 +237,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             taskItemIsCompleted: type == .taskItem && self.type == .taskItem ? taskItemIsCompleted : false,
             toggleIsExpanded: type == .toggle && self.type == .toggle ? toggleIsExpanded : true,
             codeBlockLineWrapping: type == .codeBlock && self.type == .codeBlock ? codeBlockLineWrapping : true,
-            pageReferenceTargetPageID: type == .pageReference || type == .blockReference ? pageReferenceTargetPageID : nil,
+            pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: type == .blockReference ? blockReferenceTargetBlockID : nil,
             tableRows: type == .table && self.type == .table ? tableRows : [],
             attachmentID: type.isAttachment && type == self.type ? attachmentID : nil

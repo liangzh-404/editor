@@ -1201,6 +1201,7 @@ final class PageRepository {
                    blocks.text_plain,
                    blocks.page_id,
                    blocks.order_key,
+                   blocks.payload_json,
                    pages.workspace_id,
                    pages.notebook_id
             FROM blocks
@@ -1222,6 +1223,13 @@ final class PageRepository {
         }
 
         let sourceText = source["text_plain"] ?? ""
+        if let targetPageID = Self.pageReferenceTargetPageID(payloadJSON: source["payload_json"] ?? ""),
+           let existingPage = try pageSummary(pageID: targetPageID) {
+            EditorLog.store.debug(
+                "block_page_conversion_reused block_id=\(blockID, privacy: .public) target_page_id=\(targetPageID, privacy: .public)"
+            )
+            return existingPage
+        }
         let title = Self.pageTitle(fromBlockText: sourceText)
         let sourceOrderKey = source["order_key"] ?? "000001"
         let notebookID = source["notebook_id"] ?? nil
@@ -1360,6 +1368,31 @@ final class PageRepository {
             title: title,
             isFavorite: false
         )
+    }
+
+    private func pageSummary(pageID: String) throws -> PageSummary? {
+        try database.query(
+            """
+            SELECT id,
+                   workspace_id,
+                   notebook_id,
+                   title,
+                   is_favorite
+            FROM pages
+            WHERE id = ?
+              AND is_archived = 0
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        ).first.map { row in
+            PageSummary(
+                id: row["id"] ?? "",
+                workspaceID: row["workspace_id"] ?? "",
+                notebookID: row["notebook_id"] ?? nil,
+                title: row["title"] ?? "",
+                isFavorite: Self.sqliteBool(row["is_favorite"])
+            )
+        }
     }
 
     func appendBlockReferenceBlock(pageID: String, targetBlockID: String) throws -> BlockSnapshot {

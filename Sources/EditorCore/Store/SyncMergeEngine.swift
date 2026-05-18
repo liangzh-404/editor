@@ -274,9 +274,7 @@ final class SyncMergeEngine {
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: remote.blockID,
                 text: remote.textPlain,
-                pageReferenceTargetPageID: remote.type == .pageReference || remote.type == .blockReference
-                    ? Self.pageReferenceTargetPageID(payloadJSON: remote.payloadJSON)
-                    : nil,
+                pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: remote.payloadJSON),
                 blockReferenceTargetBlockID: remote.type == .blockReference
                     ? Self.blockReferenceTargetBlockID(payloadJSON: remote.payloadJSON)
                     : nil

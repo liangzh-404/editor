@@ -926,6 +926,28 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSourceBlock.pageReferenceTargetPageID, createdPage.id)
     }
 
+    func testConvertListBlockToPageReopensExistingChildPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlock = try repository.appendBlock(
+            pageID: sourcePageID,
+            type: .unorderedListItem,
+            text: "已有子页面"
+        )
+        let createdPage = try repository.convertTextBlockToPage(blockID: sourceBlock.id)
+
+        let reopenedPage = try repository.convertTextBlockToPage(blockID: sourceBlock.id)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let parentLinks = reloadedSnapshot.pageParentLinks.filter { $0.sourceBlockID == sourceBlock.id }
+
+        XCTAssertEqual(reopenedPage.id, createdPage.id)
+        XCTAssertEqual(parentLinks.count, 1)
+    }
+
     func testEditingConvertedHeadingKeepsChildPageTarget() throws {
         let database = try migratedDatabase()
         defer { database.close() }

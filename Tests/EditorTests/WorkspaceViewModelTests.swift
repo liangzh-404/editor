@@ -1044,6 +1044,38 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testEditingConvertedListBlockKeepsInlineChildPageTargetInMemory() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlock = try repository.appendBlock(
+            pageID: sourcePageID,
+            type: .orderedListItem,
+            text: "列表子页面"
+        )
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            backlinkRepository: BacklinkRepository(database: database)
+        )
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+        let createdPage = try viewModel.convertTextBlockToPage(blockID: sourceBlock.id)
+        XCTAssertTrue(try viewModel.navigateBack())
+
+        try viewModel.updateBlockText(blockID: sourceBlock.id, text: "列表子页面更新")
+        let reloadedSourceBlock = try XCTUnwrap(
+            viewModel.snapshot.blocks.first { $0.id == sourceBlock.id }
+        )
+
+        XCTAssertEqual(reloadedSourceBlock.type, .orderedListItem)
+        XCTAssertEqual(reloadedSourceBlock.textPlain, "列表子页面更新")
+        XCTAssertEqual(reloadedSourceBlock.pageReferenceTargetPageID, createdPage.id)
+    }
+
+    @MainActor
     func testAppendBlockReferenceAndOpenItFocusesTargetBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }

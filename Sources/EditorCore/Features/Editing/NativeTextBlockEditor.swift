@@ -714,15 +714,15 @@ struct NativeTextBlockEditor: View {
     private var minimumHeight: CGFloat {
         switch blockType {
         case .heading1:
-            return 34
-        case .heading2:
             return 30
+        case .heading2:
+            return 27
         case .heading3:
-            return 28
+            return 25
         case .codeBlock, .table:
             return 28
         default:
-            return 24
+            return 23
         }
     }
 
@@ -1084,11 +1084,11 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     private var nsFont: NSFont {
         switch blockType {
         case .heading1:
-            return .systemFont(ofSize: 22, weight: .semibold)
+            return .systemFont(ofSize: 20, weight: .semibold)
         case .heading2:
-            return .systemFont(ofSize: 19, weight: .semibold)
+            return .systemFont(ofSize: 17, weight: .semibold)
         case .heading3:
-            return .systemFont(ofSize: 16, weight: .semibold)
+            return .systemFont(ofSize: 15, weight: .semibold)
         case .codeBlock, .table:
             return .monospacedSystemFont(ofSize: 14, weight: .regular)
         default:
@@ -1861,11 +1861,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     private var uiFont: UIFont {
         switch blockType {
         case .heading1:
-            return .preferredFont(forTextStyle: .title2)
+            return .systemFont(ofSize: 20, weight: .semibold)
         case .heading2:
-            return .preferredFont(forTextStyle: .title3)
+            return .systemFont(ofSize: 17, weight: .semibold)
         case .heading3:
-            return .preferredFont(forTextStyle: .headline)
+            return .systemFont(ofSize: 15, weight: .semibold)
         case .codeBlock, .table:
             return .monospacedSystemFont(ofSize: 15, weight: .regular)
         default:
