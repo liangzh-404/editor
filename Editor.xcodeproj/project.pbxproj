@@ -54,6 +54,8 @@
 		680FA555099757D0954DBFF7 /* SyncRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E5987A98D4AEC7981273C41 /* SyncRepository.swift */; };
 		6861322C7C6B927B36EB0D01 /* SyncRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21C821093352B684252705EC /* SyncRepositoryTests.swift */; };
 		69876CE14D2D2E8A4A00992B /* EditorShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */; };
+		69DDD94988608C009D42C71C /* HighlightSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 7C2B290DE56754D5E08BC2B9 /* HighlightSwift */; };
+		6A4E2338E27DC654E988AE0E /* HighlightSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 01F86F986E75970B8A2B1A64 /* HighlightSwift */; };
 		6A7F865DCBB7545701FE6F7D /* EditorShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF94D39B44F2FDB5B09C55B8 /* EditorShellView.swift */; };
 		6C2EEADF704236F0270EC19B /* BacklinkRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 721AB2B9FBD1E62EB105C77B /* BacklinkRepository.swift */; };
 		711E78B4E602143661DC5F2C /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1096512E28BB2AFF667653D /* SQLiteDatabase.swift */; };
@@ -79,6 +81,7 @@
 		A94BCFD1FAB72981D2ABA60E /* NativeTextBlockEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B305E7542E1D1459C797CE /* NativeTextBlockEditor.swift */; };
 		AC5465204820AECB2AEDBDB4 /* AttachmentThumbnailScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2B4D890F84CA04F7C8018A /* AttachmentThumbnailScheduler.swift */; };
 		B314C4800CB52538C63604C6 /* EditorIOS-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = BE299953F1B4500B81B093A6 /* EditorIOS-Info.plist */; };
+		B4A1AFA9AF4D35DE0DCC604B /* HighlightSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 3F0CDB69805FEA56700323B0 /* HighlightSwift */; };
 		B4C2EF67E13A290D9E803CB1 /* EditorShortcutConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61ADE28ADDB4897F6FF626F1 /* EditorShortcutConfiguration.swift */; };
 		BD5D4967A28608F792BE033D /* TagRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 781D821462B3C5971EAAE009 /* TagRepositoryTests.swift */; };
 		BE8D6775DA5E9F581EDCD86E /* SyncMergeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9020679BDD2802585CAFFF9A /* SyncMergeEngine.swift */; };
@@ -118,10 +121,10 @@
 
 /* Begin PBXFileReference section */
 		0642335E4D879DE20001FC35 /* DiaryRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiaryRepository.swift; sourceTree = "<group>"; };
-		0710D1C7EF032791B008493B /* EditorIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EditorIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0710D1C7EF032791B008493B /* EditorIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = EditorIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1214EBBA79907FAE38BD08D0 /* EditorCloudKit.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EditorCloudKit.entitlements; sourceTree = "<group>"; };
 		1270B98A9F61963B3A04FAE9 /* EditorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EditorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		152D105039220FD63ED4FFD8 /* EditorIOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EditorIOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		152D105039220FD63ED4FFD8 /* EditorIOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = EditorIOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1775693501BBE99927D7F07C /* SchemaMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemaMigrator.swift; sourceTree = "<group>"; };
 		1927809A95C559A7342DE2D0 /* AttachmentRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentRepository.swift; sourceTree = "<group>"; };
 		199BD1746B6CDF8429B282CD /* WorkspaceViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceViewModelTests.swift; sourceTree = "<group>"; };
@@ -170,6 +173,33 @@
 		F9225993DF8341A04734C517 /* EditorSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSession.swift; sourceTree = "<group>"; };
 		FD68E48C0F2260B332722AA9 /* SyncEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEngineTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		3DBA6AF1E763FB47B726A762 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B4A1AFA9AF4D35DE0DCC604B /* HighlightSwift in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		65BA2B5556A3B2EFDF0A3ABD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				69DDD94988608C009D42C71C /* HighlightSwift in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		792823FA452C30E5DBB90676 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6A4E2338E27DC654E988AE0E /* HighlightSwift in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		0086089CAB3C88090BEFEEB8 /* EditorIOSUITests */ = {
@@ -381,6 +411,7 @@
 			buildConfigurationList = 6E694F3CA1D62FA8E5A6BA97 /* Build configuration list for PBXNativeTarget "EditorIOS" */;
 			buildPhases = (
 				D8AB6B8A8C1ECBB546248DA1 /* Sources */,
+				792823FA452C30E5DBB90676 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -388,6 +419,7 @@
 			);
 			name = EditorIOS;
 			packageProductDependencies = (
+				01F86F986E75970B8A2B1A64 /* HighlightSwift */,
 			);
 			productName = EditorIOS;
 			productReference = 0710D1C7EF032791B008493B /* EditorIOS.app */;
@@ -399,6 +431,7 @@
 			buildPhases = (
 				D8FFA47E03A6D1860C3C7A78 /* Sources */,
 				705B4A895D1F0C0686ABEFD4 /* Resources */,
+				65BA2B5556A3B2EFDF0A3ABD /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -406,6 +439,7 @@
 			);
 			name = EditorMac;
 			packageProductDependencies = (
+				7C2B290DE56754D5E08BC2B9 /* HighlightSwift */,
 			);
 			productName = EditorMac;
 			productReference = 87174FBC64830887961BD6C0 /* EditorMac.app */;
@@ -434,6 +468,7 @@
 			buildConfigurationList = A21F1666F05C8DCBE949E860 /* Build configuration list for PBXNativeTarget "EditorTests" */;
 			buildPhases = (
 				30D873B1875A5AE471319CE3 /* Sources */,
+				3DBA6AF1E763FB47B726A762 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -441,6 +476,7 @@
 			);
 			name = EditorTests;
 			packageProductDependencies = (
+				3F0CDB69805FEA56700323B0 /* HighlightSwift */,
 			);
 			productName = EditorTests;
 			productReference = 1270B98A9F61963B3A04FAE9 /* EditorTests.xctest */;
@@ -478,6 +514,9 @@
 			);
 			mainGroup = 0CBB6B2B1924BB4502471BF8;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5E0C62E8971C59B4D2989B8F /* XCRemoteSwiftPackageReference "highlightswift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FD41236BEF8F0AF43B905F8E /* Products */;
 			projectDirPath = "";
@@ -731,7 +770,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				DEVELOPMENT_TEAM = H52N5N7WQ7;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -769,16 +807,12 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/EditorApp/EditorIOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = H52N5N7WQ7;
 				INFOPLIST_FILE = "Sources/EditorApp/EditorIOS-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lsqlite3",
-				);
+				OTHER_LDFLAGS = "$(inherited) -lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.liangzhang.editor.ios;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -797,10 +831,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lsqlite3",
-				);
+				OTHER_LDFLAGS = "$(inherited) -lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.liangzhang.editor.tests;
 				SDKROOT = macosx;
 			};
@@ -813,7 +844,6 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/EditorApp/EditorMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = H52N5N7WQ7;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Editor;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -821,10 +851,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lsqlite3",
-				);
+				OTHER_LDFLAGS = "$(inherited) -lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.liangzhang.editor.mac;
 				SDKROOT = macosx;
 			};
@@ -896,7 +923,6 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/EditorApp/EditorMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = H52N5N7WQ7;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Editor;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -904,10 +930,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lsqlite3",
-				);
+				OTHER_LDFLAGS = "$(inherited) -lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.liangzhang.editor.mac;
 				SDKROOT = macosx;
 			};
@@ -924,10 +947,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lsqlite3",
-				);
+				OTHER_LDFLAGS = "$(inherited) -lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.liangzhang.editor.tests;
 				SDKROOT = macosx;
 			};
@@ -940,16 +960,12 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/EditorApp/EditorIOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = H52N5N7WQ7;
 				INFOPLIST_FILE = "Sources/EditorApp/EditorIOS-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lsqlite3",
-				);
+				OTHER_LDFLAGS = "$(inherited) -lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.liangzhang.editor.ios;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -961,7 +977,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				DEVELOPMENT_TEAM = H52N5N7WQ7;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1033,6 +1048,35 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		5E0C62E8971C59B4D2989B8F /* XCRemoteSwiftPackageReference "highlightswift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/appstefan/highlightswift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		01F86F986E75970B8A2B1A64 /* HighlightSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5E0C62E8971C59B4D2989B8F /* XCRemoteSwiftPackageReference "highlightswift" */;
+			productName = HighlightSwift;
+		};
+		3F0CDB69805FEA56700323B0 /* HighlightSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5E0C62E8971C59B4D2989B8F /* XCRemoteSwiftPackageReference "highlightswift" */;
+			productName = HighlightSwift;
+		};
+		7C2B290DE56754D5E08BC2B9 /* HighlightSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5E0C62E8971C59B4D2989B8F /* XCRemoteSwiftPackageReference "highlightswift" */;
+			productName = HighlightSwift;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 069CC3F098A07CA0727AF3A5 /* Project object */;
 }

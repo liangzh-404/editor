@@ -330,7 +330,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             return parsedRows
         }
 
-        return [[text]]
+        return MarkdownTableDocument.defaultGridRows(firstCellText: text)
     }
 }
 
@@ -465,6 +465,25 @@ extension WorkspaceSnapshot {
         selectedNotebookID: nil,
         selectedPageID: nil
     )
+
+    func replacingBlocks(pageID: String, blocks replacementBlocks: [BlockSnapshot]) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages,
+            archivedPages: archivedPages,
+            blocks: blocks.filter { $0.pageID != pageID } + replacementBlocks,
+            attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
 
     func replacingBlock(blockID: String, type: BlockType, text: String) -> WorkspaceSnapshot {
         WorkspaceSnapshot(

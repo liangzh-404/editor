@@ -230,6 +230,18 @@ struct MarkdownBlockDraft: Equatable, Sendable {
 }
 
 struct MarkdownTableDocument: Equatable, Sendable {
+    static let defaultEmptyGridRows = [
+        ["", ""],
+        ["", ""]
+    ]
+
+    static func defaultGridRows(firstCellText text: String) -> [[String]] {
+        [
+            [text, ""],
+            ["", ""]
+        ]
+    }
+
     private(set) var rows: [[String]]
 
     init(markdown: String) {

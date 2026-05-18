@@ -35,10 +35,21 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorDesignTokens.Layout.documentListRowMinHeight, 72)
         XCTAssertEqual(EditorDesignTokens.Layout.documentListSelectedAccentWidth, 3)
         XCTAssertEqual(EditorDesignTokens.Layout.pageLinkCornerRadius, 13)
-        XCTAssertEqual(EditorDesignTokens.Layout.slashMenuWidth, 520)
-        XCTAssertEqual(EditorDesignTokens.Layout.slashMenuRowHeight, 54)
-        XCTAssertEqual(EditorDesignTokens.Layout.slashMenuCornerRadius, 16)
+        XCTAssertEqual(EditorDesignTokens.Layout.slashMenuWidth, 380)
+        XCTAssertEqual(EditorDesignTokens.Layout.slashMenuRowHeight, 48)
+        XCTAssertEqual(EditorDesignTokens.Layout.slashMenuCornerRadius, 14)
         XCTAssertEqual(EditorDesignTokens.Layout.auxiliaryRailWidth, 180)
+    }
+
+    func testEditorCanvasChromeKeepsContentCloseToPhoneEdges() {
+#if os(iOS)
+        XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, 20)
+        XCTAssertEqual(EditorCanvasChromeLayout.verticalPadding, 18)
+#else
+        XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, 40)
+        XCTAssertEqual(EditorCanvasChromeLayout.verticalPadding, 36)
+#endif
+        XCTAssertEqual(EditorCanvasChromeLayout.pageTitleLeadingPadding, 27)
     }
 
     func testEditorDisplayModesProgressivelyHideSecondaryChrome() {
@@ -62,14 +73,133 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.listBackgroundOpacity, 0)
         XCTAssertEqual(EditorBlockChrome.listMarkerWidth, 18)
         XCTAssertEqual(EditorBlockChrome.listTextSpacing, 6)
-        XCTAssertEqual(EditorBlockChrome.listMarkerTopPadding, 0)
+        XCTAssertEqual(EditorBlockChrome.listMarkerTopPadding, 3)
+        XCTAssertEqual(EditorBlockChrome.listMarkerLineHeight, 20)
+        XCTAssertEqual(EditorBlockChrome.listNestingIndentWidth, 48)
         XCTAssertEqual(EditorBlockChrome.actionColumnWidth, 18)
         XCTAssertEqual(EditorBlockChrome.actionColumnSpacing, 5)
         XCTAssertEqual(EditorBlockChrome.inactiveHandleOpacity, 0)
         XCTAssertEqual(EditorBlockChrome.dropTargetHeight, 32)
-        XCTAssertEqual(EditorBlockChrome.dropSlotHeight, 10)
+        XCTAssertEqual(EditorBlockChrome.dropSlotHeight, 4)
         XCTAssertEqual(EditorBlockChrome.dropIndicatorAfterOffset, 0)
         XCTAssertEqual(EditorBlockChrome.trailingInsertHitHeight, 64)
+    }
+
+    func testNestedListVerticalRhythmKeepsDropSlotsSubtleLikeCraft() {
+        XCTAssertLessThanOrEqual(EditorBlockChrome.dropSlotHeight, 4)
+        XCTAssertLessThanOrEqual(
+            EditorBlockChrome.dropSlotHeight + EditorBlockChrome.rowVerticalPadding * 2,
+            4
+        )
+    }
+
+    func testListMarkerFrameKeepsBulletAndNumberedMarkersLeftAligned() {
+        let descriptor = ListMarkerGlyphFrameDescriptor()
+        let bulletDescriptor = ListMarkerBulletGlyphDescriptor()
+
+        XCTAssertEqual(descriptor.width, EditorBlockChrome.listMarkerWidth)
+        XCTAssertEqual(descriptor.height, EditorBlockChrome.listMarkerLineHeight)
+        XCTAssertEqual(descriptor.horizontalAlignment, .leading)
+        XCTAssertEqual(bulletDescriptor.diameter, 6)
+        XCTAssertEqual(bulletDescriptor.strokeLineWidth, 1.4)
+        XCTAssertEqual(bulletDescriptor.visibleLeadingOffset, 0)
+        XCTAssertEqual(bulletDescriptor.visibleTopOffset, 0)
+        XCTAssertEqual(
+            ListMarkerColumnAlignmentResolver.leadingOffset(markerWidth: 4, columnWidth: descriptor.width),
+            0
+        )
+        XCTAssertEqual(
+            ListMarkerColumnAlignmentResolver.leadingOffset(markerWidth: 14, columnWidth: descriptor.width),
+            0
+        )
+    }
+
+    func testListBulletStyleAlternatesByNestingLevelLikeCraft() {
+        XCTAssertFalse(ListMarkerBulletStyleResolver.isHollow(nestingLevel: 0))
+        XCTAssertTrue(ListMarkerBulletStyleResolver.isHollow(nestingLevel: 1))
+        XCTAssertFalse(ListMarkerBulletStyleResolver.isHollow(nestingLevel: 2))
+        XCTAssertTrue(ListMarkerBulletStyleResolver.isHollow(nestingLevel: 3))
+        XCTAssertEqual(BlockRowNestingIndentResolver.leadingPadding(nestingLevel: 2, blockType: .unorderedListItem), 96)
+        XCTAssertEqual(BlockRowNestingIndentResolver.leadingPadding(nestingLevel: 2, blockType: .paragraph), 48)
+    }
+
+    func testFocusedRowBackgroundStaysOffWhenSlashMenuIsVisible() {
+        XCTAssertEqual(
+            BlockRowBackgroundPolicy.opacity(
+                blockType: .paragraph,
+                isSelected: false,
+                isFocused: true,
+                isSlashCommandMenuVisible: true
+            ),
+            0
+        )
+        XCTAssertGreaterThan(
+            BlockRowBackgroundPolicy.opacity(
+                blockType: .paragraph,
+                isSelected: false,
+                isFocused: true,
+                isSlashCommandMenuVisible: false
+            ),
+            0
+        )
+    }
+
+    func testDividerRowsNeverShowSelectionBackgroundAndDoNotAutoSelectAfterInsertion() {
+        XCTAssertEqual(
+            BlockRowBackgroundPolicy.opacity(
+                blockType: .divider,
+                isSelected: true,
+                isFocused: true,
+                isSlashCommandMenuVisible: false
+            ),
+            0
+        )
+        XCTAssertEqual(
+            BlockRowSelectionBorderPolicy.opacity(blockType: .divider, isSelected: true),
+            0
+        )
+        XCTAssertFalse(NonEditableBlockSelectionPolicy.selectsBlockOnFocusRequest(blockType: .divider))
+    }
+
+    func testDividerBlockUsesHorizontalCraftSeparatorMetrics() {
+        let descriptor = DividerBlockChromeDescriptor(
+            block: block(id: "divider", parentBlockID: nil, type: .divider, text: "")
+        )
+
+        XCTAssertEqual(descriptor.axis, .horizontal)
+        XCTAssertEqual(descriptor.height, 56)
+        XCTAssertGreaterThanOrEqual(descriptor.waveAmplitude, 12)
+        XCTAssertEqual(descriptor.loopCount, 5)
+        XCTAssertGreaterThan(descriptor.casualVariance, 0)
+        XCTAssertGreaterThan(descriptor.strokeOpacity, 0.45)
+    }
+
+    func testInlineLeadingControlsShareTextBaselineMetricsAcrossListTaskAndToggle() {
+        let descriptor = InlineLeadingControlFrameDescriptor()
+
+        XCTAssertEqual(descriptor.width, EditorBlockChrome.listMarkerWidth)
+        XCTAssertEqual(descriptor.height, EditorBlockChrome.listMarkerLineHeight)
+        XCTAssertEqual(descriptor.topPadding, EditorBlockChrome.listMarkerTopPadding)
+        XCTAssertEqual(descriptor.textSpacing, EditorBlockChrome.listTextSpacing)
+        XCTAssertLessThan(
+            descriptor.textVerticalOffset,
+            0,
+            "List/task/toggle body text should sit slightly higher than the marker control to compensate NSTextView metrics"
+        )
+        XCTAssertEqual(TextEditableBlockChromePolicy.backgroundOpacity(blockType: .taskItem), 0)
+        XCTAssertEqual(TextEditableBlockChromePolicy.backgroundOpacity(blockType: .toggle), 0)
+    }
+
+    func testDragPreviewChromeOffsetsVisibleCardAwayFromPointerAndDropIndicator() {
+        let descriptor = DragPreviewLayoutDescriptor()
+
+        XCTAssertGreaterThan(descriptor.pointerHorizontalOffset, descriptor.visibleCardWidth)
+        XCTAssertGreaterThan(descriptor.pointerVerticalOffset, descriptor.visibleCardMaxHeight)
+        XCTAssertGreaterThanOrEqual(descriptor.visibleCardLeadingFromCenteredPointer, 36)
+        XCTAssertGreaterThanOrEqual(
+            descriptor.visibleCardTopFromCenteredPointer,
+            EditorBlockChrome.dropSlotHeight + 20
+        )
     }
 
     func testCompactChromeUsesWarmAppBackgroundTokenAcrossMobileLists() {
@@ -86,12 +216,12 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.038)
         XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.080)
         XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 18)
-        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 6)
-        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 12)
-        XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 7)
+        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 4)
+        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 10)
+        XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 6)
         XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 0)
-        XCTAssertEqual(TableBlockChrome.insertControlIdleOpacity, 0.54)
-        XCTAssertEqual(TableBlockChrome.insertControlHoverOpacity, 1)
+        XCTAssertEqual(TableBlockChrome.insertControlIdleOpacity, 0.28)
+        XCTAssertEqual(TableBlockChrome.insertControlHoverOpacity, 0.9)
         XCTAssertEqual(TableBlockChrome.selectorWidth, 8)
         XCTAssertEqual(TableBlockChrome.selectorHeight, 8)
         XCTAssertEqual(TableBlockChrome.selectorIndicatorOpacity, 0)
@@ -161,12 +291,38 @@ final class EditorBlockChromeTests: XCTestCase {
         )
         XCTAssertEqual(
             TableBlockDefaultGridResolver.editableRows(text: "单元格", rows: []),
-            [["单元格"]]
+            [["单元格", ""], ["", ""]]
         )
         XCTAssertEqual(
             TableBlockDefaultGridResolver.editableRows(text: "", rows: [["已有"]]),
             [["已有"]]
         )
+    }
+
+    func testEmptyTableSnapshotsStartAsTwoByTwoDocumentGrid() {
+        let block = BlockSnapshot(
+            id: "table",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .table,
+            textPlain: ""
+        )
+
+        XCTAssertEqual(block.tableRows, [["", ""], ["", ""]])
+    }
+
+    func testTextConvertedToTableStartsAsTwoByTwoGridWithTextInFirstCell() {
+        let block = BlockSnapshot(
+            id: "table",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .table,
+            textPlain: "单元格"
+        )
+
+        XCTAssertEqual(block.tableRows, [["单元格", ""], ["", ""]])
     }
 
     func testMobileBlockSwipeResolverSeparatesSelectionFromIndenting() {
@@ -299,6 +455,120 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testBlockSelectionRangeResolverSelectsContiguousVisibleBlocks() {
+        let visibleBlockIDs = ["first", "second", "third", "fourth"]
+
+        XCTAssertEqual(
+            BlockSelectionRangeResolver.selection(
+                anchorBlockID: "second",
+                targetBlockID: "fourth",
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            ["second", "third", "fourth"]
+        )
+        XCTAssertEqual(
+            BlockSelectionRangeResolver.selection(
+                anchorBlockID: "third",
+                targetBlockID: "first",
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            ["first", "second", "third"]
+        )
+        XCTAssertTrue(
+            BlockSelectionRangeResolver.selection(
+                anchorBlockID: "missing",
+                targetBlockID: "first",
+                visibleBlockIDs: visibleBlockIDs
+            ).isEmpty
+        )
+    }
+
+    func testBlockSelectionRangeResolverExtendsSelectionFromEdges() {
+        let visibleBlockIDs = ["first", "second", "third", "fourth"]
+
+        XCTAssertEqual(
+            BlockSelectionRangeResolver.selectionAfterExtending(
+                from: "second",
+                direction: .next,
+                currentSelection: [],
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            ["second", "third"]
+        )
+        XCTAssertEqual(
+            BlockSelectionRangeResolver.selectionAfterExtending(
+                from: "second",
+                direction: .next,
+                currentSelection: ["second", "third"],
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            ["second", "third", "fourth"]
+        )
+        XCTAssertEqual(
+            BlockSelectionRangeResolver.selectionAfterExtending(
+                from: "third",
+                direction: .previous,
+                currentSelection: ["second", "third"],
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            ["first", "second", "third"]
+        )
+    }
+
+    func testBlockSelectionMarqueeRectNormalizesAnyDragDirection() {
+        XCTAssertEqual(
+            BlockSelectionMarqueeRectResolver.rect(
+                start: CGPoint(x: 180, y: 220),
+                current: CGPoint(x: 80, y: 100)
+            ),
+            CGRect(x: 80, y: 100, width: 100, height: 120)
+        )
+        XCTAssertTrue(
+            BlockSelectionMarqueeRectResolver.isVisible(
+                CGRect(x: 0, y: 0, width: 2, height: 2)
+            )
+        )
+        XCTAssertFalse(
+            BlockSelectionMarqueeRectResolver.isVisible(
+                CGRect(x: 0, y: 0, width: 1, height: 0.5)
+            )
+        )
+    }
+
+    func testBlockSelectionMarqueeSelectsBlocksIntersectingBlueAreaInVisibleOrder() {
+        let visibleBlockIDs = ["first", "second", "third"]
+        let blockFrames: [String: CGRect] = [
+            "first": CGRect(x: 40, y: 40, width: 400, height: 24),
+            "second": CGRect(x: 40, y: 80, width: 400, height: 24),
+            "third": CGRect(x: 40, y: 120, width: 400, height: 24)
+        ]
+
+        XCTAssertEqual(
+            BlockSelectionMarqueeSelectionResolver.selectedBlockIDs(
+                selectionRect: CGRect(x: 160, y: 70, width: 80, height: 68),
+                blockFrames: blockFrames,
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            ["second", "third"]
+        )
+        XCTAssertEqual(
+            BlockSelectionMarqueeSelectionResolver.selectedBlockIDs(
+                selectionRect: CGRect(x: 470, y: 70, width: 80, height: 68),
+                blockFrames: blockFrames,
+                visibleBlockIDs: visibleBlockIDs
+            ),
+            []
+        )
+    }
+
+    func testBlockSelectionMarqueeChromeMatchesCraftBlueArea() {
+        XCTAssertEqual(BlockSelectionMarqueeChrome.fillOpacity, 0.10)
+        XCTAssertEqual(BlockSelectionMarqueeChrome.strokeOpacity, 0.42)
+        XCTAssertEqual(BlockSelectionMarqueeChrome.strokeWidth, 1)
+        XCTAssertEqual(BlockSelectionMarqueeChrome.cornerRadius, 4)
+        XCTAssertEqual(BlockSelectionMarqueeChrome.minimumVisibleDimension, 2)
+    }
+
     func testCompactInitialNavigationResolverStartsOnSelectedPageWhenAvailable() {
         XCTAssertEqual(
             CompactInitialNavigationResolver.initialPageID(
@@ -394,40 +664,152 @@ final class EditorBlockChromeTests: XCTestCase {
 
     func testBlockDropPlacementResolverSupportsIndentedAfterTarget() {
         XCTAssertEqual(
-            BlockDropPlacementResolver.placement(
+            BlockDropPlacementResolver.resolution(
                 location: CGPoint(x: 72, y: 20),
-                rowSize: CGSize(width: 480, height: 48)
+                rowSize: CGSize(width: 480, height: 48),
+                destinationLevel: 0
             ),
-            .after
+            BlockDropPlacementResolution(placement: .after, targetLevel: 0)
         )
         XCTAssertEqual(
-            BlockDropPlacementResolver.placement(
+            BlockDropPlacementResolver.resolution(
                 location: CGPoint(x: 96, y: 20),
-                rowSize: CGSize(width: 480, height: 48)
+                rowSize: CGSize(width: 480, height: 48),
+                destinationLevel: 0
             ),
-            .after
+            BlockDropPlacementResolution(placement: .childAfter, targetLevel: 1)
         )
         XCTAssertEqual(
-            BlockDropPlacementResolver.placement(
+            BlockDropPlacementResolver.resolution(
                 location: CGPoint(x: 128, y: 20),
-                rowSize: CGSize(width: 480, height: 48)
+                rowSize: CGSize(width: 480, height: 48),
+                destinationLevel: 0
             ),
-            .childAfter
+            BlockDropPlacementResolution(placement: .childAfter, targetLevel: 1)
         )
         XCTAssertEqual(
-            BlockDropPlacementResolver.placement(
-                location: CGPoint(x: 10, y: 20),
-                rowSize: CGSize(width: 480, height: 48)
+            BlockDropPlacementResolver.resolution(
+                location: CGPoint(x: 72, y: 20),
+                rowSize: CGSize(width: 480, height: 48),
+                destinationLevel: 1
             ),
-            .after
+            BlockDropPlacementResolution(placement: .after, targetLevel: 1)
         )
         XCTAssertEqual(
-            BlockDropPlacementResolver.placement(
+            BlockDropPlacementResolver.resolution(
+                location: CGPoint(x: 48, y: 20),
+                rowSize: CGSize(width: 480, height: 48),
+                destinationLevel: 2
+            ),
+            BlockDropPlacementResolution(placement: .outdentAfter, targetLevel: 0)
+        )
+        XCTAssertEqual(
+            BlockDropPlacementResolver.resolution(
+                location: CGPoint(x: 72, y: 20),
+                rowSize: CGSize(width: 480, height: 48),
+                destinationLevel: 2
+            ),
+            BlockDropPlacementResolution(placement: .outdentAfter, targetLevel: 1)
+        )
+        XCTAssertEqual(
+            BlockDropPlacementResolver.resolution(
+                location: CGPoint(x: 96, y: 20),
+                rowSize: CGSize(width: 480, height: 48),
+                destinationLevel: 2
+            ),
+            BlockDropPlacementResolution(placement: .after, targetLevel: 2)
+        )
+        XCTAssertEqual(
+            BlockDropPlacementResolver.resolution(
                 location: CGPoint(x: 10, y: 8),
-                rowSize: CGSize(width: 480, height: 48)
+                rowSize: CGSize(width: 480, height: 48),
+                destinationLevel: 2
             ),
-            .before
+            BlockDropPlacementResolution(placement: .before, targetLevel: 2)
         )
+    }
+
+    func testDropParentResolverSupportsBeforeAndEndDropsChangingHierarchy() {
+        let blocks = [
+            block(id: "root", parentBlockID: nil, text: "Root"),
+            block(id: "child", parentBlockID: "root", text: "Child"),
+            block(id: "grandchild", parentBlockID: "child", text: "Grandchild")
+        ]
+
+        XCTAssertEqual(
+            BlockDropParentResolver.parentBlockID(
+                destinationBlockID: "grandchild",
+                targetLevel: 2,
+                blocks: blocks
+            ),
+            "child"
+        )
+        XCTAssertNil(BlockDropParentResolver.parentBlockIDForEndDrop())
+    }
+
+    func testSlashCommandMenuOnlyAutoScrollsForKeyboardSelection() {
+        XCTAssertTrue(
+            SlashCommandMenuScrollPolicy.shouldScrollSelectionIntoView(source: .keyboard)
+        )
+        XCTAssertFalse(
+            SlashCommandMenuScrollPolicy.shouldScrollSelectionIntoView(source: .hover)
+        )
+    }
+
+    func testBlockDropParentResolverMapsTargetLevelsToDestinationAncestors() {
+        let blocks = [
+            block(id: "root", parentBlockID: nil, text: "Root"),
+            block(id: "child", parentBlockID: "root", text: "Child"),
+            block(id: "grandchild", parentBlockID: "child", text: "Grandchild")
+        ]
+
+        XCTAssertNil(
+            BlockDropParentResolver.parentBlockID(
+                destinationBlockID: "grandchild",
+                targetLevel: 0,
+                blocks: blocks
+            )
+        )
+        XCTAssertEqual(
+            BlockDropParentResolver.parentBlockID(
+                destinationBlockID: "grandchild",
+                targetLevel: 1,
+                blocks: blocks
+            ),
+            "root"
+        )
+        XCTAssertEqual(
+            BlockDropParentResolver.parentBlockID(
+                destinationBlockID: "grandchild",
+                targetLevel: 2,
+                blocks: blocks
+            ),
+            "child"
+        )
+        XCTAssertEqual(
+            BlockDropParentResolver.parentBlockID(
+                destinationBlockID: "grandchild",
+                targetLevel: 3,
+                blocks: blocks
+            ),
+            "grandchild"
+        )
+    }
+
+    func testBlockDropIndicatorDescriptorUsesDotsInsteadOfVisibleTextForHierarchy() {
+        XCTAssertEqual(
+            BlockDropIndicatorDescriptor(placement: .outdentAfter, targetLevel: 0).levelDotCount,
+            1
+        )
+        XCTAssertEqual(
+            BlockDropIndicatorDescriptor(placement: .after, targetLevel: 2).levelDotCount,
+            3
+        )
+        XCTAssertEqual(
+            BlockDropIndicatorDescriptor(placement: .childAfter, targetLevel: 3).levelDotCount,
+            4
+        )
+        XCTAssertNil(BlockDropIndicatorDescriptor(placement: .childAfter, targetLevel: 3).visibleText)
     }
 
     func testBlockDragPayloadIncludesIndentedDescendants() {
@@ -706,13 +1088,18 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
-    private func block(id: String, parentBlockID: String?, text: String) -> BlockSnapshot {
+    private func block(
+        id: String,
+        parentBlockID: String?,
+        type: BlockType = .paragraph,
+        text: String
+    ) -> BlockSnapshot {
         BlockSnapshot(
             id: id,
             pageID: "page",
             parentBlockID: parentBlockID,
             orderKey: id,
-            type: .paragraph,
+            type: type,
             textPlain: text
         )
     }

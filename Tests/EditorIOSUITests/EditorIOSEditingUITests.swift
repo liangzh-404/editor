@@ -23,6 +23,33 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneEditorDoesNotDuplicatePageTitleInNavigationBar() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let pageTitle = app.textFields["editor.page-title"]
+        XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "The editable page title should remain in the document body")
+
+        let titleValue = (pageTitle.value as? String) ?? pageTitle.label
+        XCTAssertFalse(titleValue.isEmpty, "The document body title should expose the selected page title")
+        XCTAssertFalse(
+            app.navigationBars.staticTexts[titleValue].exists,
+            "iPhone editor should not render a second large navigation title above the editable document title"
+        )
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should still be tappable after hiding the duplicate title")
+
+        firstTextView.tap()
+        firstTextView.typeText(" 标题去重")
+
+        let value = firstTextView.value as? String ?? ""
+        XCTAssertTrue(value.contains("标题去重"), "Typing should still work after tapping the document canvas")
+    }
+
+    @MainActor
     func testIPhoneHomeNewDocumentButtonOpensEditableBlankPage() {
         let app = XCUIApplication()
         app.launch()

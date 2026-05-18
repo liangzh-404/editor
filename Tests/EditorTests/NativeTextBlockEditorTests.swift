@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import HighlightSwift
 #if os(macOS)
 import AppKit
 #elseif os(iOS)
@@ -106,8 +107,90 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: false))
     }
 
+    func testNativeTextPlaceholderHidesWhileIMEIsComposing() {
+        XCTAssertFalse(
+            NativeTextPlaceholderVisibilityPolicy.showsPlaceholder(
+                text: "",
+                isFocused: true,
+                isComposing: true
+            )
+        )
+        XCTAssertTrue(
+            NativeTextPlaceholderVisibilityPolicy.showsPlaceholder(
+                text: "",
+                isFocused: true,
+                isComposing: false
+            )
+        )
+        XCTAssertFalse(
+            NativeTextPlaceholderVisibilityPolicy.showsPlaceholder(
+                text: "分",
+                isFocused: true,
+                isComposing: false
+            )
+        )
+    }
+
     func testNativeTextDropPolicyKeepsBlockDragsOutOfTextEditor() {
         XCTAssertFalse(NativeTextDropPolicy.acceptsDropIntoTextEditor)
+    }
+
+    func testNativeTextInsertionPointRectResolverClampsTallCaretToFontLineHeight() {
+        let originalRect = CGRect(x: 12, y: 4, width: 2, height: 28)
+
+        let resolved = NativeTextInsertionPointRectResolver.rect(
+            original: originalRect,
+            fontLineHeight: 16
+        )
+
+        XCTAssertEqual(resolved.origin.x, 12)
+        XCTAssertEqual(resolved.size.width, 2)
+        XCTAssertEqual(resolved.size.height, 18)
+        XCTAssertEqual(resolved.midY, originalRect.midY, accuracy: 0.001)
+    }
+
+    func testNativeTextEditorLayoutAddsVerticalInsetToAvoidSelectionClipping() {
+        XCTAssertEqual(NativeTextEditorLayout.textContainerInset.height, 2)
+        XCTAssertEqual(
+            NativeTextEditorLayout.measuredHeight(contentHeight: 18, minimumHeight: 20),
+            22
+        )
+    }
+
+    #if os(macOS)
+    func testCodeBlockSyntaxHighlightApplicatorPreservesTextAndBaseFont() {
+        let code = "let value = 1\nprint(value)"
+        let highlighted = NSMutableAttributedString(string: code)
+        highlighted.addAttribute(
+            .foregroundColor,
+            value: NSColor.systemPurple,
+            range: NSRange(location: 0, length: 3)
+        )
+        let baseFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let applied = CodeBlockSyntaxHighlightApplicator.attributedString(
+            text: code,
+            highlighted: highlighted,
+            baseAttributes: [
+                .font: baseFont,
+                .foregroundColor: NSColor.labelColor
+            ],
+            allowedAttributeKeys: [.foregroundColor]
+        )
+
+        XCTAssertEqual(applied.string, code)
+        XCTAssertEqual(applied.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, baseFont)
+        XCTAssertEqual(applied.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .systemPurple)
+    }
+    #endif
+
+    func testHighlightSwiftSupportsMultipleCodeLanguages() async throws {
+        let highlighter = Highlight()
+
+        let swift = try await highlighter.request("let value = 1", mode: .languageAlias("swift"))
+        let python = try await highlighter.request("def value():\n    return 1", mode: .languageAlias("python"))
+
+        XCTAssertEqual(swift.language, "swift")
+        XCTAssertEqual(python.language, "python")
     }
 
     func testSlashCommandKeyboardResolverKeepsArrowKeysInsideOpenMenu() {
@@ -357,19 +440,29 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(
             BlockKeyboardShortcutResolver.insertsBlockAfter(
                 keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
-                modifiers: []
+                modifiers: [],
+                blockType: .paragraph
             )
         )
         XCTAssertFalse(
             BlockKeyboardShortcutResolver.insertsBlockAfter(
                 keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
-                modifiers: [.shift]
+                modifiers: [.shift],
+                blockType: .paragraph
             )
         )
         XCTAssertFalse(
             BlockKeyboardShortcutResolver.insertsBlockAfter(
                 keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
-                modifiers: [.command]
+                modifiers: [.command],
+                blockType: .paragraph
+            )
+        )
+        XCTAssertFalse(
+            BlockKeyboardShortcutResolver.insertsBlockAfter(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: [],
+                blockType: .codeBlock
             )
         )
     }
@@ -412,6 +505,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
         XCTAssertEqual(
             BlockSelectAllKeyboardResolver.stage(
+                blockType: .paragraph,
                 selectedRange: NSRange(location: 2, length: 0),
                 text: "Alpha"
             ),
@@ -419,10 +513,30 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
         XCTAssertEqual(
             BlockSelectAllKeyboardResolver.stage(
+                blockType: .paragraph,
                 selectedRange: NSRange(location: 0, length: 5),
                 text: "Alpha"
             ),
             .allBlocks
+        )
+    }
+
+    func testBlockSelectAllKeyboardResolverKeepsCodeBlocksInTextSelection() {
+        XCTAssertEqual(
+            BlockSelectAllKeyboardResolver.stage(
+                blockType: .codeBlock,
+                selectedRange: NSRange(location: 3, length: 0),
+                text: "let a = 1\nlet b = 2"
+            ),
+            .currentText
+        )
+        XCTAssertEqual(
+            BlockSelectAllKeyboardResolver.stage(
+                blockType: .codeBlock,
+                selectedRange: NSRange(location: 0, length: 19),
+                text: "let a = 1\nlet b = 2"
+            ),
+            .currentText
         )
     }
 
@@ -518,14 +632,93 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 hasPasteableAttachments: false
             )
         )
-        XCTAssertNil(
+        XCTAssertEqual(
             MacEditorKeyboardShortcutActionResolver.action(
                 keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
                 input: nil,
                 modifiers: [.shift],
                 hasBlockSelection: true,
                 hasPasteableAttachments: false
+            ),
+            .extendBlockSelection(.next)
+        )
+    }
+
+    func testMacEditorKeyboardShortcutActionResolverHandlesSelectedBlockBatchCommands() {
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: 51,
+                input: nil,
+                modifiers: [],
+                hasBlockSelection: true,
+                hasPasteableAttachments: false
+            ),
+            .deleteSelection
+        )
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.tabKeyCode,
+                input: nil,
+                modifiers: [],
+                hasBlockSelection: true,
+                hasPasteableAttachments: false
+            ),
+            .indentSelection(.indent)
+        )
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.tabKeyCode,
+                input: nil,
+                modifiers: [.shift],
+                hasBlockSelection: true,
+                hasPasteableAttachments: false
+            ),
+            .indentSelection(.outdent)
+        )
+        XCTAssertNil(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: 51,
+                input: nil,
+                modifiers: [],
+                hasBlockSelection: false,
+                hasPasteableAttachments: false
             )
+        )
+    }
+
+    func testMacEditorKeyboardShortcutActionResolverOffersCodeTextSelectAllFallback() {
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: 0,
+                input: "a",
+                modifiers: [.command],
+                hasBlockSelection: false,
+                hasPasteableAttachments: false
+            ),
+            .selectFocusedCodeText
+        )
+    }
+
+    func testMacEditorKeyboardShortcutActionResolverHandlesUndoRedo() {
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: 0,
+                input: "z",
+                modifiers: [.command],
+                hasBlockSelection: false,
+                hasPasteableAttachments: false
+            ),
+            .undoEdit
+        )
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: 0,
+                input: "z",
+                modifiers: [.command, .shift],
+                hasBlockSelection: false,
+                hasPasteableAttachments: false
+            ),
+            .redoEdit
         )
     }
 
@@ -542,7 +735,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
-    func testBlockKeyboardFocusResolverMovesOnlyAtTextBoundaries() {
+    func testBlockKeyboardFocusResolverMovesAcrossSingleLineBlocksAndAtMultilineBoundaries() {
         XCTAssertEqual(
             BlockKeyboardFocusResolver.focusDirection(
                 keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
@@ -561,12 +754,30 @@ final class NativeTextBlockEditorTests: XCTestCase {
             ),
             .next
         )
-        XCTAssertNil(
+        XCTAssertEqual(
             BlockKeyboardFocusResolver.focusDirection(
                 keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
                 modifiers: [],
                 selectedRange: NSRange(location: 2, length: 0),
                 text: "Middle"
+            ),
+            .previous
+        )
+        XCTAssertEqual(
+            BlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [],
+                selectedRange: NSRange(location: 2, length: 0),
+                text: "Middle"
+            ),
+            .next
+        )
+        XCTAssertNil(
+            BlockKeyboardFocusResolver.focusDirection(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [],
+                selectedRange: NSRange(location: 2, length: 0),
+                text: "First\nSecond"
             )
         )
         XCTAssertNil(
@@ -583,6 +794,43 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 modifiers: [],
                 selectedRange: NSRange(location: 0, length: 2),
                 text: "Selected"
+            )
+        )
+    }
+
+    func testBlockKeyboardSelectionExtensionResolverUsesShiftArrowsAtTextBoundaries() {
+        XCTAssertEqual(
+            BlockKeyboardSelectionExtensionResolver.direction(
+                keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
+                modifiers: [.shift],
+                selectedRange: NSRange(location: 0, length: 0),
+                text: "First line"
+            ),
+            .previous
+        )
+        XCTAssertEqual(
+            BlockKeyboardSelectionExtensionResolver.direction(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [.shift],
+                selectedRange: NSRange(location: ("Last line" as NSString).length, length: 0),
+                text: "Last line"
+            ),
+            .next
+        )
+        XCTAssertNil(
+            BlockKeyboardSelectionExtensionResolver.direction(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [.shift],
+                selectedRange: NSRange(location: 0, length: 2),
+                text: "Selected text"
+            )
+        )
+        XCTAssertNil(
+            BlockKeyboardSelectionExtensionResolver.direction(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                modifiers: [],
+                selectedRange: NSRange(location: 4, length: 0),
+                text: "Text"
             )
         )
     }
@@ -1427,6 +1675,29 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 destinationBlockID: "parent",
                 visibleBlockIDs: visibleBlockIDs,
                 placement: .childAfter
+            ),
+            1
+        )
+    }
+
+    func testBlockDragReorderResolverAllowsOutdentDropWhenOnlyParentChanges() {
+        let visibleBlockIDs = ["parent", "child", "sibling"]
+
+        XCTAssertEqual(
+            BlockDragReorderResolver.targetIndex(
+                draggedBlockID: "child",
+                destinationBlockID: "child",
+                visibleBlockIDs: visibleBlockIDs,
+                placement: .outdentAfter
+            ),
+            1
+        )
+        XCTAssertEqual(
+            BlockDragReorderResolver.targetIndex(
+                draggedBlockID: "child",
+                destinationBlockID: "parent",
+                visibleBlockIDs: visibleBlockIDs,
+                placement: .outdentAfter
             ),
             1
         )
