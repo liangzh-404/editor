@@ -488,6 +488,47 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testMacEditorKeyboardShortcutActionResolverMovesFocusForSelectedBlocks() {
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.upArrowKeyCode,
+                input: nil,
+                modifiers: [],
+                hasBlockSelection: true,
+                hasPasteableAttachments: false
+            ),
+            .moveFocus(.previous)
+        )
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                input: nil,
+                modifiers: [],
+                hasBlockSelection: true,
+                hasPasteableAttachments: false
+            ),
+            .moveFocus(.next)
+        )
+        XCTAssertNil(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                input: nil,
+                modifiers: [],
+                hasBlockSelection: false,
+                hasPasteableAttachments: false
+            )
+        )
+        XCTAssertNil(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
+                input: nil,
+                modifiers: [.shift],
+                hasBlockSelection: true,
+                hasPasteableAttachments: false
+            )
+        )
+    }
+
     func testBlockKeyboardFocusResolverMovesOnlyAtTextBoundaries() {
         XCTAssertEqual(
             BlockKeyboardFocusResolver.focusDirection(

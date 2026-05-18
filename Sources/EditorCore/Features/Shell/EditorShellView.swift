@@ -3414,6 +3414,20 @@ private struct EditorCanvasView: View {
                     let hadBlockSelection = !editorSession.selectedBlockIDs.isEmpty
                     editorSession.clearBlockSelection()
                     return hadBlockSelection
+                },
+                onMoveFocus: { direction in
+                    guard let blockID = BlockSelectionKeyboardAnchorResolver.anchorBlockID(
+                        selectedBlockIDs: editorSession.selectedBlockIDs,
+                        visibleBlockIDs: blocks.map(\.id)
+                    ) else {
+                        return false
+                    }
+
+                    return focusAdjacentBlock(
+                        from: blockID,
+                        direction: direction,
+                        clearsBlockSelection: true
+                    )
                 }
             )
         )
@@ -4261,6 +4275,7 @@ enum MacEditorKeyboardShortcutAction: Equatable, Sendable {
     case cancelSelection
     case insertLink
     case pasteAttachments
+    case moveFocus(BlockKeyboardFocusDirection)
 }
 
 enum MacEditorKeyboardShortcutActionResolver {
@@ -4278,6 +4293,14 @@ enum MacEditorKeyboardShortcutActionResolver {
             modifiers: modifiers
            ) {
             return .cancelSelection
+        }
+
+        if hasBlockSelection,
+           let direction = NonEditableBlockKeyboardFocusResolver.focusDirection(
+            keyCode: keyCode,
+            modifiers: modifiers
+           ) {
+            return .moveFocus(direction)
         }
 
         if MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(
@@ -4305,6 +4328,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
     let onPasteAttachments: () -> Bool
     let hasBlockSelection: () -> Bool
     let onCancelSelection: () -> Bool
+    let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -4315,6 +4339,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         context.coordinator.onPasteAttachments = onPasteAttachments
         context.coordinator.hasBlockSelection = hasBlockSelection
         context.coordinator.onCancelSelection = onCancelSelection
+        context.coordinator.onMoveFocus = onMoveFocus
         context.coordinator.install()
         return NSView(frame: .zero)
     }
@@ -4324,6 +4349,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         context.coordinator.onPasteAttachments = onPasteAttachments
         context.coordinator.hasBlockSelection = hasBlockSelection
         context.coordinator.onCancelSelection = onCancelSelection
+        context.coordinator.onMoveFocus = onMoveFocus
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -4335,6 +4361,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         var onPasteAttachments: (() -> Bool)?
         var hasBlockSelection: (() -> Bool)?
         var onCancelSelection: (() -> Bool)?
+        var onMoveFocus: ((BlockKeyboardFocusDirection) -> Bool)?
         private var eventMonitor: Any?
 
         func install() {
@@ -4366,6 +4393,10 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
                     }
                 case .pasteAttachments:
                     if self.onPasteAttachments?() == true {
+                        return nil
+                    }
+                case .moveFocus(let direction):
+                    if self.onMoveFocus?(direction) == true {
                         return nil
                     }
                 case nil:
