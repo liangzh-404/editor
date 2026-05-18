@@ -739,6 +739,32 @@ enum IOSEditorKeyboardShortcutActionResolver {
     }
 }
 
+enum IOSTableBlockKeyboardActionResolver {
+    static let deleteBackwardInput = "\u{8}"
+    static let deleteForwardInput = "\u{7F}"
+
+    static func action(
+        input: String?,
+        modifiers: Set<BlockKeyboardShortcutModifier>,
+        hasSelection: Bool
+    ) -> TableBlockKeyboardAction? {
+        guard hasSelection, modifiers.isEmpty else {
+            return nil
+        }
+
+        switch input {
+        case deleteBackwardInput, deleteForwardInput:
+            return .deleteSelection
+        case IOSEditorKeyboardShortcutActionResolver.upArrowInput:
+            return .moveFocus(.previous)
+        case IOSEditorKeyboardShortcutActionResolver.downArrowInput:
+            return .moveFocus(.next)
+        default:
+            return nil
+        }
+    }
+}
+
 enum IOSEditorKeyboardShortcutBridgeActivationResolver {
     static func capturesPaste(
         hasFocusedTextBlock: Bool,
@@ -6529,6 +6555,15 @@ private struct StructuredTableBlockEditor: View {
             }
             .frame(width: 0, height: 0)
         )
+#elseif os(iOS)
+        .background(
+            IOSTableKeyboardShortcutBridge(isEnabled: !selection.isEmpty) {
+                deleteSelection()
+            } onMoveFocus: { direction in
+                onMoveFocusByKeyboard(direction)
+            }
+            .frame(width: 0, height: 0)
+        )
 #endif
         .accessibilityElement(children: .contain)
         .accessibilityLabel("表格块，\(tableDimensions)")
@@ -6872,6 +6907,112 @@ private struct TableInsertControl: View {
         return Color.secondary.opacity(TableBlockChrome.insertControlIdleOpacity)
     }
 }
+
+#if os(iOS)
+private struct IOSTableKeyboardShortcutBridge: UIViewRepresentable {
+    let isEnabled: Bool
+    let onDelete: () -> Void
+    let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
+
+    func makeUIView(context: Context) -> TableKeyCaptureView {
+        let view = TableKeyCaptureView(frame: .zero)
+        view.isEnabled = isEnabled
+        view.onDelete = onDelete
+        view.onMoveFocus = onMoveFocus
+        return view
+    }
+
+    func updateUIView(_ uiView: TableKeyCaptureView, context: Context) {
+        uiView.isEnabled = isEnabled
+        uiView.onDelete = onDelete
+        uiView.onMoveFocus = onMoveFocus
+        uiView.updateFirstResponderIfNeeded()
+    }
+
+    final class TableKeyCaptureView: UIView {
+        var isEnabled = false
+        var onDelete: () -> Void = {}
+        var onMoveFocus: (BlockKeyboardFocusDirection) -> Bool = { _ in false }
+        private var isCapturingKeyboard = false
+
+        override var canBecomeFirstResponder: Bool {
+            isEnabled
+        }
+
+        override var keyCommands: [UIKeyCommand]? {
+            guard isEnabled else {
+                return []
+            }
+
+            return [
+                UIKeyCommand(
+                    input: UIKeyCommand.inputUpArrow,
+                    modifierFlags: [],
+                    action: #selector(moveFocusUp)
+                ),
+                UIKeyCommand(
+                    input: UIKeyCommand.inputDownArrow,
+                    modifierFlags: [],
+                    action: #selector(moveFocusDown)
+                ),
+                UIKeyCommand(
+                    input: IOSTableBlockKeyboardActionResolver.deleteBackwardInput,
+                    modifierFlags: [],
+                    action: #selector(deleteSelectionCommand)
+                ),
+                UIKeyCommand(
+                    input: IOSTableBlockKeyboardActionResolver.deleteForwardInput,
+                    modifierFlags: [],
+                    action: #selector(deleteSelectionCommand)
+                )
+            ]
+        }
+
+        func updateFirstResponderIfNeeded() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                if self.isEnabled {
+                    self.becomeFirstResponder()
+                    self.isCapturingKeyboard = self.isFirstResponder
+                } else if self.isCapturingKeyboard {
+                    self.resignFirstResponder()
+                    self.isCapturingKeyboard = false
+                }
+            }
+        }
+
+        @objc private func moveFocusUp(_ sender: Any?) {
+            performShortcut(input: IOSEditorKeyboardShortcutActionResolver.upArrowInput)
+        }
+
+        @objc private func moveFocusDown(_ sender: Any?) {
+            performShortcut(input: IOSEditorKeyboardShortcutActionResolver.downArrowInput)
+        }
+
+        @objc private func deleteSelectionCommand(_ sender: Any?) {
+            performShortcut(input: IOSTableBlockKeyboardActionResolver.deleteBackwardInput)
+        }
+
+        private func performShortcut(input: String?) {
+            switch IOSTableBlockKeyboardActionResolver.action(
+                input: input,
+                modifiers: [],
+                hasSelection: isEnabled
+            ) {
+            case .deleteSelection:
+                onDelete()
+            case .moveFocus(let direction):
+                _ = onMoveFocus(direction)
+            case nil:
+                break
+            }
+        }
+    }
+}
+#endif
 
 #if os(macOS)
 private struct NonEditableBlockKeyboardFocusBridge: NSViewRepresentable {
