@@ -733,6 +733,50 @@ final class PageRepositoryTests: XCTestCase {
         )
     }
 
+    func testUpdateBlockParentPersistsArbitraryDropTargetParentAndQueuesSync() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                Root
+                Child
+                Grandchild
+                Moved
+                """
+        )
+        let importedSnapshot = try repository.loadWorkspaceSnapshot()
+        let rootID = try XCTUnwrap(importedSnapshot.blocks.first?.id)
+        let childID = try XCTUnwrap(importedSnapshot.blocks.dropFirst().first?.id)
+        let grandchildID = try XCTUnwrap(importedSnapshot.blocks.dropFirst(2).first?.id)
+        let movedID = try XCTUnwrap(importedSnapshot.blocks.dropFirst(3).first?.id)
+        XCTAssertTrue(try repository.indentBlock(blockID: childID))
+        XCTAssertTrue(try repository.indentBlock(blockID: grandchildID))
+
+        try repository.updateBlockParent(blockID: movedID, parentBlockID: childID)
+        var reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        XCTAssertEqual(reloadedSnapshot.blocks.first { $0.id == movedID }?.parentBlockID, childID)
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "block", entityID: movedID, changeType: "update")
+        )
+
+        try repository.updateBlockParent(blockID: movedID, parentBlockID: nil)
+        reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        XCTAssertNil(reloadedSnapshot.blocks.first { $0.id == movedID }?.parentBlockID)
+
+        XCTAssertThrowsError(
+            try repository.updateBlockParent(blockID: rootID, parentBlockID: grandchildID)
+        ) { error in
+            XCTAssertEqual(error as? PageRepositoryError, .cyclicBlockParent)
+        }
+    }
+
     func testAppendParagraphBlockPersistsAtEnd() throws {
         let database = try migratedDatabase()
         defer { database.close() }

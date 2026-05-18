@@ -1,4 +1,5 @@
 import SwiftUI
+import HighlightSwift
 
 enum BlockKeyboardMoveDirection: Equatable, Sendable {
     case up
@@ -63,9 +64,10 @@ enum BlockKeyboardShortcutResolver {
 
     static func insertsBlockAfter(
         keyCode: UInt16,
-        modifiers: Set<BlockKeyboardShortcutModifier>
+        modifiers: Set<BlockKeyboardShortcutModifier>,
+        blockType: BlockType
     ) -> Bool {
-        keyCode == returnKeyCode && modifiers.isEmpty
+        keyCode == returnKeyCode && modifiers.isEmpty && blockType != .codeBlock
     }
 
     static func indentationDirection(
@@ -126,6 +128,7 @@ enum MarkdownInlineLinkKeyboardResolver {
 }
 
 enum BlockSelectAllStage: Equatable, Sendable {
+    case currentText
     case currentBlock
     case allBlocks
 }
@@ -138,7 +141,11 @@ enum BlockSelectAllKeyboardResolver {
         modifiers == [.command] && input?.lowercased() == "a"
     }
 
-    static func stage(selectedRange: NSRange, text: String) -> BlockSelectAllStage {
+    static func stage(blockType: BlockType, selectedRange: NSRange, text: String) -> BlockSelectAllStage {
+        if blockType == .codeBlock {
+            return .currentText
+        }
+
         let textLength = (text as NSString).length
         if selectedRange.location == 0,
            selectedRange.length == textLength {
@@ -248,10 +255,11 @@ enum BlockKeyboardFocusResolver {
         }
 
         let textLength = (text as NSString).length
+        let isSingleLine = text.rangeOfCharacter(from: .newlines) == nil
         switch keyCode {
-        case BlockKeyboardShortcutResolver.upArrowKeyCode where selectedRange.location == 0:
+        case BlockKeyboardShortcutResolver.upArrowKeyCode where isSingleLine || selectedRange.location == 0:
             return .previous
-        case BlockKeyboardShortcutResolver.downArrowKeyCode where selectedRange.location == textLength:
+        case BlockKeyboardShortcutResolver.downArrowKeyCode where isSingleLine || selectedRange.location == textLength:
             return .next
         default:
             return nil
@@ -320,6 +328,48 @@ enum BlockKeyboardFocusResolver {
              .attachmentVideo,
              .attachmentFile:
             return true
+        }
+    }
+}
+
+enum BlockKeyboardSelectionExtensionResolver {
+    static func direction(
+        keyCode: UInt16,
+        modifiers: Set<BlockKeyboardShortcutModifier>
+    ) -> BlockKeyboardFocusDirection? {
+        guard modifiers == [.shift] else {
+            return nil
+        }
+
+        switch keyCode {
+        case BlockKeyboardShortcutResolver.upArrowKeyCode:
+            return .previous
+        case BlockKeyboardShortcutResolver.downArrowKeyCode:
+            return .next
+        default:
+            return nil
+        }
+    }
+
+    static func direction(
+        keyCode: UInt16,
+        modifiers: Set<BlockKeyboardShortcutModifier>,
+        selectedRange: NSRange,
+        text: String
+    ) -> BlockKeyboardFocusDirection? {
+        guard selectedRange.length == 0,
+              let direction = direction(keyCode: keyCode, modifiers: modifiers) else {
+            return nil
+        }
+
+        let textLength = (text as NSString).length
+        switch direction {
+        case .previous where selectedRange.location == 0:
+            return .previous
+        case .next where selectedRange.location == textLength:
+            return .next
+        default:
+            return nil
         }
     }
 }
@@ -444,9 +494,11 @@ enum BlockDragReorderResolver {
         placement: BlockDropPlacement = .before
     ) -> Int? {
         let draggedBlockIDSet = Set(draggedBlockIDs)
-        guard !draggedBlockIDSet.contains(destinationBlockID),
-              let destinationIndex = visibleBlockIDs.firstIndex(of: destinationBlockID) else {
+        guard let destinationIndex = visibleBlockIDs.firstIndex(of: destinationBlockID) else {
             return nil
+        }
+        if draggedBlockIDSet.contains(destinationBlockID) {
+            return placement == .outdentAfter ? destinationIndex : nil
         }
 
         let insertionIndex = destinationIndex + (placement == .before ? 0 : 1)
@@ -465,7 +517,7 @@ enum BlockDragReorderResolver {
         reorderedBlockIDs.insert(contentsOf: movingBlockIDs, at: min(max(adjustedTargetIndex, 0), remainingBlockIDs.count))
 
         guard reorderedBlockIDs != visibleBlockIDs else {
-            if placement == .childAfter {
+            if placement == .childAfter || placement == .outdentAfter {
                 return adjustedTargetIndex
             }
             return nil
@@ -556,8 +608,69 @@ enum NativeTextCompositionPolicy {
     }
 }
 
+enum NativeTextPlaceholderVisibilityPolicy {
+    static func showsPlaceholder(text: String, isFocused: Bool, isComposing: Bool) -> Bool {
+        text.isEmpty && isFocused && !isComposing
+    }
+}
+
 enum NativeTextDropPolicy {
     static let acceptsDropIntoTextEditor = false
+}
+
+enum NativeTextInsertionPointRectResolver {
+    static let verticalPadding: CGFloat = 2
+
+    static func rect(original: CGRect, fontLineHeight: CGFloat?) -> CGRect {
+        guard let fontLineHeight, fontLineHeight > 0 else {
+            return original
+        }
+
+        let clampedHeight = min(original.height, ceil(fontLineHeight + verticalPadding))
+        let originY = original.midY - clampedHeight / 2
+        return CGRect(
+            x: original.origin.x,
+            y: originY,
+            width: original.width,
+            height: clampedHeight
+        )
+    }
+}
+
+enum NativeTextEditorLayout {
+    static let verticalTextInset: CGFloat = 2
+    static let textContainerInset = CGSize(width: 0, height: verticalTextInset)
+
+    static func measuredHeight(contentHeight: CGFloat, minimumHeight: CGFloat) -> CGFloat {
+        max(minimumHeight, ceil(contentHeight + verticalTextInset * 2))
+    }
+}
+
+enum CodeBlockSyntaxHighlightApplicator {
+    static func attributedString(
+        text: String,
+        highlighted: NSAttributedString,
+        baseAttributes: [NSAttributedString.Key: Any],
+        allowedAttributeKeys: Set<NSAttributedString.Key>
+    ) -> NSMutableAttributedString {
+        let fullRange = NSRange(location: 0, length: (text as NSString).length)
+        let result = NSMutableAttributedString(string: text, attributes: baseAttributes)
+        guard highlighted.string == text,
+              highlighted.length == fullRange.length,
+              fullRange.length > 0 else {
+            return result
+        }
+
+        highlighted.enumerateAttributes(in: fullRange) { attributes, range, _ in
+            let syntaxAttributes = attributes.filter { key, _ in
+                allowedAttributeKeys.contains(key)
+            }
+            if !syntaxAttributes.isEmpty {
+                result.addAttributes(syntaxAttributes, range: range)
+            }
+        }
+        return result
+    }
 }
 
 enum NativeTextFocusSelection {
@@ -590,6 +703,7 @@ struct NativeTextBlockEditor: View {
     let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
     let onIndentationByKeyboard: (BlockKeyboardIndentationDirection) -> Bool
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
+    let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
@@ -617,6 +731,7 @@ struct NativeTextBlockEditor: View {
         onMoveByKeyboard: @escaping (BlockKeyboardMoveDirection) -> Bool = { _ in false },
         onIndentationByKeyboard: @escaping (BlockKeyboardIndentationDirection) -> Bool = { _ in false },
         onMoveFocusByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
+        onExtendBlockSelectionByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
         onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onInsertBlockAfter: @escaping (EditorTextSelection) -> Bool = { _ in false },
@@ -642,6 +757,7 @@ struct NativeTextBlockEditor: View {
         self.onMoveByKeyboard = onMoveByKeyboard
         self.onIndentationByKeyboard = onIndentationByKeyboard
         self.onMoveFocusByKeyboard = onMoveFocusByKeyboard
+        self.onExtendBlockSelectionByKeyboard = onExtendBlockSelectionByKeyboard
         self.onApplyInlineFormatByKeyboard = onApplyInlineFormatByKeyboard
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
@@ -671,6 +787,7 @@ struct NativeTextBlockEditor: View {
                 onMoveByKeyboard: onMoveByKeyboard,
                 onIndentationByKeyboard: onIndentationByKeyboard,
                 onMoveFocusByKeyboard: onMoveFocusByKeyboard,
+                onExtendBlockSelectionByKeyboard: onExtendBlockSelectionByKeyboard,
                 onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
                 onInsertLinkByKeyboard: onInsertLinkByKeyboard,
                 onInsertBlockAfter: onInsertBlockAfter,
@@ -692,6 +809,7 @@ struct NativeTextBlockEditor: View {
                 Text("按 \"/\" 快速操作")
                     .font(placeholderFont)
                     .foregroundStyle(.secondary.opacity(0.72))
+                    .padding(.top, NativeTextEditorLayout.verticalTextInset)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -700,7 +818,11 @@ struct NativeTextBlockEditor: View {
     }
 
     var showsPlaceholder: Bool {
-        text.isEmpty && session.focusedBlockID == blockID
+        NativeTextPlaceholderVisibilityPolicy.showsPlaceholder(
+            text: text,
+            isFocused: session.focusedBlockID == blockID,
+            isComposing: session.composingBlockID == blockID
+        )
     }
 
     private var placeholderFont: Font {
@@ -866,6 +988,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
     let onIndentationByKeyboard: (BlockKeyboardIndentationDirection) -> Bool
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
+    let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
@@ -903,6 +1026,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         context.coordinator.textLayoutManager = textLayoutManager
 
         let textView = EditorNSTextView(frame: .zero, textContainer: textContainer)
+        textView.blockType = blockType
         textView.onMouseDown = {
             EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
         }
@@ -914,6 +1038,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.onKeyboardMove = onMoveByKeyboard
         textView.onKeyboardIndentation = onIndentationByKeyboard
         textView.onKeyboardFocusMove = onMoveFocusByKeyboard
+        textView.onExtendBlockSelectionByKeyboard = onExtendBlockSelectionByKeyboard
         textView.onSlashCommandNavigationByKeyboard = onSlashCommandNavigationByKeyboard
         textView.onSlashCommandSelectionByKeyboard = onSlashCommandSelectionByKeyboard
         textView.onKeyboardInlineFormat = { format, selectedRange in
@@ -963,6 +1088,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             )
         }
         textView.onPasteAttachmentURLs = onPasteAttachmentURLs
+        textView.onSelectCurrentTextByKeyboard = {
+            context.coordinator.syncCurrentTextSelection(in: textView)
+            return true
+        }
         textView.onSelectCurrentBlockByKeyboard = {
             context.coordinator.selectCurrentBlock(in: textView)
             return true
@@ -985,7 +1114,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.isSelectable = true
         textView.isHorizontallyResizable = !lineWrapping
         textView.isVerticallyResizable = true
-        textView.textContainerInset = .zero
+        textView.textContainerInset = NativeTextEditorLayout.textContainerInset
         textView.autoresizingMask = [.width]
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         configureLineWrapping(textView: textView)
@@ -999,6 +1128,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     func updateNSView(_ textView: NSTextView, context: Context) {
         context.coordinator.parent = self
         if let textView = textView as? EditorNSTextView {
+            textView.blockType = blockType
             textView.onMouseDown = {
                 EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
             }
@@ -1010,6 +1140,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             textView.onKeyboardMove = onMoveByKeyboard
             textView.onKeyboardIndentation = onIndentationByKeyboard
             textView.onKeyboardFocusMove = onMoveFocusByKeyboard
+            textView.onExtendBlockSelectionByKeyboard = onExtendBlockSelectionByKeyboard
             textView.onSlashCommandNavigationByKeyboard = onSlashCommandNavigationByKeyboard
             textView.onSlashCommandSelectionByKeyboard = onSlashCommandSelectionByKeyboard
             textView.onKeyboardInlineFormat = { format, selectedRange in
@@ -1059,6 +1190,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                 )
             }
             textView.onPasteAttachmentURLs = onPasteAttachmentURLs
+            textView.onSelectCurrentTextByKeyboard = {
+                context.coordinator.syncCurrentTextSelection(in: textView)
+                return true
+            }
             textView.onSelectCurrentBlockByKeyboard = {
                 context.coordinator.selectCurrentBlock(in: textView)
                 return true
@@ -1076,7 +1211,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.defaultParagraphStyle = paragraphStyle
         configureLineWrapping(textView: textView)
         if NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.hasMarkedText()) {
-            context.coordinator.applyInlineMarkdownStyles(to: textView)
+            context.coordinator.applyTextStyles(to: textView)
         }
         context.coordinator.scheduleHeightMeasurement(for: textView)
         context.coordinator.handleFocusRequestIfNeeded(textView: textView)
@@ -1120,6 +1255,8 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         private var focusRequestState = NativeTextFocusRequestState()
         private var modelUpdateGuard = NativeTextModelUpdateGuard()
         private var isHeightMeasurementScheduled = false
+        private let codeSyntaxHighlighter = Highlight()
+        private var codeSyntaxHighlightTask: Task<Void, Never>?
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
@@ -1131,8 +1268,18 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                 modelUpdateGuard.finishApplyingModelText()
             }
             textView.string = text
-            applyInlineMarkdownStyles(to: textView)
+            applyTextStyles(to: textView)
             scheduleHeightMeasurement(for: textView)
+        }
+
+        func applyTextStyles(to textView: NSTextView) {
+            guard parent.blockType == .codeBlock else {
+                codeSyntaxHighlightTask?.cancel()
+                applyInlineMarkdownStyles(to: textView)
+                return
+            }
+
+            applyCodeBlockSyntaxHighlight(to: textView)
         }
 
         func applyInlineMarkdownStyles(to textView: NSTextView) {
@@ -1164,6 +1311,71 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             textView.typingAttributes = baseTextAttributes
             if NSMaxRange(selectedRange) <= fullRange.length {
                 textView.setSelectedRange(selectedRange)
+            }
+        }
+
+        private func applyCodeBlockSyntaxHighlight(to textView: NSTextView) {
+            guard NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.hasMarkedText()),
+                  let textStorage = textView.textStorage else {
+                return
+            }
+
+            codeSyntaxHighlightTask?.cancel()
+            let code = textView.string
+            let fullRange = NSRange(location: 0, length: (code as NSString).length)
+            guard fullRange.length > 0 else {
+                modelUpdateGuard.beginApplyingModelText()
+                textStorage.setAttributes(baseTextAttributes, range: fullRange)
+                modelUpdateGuard.finishApplyingModelText()
+                return
+            }
+
+            let baseAttributes = baseTextAttributes
+            codeSyntaxHighlightTask = Task { [weak self, weak textView, codeSyntaxHighlighter] in
+                do {
+                    let highlighted = try await codeSyntaxHighlighter.attributedText(
+                        code,
+                        colors: .light(.xcode)
+                    )
+                    let highlightedString = try NSAttributedString(highlighted, including: \.appKit)
+                    await MainActor.run { [weak self, weak textView] in
+                        guard let self,
+                              let textView,
+                              !Task.isCancelled,
+                              textView.string == code,
+                              let textStorage = textView.textStorage else {
+                            return
+                        }
+
+                        let selectedRange = textView.selectedRange()
+                        let styled = CodeBlockSyntaxHighlightApplicator.attributedString(
+                            text: code,
+                            highlighted: highlightedString,
+                            baseAttributes: baseAttributes,
+                            allowedAttributeKeys: [.foregroundColor]
+                        )
+                        self.modelUpdateGuard.beginApplyingModelText()
+                        textStorage.setAttributedString(styled)
+                        textView.typingAttributes = baseAttributes
+                        if NSMaxRange(selectedRange) <= styled.length {
+                            textView.setSelectedRange(selectedRange)
+                        }
+                        self.modelUpdateGuard.finishApplyingModelText()
+                    }
+                } catch {
+                    await MainActor.run { [weak self, weak textView] in
+                        guard let self,
+                              let textView,
+                              textView.string == code,
+                              let textStorage = textView.textStorage else {
+                            return
+                        }
+                        self.modelUpdateGuard.beginApplyingModelText()
+                        textStorage.setAttributes(baseAttributes, range: fullRange)
+                        textView.typingAttributes = baseAttributes
+                        self.modelUpdateGuard.finishApplyingModelText()
+                    }
+                }
             }
         }
 
@@ -1230,7 +1442,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             }
             parent.session.updateDraft(blockID: parent.blockID, text: textView.string)
             parent.onTextChange(textView.string)
-            applyInlineMarkdownStyles(to: textView)
+            applyTextStyles(to: textView)
             scheduleHeightMeasurement(for: textView)
         }
 
@@ -1248,6 +1460,11 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         func textDidEndEditing(_ notification: Notification) {
             _ = parent.session.commitDraft(blockID: parent.blockID)
             parent.session.endEditing(blockID: parent.blockID)
+        }
+
+        func syncCurrentTextSelection(in textView: NSTextView) {
+            updateSessionSelection(textView: textView)
+            parent.session.clearBlockSelection()
         }
 
         func selectCurrentBlock(in textView: NSTextView) {
@@ -1361,8 +1578,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                 with: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading]
             )
-            let verticalInset = textView.textContainerInset.height * 2
-            return max(parent.minimumHeight, ceil(boundingRect.height + verticalInset + 2))
+            return NativeTextEditorLayout.measuredHeight(
+                contentHeight: boundingRect.height,
+                minimumHeight: parent.minimumHeight
+            )
         }
 
         private func focusDelay(for remainingAttempts: Int) -> DispatchTimeInterval {
@@ -1372,11 +1591,13 @@ private struct PlatformNativeTextView: NSViewRepresentable {
 }
 
 private final class EditorNSTextView: NSTextView {
+    var blockType: BlockType = .paragraph
     var onMouseDown: (() -> Void)?
     var onMouseFocusResult: ((Bool) -> Void)?
     var onKeyboardMove: ((BlockKeyboardMoveDirection) -> Bool)?
     var onKeyboardIndentation: ((BlockKeyboardIndentationDirection) -> Bool)?
     var onKeyboardFocusMove: ((BlockKeyboardFocusDirection) -> Bool)?
+    var onExtendBlockSelectionByKeyboard: ((BlockKeyboardFocusDirection) -> Bool)?
     var onSlashCommandNavigationByKeyboard: ((BlockKeyboardMoveDirection) -> Bool)?
     var onSlashCommandSelectionByKeyboard: (() -> Bool)?
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
@@ -1385,6 +1606,7 @@ private final class EditorNSTextView: NSTextView {
     var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
     var onMergeBlockWithNext: ((NSRange) -> Bool)?
     var onPasteAttachmentURLs: (([URL]) -> Bool)?
+    var onSelectCurrentTextByKeyboard: (() -> Bool)?
     var onSelectCurrentBlockByKeyboard: (() -> Bool)?
     var onSelectAllBlocksByKeyboard: (() -> Bool)?
     var onCancelSelectionByKeyboard: (() -> Bool)?
@@ -1408,9 +1630,27 @@ private final class EditorNSTextView: NSTextView {
         onMouseFocusResult?(window?.firstResponder === self)
     }
 
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        super.drawInsertionPoint(
+            in: NativeTextInsertionPointRectResolver.rect(
+                original: rect,
+                fontLineHeight: font?.boundingRectForFont.height
+            ),
+            color: color,
+            turnedOn: flag
+        )
+    }
+
     override func keyDown(with event: NSEvent) {
         guard NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: hasMarkedText()) else {
             super.keyDown(with: event)
+            return
+        }
+
+        if BlockSelectAllKeyboardResolver.requestsSelectAll(
+            input: event.charactersIgnoringModifiers,
+            modifiers: event.blockKeyboardShortcutModifiers
+        ), handleSelectAllByKeyboard() {
             return
         }
 
@@ -1463,6 +1703,15 @@ private final class EditorNSTextView: NSTextView {
             input: event.charactersIgnoringModifiers,
             modifiers: event.blockKeyboardShortcutModifiers
         ), onPromoteBlockToPageByKeyboard?() == true {
+            return
+        }
+
+        if let direction = BlockKeyboardSelectionExtensionResolver.direction(
+            keyCode: event.keyCode,
+            modifiers: event.blockKeyboardShortcutModifiers,
+            selectedRange: selectedRange(),
+            text: string
+        ), onExtendBlockSelectionByKeyboard?(direction) == true {
             return
         }
 
@@ -1528,7 +1777,11 @@ private final class EditorNSTextView: NSTextView {
     }
 
     private func handleSelectAllByKeyboard() -> Bool {
-        switch BlockSelectAllKeyboardResolver.stage(selectedRange: selectedRange(), text: string) {
+        switch BlockSelectAllKeyboardResolver.stage(blockType: blockType, selectedRange: selectedRange(), text: string) {
+        case .currentText:
+            super.selectAll(nil)
+            _ = onSelectCurrentTextByKeyboard?()
+            return true
         case .currentBlock:
             return onSelectCurrentBlockByKeyboard?() == true
         case .allBlocks:
@@ -1559,6 +1812,15 @@ private final class EditorNSTextView: NSTextView {
 
     override func insertNewline(_ sender: Any?) {
         guard NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: hasMarkedText()) else {
+            super.insertNewline(sender)
+            return
+        }
+
+        guard BlockKeyboardShortcutResolver.insertsBlockAfter(
+            keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+            modifiers: [],
+            blockType: blockType
+        ) else {
             super.insertNewline(sender)
             return
         }
@@ -1700,6 +1962,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
     let onIndentationByKeyboard: (BlockKeyboardIndentationDirection) -> Bool
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
+    let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
@@ -1722,9 +1985,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UITextView {
         let textView = EditorUITextView(usingTextLayoutManager: true)
+        textView.blockType = blockType
         textView.onKeyboardMove = onMoveByKeyboard
         textView.onKeyboardIndentation = onIndentationByKeyboard
         textView.onKeyboardFocusMove = onMoveFocusByKeyboard
+        textView.onExtendBlockSelectionByKeyboard = onExtendBlockSelectionByKeyboard
         textView.onSlashCommandNavigationByKeyboard = onSlashCommandNavigationByKeyboard
         textView.onSlashCommandSelectionByKeyboard = onSlashCommandSelectionByKeyboard
         textView.onKeyboardInlineFormat = { format, selectedRange in
@@ -1773,6 +2038,10 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                 )
             )
         }
+        textView.onSelectCurrentTextByKeyboard = {
+            context.coordinator.syncCurrentTextSelection(in: textView)
+            return true
+        }
         textView.onSelectCurrentBlockByKeyboard = {
             context.coordinator.selectCurrentBlock(in: textView)
             return true
@@ -1791,7 +2060,12 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.typingAttributes = baseTextAttributes
         textView.backgroundColor = .clear
         textView.isScrollEnabled = false
-        textView.textContainerInset = .zero
+        textView.textContainerInset = UIEdgeInsets(
+            top: NativeTextEditorLayout.verticalTextInset,
+            left: 0,
+            bottom: NativeTextEditorLayout.verticalTextInset,
+            right: 0
+        )
         textView.textContainer.lineFragmentPadding = 0
         configureLineWrapping(textView: textView)
         textView.adjustsFontForContentSizeCategory = true
@@ -1805,9 +2079,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.parent = self
         if let textView = textView as? EditorUITextView {
+            textView.blockType = blockType
             textView.onKeyboardMove = onMoveByKeyboard
             textView.onKeyboardIndentation = onIndentationByKeyboard
             textView.onKeyboardFocusMove = onMoveFocusByKeyboard
+            textView.onExtendBlockSelectionByKeyboard = onExtendBlockSelectionByKeyboard
             textView.onSlashCommandNavigationByKeyboard = onSlashCommandNavigationByKeyboard
             textView.onSlashCommandSelectionByKeyboard = onSlashCommandSelectionByKeyboard
             textView.onKeyboardInlineFormat = { format, selectedRange in
@@ -1856,6 +2132,10 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                     )
                 )
             }
+            textView.onSelectCurrentTextByKeyboard = {
+                context.coordinator.syncCurrentTextSelection(in: textView)
+                return true
+            }
             textView.onSelectCurrentBlockByKeyboard = {
                 context.coordinator.selectCurrentBlock(in: textView)
                 return true
@@ -1876,7 +2156,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.typingAttributes = baseTextAttributes
         configureLineWrapping(textView: textView)
         if NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.markedTextRange != nil) {
-            context.coordinator.applyInlineMarkdownStyles(to: textView)
+            context.coordinator.applyTextStyles(to: textView)
         }
         context.coordinator.scheduleHeightMeasurement(for: textView)
         context.coordinator.handleFocusRequestIfNeeded(textView: textView)
@@ -1921,6 +2201,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         private var focusRequestState = NativeTextFocusRequestState()
         private var modelUpdateGuard = NativeTextModelUpdateGuard()
         private var isHeightMeasurementScheduled = false
+        private let codeSyntaxHighlighter = Highlight()
+        private var codeSyntaxHighlightTask: Task<Void, Never>?
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
@@ -1932,8 +2214,18 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                 modelUpdateGuard.finishApplyingModelText()
             }
             textView.text = text
-            applyInlineMarkdownStyles(to: textView)
+            applyTextStyles(to: textView)
             scheduleHeightMeasurement(for: textView)
+        }
+
+        func applyTextStyles(to textView: UITextView) {
+            guard parent.blockType == .codeBlock else {
+                codeSyntaxHighlightTask?.cancel()
+                applyInlineMarkdownStyles(to: textView)
+                return
+            }
+
+            applyCodeBlockSyntaxHighlight(to: textView)
         }
 
         func applyInlineMarkdownStyles(to textView: UITextView) {
@@ -1964,6 +2256,68 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             textView.typingAttributes = baseTextAttributes
             if NSMaxRange(selectedRange) <= fullRange.length {
                 textView.selectedRange = selectedRange
+            }
+        }
+
+        private func applyCodeBlockSyntaxHighlight(to textView: UITextView) {
+            guard NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.markedTextRange != nil) else {
+                return
+            }
+
+            codeSyntaxHighlightTask?.cancel()
+            let code = textView.text ?? ""
+            let fullRange = NSRange(location: 0, length: (code as NSString).length)
+            guard fullRange.length > 0 else {
+                modelUpdateGuard.beginApplyingModelText()
+                textView.textStorage.setAttributes(baseTextAttributes, range: fullRange)
+                modelUpdateGuard.finishApplyingModelText()
+                return
+            }
+
+            let baseAttributes = baseTextAttributes
+            codeSyntaxHighlightTask = Task { [weak self, weak textView, codeSyntaxHighlighter] in
+                do {
+                    let highlighted = try await codeSyntaxHighlighter.attributedText(
+                        code,
+                        colors: .light(.xcode)
+                    )
+                    let highlightedString = try NSAttributedString(highlighted, including: \.uiKit)
+                    await MainActor.run { [weak self, weak textView] in
+                        guard let self,
+                              let textView,
+                              !Task.isCancelled,
+                              textView.text == code else {
+                            return
+                        }
+
+                        let selectedRange = textView.selectedRange
+                        let styled = CodeBlockSyntaxHighlightApplicator.attributedString(
+                            text: code,
+                            highlighted: highlightedString,
+                            baseAttributes: baseAttributes,
+                            allowedAttributeKeys: [.foregroundColor]
+                        )
+                        self.modelUpdateGuard.beginApplyingModelText()
+                        textView.textStorage.setAttributedString(styled)
+                        textView.typingAttributes = baseAttributes
+                        if NSMaxRange(selectedRange) <= styled.length {
+                            textView.selectedRange = selectedRange
+                        }
+                        self.modelUpdateGuard.finishApplyingModelText()
+                    }
+                } catch {
+                    await MainActor.run { [weak self, weak textView] in
+                        guard let self,
+                              let textView,
+                              textView.text == code else {
+                            return
+                        }
+                        self.modelUpdateGuard.beginApplyingModelText()
+                        textView.textStorage.setAttributes(baseAttributes, range: fullRange)
+                        textView.typingAttributes = baseAttributes
+                        self.modelUpdateGuard.finishApplyingModelText()
+                    }
+                }
             }
         }
 
@@ -2031,7 +2385,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             }
             parent.session.updateDraft(blockID: parent.blockID, text: textView.text)
             parent.onTextChange(textView.text)
-            applyInlineMarkdownStyles(to: textView)
+            applyTextStyles(to: textView)
             scheduleHeightMeasurement(for: textView)
         }
 
@@ -2063,6 +2417,23 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                 }
                 return true
             }
+            guard BlockKeyboardShortcutResolver.insertsBlockAfter(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: [],
+                blockType: parent.blockType
+            ) else {
+                return true
+            }
+
+            if SlashCommandKeyboardResolver.requestsSelection(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: [],
+                text: textView.text,
+                selectedRange: range
+            ), parent.onSlashCommandSelectionByKeyboard() {
+                return false
+            }
+
             return !parent.onInsertBlockAfter(
                 EditorTextSelection(
                     blockID: parent.blockID,
@@ -2075,6 +2446,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         func textViewDidEndEditing(_ textView: UITextView) {
             _ = parent.session.commitDraft(blockID: parent.blockID)
             parent.session.endEditing(blockID: parent.blockID)
+        }
+
+        func syncCurrentTextSelection(in textView: UITextView) {
+            updateSessionSelection(textView: textView)
+            parent.session.clearBlockSelection()
         }
 
         func selectCurrentBlock(in textView: UITextView) {
@@ -2181,7 +2557,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             let fittingSize = textView.sizeThatFits(
                 CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
             )
-            return max(parent.minimumHeight, ceil(fittingSize.height))
+            let contentHeight = max(0, fittingSize.height - NativeTextEditorLayout.verticalTextInset * 2)
+            return NativeTextEditorLayout.measuredHeight(
+                contentHeight: contentHeight,
+                minimumHeight: parent.minimumHeight
+            )
         }
 
         private func focusDelay(for remainingAttempts: Int) -> DispatchTimeInterval {
@@ -2191,9 +2571,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
 }
 
 private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
+    var blockType: BlockType = .paragraph
     var onKeyboardMove: ((BlockKeyboardMoveDirection) -> Bool)?
     var onKeyboardIndentation: ((BlockKeyboardIndentationDirection) -> Bool)?
     var onKeyboardFocusMove: ((BlockKeyboardFocusDirection) -> Bool)?
+    var onExtendBlockSelectionByKeyboard: ((BlockKeyboardFocusDirection) -> Bool)?
     var onSlashCommandNavigationByKeyboard: ((BlockKeyboardMoveDirection) -> Bool)?
     var onSlashCommandSelectionByKeyboard: (() -> Bool)?
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
@@ -2201,6 +2583,7 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     var onInsertBlockAfter: ((NSRange) -> Bool)?
     var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
     var onMergeBlockWithNext: ((NSRange) -> Bool)?
+    var onSelectCurrentTextByKeyboard: (() -> Bool)?
     var onSelectCurrentBlockByKeyboard: (() -> Bool)?
     var onSelectAllBlocksByKeyboard: (() -> Bool)?
     var onCancelSelectionByKeyboard: (() -> Bool)?
@@ -2222,7 +2605,7 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     }
 
     override var keyCommands: [UIKeyCommand]? {
-        [
+        var commands = [
             UIKeyCommand(
                 input: UIKeyCommand.inputUpArrow,
                 modifierFlags: [.command, .alternate],
@@ -2232,11 +2615,6 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
                 input: UIKeyCommand.inputDownArrow,
                 modifierFlags: [.command, .alternate],
                 action: #selector(moveBlockDown)
-            ),
-            UIKeyCommand(
-                input: "\r",
-                modifierFlags: [],
-                action: #selector(insertBlockAfter)
             ),
             UIKeyCommand(
                 input: "\t",
@@ -2294,6 +2672,21 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
                 action: #selector(cancelSelectionByKeyboard)
             )
         ]
+        if BlockKeyboardShortcutResolver.insertsBlockAfter(
+            keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+            modifiers: [],
+            blockType: blockType
+        ) {
+            commands.insert(
+                UIKeyCommand(
+                    input: "\r",
+                    modifierFlags: [],
+                    action: #selector(insertBlockAfter)
+                ),
+                at: 2
+            )
+        }
+        return commands
     }
 
     func gestureRecognizer(
@@ -2344,6 +2737,14 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
 
     @objc private func insertBlockAfter() {
         guard NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: markedTextRange != nil) else {
+            return
+        }
+        guard BlockKeyboardShortcutResolver.insertsBlockAfter(
+            keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+            modifiers: [],
+            blockType: blockType
+        ) else {
+            insertText("\n")
             return
         }
         if SlashCommandKeyboardResolver.requestsSelection(
@@ -2487,7 +2888,12 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
             return
         }
 
-        switch BlockSelectAllKeyboardResolver.stage(selectedRange: selectedRange, text: text) {
+        switch BlockSelectAllKeyboardResolver.stage(blockType: blockType, selectedRange: selectedRange, text: text) {
+        case .currentText:
+            super.selectAll(nil)
+            if onSelectCurrentTextByKeyboard?() == true {
+                return
+            }
         case .currentBlock:
             if onSelectCurrentBlockByKeyboard?() == true {
                 return
@@ -2548,6 +2954,15 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
             text: text,
             selectedRange: selectedRange
         ), onSlashCommandNavigationByKeyboard?(direction) == true {
+            return
+        }
+
+        if let direction = BlockKeyboardSelectionExtensionResolver.direction(
+            keyCode: keyCode,
+            modifiers: press.key?.modifierFlags.blockKeyboardShortcutModifiers ?? [],
+            selectedRange: selectedRange,
+            text: text
+        ), onExtendBlockSelectionByKeyboard?(direction) == true {
             return
         }
 

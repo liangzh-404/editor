@@ -842,6 +842,165 @@ final class PageRepository {
         )
     }
 
+    func replaceBlocks(pageID: String, blocks replacementBlocks: [BlockSnapshot]) throws {
+        let pageRows = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        guard pageRows.first != nil,
+              replacementBlocks.allSatisfy({ $0.pageID == pageID }) else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        let activeBlockIDs = Set(
+            try database.query(
+                """
+                SELECT id
+                FROM blocks
+                WHERE page_id = ? AND is_deleted = 0
+                """,
+                bindings: [.text(pageID)]
+            ).compactMap { $0["id"] }
+        )
+        let replacementBlockIDs = Set(replacementBlocks.map(\.id))
+        let removedBlockIDs = activeBlockIDs.subtracting(replacementBlockIDs)
+        let existingReplacementBlockIDs: Set<String>
+        if replacementBlocks.isEmpty {
+            existingReplacementBlockIDs = []
+        } else {
+            let placeholders = Array(repeating: "?", count: replacementBlocks.count).joined(separator: ", ")
+            existingReplacementBlockIDs = Set(
+                try database.query(
+                    """
+                    SELECT id
+                    FROM blocks
+                    WHERE id IN (\(placeholders))
+                    """,
+                    bindings: replacementBlocks.map { SQLiteValue.text($0.id) }
+                ).compactMap { $0["id"] }
+            )
+        }
+
+        let now = Self.timestamp()
+        try database.withImmediateTransaction("replace_page_blocks") {
+            if !removedBlockIDs.isEmpty {
+                let placeholders = Array(repeating: "?", count: removedBlockIDs.count).joined(separator: ", ")
+                try database.execute(
+                    """
+                    UPDATE blocks
+                    SET is_deleted = 1,
+                        revision = revision + 1,
+                        sync_state = ?,
+                        updated_at = ?
+                    WHERE id IN (\(placeholders))
+                      AND is_deleted = 0
+                    """,
+                    bindings: [.text("local"), .text(now)] + removedBlockIDs.map(SQLiteValue.text)
+                )
+            }
+
+            try database.execute(
+                """
+                DELETE FROM links
+                WHERE source_page_id = ?
+                """,
+                bindings: [.text(pageID)]
+            )
+
+            for block in replacementBlocks {
+                let payloadJSON = try blockPayloadJSON(block: block)
+                if existingReplacementBlockIDs.contains(block.id) {
+                    try database.execute(
+                        """
+                        UPDATE blocks
+                        SET page_id = ?,
+                            parent_block_id = ?,
+                            order_key = ?,
+                            type = ?,
+                            payload_json = ?,
+                            text_plain = ?,
+                            revision = revision + 1,
+                            sync_state = ?,
+                            is_deleted = 0,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        bindings: [
+                            .text(block.pageID),
+                            block.parentBlockID.map(SQLiteValue.text) ?? .null,
+                            .text(block.orderKey),
+                            .text(block.type.rawValue),
+                            .text(payloadJSON),
+                            .text(block.textPlain),
+                            .text("local"),
+                            .text(now),
+                            .text(block.id)
+                        ]
+                    )
+                } else {
+                    try database.execute(
+                        """
+                        INSERT INTO blocks (
+                            id,
+                            page_id,
+                            parent_block_id,
+                            order_key,
+                            type,
+                            payload_json,
+                            text_plain,
+                            revision,
+                            sync_state,
+                            is_deleted,
+                            created_at,
+                            updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        bindings: [
+                            .text(block.id),
+                            .text(block.pageID),
+                            block.parentBlockID.map(SQLiteValue.text) ?? .null,
+                            .text(block.orderKey),
+                            .text(block.type.rawValue),
+                            .text(payloadJSON),
+                            .text(block.textPlain),
+                            .integer(1),
+                            .text("local"),
+                            .integer(0),
+                            .text(now),
+                            .text(now)
+                        ]
+                    )
+                }
+            }
+        }
+
+        let syncRepository = SyncRepository(database: database)
+        for removedBlockID in removedBlockIDs {
+            try syncRepository.enqueue(
+                entityType: "block",
+                entityID: removedBlockID,
+                changeType: "delete"
+            )
+        }
+        for block in replacementBlocks {
+            try syncRepository.enqueue(
+                entityType: "block",
+                entityID: block.id,
+                changeType: existingReplacementBlockIDs.contains(block.id) ? "update" : "create"
+            )
+        }
+        try rebuildLinksForBlocks(blockIDs: replacementBlocks.map(\.id))
+        EditorLog.store.debug(
+            "page_blocks_replaced page_id=\(pageID, privacy: .public) blocks=\(replacementBlocks.count, privacy: .public) removed=\(removedBlockIDs.count, privacy: .public)"
+        )
+    }
+
     func updateToggleExpansion(blockID: String, isExpanded: Bool) throws {
         guard let row = try database.query(
             """
@@ -2260,7 +2419,37 @@ final class PageRepository {
         ).compactMap { $0["id"] }
     }
 
-    private func updateBlockParent(blockID: String, parentBlockID: String?) throws {
+    @discardableResult
+    func updateBlockParent(blockID: String, parentBlockID: String?) throws -> Bool {
+        let block = try requiredActiveBlock(blockID: blockID)
+        let pageID = block["page_id"] ?? ""
+        let currentParentBlockID = block["parent_block_id"] ?? nil
+        guard currentParentBlockID != parentBlockID else {
+            return false
+        }
+
+        if let parentBlockID {
+            guard parentBlockID != blockID else {
+                throw PageRepositoryError.cyclicBlockParent
+            }
+
+            let parent = try requiredActiveBlock(blockID: parentBlockID)
+            guard parent["page_id"] == pageID else {
+                throw PageRepositoryError.blockNotFound
+            }
+            guard try !blockParentChainContains(
+                blockID: parentBlockID,
+                ancestorBlockID: blockID
+            ) else {
+                throw PageRepositoryError.cyclicBlockParent
+            }
+        }
+
+        try persistBlockParent(blockID: blockID, parentBlockID: parentBlockID)
+        return true
+    }
+
+    private func persistBlockParent(blockID: String, parentBlockID: String?) throws {
         let now = Self.timestamp()
         try database.execute(
             """
@@ -2283,6 +2472,34 @@ final class PageRepository {
             entityID: blockID,
             changeType: "update"
         )
+    }
+
+    private func blockParentChainContains(
+        blockID: String,
+        ancestorBlockID: String
+    ) throws -> Bool {
+        var currentBlockID: String? = blockID
+        var visitedBlockIDs: Set<String> = []
+
+        while let current = currentBlockID,
+              !visitedBlockIDs.contains(current) {
+            if current == ancestorBlockID {
+                return true
+            }
+
+            visitedBlockIDs.insert(current)
+            currentBlockID = try database.query(
+                """
+                SELECT parent_block_id
+                FROM blocks
+                WHERE id = ? AND is_deleted = 0
+                LIMIT 1
+                """,
+                bindings: [.text(current)]
+            ).first?["parent_block_id"] ?? nil
+        }
+
+        return false
     }
 
     private func blockPayloadJSON(
@@ -2352,6 +2569,61 @@ final class PageRepository {
         return payload
     }
 
+    private func blockPayloadJSON(block: BlockSnapshot) throws -> String {
+        switch block.type {
+        case .attachmentImage:
+            return try attachmentBlockPayloadJSON(
+                attachmentID: block.attachmentID,
+                kind: .image,
+                filename: block.textPlain
+            )
+        case .attachmentVideo:
+            return try attachmentBlockPayloadJSON(
+                attachmentID: block.attachmentID,
+                kind: .video,
+                filename: block.textPlain
+            )
+        case .attachmentFile:
+            return try attachmentBlockPayloadJSON(
+                attachmentID: block.attachmentID,
+                kind: .file,
+                filename: block.textPlain
+            )
+        default:
+            return try blockPayloadJSON(
+                type: block.type,
+                text: block.textPlain,
+                taskItemIsCompleted: block.taskItemIsCompleted,
+                toggleIsExpanded: block.toggleIsExpanded,
+                codeBlockLineWrapping: block.codeBlockLineWrapping,
+                pageReferenceTargetPageID: block.pageReferenceTargetPageID,
+                blockReferenceTargetBlockID: block.blockReferenceTargetBlockID,
+                tableRows: block.tableRows
+            )
+        }
+    }
+
+    private func attachmentBlockPayloadJSON(
+        attachmentID: String?,
+        kind: AttachmentKind,
+        filename: String
+    ) throws -> String {
+        let data = try JSONSerialization.data(
+            withJSONObject: [
+                "attachment_id": attachmentID ?? "",
+                "filename": filename,
+                "kind": kind.rawValue
+            ],
+            options: [.sortedKeys]
+        )
+
+        guard let payload = String(data: data, encoding: .utf8) else {
+            throw PageRepositoryError.invalidPayloadEncoding
+        }
+
+        return payload
+    }
+
     private static func normalizedTableRows(text: String, explicitRows: [[String]]?) -> [[String]] {
         if let explicitRows, !explicitRows.isEmpty {
             return MarkdownTableDocument(rows: explicitRows).rows
@@ -2362,7 +2634,7 @@ final class PageRepository {
             return parsedRows
         }
 
-        return [[text]]
+        return MarkdownTableDocument.defaultGridRows(firstCellText: text)
     }
 
     private static func tableRows(type: BlockType, payloadJSON: String, text: String) -> [[String]] {
@@ -2595,6 +2867,7 @@ enum PageRepositoryError: Error, Equatable {
     case workspaceNotFound
     case notebookNotFound
     case cyclicNotebookParent
+    case cyclicBlockParent
     case pageNotFound
     case blockNotFound
     case invalidPayloadEncoding

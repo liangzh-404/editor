@@ -66,6 +66,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var pendingFocusBlockID: String?
     @Published private(set) var pendingCompactPageNavigationID: String?
     @Published private(set) var canUndoTextEdit = false
+    @Published private(set) var canRedoTextEdit = false
     @Published private(set) var canUndoPageArchive = false
     @Published private(set) var attachmentPreviewGenerationStatuses: [String: AttachmentPreviewGenerationStatus] = [:]
     @Published private(set) var markdownImportStatusText: String?
@@ -85,7 +86,9 @@ final class WorkspaceViewModel: ObservableObject {
     private var hasLoadedSnapshot = false
     private var didRequestInitialEditorFocus = false
     private var didRequestInitialCompactPageNavigation = false
-    private var textEditUndoStack: [TextEditUndoSnapshot] = []
+    private let pageEditUndoHistoryLimit = 100
+    private var pageEditUndoStack: [PageEditHistorySnapshot] = []
+    private var pageEditRedoStack: [PageEditHistorySnapshot] = []
     private var pageArchiveUndoStack: [PageArchiveUndoSnapshot] = []
     private var pageNavigationBackStack: [PageNavigationHistoryEntry] = []
     private var pageNavigationForwardStack: [PageNavigationHistoryEntry] = []
@@ -238,6 +241,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingFocusBlockID = nil
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
+        canRedoTextEdit = false
         canUndoPageArchive = false
         attachmentPreviewGenerationStatuses = [:]
     }
@@ -264,6 +268,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingFocusBlockID = nil
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
+        canRedoTextEdit = false
         canUndoPageArchive = false
         attachmentPreviewGenerationStatuses = [:]
         requestInitialCompactPageNavigationIfNeeded(source: "snapshot")
@@ -722,14 +727,16 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         do {
-            try repository?.updateCodeBlockLineWrapping(blockID: blockID, isWrapped: isWrapped)
+            try performPageEdit(pageID: block.pageID, focusBlockID: blockID) {
+                try repository?.updateCodeBlockLineWrapping(blockID: blockID, isWrapped: isWrapped)
+                snapshot = snapshot.replacingCodeBlockLineWrapping(blockID: blockID, isWrapped: isWrapped)
+            }
         } catch {
             EditorLog.render.error(
                 "code_block_line_wrapping_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return
         }
-        snapshot = snapshot.replacingCodeBlockLineWrapping(blockID: blockID, isWrapped: isWrapped)
         pendingFocusBlockID = blockID
         EditorLog.render.debug(
             "code_block_line_wrapping_changed block_id=\(blockID, privacy: .public) wrapped=\(isWrapped, privacy: .public)"
@@ -743,14 +750,16 @@ final class WorkspaceViewModel: ObservableObject {
 
         let isExpanded = !block.toggleIsExpanded
         do {
-            try repository?.updateToggleExpansion(blockID: blockID, isExpanded: isExpanded)
+            try performPageEdit(pageID: block.pageID, focusBlockID: blockID) {
+                try repository?.updateToggleExpansion(blockID: blockID, isExpanded: isExpanded)
+                snapshot = snapshot.replacingToggleExpansion(blockID: blockID, isExpanded: isExpanded)
+            }
         } catch {
             EditorLog.render.error(
                 "toggle_block_expansion_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return
         }
-        snapshot = snapshot.replacingToggleExpansion(blockID: blockID, isExpanded: isExpanded)
         pendingFocusBlockID = blockID
         EditorLog.render.debug(
             "toggle_block_expansion_changed block_id=\(blockID, privacy: .public) expanded=\(isExpanded, privacy: .public)"
@@ -944,102 +953,78 @@ final class WorkspaceViewModel: ObservableObject {
         let tagExtraction = InlineHashTagExtractor.extract(from: text)
         let nextText = tagExtraction.tagNames.isEmpty ? text : tagExtraction.text
         let nextBlock = nextBlockState(currentType: currentType, text: nextText)
-        let undoSnapshot = makeTextEditUndoSnapshot(
+        let coalescingKey = makeTextEditUndoCoalescingKey(
             blockID: blockID,
             currentBlock: currentBlock,
             nextType: nextBlock.type,
-            nextText: nextBlock.text,
             registerUndo: registerUndo
         )
 
-        if let repository {
-            try repository.updateBlock(
-                blockID: blockID,
-                type: nextBlock.type,
-                text: nextBlock.text,
-                taskItemIsCompleted: nextBlock.taskItemIsCompleted
-            )
-        }
-
-        snapshot = snapshot.replacingBlock(
-            blockID: blockID,
-            type: nextBlock.type,
-            text: nextBlock.text
-        )
-        if let taskItemIsCompleted = nextBlock.taskItemIsCompleted {
-            snapshot = snapshot.replacingTaskItemCompletion(
-                blockID: blockID,
-                isCompleted: taskItemIsCompleted
-            )
-        }
-        if !tagExtraction.tagNames.isEmpty,
-           let pageID = currentBlock?.pageID ?? selectedPageID {
-            try assignInlineTags(tagExtraction.tagNames, to: pageID)
+        try performPageEdit(
+            pageID: registerUndo ? currentBlock?.pageID ?? selectedPageID : nil,
+            focusBlockID: blockID,
+            coalescingKey: coalescingKey
+        ) {
             if let repository {
-                let previousSelectedCollection = selectedCollection
-                let previousSelectedPageID = selectedPageID
-                let loadedSnapshot = try repository.loadWorkspaceSnapshot()
-                apply(snapshot: loadedSnapshot)
-                restoreSelectionAfterReload(
-                    collection: previousSelectedCollection,
-                    pageID: previousSelectedPageID
+                try repository.updateBlock(
+                    blockID: blockID,
+                    type: nextBlock.type,
+                    text: nextBlock.text,
+                    taskItemIsCompleted: nextBlock.taskItemIsCompleted
                 )
             }
-            pendingFocusBlockID = blockID
-            EditorLog.focus.debug(
-                "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=inline_tag_extract"
-            )
-        }
-        if currentType != nextBlock.type {
-            pendingFocusBlockID = blockID
-            EditorLog.focus.debug(
-                "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=markdown_shortcut"
-            )
-        }
-        try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
 
-        if let undoSnapshot {
-            recordTextEditUndoSnapshot(
-                undoSnapshot,
-                currentBlock: currentBlock,
-                nextType: nextBlock.type
+            snapshot = snapshot.replacingBlock(
+                blockID: blockID,
+                type: nextBlock.type,
+                text: nextBlock.text
             )
-            refreshTextEditUndoAvailability()
+            if let taskItemIsCompleted = nextBlock.taskItemIsCompleted {
+                snapshot = snapshot.replacingTaskItemCompletion(
+                    blockID: blockID,
+                    isCompleted: taskItemIsCompleted
+                )
+            }
+            if !tagExtraction.tagNames.isEmpty,
+               let pageID = currentBlock?.pageID ?? selectedPageID {
+                try assignInlineTags(tagExtraction.tagNames, to: pageID)
+                if let repository {
+                    let previousSelectedCollection = selectedCollection
+                    let previousSelectedPageID = selectedPageID
+                    let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+                    apply(snapshot: loadedSnapshot)
+                    restoreSelectionAfterReload(
+                        collection: previousSelectedCollection,
+                        pageID: previousSelectedPageID
+                    )
+                }
+                pendingFocusBlockID = blockID
+                EditorLog.focus.debug(
+                    "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=inline_tag_extract"
+                )
+            }
+            if currentType != nextBlock.type {
+                pendingFocusBlockID = blockID
+                EditorLog.focus.debug(
+                    "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=markdown_shortcut"
+                )
+            }
+            try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
         }
     }
 
     func undoLastTextEdit() throws {
-        guard let undoSnapshot = textEditUndoStack.last else {
+        guard let undoSnapshot = pageEditUndoStack.last else {
             return
         }
 
-        if let repository {
-            try repository.updateBlock(
-                blockID: undoSnapshot.blockID,
-                type: undoSnapshot.previousType,
-                text: undoSnapshot.previousText,
-                tableRows: undoSnapshot.previousType == .table ? undoSnapshot.previousTableRows : nil
-            )
-        }
-
-        snapshot = snapshot.replacingBlock(
-            blockID: undoSnapshot.blockID,
-            type: undoSnapshot.previousType,
-            text: undoSnapshot.previousText
-        )
-        if undoSnapshot.previousType == .table {
-            snapshot = snapshot.replacingTableRows(
-                blockID: undoSnapshot.blockID,
-                rows: undoSnapshot.previousTableRows,
-                text: undoSnapshot.previousText
-            )
-        }
-        try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: undoSnapshot.blockID)
-        _ = textEditUndoStack.popLast()
-        refreshTextEditUndoAvailability()
-        pendingFocusBlockID = undoSnapshot.blockID
+        try restorePageBlocks(pageID: undoSnapshot.pageID, blocks: undoSnapshot.beforeBlocks)
+        _ = pageEditUndoStack.popLast()
+        pageEditRedoStack.append(undoSnapshot)
+        refreshPageEditUndoAvailability()
+        pendingFocusBlockID = undoSnapshot.focusBlockID
         EditorLog.focus.debug(
-            "editor_focus_request_queued block_id=\(undoSnapshot.blockID, privacy: .public) source=text_undo"
+            "editor_focus_request_queued block_id=\(undoSnapshot.focusBlockID ?? "none", privacy: .public) source=page_edit_undo"
         )
     }
 
@@ -1054,25 +1039,56 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func redoLastTextEdit() throws {
+        guard let redoSnapshot = pageEditRedoStack.last else {
+            return
+        }
+
+        try restorePageBlocks(pageID: redoSnapshot.pageID, blocks: redoSnapshot.afterBlocks)
+        _ = pageEditRedoStack.popLast()
+        pageEditUndoStack.append(redoSnapshot)
+        if pageEditUndoStack.count > pageEditUndoHistoryLimit {
+            pageEditUndoStack.removeFirst(pageEditUndoStack.count - pageEditUndoHistoryLimit)
+        }
+        refreshPageEditUndoAvailability()
+        pendingFocusBlockID = redoSnapshot.focusBlockID
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(redoSnapshot.focusBlockID ?? "none", privacy: .public) source=page_edit_redo"
+        )
+    }
+
+    func redoLastTextEditForUI() {
+        do {
+            try redoLastTextEdit()
+            EditorLog.input.debug("text_edit_redo_visible")
+        } catch {
+            EditorLog.input.error(
+                "text_edit_redo_failed error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     func changeBlockType(blockID: String, type: BlockType) throws {
         guard let block = snapshot.blocks.first(where: { $0.id == blockID }) else {
             throw PageRepositoryError.blockNotFound
         }
 
-        if let repository {
-            try repository.updateBlock(
+        try performPageEdit(pageID: block.pageID, focusBlockID: blockID) {
+            if let repository {
+                try repository.updateBlock(
+                    blockID: blockID,
+                    type: type,
+                    text: block.textPlain
+                )
+            }
+
+            snapshot = snapshot.replacingBlock(
                 blockID: blockID,
                 type: type,
                 text: block.textPlain
             )
+            try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
         }
-
-        snapshot = snapshot.replacingBlock(
-            blockID: blockID,
-            type: type,
-            text: block.textPlain
-        )
-        try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
         pendingFocusBlockID = blockID
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=block_type_change"
@@ -1086,33 +1102,22 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         let table = MarkdownTableDocument(rows: rows)
-        let undoSnapshot = makeTextEditUndoSnapshot(
-            blockID: blockID,
-            currentBlock: currentBlock,
-            nextType: .table,
-            nextText: table.markdown,
-            registerUndo: true
-        )
+        try performPageEdit(
+            pageID: currentBlock.pageID,
+            focusBlockID: blockID,
+            coalescingKey: .blockContent(blockID: blockID, type: .table)
+        ) {
+            if let repository {
+                try repository.updateBlock(
+                    blockID: blockID,
+                    type: .table,
+                    text: table.markdown,
+                    tableRows: table.rows
+                )
+            }
 
-        if let repository {
-            try repository.updateBlock(
-                blockID: blockID,
-                type: .table,
-                text: table.markdown,
-                tableRows: table.rows
-            )
-        }
-
-        snapshot = snapshot.replacingTableRows(blockID: blockID, rows: table.rows, text: table.markdown)
-        try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
-
-        if let undoSnapshot {
-            recordTextEditUndoSnapshot(
-                undoSnapshot,
-                currentBlock: currentBlock,
-                nextType: .table
-            )
-            refreshTextEditUndoAvailability()
+            snapshot = snapshot.replacingTableRows(blockID: blockID, rows: table.rows, text: table.markdown)
+            try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
         }
     }
 
@@ -1120,10 +1125,15 @@ final class WorkspaceViewModel: ObservableObject {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
         }
+        guard let block = snapshot.blocks.first(where: { $0.id == blockID }) else {
+            throw PageRepositoryError.blockNotFound
+        }
 
-        try repository.updateTaskItemCompletion(blockID: blockID, isCompleted: isCompleted)
-        snapshot = snapshot.replacingTaskItemCompletion(blockID: blockID, isCompleted: isCompleted)
-        try refreshDerivedState(rebuildSearchIndex: false)
+        try performPageEdit(pageID: block.pageID, focusBlockID: blockID) {
+            try repository.updateTaskItemCompletion(blockID: blockID, isCompleted: isCompleted)
+            snapshot = snapshot.replacingTaskItemCompletion(blockID: blockID, isCompleted: isCompleted)
+            try refreshDerivedState(rebuildSearchIndex: false)
+        }
         pendingFocusBlockID = blockID
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=task_completion"
@@ -1225,12 +1235,19 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingSelection
         }
 
-        let block = try repository.appendBlock(
-            pageID: selectedPageID,
-            type: .paragraph,
-            text: ""
-        )
-        try load()
+        var block: BlockSnapshot?
+        try performPageEdit(pageID: selectedPageID, focusBlockID: nil) {
+            block = try repository.appendBlock(
+                pageID: selectedPageID,
+                type: .paragraph,
+                text: ""
+            )
+            try load()
+        }
+        guard let block else {
+            throw PageRepositoryError.blockNotFound
+        }
+        updateLastPageEditFocusBlockID(pageID: selectedPageID, focusBlockID: block.id)
         return block
     }
 
@@ -1245,12 +1262,19 @@ final class WorkspaceViewModel: ObservableObject {
 
         let previousNotebookID = selectedNotebookID
         let previousPageID = self.selectedPageID
-        let block = try repository.appendPageReferenceBlock(
-            pageID: selectedPageID,
-            targetPageID: targetPageID
-        )
-        try load()
-        restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+        var block: BlockSnapshot?
+        try performPageEdit(pageID: selectedPageID, focusBlockID: nil) {
+            block = try repository.appendPageReferenceBlock(
+                pageID: selectedPageID,
+                targetPageID: targetPageID
+            )
+            try load()
+            restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+        }
+        guard let block else {
+            throw PageRepositoryError.blockNotFound
+        }
+        updateLastPageEditFocusBlockID(pageID: selectedPageID, focusBlockID: block.id)
         return block.id
     }
 
@@ -1304,12 +1328,19 @@ final class WorkspaceViewModel: ObservableObject {
 
         let previousNotebookID = selectedNotebookID
         let previousPageID = self.selectedPageID
-        let block = try repository.appendBlockReferenceBlock(
-            pageID: selectedPageID,
-            targetBlockID: targetBlockID
-        )
-        try load()
-        restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+        var block: BlockSnapshot?
+        try performPageEdit(pageID: selectedPageID, focusBlockID: nil) {
+            block = try repository.appendBlockReferenceBlock(
+                pageID: selectedPageID,
+                targetBlockID: targetBlockID
+            )
+            try load()
+            restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+        }
+        guard let block else {
+            throw PageRepositoryError.blockNotFound
+        }
+        updateLastPageEditFocusBlockID(pageID: selectedPageID, focusBlockID: block.id)
         return block.id
     }
 
@@ -1718,8 +1749,11 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingRepository
         }
 
-        try repository.moveBlock(blockID: blockID, toIndex: toIndex)
-        try load()
+        let pageID = snapshot.blocks.first(where: { $0.id == blockID })?.pageID
+        try performPageEdit(pageID: pageID, focusBlockID: blockID) {
+            try repository.moveBlock(blockID: blockID, toIndex: toIndex)
+            try load()
+        }
     }
 
     func moveBlocks(blockIDs: [String], toIndex: Int) throws {
@@ -1727,8 +1761,39 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingRepository
         }
 
-        try repository.moveBlocks(blockIDs: blockIDs, toIndex: toIndex)
-        try load()
+        let pageID = blockIDs.compactMap { blockID in
+            snapshot.blocks.first(where: { $0.id == blockID })?.pageID
+        }.first
+        try performPageEdit(pageID: pageID, focusBlockID: blockIDs.first) {
+            try repository.moveBlocks(blockIDs: blockIDs, toIndex: toIndex)
+            try load()
+        }
+    }
+
+    @discardableResult
+    func updateBlockParent(blockID: String, parentBlockID: String?) throws -> Bool {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let pageID = snapshot.blocks.first(where: { $0.id == blockID })?.pageID
+        var didUpdate = false
+        try performPageEdit(pageID: pageID, focusBlockID: blockID) {
+            didUpdate = try repository.updateBlockParent(blockID: blockID, parentBlockID: parentBlockID)
+            guard didUpdate else {
+                return
+            }
+            try load()
+        }
+        guard didUpdate else {
+            return false
+        }
+
+        pendingFocusBlockID = blockID
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=block_reparent"
+        )
+        return true
     }
 
     @discardableResult
@@ -1737,8 +1802,18 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingRepository
         }
 
-        let block = try repository.insertParagraphBlock(after: blockID)
-        try load()
+        let pageID = snapshot.blocks.first(where: { $0.id == blockID })?.pageID
+        var block: BlockSnapshot?
+        try performPageEdit(pageID: pageID, focusBlockID: nil) {
+            block = try repository.insertParagraphBlock(after: blockID)
+            try load()
+        }
+        guard let block else {
+            throw PageRepositoryError.blockNotFound
+        }
+        if let pageID {
+            updateLastPageEditFocusBlockID(pageID: pageID, focusBlockID: block.id)
+        }
         pendingFocusBlockID = block.id
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=insert_after"
@@ -1772,25 +1847,32 @@ final class WorkspaceViewModel: ObservableObject {
         let leadingText = nsText.substring(to: selectedRange.location)
         let trailingText = nsText.substring(from: NSMaxRange(selectedRange))
 
-        try repository.updateBlock(
-            blockID: blockID,
-            type: block.type,
-            text: leadingText,
-            taskItemIsCompleted: block.taskItemIsCompleted,
-            toggleIsExpanded: block.toggleIsExpanded,
-            codeBlockLineWrapping: block.codeBlockLineWrapping
-        )
         let insertedBlockType = TextBlockSplitPolicy.insertedBlockType(after: block.type)
-        let insertedBlock = try repository.insertParagraphBlock(after: blockID, text: trailingText)
-        if insertedBlockType != .paragraph {
+        var insertedBlock: BlockSnapshot?
+        try performPageEdit(pageID: block.pageID, focusBlockID: nil) {
             try repository.updateBlock(
-                blockID: insertedBlock.id,
-                type: insertedBlockType,
-                text: trailingText,
-                taskItemIsCompleted: false
+                blockID: blockID,
+                type: block.type,
+                text: leadingText,
+                taskItemIsCompleted: block.taskItemIsCompleted,
+                toggleIsExpanded: block.toggleIsExpanded,
+                codeBlockLineWrapping: block.codeBlockLineWrapping
             )
+            insertedBlock = try repository.insertParagraphBlock(after: blockID, text: trailingText)
+            if let insertedBlock, insertedBlockType != .paragraph {
+                try repository.updateBlock(
+                    blockID: insertedBlock.id,
+                    type: insertedBlockType,
+                    text: trailingText,
+                    taskItemIsCompleted: false
+                )
+            }
+            try load()
         }
-        try load()
+        guard let insertedBlock else {
+            throw PageRepositoryError.blockNotFound
+        }
+        updateLastPageEditFocusBlockID(pageID: block.pageID, focusBlockID: insertedBlock.id)
         pendingFocusBlockID = insertedBlock.id
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(insertedBlock.id, privacy: .public) source=split_text_block"
@@ -1815,15 +1897,17 @@ final class WorkspaceViewModel: ObservableObject {
             guard let repository else {
                 throw WorkspaceViewModelError.missingRepository
             }
-            try repository.updateBlock(
-                blockID: blockID,
-                type: .paragraph,
-                text: currentBlock.textPlain,
-                taskItemIsCompleted: false,
-                toggleIsExpanded: currentBlock.toggleIsExpanded,
-                codeBlockLineWrapping: currentBlock.codeBlockLineWrapping
-            )
-            try load()
+            try performPageEdit(pageID: currentBlock.pageID, focusBlockID: blockID) {
+                try repository.updateBlock(
+                    blockID: blockID,
+                    type: .paragraph,
+                    text: currentBlock.textPlain,
+                    taskItemIsCompleted: false,
+                    toggleIsExpanded: currentBlock.toggleIsExpanded,
+                    codeBlockLineWrapping: currentBlock.codeBlockLineWrapping
+                )
+                try load()
+            }
             pendingFocusBlockID = blockID
             EditorLog.focus.debug(
                 "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=line_head_strip_block_type"
@@ -1837,11 +1921,17 @@ final class WorkspaceViewModel: ObservableObject {
             guard let repository else {
                 throw WorkspaceViewModelError.missingRepository
             }
-            let didOutdent = try repository.outdentBlock(blockID: blockID)
+            var didOutdent = false
+            try performPageEdit(pageID: currentBlock.pageID, focusBlockID: blockID) {
+                didOutdent = try repository.outdentBlock(blockID: blockID)
+                guard didOutdent else {
+                    return
+                }
+                try load()
+            }
             guard didOutdent else {
                 return nil
             }
-            try load()
             pendingFocusBlockID = blockID
             EditorLog.focus.debug(
                 "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=empty_indented_backspace"
@@ -1867,16 +1957,18 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         let focusLocation = (previousBlock.textPlain as NSString).length
-        try repository.updateBlock(
-            blockID: previousBlock.id,
-            type: previousBlock.type,
-            text: previousBlock.textPlain + currentBlock.textPlain,
-            taskItemIsCompleted: previousBlock.taskItemIsCompleted,
-            toggleIsExpanded: previousBlock.toggleIsExpanded,
-            codeBlockLineWrapping: previousBlock.codeBlockLineWrapping
-        )
-        try repository.deleteBlock(blockID: blockID)
-        try load()
+        try performPageEdit(pageID: currentBlock.pageID, focusBlockID: previousBlock.id) {
+            try repository.updateBlock(
+                blockID: previousBlock.id,
+                type: previousBlock.type,
+                text: previousBlock.textPlain + currentBlock.textPlain,
+                taskItemIsCompleted: previousBlock.taskItemIsCompleted,
+                toggleIsExpanded: previousBlock.toggleIsExpanded,
+                codeBlockLineWrapping: previousBlock.codeBlockLineWrapping
+            )
+            try repository.deleteBlock(blockID: blockID)
+            try load()
+        }
         pendingFocusBlockID = previousBlock.id
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(previousBlock.id, privacy: .public) source=merge_text_block"
@@ -1913,16 +2005,18 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingRepository
         }
 
-        try repository.updateBlock(
-            blockID: currentBlock.id,
-            type: currentBlock.type,
-            text: currentBlock.textPlain + nextBlock.textPlain,
-            taskItemIsCompleted: currentBlock.taskItemIsCompleted,
-            toggleIsExpanded: currentBlock.toggleIsExpanded,
-            codeBlockLineWrapping: currentBlock.codeBlockLineWrapping
-        )
-        try repository.deleteBlock(blockID: nextBlock.id)
-        try load()
+        try performPageEdit(pageID: currentBlock.pageID, focusBlockID: currentBlock.id) {
+            try repository.updateBlock(
+                blockID: currentBlock.id,
+                type: currentBlock.type,
+                text: currentBlock.textPlain + nextBlock.textPlain,
+                taskItemIsCompleted: currentBlock.taskItemIsCompleted,
+                toggleIsExpanded: currentBlock.toggleIsExpanded,
+                codeBlockLineWrapping: currentBlock.codeBlockLineWrapping
+            )
+            try repository.deleteBlock(blockID: nextBlock.id)
+            try load()
+        }
         pendingFocusBlockID = currentBlock.id
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(currentBlock.id, privacy: .public) source=merge_next_text_block"
@@ -1965,12 +2059,19 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingRepository
         }
 
-        let didIndent = try repository.indentBlock(blockID: blockID)
+        let pageID = snapshot.blocks.first(where: { $0.id == blockID })?.pageID
+        var didIndent = false
+        try performPageEdit(pageID: pageID, focusBlockID: blockID) {
+            didIndent = try repository.indentBlock(blockID: blockID)
+            guard didIndent else {
+                return
+            }
+            try load()
+        }
         guard didIndent else {
             return false
         }
 
-        try load()
         pendingFocusBlockID = blockID
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=block_indent"
@@ -1984,12 +2085,19 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingRepository
         }
 
-        let didOutdent = try repository.outdentBlock(blockID: blockID)
+        let pageID = snapshot.blocks.first(where: { $0.id == blockID })?.pageID
+        var didOutdent = false
+        try performPageEdit(pageID: pageID, focusBlockID: blockID) {
+            didOutdent = try repository.outdentBlock(blockID: blockID)
+            guard didOutdent else {
+                return
+            }
+            try load()
+        }
         guard didOutdent else {
             return false
         }
 
-        try load()
         pendingFocusBlockID = blockID
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=block_outdent"
@@ -2002,8 +2110,11 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingRepository
         }
 
-        try repository.deleteBlock(blockID: blockID)
-        try load()
+        let pageID = snapshot.blocks.first(where: { $0.id == blockID })?.pageID
+        try performPageEdit(pageID: pageID, focusBlockID: blockID) {
+            try repository.deleteBlock(blockID: blockID)
+            try load()
+        }
     }
 
     func moveBlockInCurrentPage(blockID: String, toIndex: Int) {
@@ -2023,6 +2134,23 @@ final class WorkspaceViewModel: ObservableObject {
             EditorLog.store.error(
                 "blocks_move_failed block_ids=\(blockIDs.joined(separator: ","), privacy: .public) target_index=\(toIndex, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
+        }
+    }
+
+    func updateBlockParentForUI(blockID: String, parentBlockID: String?) -> Bool {
+        do {
+            let didUpdate = try updateBlockParent(blockID: blockID, parentBlockID: parentBlockID)
+            if didUpdate {
+                EditorLog.store.debug(
+                    "block_parent_update_visible block_id=\(blockID, privacy: .public) parent_block_id=\(parentBlockID ?? "root", privacy: .public)"
+                )
+            }
+            return didUpdate
+        } catch {
+            EditorLog.store.error(
+                "block_parent_update_failed block_id=\(blockID, privacy: .public) parent_block_id=\(parentBlockID ?? "root", privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
         }
     }
 
@@ -2355,10 +2483,15 @@ final class WorkspaceViewModel: ObservableObject {
                 throw WorkspaceViewModelError.missingRepository
             }
 
-            for blockID in uniqueBlockIDs {
-                try repository.deleteBlock(blockID: blockID)
+            let pageID = uniqueBlockIDs.compactMap { blockID in
+                snapshot.blocks.first(where: { $0.id == blockID })?.pageID
+            }.first
+            try performPageEdit(pageID: pageID, focusBlockID: uniqueBlockIDs.first) {
+                for blockID in uniqueBlockIDs {
+                    try repository.deleteBlock(blockID: blockID)
+                }
+                try load()
             }
-            try load()
             EditorLog.store.debug(
                 "blocks_delete_visible block_ids=\(uniqueBlockIDs.joined(separator: ","), privacy: .public)"
             )
@@ -3031,45 +3164,118 @@ final class WorkspaceViewModel: ObservableObject {
         return didExtractTags
     }
 
-    private func makeTextEditUndoSnapshot(
-        blockID: String,
-        currentBlock: BlockSnapshot?,
-        nextType: BlockType,
-        nextText: String,
-        registerUndo: Bool
-    ) -> TextEditUndoSnapshot? {
-        guard registerUndo,
-              let currentBlock,
-              currentBlock.type != nextType || currentBlock.textPlain != nextText else {
-            return nil
-        }
-
-        return TextEditUndoSnapshot(
-            blockID: blockID,
-            previousType: currentBlock.type,
-            previousText: currentBlock.textPlain,
-            previousTableRows: currentBlock.tableRows
-        )
-    }
-
-    private func recordTextEditUndoSnapshot(
-        _ undoSnapshot: TextEditUndoSnapshot,
-        currentBlock: BlockSnapshot?,
-        nextType: BlockType
-    ) {
-        if let currentType = currentBlock?.type,
-           let lastUndoSnapshot = textEditUndoStack.last,
-           lastUndoSnapshot.blockID == undoSnapshot.blockID,
-           lastUndoSnapshot.previousType == currentType,
-           currentType == nextType {
+    private func performPageEdit(
+        pageID: String?,
+        focusBlockID: String?,
+        coalescingKey: PageEditCoalescingKey? = nil,
+        edit: () throws -> Void
+    ) throws {
+        guard let pageID else {
+            try edit()
             return
         }
 
-        textEditUndoStack.append(undoSnapshot)
+        let beforeBlocks = pageBlocks(pageID: pageID)
+        try edit()
+        let afterBlocks = pageBlocks(pageID: pageID)
+        guard beforeBlocks != afterBlocks else {
+            return
+        }
+
+        recordPageEditUndoSnapshot(
+            PageEditHistorySnapshot(
+                pageID: pageID,
+                beforeBlocks: beforeBlocks,
+                afterBlocks: afterBlocks,
+                focusBlockID: focusBlockID,
+                coalescingKey: coalescingKey
+            )
+        )
     }
 
-    private func refreshTextEditUndoAvailability() {
-        canUndoTextEdit = !textEditUndoStack.isEmpty
+    private func pageBlocks(pageID: String) -> [BlockSnapshot] {
+        snapshot.blocks.filter { $0.pageID == pageID }
+    }
+
+    private func restorePageBlocks(pageID: String, blocks: [BlockSnapshot]) throws {
+        let previousSelectedCollection = selectedCollection
+        let previousSelectedPageID = selectedPageID
+
+        if let repository {
+            try repository.replaceBlocks(pageID: pageID, blocks: blocks)
+            let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+            apply(snapshot: loadedSnapshot)
+            restoreSelectionAfterReload(
+                collection: previousSelectedCollection,
+                pageID: previousSelectedPageID
+            )
+        } else {
+            snapshot = snapshot.replacingBlocks(pageID: pageID, blocks: blocks)
+        }
+
+        try refreshDerivedState(rebuildSearchIndex: true)
+    }
+
+    private func makeTextEditUndoCoalescingKey(
+        blockID: String,
+        currentBlock: BlockSnapshot?,
+        nextType: BlockType,
+        registerUndo: Bool
+    ) -> PageEditCoalescingKey? {
+        guard registerUndo,
+              let currentBlock,
+              currentBlock.type == nextType else {
+            return nil
+        }
+
+        return .blockContent(blockID: blockID, type: currentBlock.type)
+    }
+
+    private func recordPageEditUndoSnapshot(_ undoSnapshot: PageEditHistorySnapshot) {
+        if let coalescingKey = undoSnapshot.coalescingKey,
+           let lastUndoSnapshot = pageEditUndoStack.last,
+           lastUndoSnapshot.pageID == undoSnapshot.pageID,
+           lastUndoSnapshot.coalescingKey == coalescingKey {
+            if lastUndoSnapshot.beforeBlocks == undoSnapshot.afterBlocks {
+                _ = pageEditUndoStack.popLast()
+            } else {
+                pageEditUndoStack[pageEditUndoStack.count - 1] = PageEditHistorySnapshot(
+                    pageID: lastUndoSnapshot.pageID,
+                    beforeBlocks: lastUndoSnapshot.beforeBlocks,
+                    afterBlocks: undoSnapshot.afterBlocks,
+                    focusBlockID: undoSnapshot.focusBlockID,
+                    coalescingKey: coalescingKey
+                )
+            }
+        } else {
+            pageEditUndoStack.append(undoSnapshot)
+            if pageEditUndoStack.count > pageEditUndoHistoryLimit {
+                pageEditUndoStack.removeFirst(pageEditUndoStack.count - pageEditUndoHistoryLimit)
+            }
+        }
+
+        pageEditRedoStack.removeAll()
+        refreshPageEditUndoAvailability()
+    }
+
+    private func updateLastPageEditFocusBlockID(pageID: String, focusBlockID: String) {
+        guard let lastUndoSnapshot = pageEditUndoStack.last,
+              lastUndoSnapshot.pageID == pageID else {
+            return
+        }
+
+        pageEditUndoStack[pageEditUndoStack.count - 1] = PageEditHistorySnapshot(
+            pageID: lastUndoSnapshot.pageID,
+            beforeBlocks: lastUndoSnapshot.beforeBlocks,
+            afterBlocks: lastUndoSnapshot.afterBlocks,
+            focusBlockID: focusBlockID,
+            coalescingKey: lastUndoSnapshot.coalescingKey
+        )
+    }
+
+    private func refreshPageEditUndoAvailability() {
+        canUndoTextEdit = !pageEditUndoStack.isEmpty
+        canRedoTextEdit = !pageEditRedoStack.isEmpty
     }
 
     private func nextBlockState(
@@ -3142,11 +3348,16 @@ private extension BlockType {
     }
 }
 
-private struct TextEditUndoSnapshot {
-    let blockID: String
-    let previousType: BlockType
-    let previousText: String
-    let previousTableRows: [[String]]
+private struct PageEditHistorySnapshot {
+    let pageID: String
+    let beforeBlocks: [BlockSnapshot]
+    let afterBlocks: [BlockSnapshot]
+    let focusBlockID: String?
+    let coalescingKey: PageEditCoalescingKey?
+}
+
+private enum PageEditCoalescingKey: Equatable {
+    case blockContent(blockID: String, type: BlockType)
 }
 
 private struct PageArchiveUndoSnapshot {

@@ -475,6 +475,104 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRedoLastTextEditRestoresUndoneTextEditAndClearsOnNewEdit() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertFalse(viewModel.canRedoTextEdit)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "First edit")
+        try viewModel.undoLastTextEdit()
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用块写作。")
+        XCTAssertTrue(viewModel.canRedoTextEdit)
+
+        try viewModel.redoLastTextEdit()
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "First edit")
+        XCTAssertFalse(viewModel.canRedoTextEdit)
+
+        try viewModel.undoLastTextEdit()
+        try viewModel.updateBlockText(blockID: blockID, text: "Second edit")
+
+        XCTAssertFalse(viewModel.canRedoTextEdit)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Second edit")
+    }
+
+    @MainActor
+    func testUndoRedoRestoresSplitBlockShape() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        try viewModel.updateBlockText(blockID: blockID, text: "AlphaBeta")
+        let splitSelection = EditorTextSelection(
+            blockID: blockID,
+            location: ("Alpha" as NSString).length,
+            length: 0
+        )
+        let insertedSelection = try XCTUnwrap(
+            try viewModel.splitTextBlockAtSelection(blockID: blockID, selection: splitSelection)
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Alpha", "Beta"])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, insertedSelection.blockID)
+
+        try viewModel.undoLastTextEdit()
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["AlphaBeta"])
+        XCTAssertEqual(viewModel.visibleBlocks.first?.id, blockID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, insertedSelection.blockID)
+        XCTAssertTrue(viewModel.canRedoTextEdit)
+
+        try viewModel.redoLastTextEdit()
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Alpha", "Beta"])
+        XCTAssertEqual(viewModel.visibleBlocks.last?.id, insertedSelection.blockID)
+    }
+
+    @MainActor
+    func testPageEditUndoHistoryKeepsMostRecentOneHundredOperations() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        for index in 0..<101 {
+            try viewModel.changeBlockType(blockID: blockID, type: index.isMultiple(of: 2) ? .heading1 : .heading2)
+        }
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .heading1)
+        XCTAssertTrue(viewModel.canUndoTextEdit)
+
+        for _ in 0..<100 {
+            try viewModel.undoLastTextEdit()
+        }
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .heading1)
+        XCTAssertFalse(viewModel.canUndoTextEdit)
+        XCTAssertTrue(viewModel.canRedoTextEdit)
+    }
+
+    @MainActor
     func testUpdateSelectedPageTitleRefreshesSnapshotAndSearchResults() throws {
         let database = try migratedDatabase()
         defer { database.close() }

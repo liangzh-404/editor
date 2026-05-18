@@ -78,9 +78,9 @@ enum EditorDesignTokens {
         static let rowCornerRadius: Double = 8
         static let specialBlockCornerRadius: Double = 12
         static let pageLinkCornerRadius: Double = 13
-        static let slashMenuWidth: Double = 520
-        static let slashMenuRowHeight: Double = 54
-        static let slashMenuCornerRadius: Double = 16
+        static let slashMenuWidth: Double = 380
+        static let slashMenuRowHeight: Double = 48
+        static let slashMenuCornerRadius: Double = 14
         static let auxiliaryRailWidth: Double = 180
         static let popoverCornerRadius: Double = 16
     }
@@ -307,6 +307,7 @@ private struct ThreeColumnEditorShell: View {
                     pageTagNames: viewModel.selectedPageTagNames,
                     pendingFocusBlockID: viewModel.pendingFocusBlockID,
                     canUndoTextEdit: viewModel.canUndoTextEdit,
+                    canRedoTextEdit: viewModel.canRedoTextEdit,
                     displayMode: displayMode,
                     onDisplayModeChange: { mode in
                         displayMode = mode
@@ -344,6 +345,9 @@ private struct ThreeColumnEditorShell: View {
                     onUndoTextEdit: {
                         viewModel.undoLastTextEditForUI()
                     },
+                    onRedoTextEdit: {
+                        viewModel.redoLastTextEditForUI()
+                    },
                     onFocusCanvas: {
                         viewModel.focusEditorCanvasForUI()
                     },
@@ -352,6 +356,9 @@ private struct ThreeColumnEditorShell: View {
                     },
                     onMoveBlocks: { blockIDs, targetIndex in
                         viewModel.moveBlocksInCurrentPage(blockIDs: blockIDs, toIndex: targetIndex)
+                    },
+                    onUpdateBlockParent: { blockID, parentBlockID in
+                        viewModel.updateBlockParentForUI(blockID: blockID, parentBlockID: parentBlockID)
                     },
                     onMoveBlockByKeyboard: { blockID, direction in
                         viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
@@ -783,16 +790,202 @@ enum EditorBlockChrome {
     static let listBackgroundOpacity: Double = 0
     static let listMarkerWidth: Double = 18
     static let listTextSpacing: Double = 6
-    static let listMarkerTopPadding: Double = 0
+    static let listMarkerTopPadding: Double = 3
+    static let listMarkerLineHeight: Double = 20
+    static let listNestingIndentWidth: Double = 48
     static let actionColumnWidth: Double = 18
     static let actionColumnSpacing: Double = 5
     static let dragHandleWidth: Double = 18
     static let inactiveHandleOpacity: Double = 0
     static let specialBlockCornerRadius: Double = 5
     static let dropTargetHeight: Double = 32
-    static let dropSlotHeight: Double = 10
+    static let dropSlotHeight: Double = 4
     static let dropIndicatorAfterOffset: Double = 0
     static let trailingInsertHitHeight: Double = 64
+}
+
+enum ListMarkerHorizontalAlignment: Equatable, Sendable {
+    case leading
+
+    var frameAlignment: Alignment {
+        switch self {
+        case .leading:
+            return .leading
+        }
+    }
+}
+
+struct ListMarkerGlyphFrameDescriptor: Equatable, Sendable {
+    let width: Double
+    let height: Double
+    let horizontalAlignment: ListMarkerHorizontalAlignment
+
+    init(
+        width: Double = EditorBlockChrome.listMarkerWidth,
+        height: Double = EditorBlockChrome.listMarkerLineHeight,
+        horizontalAlignment: ListMarkerHorizontalAlignment = .leading
+    ) {
+        self.width = width
+        self.height = height
+        self.horizontalAlignment = horizontalAlignment
+    }
+}
+
+struct ListMarkerBulletGlyphDescriptor: Equatable, Sendable {
+    let diameter: Double
+    let strokeLineWidth: Double
+    let visibleLeadingOffset: Double
+    let visibleTopOffset: Double
+
+    init(
+        diameter: Double = 6,
+        strokeLineWidth: Double = 1.4,
+        visibleLeadingOffset: Double = 0,
+        visibleTopOffset: Double = 0
+    ) {
+        self.diameter = diameter
+        self.strokeLineWidth = strokeLineWidth
+        self.visibleLeadingOffset = visibleLeadingOffset
+        self.visibleTopOffset = visibleTopOffset
+    }
+}
+
+struct InlineLeadingControlFrameDescriptor: Equatable, Sendable {
+    let width: Double
+    let height: Double
+    let topPadding: Double
+    let textSpacing: Double
+    let textVerticalOffset: Double
+
+    init(
+        width: Double = EditorBlockChrome.listMarkerWidth,
+        height: Double = EditorBlockChrome.listMarkerLineHeight,
+        topPadding: Double = EditorBlockChrome.listMarkerTopPadding,
+        textSpacing: Double = EditorBlockChrome.listTextSpacing,
+        textVerticalOffset: Double = -2
+    ) {
+        self.width = width
+        self.height = height
+        self.topPadding = topPadding
+        self.textSpacing = textSpacing
+        self.textVerticalOffset = textVerticalOffset
+    }
+}
+
+enum ListMarkerBulletStyleResolver {
+    static func isHollow(nestingLevel: Int) -> Bool {
+        max(0, nestingLevel).isMultiple(of: 2) == false
+    }
+}
+
+enum BlockRowNestingIndentResolver {
+    static func leadingPadding(nestingLevel: Int, blockType: BlockType) -> Double {
+        let level = max(0, nestingLevel)
+        let width: Double
+        switch blockType {
+        case .unorderedListItem, .orderedListItem, .taskItem:
+            width = EditorBlockChrome.listNestingIndentWidth
+        default:
+            width = BlockDropPlacementResolver.levelIndentWidth
+        }
+        return Double(level) * width
+    }
+}
+
+enum BlockRowBackgroundPolicy {
+    static func opacity(
+        blockType: BlockType,
+        isSelected: Bool,
+        isFocused: Bool,
+        isSlashCommandMenuVisible: Bool
+    ) -> Double {
+        if blockType == .table || blockType == .divider || isSlashCommandMenuVisible {
+            return 0
+        }
+        if isSelected {
+            return 0.08
+        }
+        if isFocused {
+            return 0.32
+        }
+        return 0
+    }
+}
+
+enum BlockRowSelectionBorderPolicy {
+    static func opacity(blockType: BlockType, isSelected: Bool) -> Double {
+        guard isSelected, blockType != .divider else {
+            return 0
+        }
+        return 0.28
+    }
+}
+
+enum NonEditableBlockSelectionPolicy {
+    static func selectsBlockOnFocusRequest(blockType: BlockType) -> Bool {
+        blockType != .divider
+    }
+}
+
+enum TextEditableBlockChromePolicy {
+    static func backgroundOpacity(blockType: BlockType) -> Double {
+        switch blockType {
+        case .taskItem, .toggle:
+            return 0
+        default:
+            return EditorBlockChrome.listBackgroundOpacity
+        }
+    }
+}
+
+enum ListMarkerColumnAlignmentResolver {
+    static func leadingOffset(markerWidth: Double, columnWidth: Double) -> Double {
+        0
+    }
+}
+
+struct DragPreviewLayoutDescriptor: Equatable, Sendable {
+    let pointerHorizontalOffset: Double
+    let pointerVerticalOffset: Double
+    let visibleCardWidth: Double
+    let visibleCardMaxHeight: Double
+    let trailingInset: Double
+    let bottomInset: Double
+    let invisibleSpacerOpacity: Double
+
+    init(
+        pointerHorizontalOffset: Double = 380,
+        pointerVerticalOffset: Double = 140,
+        visibleCardWidth: Double = 284,
+        visibleCardMaxHeight: Double = 64,
+        trailingInset: Double = 8,
+        bottomInset: Double = 8,
+        invisibleSpacerOpacity: Double = 0.001
+    ) {
+        self.pointerHorizontalOffset = pointerHorizontalOffset
+        self.pointerVerticalOffset = pointerVerticalOffset
+        self.visibleCardWidth = visibleCardWidth
+        self.visibleCardMaxHeight = visibleCardMaxHeight
+        self.trailingInset = trailingInset
+        self.bottomInset = bottomInset
+        self.invisibleSpacerOpacity = invisibleSpacerOpacity
+    }
+
+    var previewWidth: Double {
+        pointerHorizontalOffset + visibleCardWidth + trailingInset
+    }
+
+    var previewHeight: Double {
+        pointerVerticalOffset + visibleCardMaxHeight + bottomInset
+    }
+
+    var visibleCardLeadingFromCenteredPointer: Double {
+        pointerHorizontalOffset - previewWidth / 2
+    }
+
+    var visibleCardTopFromCenteredPointer: Double {
+        pointerVerticalOffset - previewHeight / 2
+    }
 }
 
 enum CompactChrome {
@@ -817,12 +1010,12 @@ enum TableBlockChrome {
     static let gridLineOpacity: Double = 0.038
     static let outerBorderOpacity: Double = 0.080
     static let primaryControlDiameter: Double = 18
-    static let insertControlVisibleDiameter: Double = 6
-    static let insertControlExpandedDiameter: Double = 12
-    static let insertControlIconFontSize: Double = 7
+    static let insertControlVisibleDiameter: Double = 4
+    static let insertControlExpandedDiameter: Double = 10
+    static let insertControlIconFontSize: Double = 6
     static let insertControlEdgeOffset: Double = 0
-    static let insertControlIdleOpacity: Double = 0.54
-    static let insertControlHoverOpacity: Double = 1
+    static let insertControlIdleOpacity: Double = 0.28
+    static let insertControlHoverOpacity: Double = 0.9
     static let selectorWidth: Double = 8
     static let selectorHeight: Double = 8
     static let selectorIndicatorOpacity: Double = 0
@@ -833,10 +1026,7 @@ enum TableBlockChrome {
 }
 
 enum TableBlockDefaultGridResolver {
-    static let emptyGridRows = [
-        ["", ""],
-        ["", ""]
-    ]
+    static let emptyGridRows = MarkdownTableDocument.defaultEmptyGridRows
 
     static func editableRows(text: String, rows: [[String]]) -> [[String]] {
         if !rows.isEmpty {
@@ -848,11 +1038,7 @@ enum TableBlockDefaultGridResolver {
             return markdownRows
         }
 
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return emptyGridRows
-        }
-
-        return [[text]]
+        return MarkdownTableDocument.defaultGridRows(firstCellText: text)
     }
 }
 
@@ -960,6 +1146,116 @@ enum BlockSelectionKeyboardAnchorResolver {
         visibleBlockIDs: [String]
     ) -> String? {
         visibleBlockIDs.last { selectedBlockIDs.contains($0) }
+    }
+}
+
+enum BlockSelectionRangeResolver {
+    static func selection(
+        anchorBlockID: String,
+        targetBlockID: String,
+        visibleBlockIDs: [String]
+    ) -> [String] {
+        guard let anchorIndex = visibleBlockIDs.firstIndex(of: anchorBlockID),
+              let targetIndex = visibleBlockIDs.firstIndex(of: targetBlockID) else {
+            return []
+        }
+
+        let lowerBound = min(anchorIndex, targetIndex)
+        let upperBound = max(anchorIndex, targetIndex)
+        return Array(visibleBlockIDs[lowerBound...upperBound])
+    }
+
+    static func selectionAfterExtending(
+        from blockID: String,
+        direction: BlockKeyboardFocusDirection,
+        currentSelection: Set<String>,
+        visibleBlockIDs: [String]
+    ) -> [String] {
+        let orderedSelection = visibleBlockIDs.filter { currentSelection.contains($0) }
+        guard !orderedSelection.isEmpty else {
+            guard let currentIndex = visibleBlockIDs.firstIndex(of: blockID) else {
+                return []
+            }
+
+            let targetIndex: Int
+            switch direction {
+            case .previous:
+                targetIndex = currentIndex - 1
+            case .next:
+                targetIndex = currentIndex + 1
+            }
+            guard visibleBlockIDs.indices.contains(targetIndex) else {
+                return []
+            }
+            return selection(
+                anchorBlockID: blockID,
+                targetBlockID: visibleBlockIDs[targetIndex],
+                visibleBlockIDs: visibleBlockIDs
+            )
+        }
+
+        guard let lowerIndex = visibleBlockIDs.firstIndex(of: orderedSelection[0]),
+              let upperIndex = visibleBlockIDs.firstIndex(of: orderedSelection[orderedSelection.count - 1]) else {
+            return orderedSelection
+        }
+
+        switch direction {
+        case .previous:
+            let nextLowerIndex = lowerIndex - 1
+            guard visibleBlockIDs.indices.contains(nextLowerIndex) else {
+                return orderedSelection
+            }
+            return Array(visibleBlockIDs[nextLowerIndex...upperIndex])
+        case .next:
+            let nextUpperIndex = upperIndex + 1
+            guard visibleBlockIDs.indices.contains(nextUpperIndex) else {
+                return orderedSelection
+            }
+            return Array(visibleBlockIDs[lowerIndex...nextUpperIndex])
+        }
+    }
+}
+
+enum BlockSelectionMarqueeChrome {
+    static let fillOpacity: Double = 0.10
+    static let strokeOpacity: Double = 0.42
+    static let strokeWidth: Double = 1
+    static let cornerRadius: Double = 4
+    static let minimumVisibleDimension: Double = 2
+}
+
+enum BlockSelectionMarqueeRectResolver {
+    static func rect(start: CGPoint, current: CGPoint) -> CGRect {
+        CGRect(
+            x: min(start.x, current.x),
+            y: min(start.y, current.y),
+            width: abs(current.x - start.x),
+            height: abs(current.y - start.y)
+        )
+    }
+
+    static func isVisible(_ rect: CGRect) -> Bool {
+        rect.width >= BlockSelectionMarqueeChrome.minimumVisibleDimension
+            && rect.height >= BlockSelectionMarqueeChrome.minimumVisibleDimension
+    }
+}
+
+enum BlockSelectionMarqueeSelectionResolver {
+    static func selectedBlockIDs(
+        selectionRect: CGRect,
+        blockFrames: [String: CGRect],
+        visibleBlockIDs: [String]
+    ) -> [String] {
+        guard BlockSelectionMarqueeRectResolver.isVisible(selectionRect) else {
+            return []
+        }
+
+        return visibleBlockIDs.filter { blockID in
+            guard let frame = blockFrames[blockID] else {
+                return false
+            }
+            return selectionRect.intersects(frame)
+        }
     }
 }
 
@@ -1195,11 +1491,19 @@ enum BlockDropPlacement: Equatable, Sendable {
     case before
     case after
     case childAfter
+    case outdentAfter
 }
 
 struct BlockDropTarget: Equatable, Sendable {
     let blockID: String
     let placement: BlockDropPlacement
+    let targetLevel: Int?
+
+    init(blockID: String, placement: BlockDropPlacement, targetLevel: Int? = nil) {
+        self.blockID = blockID
+        self.placement = placement
+        self.targetLevel = targetLevel
+    }
 }
 
 enum BlockDropTargetLifecycleReducer {
@@ -1225,18 +1529,119 @@ struct TransientSelectionResetRequest: Equatable, Sendable {
 }
 
 enum BlockDropPlacementResolver {
-    static let indentationThreshold: CGFloat = 112
+    static let rootLevelAnchorX: CGFloat = 48
+    static let levelIndentWidth: CGFloat = 24
+    static let childActivationOffset: CGFloat = 36
     static let beforeBandHeight: CGFloat = 10
 
-    static func placement(location: CGPoint, rowSize: CGSize) -> BlockDropPlacement {
+    static func resolution(
+        location: CGPoint,
+        rowSize: CGSize,
+        destinationLevel: Int = 0
+    ) -> BlockDropPlacementResolution {
+        let clampedDestinationLevel = max(0, destinationLevel)
         let topBandHeight = min(beforeBandHeight, max(rowSize.height * 0.35, 8))
         if location.y <= topBandHeight {
-            return .before
+            return BlockDropPlacementResolution(placement: .before, targetLevel: clampedDestinationLevel)
         }
-        if location.x >= indentationThreshold {
-            return .childAfter
+
+        return afterResolution(locationX: location.x, destinationLevel: clampedDestinationLevel)
+    }
+
+    static func placement(
+        location: CGPoint,
+        rowSize: CGSize,
+        destinationLevel: Int = 0
+    ) -> BlockDropPlacement {
+        resolution(location: location, rowSize: rowSize, destinationLevel: destinationLevel).placement
+    }
+
+    static func afterResolution(
+        locationX: CGFloat,
+        destinationLevel: Int
+    ) -> BlockDropPlacementResolution {
+        let clampedDestinationLevel = max(0, destinationLevel)
+        let sameLevelAnchor = rootLevelAnchorX + CGFloat(clampedDestinationLevel) * levelIndentWidth
+
+        let targetLevel: Int
+        if locationX >= sameLevelAnchor + childActivationOffset {
+            targetLevel = clampedDestinationLevel + 1
+        } else {
+            let rawLevel = Int(round((locationX - rootLevelAnchorX) / levelIndentWidth))
+            targetLevel = min(max(rawLevel, 0), clampedDestinationLevel)
         }
-        return .after
+
+        let placement: BlockDropPlacement
+        if targetLevel > clampedDestinationLevel {
+            placement = .childAfter
+        } else if targetLevel < clampedDestinationLevel {
+            placement = .outdentAfter
+        } else {
+            placement = .after
+        }
+        return BlockDropPlacementResolution(placement: placement, targetLevel: targetLevel)
+    }
+}
+
+struct BlockDropPlacementResolution: Equatable, Sendable {
+    let placement: BlockDropPlacement
+    let targetLevel: Int?
+}
+
+enum BlockDropParentResolver {
+    static func parentBlockIDForEndDrop() -> String? {
+        nil
+    }
+
+    static func parentBlockID(
+        destinationBlockID: String,
+        targetLevel: Int,
+        blocks: [BlockSnapshot]
+    ) -> String? {
+        guard targetLevel > 0 else {
+            return nil
+        }
+
+        let destinationChain = ancestorChainIncludingDestination(
+            destinationBlockID: destinationBlockID,
+            blocks: blocks
+        )
+        guard destinationChain.indices.contains(targetLevel - 1) else {
+            return destinationBlockID
+        }
+        return destinationChain[targetLevel - 1].id
+    }
+
+    private static func ancestorChainIncludingDestination(
+        destinationBlockID: String,
+        blocks: [BlockSnapshot]
+    ) -> [BlockSnapshot] {
+        let blocksByID = Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0) })
+        guard var block = blocksByID[destinationBlockID] else {
+            return []
+        }
+
+        var chain: [BlockSnapshot] = [block]
+        var visitedBlockIDs: Set<String> = [block.id]
+        while let parentBlockID = block.parentBlockID,
+              !visitedBlockIDs.contains(parentBlockID),
+              let parent = blocksByID[parentBlockID] {
+            chain.insert(parent, at: 0)
+            visitedBlockIDs.insert(parentBlockID)
+            block = parent
+        }
+        return chain
+    }
+}
+
+enum SlashCommandSelectionSource: Equatable, Sendable {
+    case keyboard
+    case hover
+}
+
+enum SlashCommandMenuScrollPolicy {
+    static func shouldScrollSelectionIntoView(source: SlashCommandSelectionSource) -> Bool {
+        source == .keyboard
     }
 }
 
@@ -1652,6 +2057,7 @@ private struct CompactPageDestination: View {
                 pageTagNames: viewModel.selectedPageTagNames,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
+                canRedoTextEdit: viewModel.canRedoTextEdit,
                 showsAuxiliaryRail: false,
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
@@ -1686,6 +2092,9 @@ private struct CompactPageDestination: View {
                 onUndoTextEdit: {
                     viewModel.undoLastTextEditForUI()
                 },
+                onRedoTextEdit: {
+                    viewModel.redoLastTextEditForUI()
+                },
                 onFocusCanvas: {
                     viewModel.focusEditorCanvasForUI()
                 },
@@ -1694,6 +2103,9 @@ private struct CompactPageDestination: View {
                 },
                 onMoveBlocks: { blockIDs, targetIndex in
                     viewModel.moveBlocksInCurrentPage(blockIDs: blockIDs, toIndex: targetIndex)
+                },
+                onUpdateBlockParent: { blockID, parentBlockID in
+                    viewModel.updateBlockParentForUI(blockID: blockID, parentBlockID: parentBlockID)
                 },
                 onMoveBlockByKeyboard: { blockID, direction in
                     viewModel.moveBlockByKeyboardForUI(blockID: blockID, direction: direction)
@@ -3213,6 +3625,44 @@ private struct ArchivedPageRow: View {
     }
 }
 
+private enum EditorCanvasCoordinateSpace {
+    static let blockSelection = "editor.canvas.block-selection"
+}
+
+private struct BlockRowFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newValue in newValue })
+    }
+}
+
+private struct BlockSelectionMarqueeOverlay: View {
+    let rect: CGRect
+
+    var body: some View {
+        RoundedRectangle(
+            cornerRadius: CGFloat(BlockSelectionMarqueeChrome.cornerRadius),
+            style: .continuous
+        )
+        .fill(EditorDesignTokens.Colors.accent.color.opacity(BlockSelectionMarqueeChrome.fillOpacity))
+        .overlay(
+            RoundedRectangle(
+                cornerRadius: CGFloat(BlockSelectionMarqueeChrome.cornerRadius),
+                style: .continuous
+            )
+            .stroke(
+                EditorDesignTokens.Colors.accent.color.opacity(BlockSelectionMarqueeChrome.strokeOpacity),
+                lineWidth: CGFloat(BlockSelectionMarqueeChrome.strokeWidth)
+            )
+        )
+        .frame(width: max(1, rect.width), height: max(1, rect.height))
+        .offset(x: rect.minX, y: rect.minY)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct EditorCanvasView: View {
     let page: PageSummary?
     let pages: [PageSummary]
@@ -3229,6 +3679,7 @@ private struct EditorCanvasView: View {
     let pageTagNames: [String]
     let pendingFocusBlockID: String?
     let canUndoTextEdit: Bool
+    let canRedoTextEdit: Bool
     var displayMode: EditorDisplayMode = .standard
     var showsAuxiliaryRail = true
     var onDisplayModeChange: (EditorDisplayMode) -> Void = { _ in }
@@ -3240,9 +3691,11 @@ private struct EditorCanvasView: View {
     let onRemoveMarkdownLinkAtSelection: (String, EditorTextSelection) -> EditorTextSelection?
     let onApplyMarkdownInlineFormat: (String, MarkdownInlineFormat, EditorTextSelection) -> EditorTextSelection?
     let onUndoTextEdit: () -> Void
+    let onRedoTextEdit: () -> Void
     let onFocusCanvas: () -> String?
     let onMoveBlock: (String, Int) -> Void
     let onMoveBlocks: ([String], Int) -> Void
+    let onUpdateBlockParent: (String, String?) -> Bool
     let onMoveBlockByKeyboard: (String, BlockKeyboardMoveDirection) -> Bool
     let onInsertBlockAfter: (String) -> Bool
     let onSplitTextBlockAtSelection: (String, EditorTextSelection) -> EditorTextSelection?
@@ -3297,6 +3750,9 @@ private struct EditorCanvasView: View {
     @State private var transientSelectionResetRequest = TransientSelectionResetRequest.none
     @State private var scrollMetricsTracker = EditorCanvasScrollMetricsTracker(pageID: nil, blockCount: 0)
     @State private var isAuxiliaryRailCollapsed = true
+    @State private var blockRowFrames: [String: CGRect] = [:]
+    @State private var blockSelectionMarqueeStart: CGPoint?
+    @State private var blockSelectionMarqueeCurrent: CGPoint?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -3407,6 +3863,7 @@ private struct EditorCanvasView: View {
                             destinationBlockID: block.id,
                             slotKind: .before,
                             activeDropTarget: $activeBlockDropTarget,
+                            destinationLevel: nestingLevel(for: block),
                             moveDroppedBlocks: moveDroppedBlocks
                         )
                     }
@@ -3436,6 +3893,9 @@ private struct EditorCanvasView: View {
                         },
                         onMoveFocusByKeyboard: { direction in
                             focusAdjacentBlock(from: block.id, direction: direction)
+                        },
+                        onExtendBlockSelectionByKeyboard: { direction in
+                            extendBlockSelection(from: block.id, direction: direction)
                         },
                         onApplyInlineFormatByKeyboard: { format, selection in
                             applyMarkdownInlineFormat(format, selection: selection)
@@ -3474,10 +3934,10 @@ private struct EditorCanvasView: View {
                             return true
                         },
                         onIndent: {
-                            onIndentBlock(block.id)
+                            applyBlockIndentation(.indent, fallbackBlockID: block.id)
                         },
                         onOutdent: {
-                            onOutdentBlock(block.id)
+                            applyBlockIndentation(.outdent, fallbackBlockID: block.id)
                         },
                         onPasteAttachmentURLs: { urls in
                             guard !urls.isEmpty else {
@@ -3486,7 +3946,7 @@ private struct EditorCanvasView: View {
                             return onImportAttachmentsAfterBlock(urls, block.id)
                         },
                         onDelete: {
-                            onDeleteBlock(block.id)
+                            deleteBlockForCommand(fallbackBlockID: block.id)
                         },
                         onOpenPageReference: { targetPageID in
                             onOpenPageReference(targetPageID)
@@ -3559,6 +4019,7 @@ private struct EditorCanvasView: View {
                     ) { text in
                         onBlockTextChange(block.id, text)
                     }
+                    .background(blockSelectionFrameReporter(block.id))
                     .onAppear {
                         scheduleVisibleBlockAppeared(block.id, index: index)
                     }
@@ -3570,6 +4031,7 @@ private struct EditorCanvasView: View {
                         destinationBlockID: block.id,
                         slotKind: .after,
                         activeDropTarget: $activeBlockDropTarget,
+                        destinationLevel: nestingLevel(for: block),
                         moveDroppedBlocks: moveDroppedBlocks
                     )
                 }
@@ -3610,6 +4072,16 @@ private struct EditorCanvasView: View {
             .padding(.vertical, 36)
             }
             .accessibilityIdentifier("editor.canvas-scroll")
+            .coordinateSpace(name: EditorCanvasCoordinateSpace.blockSelection)
+            .onPreferenceChange(BlockRowFramePreferenceKey.self) { frames in
+                blockRowFrames = frames
+            }
+            .overlay(alignment: .topLeading) {
+                if let blockSelectionMarqueeRect {
+                    BlockSelectionMarqueeOverlay(rect: blockSelectionMarqueeRect)
+                }
+            }
+            .simultaneousGesture(blockSelectionMarqueeGesture())
             .onChange(of: editorSession.focusedBlockID) { _, _ in
                 activeBlockDropTarget = BlockDropTargetLifecycleReducer
                     .targetAfterEditorInteraction(current: activeBlockDropTarget)
@@ -3653,16 +4125,13 @@ private struct EditorCanvasView: View {
                         editorSession.clearBlockSelection()
                     },
                     onOutdent: {
-                        applyMobileSelectedBlocksIndentation(.outdent)
+                        applySelectedBlocksIndentation(.outdent)
                     },
                     onIndent: {
-                        applyMobileSelectedBlocksIndentation(.indent)
+                        applySelectedBlocksIndentation(.indent)
                     },
                     onDelete: {
-                        let blockIDs = Array(editorSession.selectedBlockIDs)
-                        if onDeleteBlocks(blockIDs) {
-                            editorSession.clearBlockSelection()
-                        }
+                        deleteSelectedBlocks()
                     }
                 )
             }
@@ -3712,6 +4181,58 @@ private struct EditorCanvasView: View {
                         direction: direction,
                         clearsBlockSelection: true
                     )
+                },
+                onExtendBlockSelection: { direction in
+                    guard let blockID = BlockSelectionKeyboardAnchorResolver.anchorBlockID(
+                        selectedBlockIDs: editorSession.selectedBlockIDs,
+                        visibleBlockIDs: blocks.map(\.id)
+                    ) else {
+                        return false
+                    }
+
+                    return extendBlockSelection(from: blockID, direction: direction)
+                },
+                onIndentSelection: { direction in
+                    applySelectedBlocksIndentation(direction)
+                },
+                onDeleteSelection: {
+                    deleteSelectedBlocks()
+                },
+                onUndoEdit: {
+                    guard canUndoTextEdit else {
+                        return false
+                    }
+                    onUndoTextEdit()
+                    return true
+                },
+                onRedoEdit: {
+                    guard canRedoTextEdit else {
+                        return false
+                    }
+                    onRedoTextEdit()
+                    return true
+                },
+                onSelectFocusedCodeText: { textView in
+                    let identifier = textView.accessibilityIdentifier()
+                    guard identifier.hasPrefix("editor.text.") else {
+                        return false
+                    }
+
+                    let blockID = String(identifier.dropFirst("editor.text.".count))
+                    guard let block = blocks.first(where: { $0.id == blockID }),
+                          block.type == .codeBlock else {
+                        return false
+                    }
+
+                    let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+                    textView.setSelectedRange(fullRange)
+                    editorSession.updateSelection(
+                        blockID: blockID,
+                        location: fullRange.location,
+                        length: fullRange.length
+                    )
+                    editorSession.clearBlockSelection()
+                    return true
                 },
                 onPromoteBlockToPage: {
                     promoteCurrentBlockToPageFromKeyboard()
@@ -3956,6 +4477,13 @@ private struct EditorCanvasView: View {
                     Label("撤销编辑", systemImage: "arrow.uturn.backward")
                 }
                 .disabled(!canUndoTextEdit)
+
+                Button {
+                    onRedoTextEdit()
+                } label: {
+                    Label("重做编辑", systemImage: "arrow.uturn.forward")
+                }
+                .disabled(!canRedoTextEdit)
 
                 Button {
                     handleMarkdownImportButton()
@@ -4395,7 +4923,26 @@ private struct EditorCanvasView: View {
     }
 
     @discardableResult
-    private func applyMobileSelectedBlocksIndentation(_ direction: BlockKeyboardIndentationDirection) -> Bool {
+    private func extendBlockSelection(
+        from blockID: String,
+        direction: BlockKeyboardFocusDirection
+    ) -> Bool {
+        let blockIDs = BlockSelectionRangeResolver.selectionAfterExtending(
+            from: blockID,
+            direction: direction,
+            currentSelection: editorSession.selectedBlockIDs,
+            visibleBlockIDs: blocks.map(\.id)
+        )
+        guard !blockIDs.isEmpty else {
+            return false
+        }
+
+        editorSession.selectBlocks(Set(blockIDs))
+        return true
+    }
+
+    @discardableResult
+    private func applySelectedBlocksIndentation(_ direction: BlockKeyboardIndentationDirection) -> Bool {
         let blockIDs = MobileBlockSelectionBatchResolver.orderedBlockIDs(
             selectedBlockIDs: editorSession.selectedBlockIDs,
             visibleBlockIDs: blocks.map(\.id)
@@ -4418,6 +4965,120 @@ private struct EditorCanvasView: View {
             editorSession.selectBlocks(Set(blockIDs))
         }
         return didChange
+    }
+
+    @discardableResult
+    private func applyBlockIndentation(
+        _ direction: BlockKeyboardIndentationDirection,
+        fallbackBlockID: String
+    ) -> Bool {
+        if editorSession.selectedBlockIDs.contains(fallbackBlockID),
+           applySelectedBlocksIndentation(direction) {
+            return true
+        }
+
+        switch direction {
+        case .indent:
+            return onIndentBlock(fallbackBlockID)
+        case .outdent:
+            return onOutdentBlock(fallbackBlockID)
+        }
+    }
+
+    @discardableResult
+    private func deleteSelectedBlocks() -> Bool {
+        let blockIDs = MobileBlockSelectionBatchResolver.orderedBlockIDs(
+            selectedBlockIDs: editorSession.selectedBlockIDs,
+            visibleBlockIDs: blocks.map(\.id)
+        )
+        guard !blockIDs.isEmpty else {
+            return false
+        }
+
+        if onDeleteBlocks(blockIDs) {
+            editorSession.clearBlockSelection()
+            return true
+        }
+        return false
+    }
+
+    private func deleteBlockForCommand(fallbackBlockID: String) {
+        if editorSession.selectedBlockIDs.contains(fallbackBlockID),
+           deleteSelectedBlocks() {
+            return
+        }
+
+        onDeleteBlock(fallbackBlockID)
+    }
+
+    private func blockSelectionFrameReporter(_ blockID: String) -> some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: BlockRowFramePreferenceKey.self,
+                value: [blockID: proxy.frame(in: .named(EditorCanvasCoordinateSpace.blockSelection))]
+            )
+        }
+    }
+
+    private var blockSelectionMarqueeRect: CGRect? {
+        guard let blockSelectionMarqueeStart,
+              let blockSelectionMarqueeCurrent else {
+            return nil
+        }
+
+        let rect = BlockSelectionMarqueeRectResolver.rect(
+            start: blockSelectionMarqueeStart,
+            current: blockSelectionMarqueeCurrent
+        )
+        guard BlockSelectionMarqueeRectResolver.isVisible(rect) else {
+            return nil
+        }
+        return rect
+    }
+
+    private func blockSelectionMarqueeGesture() -> some Gesture {
+        DragGesture(
+            minimumDistance: 2,
+            coordinateSpace: .named(EditorCanvasCoordinateSpace.blockSelection)
+        )
+        .onChanged { value in
+            guard isBlockSelectionMarqueeDragStart(value.startLocation) else {
+                return
+            }
+
+            if blockSelectionMarqueeStart == nil {
+                blockSelectionMarqueeStart = value.startLocation
+            }
+            blockSelectionMarqueeCurrent = value.location
+
+            let selectionRect = BlockSelectionMarqueeRectResolver.rect(
+                start: value.startLocation,
+                current: value.location
+            )
+            let blockIDs = BlockSelectionMarqueeSelectionResolver.selectedBlockIDs(
+                selectionRect: selectionRect,
+                blockFrames: blockRowFrames,
+                visibleBlockIDs: blocks.map(\.id)
+            )
+
+            editorSession.selectBlocks(Set(blockIDs))
+        }
+        .onEnded { _ in
+            blockSelectionMarqueeStart = nil
+            blockSelectionMarqueeCurrent = nil
+        }
+    }
+
+    private func isBlockSelectionMarqueeDragStart(_ location: CGPoint) -> Bool {
+        !blockRowFrames.contains { _, frame in
+            let handleFrame = CGRect(
+                x: frame.minX,
+                y: frame.minY,
+                width: CGFloat(EditorBlockChrome.actionColumnWidth),
+                height: frame.height
+            )
+            return handleFrame.contains(location)
+        }
     }
 
     private func importPastedAttachments(_ attachmentURLs: [URL]) -> Bool {
@@ -4468,7 +5129,8 @@ private struct EditorCanvasView: View {
     private func moveDroppedBlocks(
         _ draggedBlockIDs: [String],
         destinationBlockID: String,
-        placement: BlockDropPlacement
+        placement: BlockDropPlacement,
+        targetLevel: Int?
     ) -> Bool {
         let movedBlockIDs = visibleDraggedBlockIDs(from: draggedBlockIDs)
         guard let draggedBlockID = movedBlockIDs.first,
@@ -4481,9 +5143,20 @@ private struct EditorCanvasView: View {
             return false
         }
 
+        let parentBlockID: String?
+        if let targetLevel {
+            parentBlockID = BlockDropParentResolver.parentBlockID(
+                destinationBlockID: destinationBlockID,
+                targetLevel: targetLevel,
+                blocks: blocks
+            )
+        } else {
+            parentBlockID = nil
+        }
+
         onMoveBlocks(movedBlockIDs, targetIndex)
-        if placement == .childAfter {
-            _ = onIndentBlock(draggedBlockID)
+        if targetLevel != nil {
+            _ = onUpdateBlockParent(draggedBlockID, parentBlockID)
         }
         pendingFocusRequest = BlockFocusRequest(blockID: draggedBlockID)
         return true
@@ -4500,6 +5173,7 @@ private struct EditorCanvasView: View {
         }
 
         onMoveBlocks(movedBlockIDs, targetIndex)
+        _ = onUpdateBlockParent(draggedBlockID, BlockDropParentResolver.parentBlockIDForEndDrop())
         pendingFocusRequest = BlockFocusRequest(blockID: draggedBlockID)
         return true
     }
@@ -4617,6 +5291,12 @@ private struct EditorCanvasView: View {
 #if os(macOS)
 enum MacEditorKeyboardShortcutAction: Equatable, Sendable {
     case cancelSelection
+    case deleteSelection
+    case indentSelection(BlockKeyboardIndentationDirection)
+    case extendBlockSelection(BlockKeyboardFocusDirection)
+    case undoEdit
+    case redoEdit
+    case selectFocusedCodeText
     case insertLink
     case pasteAttachments
     case moveFocus(BlockKeyboardFocusDirection)
@@ -4624,6 +5304,8 @@ enum MacEditorKeyboardShortcutAction: Equatable, Sendable {
 }
 
 enum MacEditorKeyboardShortcutActionResolver {
+    private static let deleteKeyCodes: Set<UInt16> = [51, 117]
+
     static func action(
         keyCode: UInt16,
         input: String?,
@@ -4636,8 +5318,30 @@ enum MacEditorKeyboardShortcutActionResolver {
             keyCode: keyCode,
             input: input,
             modifiers: modifiers
-           ) {
+        ) {
             return .cancelSelection
+        }
+
+        if hasBlockSelection,
+           deleteKeyCodes.contains(keyCode),
+           modifiers.isEmpty {
+            return .deleteSelection
+        }
+
+        if hasBlockSelection,
+           let direction = BlockKeyboardShortcutResolver.indentationDirection(
+            keyCode: keyCode,
+            modifiers: modifiers
+           ) {
+            return .indentSelection(direction)
+        }
+
+        if hasBlockSelection,
+           let direction = BlockKeyboardSelectionExtensionResolver.direction(
+            keyCode: keyCode,
+            modifiers: modifiers
+           ) {
+            return .extendBlockSelection(direction)
         }
 
         if hasBlockSelection,
@@ -4646,6 +5350,23 @@ enum MacEditorKeyboardShortcutActionResolver {
             modifiers: modifiers
            ) {
             return .moveFocus(direction)
+        }
+
+        if input?.lowercased() == "z",
+           modifiers == [.command] {
+            return .undoEdit
+        }
+
+        if input?.lowercased() == "z",
+           modifiers == [.command, .shift] {
+            return .redoEdit
+        }
+
+        if BlockSelectAllKeyboardResolver.requestsSelectAll(
+            input: input,
+            modifiers: modifiers
+        ) {
+            return .selectFocusedCodeText
         }
 
         if MarkdownInlineLinkKeyboardResolver.requestsLinkInsertion(
@@ -4681,6 +5402,12 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
     let hasBlockSelection: () -> Bool
     let onCancelSelection: () -> Bool
     let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
+    let onExtendBlockSelection: (BlockKeyboardFocusDirection) -> Bool
+    let onIndentSelection: (BlockKeyboardIndentationDirection) -> Bool
+    let onDeleteSelection: () -> Bool
+    let onUndoEdit: () -> Bool
+    let onRedoEdit: () -> Bool
+    let onSelectFocusedCodeText: (NSTextView) -> Bool
     let onPromoteBlockToPage: () -> Bool
 
     func makeCoordinator() -> Coordinator {
@@ -4693,6 +5420,12 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         context.coordinator.hasBlockSelection = hasBlockSelection
         context.coordinator.onCancelSelection = onCancelSelection
         context.coordinator.onMoveFocus = onMoveFocus
+        context.coordinator.onExtendBlockSelection = onExtendBlockSelection
+        context.coordinator.onIndentSelection = onIndentSelection
+        context.coordinator.onDeleteSelection = onDeleteSelection
+        context.coordinator.onUndoEdit = onUndoEdit
+        context.coordinator.onRedoEdit = onRedoEdit
+        context.coordinator.onSelectFocusedCodeText = onSelectFocusedCodeText
         context.coordinator.onPromoteBlockToPage = onPromoteBlockToPage
         context.coordinator.install()
         return NSView(frame: .zero)
@@ -4704,6 +5437,12 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         context.coordinator.hasBlockSelection = hasBlockSelection
         context.coordinator.onCancelSelection = onCancelSelection
         context.coordinator.onMoveFocus = onMoveFocus
+        context.coordinator.onExtendBlockSelection = onExtendBlockSelection
+        context.coordinator.onIndentSelection = onIndentSelection
+        context.coordinator.onDeleteSelection = onDeleteSelection
+        context.coordinator.onUndoEdit = onUndoEdit
+        context.coordinator.onRedoEdit = onRedoEdit
+        context.coordinator.onSelectFocusedCodeText = onSelectFocusedCodeText
         context.coordinator.onPromoteBlockToPage = onPromoteBlockToPage
     }
 
@@ -4717,6 +5456,12 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         var hasBlockSelection: (() -> Bool)?
         var onCancelSelection: (() -> Bool)?
         var onMoveFocus: ((BlockKeyboardFocusDirection) -> Bool)?
+        var onExtendBlockSelection: ((BlockKeyboardFocusDirection) -> Bool)?
+        var onIndentSelection: ((BlockKeyboardIndentationDirection) -> Bool)?
+        var onDeleteSelection: (() -> Bool)?
+        var onUndoEdit: (() -> Bool)?
+        var onRedoEdit: (() -> Bool)?
+        var onSelectFocusedCodeText: ((NSTextView) -> Bool)?
         var onPromoteBlockToPage: (() -> Bool)?
         private var eventMonitor: Any?
 
@@ -4741,6 +5486,34 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
                 switch action {
                 case .cancelSelection:
                     if self.onCancelSelection?() == true {
+                        return nil
+                    }
+                case .deleteSelection:
+                    if self.onDeleteSelection?() == true {
+                        return nil
+                    }
+                case .indentSelection(let direction):
+                    if self.onIndentSelection?(direction) == true {
+                        return nil
+                    }
+                case .extendBlockSelection(let direction):
+                    if self.onExtendBlockSelection?(direction) == true {
+                        return nil
+                    }
+                case .undoEdit:
+                    if self.onUndoEdit?() == true {
+                        return nil
+                    }
+                case .redoEdit:
+                    if self.onRedoEdit?() == true {
+                        return nil
+                    }
+                case .selectFocusedCodeText:
+                    let focusedTextView = MainActor.assumeIsolated {
+                        NSApp.keyWindow?.firstResponder as? NSTextView
+                    }
+                    if let textView = focusedTextView,
+                       self.onSelectFocusedCodeText?(textView) == true {
                         return nil
                     }
                 case .insertLink:
@@ -5467,7 +6240,8 @@ struct ListBlockChromeDescriptor: Equatable, Sendable {
 
 private struct ListMarkerGlyph: View {
     let descriptor: ListBlockChromeDescriptor
-    let isNested: Bool
+    let nestingLevel: Int
+    private let frameDescriptor = ListMarkerGlyphFrameDescriptor()
 
     var body: some View {
         Group {
@@ -5476,17 +6250,40 @@ private struct ListMarkerGlyph: View {
                     .font(.system(size: EditorDesignTokens.Typography.bodySize, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(Color.primary)
-            } else if isNested {
-                Text("◦")
-                    .font(.system(size: EditorDesignTokens.Typography.bodySize, weight: .regular))
-                    .foregroundStyle(Color.primary)
             } else {
-                Text("•")
-                    .font(.system(size: EditorDesignTokens.Typography.bodySize, weight: .regular))
-                    .foregroundStyle(Color.primary)
+                ListMarkerBulletGlyph(
+                    isHollow: ListMarkerBulletStyleResolver.isHollow(nestingLevel: nestingLevel)
+                )
             }
         }
-        .frame(width: CGFloat(EditorBlockChrome.listMarkerWidth), alignment: .trailing)
+        .frame(
+            width: CGFloat(frameDescriptor.width),
+            height: CGFloat(frameDescriptor.height),
+            alignment: frameDescriptor.horizontalAlignment.frameAlignment
+        )
+        .accessibilityHidden(true)
+    }
+}
+
+private struct ListMarkerBulletGlyph: View {
+    let isHollow: Bool
+    private let descriptor = ListMarkerBulletGlyphDescriptor()
+
+    var body: some View {
+        Group {
+            if isHollow {
+                Circle()
+                    .stroke(Color.primary, lineWidth: CGFloat(descriptor.strokeLineWidth))
+            } else {
+                Circle()
+                    .fill(Color.primary)
+            }
+        }
+        .frame(width: CGFloat(descriptor.diameter), height: CGFloat(descriptor.diameter))
+        .offset(
+            x: CGFloat(descriptor.visibleLeadingOffset),
+            y: CGFloat(descriptor.visibleTopOffset)
+        )
         .accessibilityHidden(true)
     }
 }
@@ -5544,15 +6341,100 @@ struct HeadingBlockChromeDescriptor: Equatable, Sendable {
     }
 }
 
+enum DividerBlockAxis: Equatable, Sendable {
+    case horizontal
+}
+
 struct DividerBlockChromeDescriptor: Equatable, Sendable {
     let accessibilityLabel: String
     let accessibilityValue: String
     let accessibilityIdentifier: String
+    let axis: DividerBlockAxis
+    let height: Double
+    let waveAmplitude: Double
+    let loopCount: Int
+    let strokeOpacity: Double
+    let strokeWidth: Double
+    let casualVariance: Double
 
     init(block: BlockSnapshot) {
         accessibilityLabel = "分割线块"
         accessibilityValue = "分割线"
         accessibilityIdentifier = "editor.divider.\(block.id)"
+        axis = .horizontal
+        height = 56
+        waveAmplitude = 12
+        loopCount = 5
+        strokeOpacity = 0.58
+        strokeWidth = 1.6
+        casualVariance = 0.16
+    }
+}
+
+private struct CraftDividerBlockRow: View {
+    let descriptor: DividerBlockChromeDescriptor
+
+    var body: some View {
+        Canvas { context, size in
+            guard size.width > 1, size.height > 1 else {
+                return
+            }
+
+            var path = Path()
+            let midY = size.height * 0.5
+            let left = size.width * 0.04
+            let right = size.width * 0.96
+            let loopWidth = min(38, max(28, size.width / 22))
+            let loopTotalWidth = loopWidth * CGFloat(descriptor.loopCount)
+            let loopStart = max(left + 20, (size.width - loopTotalWidth) / 2)
+            let loopEnd = min(right - 20, loopStart + loopTotalWidth)
+            let amplitude = CGFloat(descriptor.waveAmplitude)
+            let variance = CGFloat(descriptor.casualVariance)
+
+            path.move(to: CGPoint(x: left, y: midY))
+            path.addCurve(
+                to: CGPoint(x: loopStart, y: midY),
+                control1: CGPoint(x: left + (loopStart - left) * 0.16, y: midY + amplitude * (0.86 + variance)),
+                control2: CGPoint(x: loopStart - (loopStart - left) * 0.24, y: midY + amplitude * (0.42 + variance * 0.4))
+            )
+
+            for index in 0..<descriptor.loopCount {
+                let startX = loopStart + CGFloat(index) * loopWidth
+                let sway = CGFloat(index % 2 == 0 ? 1 : -1) * variance
+                let middleX = startX + loopWidth * (0.50 + sway * 0.10)
+                let endX = startX + loopWidth
+                let topScale = 1.22 - CGFloat(index % 3) * variance * 0.18
+                let bottomScale = 1.06 + CGFloat(index % 2) * variance * 0.5
+                path.addCurve(
+                    to: CGPoint(x: middleX, y: midY),
+                    control1: CGPoint(x: startX + loopWidth * (0.13 + sway * 0.04), y: midY - amplitude * topScale),
+                    control2: CGPoint(x: middleX - loopWidth * (0.24 - sway * 0.05), y: midY - amplitude * (topScale + variance * 0.25))
+                )
+                path.addCurve(
+                    to: CGPoint(x: endX, y: midY),
+                    control1: CGPoint(x: middleX + loopWidth * (0.22 + sway * 0.03), y: midY + amplitude * bottomScale),
+                    control2: CGPoint(x: endX - loopWidth * (0.16 - sway * 0.04), y: midY + amplitude * (bottomScale + variance * 0.22))
+                )
+            }
+
+            path.addCurve(
+                to: CGPoint(x: right, y: midY),
+                control1: CGPoint(x: loopEnd + (right - loopEnd) * 0.22, y: midY - amplitude * 0.5),
+                control2: CGPoint(x: right - (right - loopEnd) * 0.18, y: midY - amplitude * 0.9)
+            )
+
+            context.stroke(
+                path,
+                with: .color(Color.primary.opacity(descriptor.strokeOpacity)),
+                style: StrokeStyle(
+                    lineWidth: CGFloat(descriptor.strokeWidth),
+                    lineCap: .round,
+                    lineJoin: .round
+                )
+            )
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: CGFloat(descriptor.height))
     }
 }
 
@@ -5657,6 +6539,7 @@ private struct BlockRowView: View {
     let onMoveDown: () -> Void
     let onMoveByKeyboard: (BlockKeyboardMoveDirection) -> Bool
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
+    let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> Bool
@@ -5692,6 +6575,7 @@ private struct BlockRowView: View {
     @State private var isRowHovered = false
     @State private var rowFocusRequest: BlockFocusRequest?
     @State private var slashCommandSelectionIndex = 0
+    @State private var slashCommandSelectionSource: SlashCommandSelectionSource = .keyboard
 
     init(
         block: BlockSnapshot,
@@ -5708,6 +6592,7 @@ private struct BlockRowView: View {
         onMoveDown: @escaping () -> Void = {},
         onMoveByKeyboard: @escaping (BlockKeyboardMoveDirection) -> Bool = { _ in false },
         onMoveFocusByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
+        onExtendBlockSelectionByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
         onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onInsertBlockAfter: @escaping (EditorTextSelection) -> Bool = { _ in false },
@@ -5755,6 +6640,7 @@ private struct BlockRowView: View {
         self.onMoveDown = onMoveDown
         self.onMoveByKeyboard = onMoveByKeyboard
         self.onMoveFocusByKeyboard = onMoveFocusByKeyboard
+        self.onExtendBlockSelectionByKeyboard = onExtendBlockSelectionByKeyboard
         self.onApplyInlineFormatByKeyboard = onApplyInlineFormatByKeyboard
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
@@ -5795,7 +6681,10 @@ private struct BlockRowView: View {
             blockContent
         }
         .padding(.vertical, CGFloat(EditorBlockChrome.rowVerticalPadding))
-        .padding(.leading, CGFloat(nestingLevel) * 24)
+        .padding(.leading, CGFloat(BlockRowNestingIndentResolver.leadingPadding(
+            nestingLevel: nestingLevel,
+            blockType: block.type
+        )))
         .padding(.horizontal, 4)
         .background(rowBackground)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -5888,8 +6777,7 @@ private struct BlockRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if block.type == .divider {
             let descriptor = DividerBlockChromeDescriptor(block: block)
-            Divider()
-                .padding(.vertical, 10)
+            CraftDividerBlockRow(descriptor: descriptor)
                 .accessibilityLabel(descriptor.accessibilityLabel)
                 .accessibilityValue(descriptor.accessibilityValue)
                 .accessibilityIdentifier(descriptor.accessibilityIdentifier)
@@ -5904,29 +6792,42 @@ private struct BlockRowView: View {
     }
 
     private var rowBackground: some View {
-        RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
+        let borderOpacity = BlockRowSelectionBorderPolicy.opacity(
+            blockType: block.type,
+            isSelected: isBlockSelected
+        )
+        return RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
             .fill(rowBackgroundColor)
             .overlay(
                 RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
-                    .stroke(isBlockSelected ? EditorDesignTokens.Colors.accent.color.opacity(0.28) : Color.clear, lineWidth: 1)
+                    .stroke(EditorDesignTokens.Colors.accent.color.opacity(borderOpacity), lineWidth: 1)
             )
     }
 
     private var rowBackgroundColor: Color {
-        if block.type == .table {
+        let opacity = BlockRowBackgroundPolicy.opacity(
+            blockType: block.type,
+            isSelected: isBlockSelected,
+            isFocused: editorSession.focusedBlockID == block.id,
+            isSlashCommandMenuVisible: isSlashCommandMenuVisible
+        )
+        guard opacity > 0 else {
             return Color.clear
         }
         if isBlockSelected {
-            return EditorDesignTokens.Colors.accent.color.opacity(0.08)
+            return EditorDesignTokens.Colors.accent.color.opacity(opacity)
         }
-        if editorSession.focusedBlockID == block.id {
-            return EditorDesignTokens.Colors.border.color.opacity(0.32)
-        }
-        return Color.clear
+        return EditorDesignTokens.Colors.border.color.opacity(opacity)
     }
 
     private var isRowActive: Bool {
         isRowHovered || isBlockSelected || editorSession.focusedBlockID == block.id
+    }
+
+    private var isSlashCommandMenuVisible: Bool {
+        editorSession.focusedBlockID == block.id
+            && block.textPlain.hasPrefix("/")
+            && !SlashCommandResolver.matchingCommands(for: block.textPlain).isEmpty
     }
 
     private var usesNativeTextEditor: Bool {
@@ -5990,7 +6891,7 @@ private struct BlockRowView: View {
         switch dropPlacement {
         case .before:
             return .topLeading
-        case .after, .childAfter, nil:
+        case .after, .childAfter, .outdentAfter, nil:
             return .bottomLeading
         }
     }
@@ -6003,7 +6904,7 @@ private struct BlockRowView: View {
         switch placement {
         case .before:
             return -CGFloat(EditorBlockChrome.dropIndicatorAfterOffset)
-        case .after, .childAfter:
+        case .after, .childAfter, .outdentAfter:
             return CGFloat(EditorBlockChrome.dropIndicatorAfterOffset)
         }
     }
@@ -6017,7 +6918,14 @@ private struct BlockRowView: View {
             SlashCommandMenu(
                 commands: commands,
                 selectedIndex: clampedSlashCommandSelectionIndex(for: commands),
+                scrollsSelectionIntoView: SlashCommandMenuScrollPolicy.shouldScrollSelectionIntoView(
+                    source: slashCommandSelectionSource
+                ),
                 onHover: { index in
+                    guard slashCommandSelectionIndex != index || slashCommandSelectionSource != .hover else {
+                        return
+                    }
+                    slashCommandSelectionSource = .hover
                     slashCommandSelectionIndex = index
                 },
                 onSelect: applySlashCommand
@@ -6137,11 +7045,12 @@ private struct BlockRowView: View {
                 .accessibilityAddTraits(.isHeader)
         } else if block.type == .unorderedListItem || block.type == .orderedListItem {
             let descriptor = ListBlockChromeDescriptor(block: block, ordinal: listOrdinal)
-            HStack(alignment: .firstTextBaseline, spacing: CGFloat(EditorBlockChrome.listTextSpacing)) {
-                ListMarkerGlyph(descriptor: descriptor, isNested: block.parentBlockID != nil)
-                    .padding(.top, CGFloat(EditorBlockChrome.listMarkerTopPadding))
+            let controlFrame = InlineLeadingControlFrameDescriptor()
+            HStack(alignment: .top, spacing: CGFloat(controlFrame.textSpacing)) {
+                ListMarkerGlyph(descriptor: descriptor, nestingLevel: nestingLevel)
+                    .padding(.top, CGFloat(controlFrame.topPadding))
 
-                nativeTextBlockEditor
+                inlineBodyTextEditor(descriptor: controlFrame)
             }
             .padding(.vertical, CGFloat(EditorBlockChrome.listVerticalPadding))
             .padding(.horizontal, CGFloat(EditorBlockChrome.listHorizontalPadding))
@@ -6151,20 +7060,15 @@ private struct BlockRowView: View {
             .accessibilityValue(descriptor.accessibilityValue)
             .accessibilityIdentifier(descriptor.accessibilityIdentifier)
         } else if block.type == .taskItem {
-            HStack(alignment: .top, spacing: 8) {
-                taskItemCompletionButton
-                    .padding(.top, 1)
+            let controlFrame = InlineLeadingControlFrameDescriptor()
+            HStack(alignment: .top, spacing: CGFloat(controlFrame.textSpacing)) {
+                inlineLeadingControl(taskItemCompletionButton, descriptor: controlFrame)
 
-                nativeTextBlockEditor
+                inlineBodyTextEditor(descriptor: controlFrame)
             }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(Color.green.opacity(0.04))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.green.opacity(0.18), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .padding(.vertical, CGFloat(EditorBlockChrome.listVerticalPadding))
+            .padding(.horizontal, CGFloat(EditorBlockChrome.listHorizontalPadding))
+            .background(Color.secondary.opacity(TextEditableBlockChromePolicy.backgroundOpacity(blockType: block.type)))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(taskBlockAccessibilityLabel)
             .accessibilityValue(block.taskItemIsCompleted ? "已完成" : "未完成")
@@ -6197,20 +7101,15 @@ private struct BlockRowView: View {
             .accessibilityValue(block.codeBlockLineWrapping ? "已开启自动换行" : "已关闭自动换行")
             .accessibilityIdentifier("editor.code.\(block.id)")
         } else if block.type == .toggle {
-            HStack(alignment: .top, spacing: 8) {
-                toggleBlockExpansionButton
-                    .padding(.top, 1)
+            let controlFrame = InlineLeadingControlFrameDescriptor()
+            HStack(alignment: .top, spacing: CGFloat(controlFrame.textSpacing)) {
+                inlineLeadingControl(toggleBlockExpansionButton, descriptor: controlFrame)
 
-                nativeTextBlockEditor
+                inlineBodyTextEditor(descriptor: controlFrame)
             }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(Color.secondary.opacity(0.04))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .padding(.vertical, CGFloat(EditorBlockChrome.listVerticalPadding))
+            .padding(.horizontal, CGFloat(EditorBlockChrome.listHorizontalPadding))
+            .background(Color.secondary.opacity(TextEditableBlockChromePolicy.backgroundOpacity(blockType: block.type)))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(toggleBlockAccessibilityLabel)
             .accessibilityValue(isToggleBlockExpanded ? "已展开" : "已折叠")
@@ -6285,14 +7184,34 @@ private struct BlockRowView: View {
         }
     }
 
+    private func inlineLeadingControl<Control: View>(
+        _ control: Control,
+        descriptor: InlineLeadingControlFrameDescriptor
+    ) -> some View {
+        control
+            .frame(
+                width: CGFloat(descriptor.width),
+                height: CGFloat(descriptor.height),
+                alignment: .leading
+            )
+            .padding(.top, CGFloat(descriptor.topPadding))
+    }
+
+    private func inlineBodyTextEditor(descriptor: InlineLeadingControlFrameDescriptor) -> some View {
+        nativeTextBlockEditor
+            .offset(y: CGFloat(descriptor.textVerticalOffset))
+    }
+
     private var taskItemCompletionButton: some View {
         Button {
             onTaskItemCompletionChange(!block.taskItemIsCompleted)
         } label: {
             Image(systemName: block.taskItemIsCompleted ? "checkmark.circle.fill" : "circle")
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
+        .font(.system(size: 16, weight: .regular))
         .foregroundStyle(block.taskItemIsCompleted ? .green : .secondary)
+        .contentShape(Rectangle())
         .help(block.taskItemIsCompleted ? "标记未完成" : "标记完成")
         .accessibilityLabel(block.taskItemIsCompleted ? "标记任务未完成" : "标记任务完成")
         .accessibilityValue(block.taskItemIsCompleted ? "已完成" : "未完成")
@@ -6305,8 +7224,10 @@ private struct BlockRowView: View {
         } label: {
             Image(systemName: isToggleBlockExpanded ? "chevron.down" : "chevron.right")
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
+        .font(.system(size: 16, weight: .regular))
         .foregroundStyle(.secondary)
+        .contentShape(Rectangle())
         .help(isToggleBlockExpanded ? "折叠" : "展开")
         .accessibilityLabel(isToggleBlockExpanded ? "折叠块" : "展开块")
         .accessibilityValue(isToggleBlockExpanded ? "已展开" : "已折叠")
@@ -6352,6 +7273,7 @@ private struct BlockRowView: View {
             onMoveByKeyboard: onMoveByKeyboard,
             onIndentationByKeyboard: handleKeyboardIndentation,
             onMoveFocusByKeyboard: onMoveFocusByKeyboard,
+            onExtendBlockSelectionByKeyboard: onExtendBlockSelectionByKeyboard,
             onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
             onInsertLinkByKeyboard: onInsertLinkByKeyboard,
             onInsertBlockAfter: onInsertBlockAfter,
@@ -6452,6 +7374,7 @@ private struct BlockRowView: View {
 
     private func applySlashCommand(_ command: SlashCommandDescriptor) {
         slashCommandSelectionIndex = 0
+        slashCommandSelectionSource = .keyboard
         switch command.type {
         case .pageReference:
             onTextChange("")
@@ -6459,6 +7382,7 @@ private struct BlockRowView: View {
         case .attachmentFile, .attachmentImage, .attachmentVideo:
             break
         default:
+            onClearTransientSelections(nil)
             onTextChange("")
             onChangeType(command.type)
             rowFocusRequest = BlockFocusRequest(blockID: block.id)
@@ -6474,6 +7398,7 @@ private struct BlockRowView: View {
         }
 
         let currentIndex = clampedSlashCommandSelectionIndex(for: commands)
+        slashCommandSelectionSource = .keyboard
         switch direction {
         case .up:
             slashCommandSelectionIndex = max(0, currentIndex - 1)
@@ -6509,7 +7434,9 @@ private struct BlockRowView: View {
         }
         onClearTransientSelections(nil)
         guard usesNativeTextEditor else {
-            onSelectCurrentBlock()
+            if NonEditableBlockSelectionPolicy.selectsBlockOnFocusRequest(blockType: block.type) {
+                onSelectCurrentBlock()
+            }
             return
         }
 
@@ -6536,7 +7463,9 @@ private struct BlockRowView: View {
             return
         }
 
-        onSelectCurrentBlock()
+        if NonEditableBlockSelectionPolicy.selectsBlockOnFocusRequest(blockType: block.type) {
+            onSelectCurrentBlock()
+        }
         handleFocusRequestHandled()
     }
 }
@@ -6550,7 +7479,8 @@ private struct BlockDropSlot: View {
     let destinationBlockID: String
     let slotKind: BlockDropSlotKind
     @Binding var activeDropTarget: BlockDropTarget?
-    let moveDroppedBlocks: ([String], String, BlockDropPlacement) -> Bool
+    let destinationLevel: Int
+    let moveDroppedBlocks: ([String], String, BlockDropPlacement, Int?) -> Bool
 
     var body: some View {
         Color.clear
@@ -6558,9 +7488,12 @@ private struct BlockDropSlot: View {
             .frame(height: CGFloat(EditorBlockChrome.dropSlotHeight))
             .contentShape(Rectangle())
             .overlay(alignment: .center) {
-                if let activePlacement {
-                    BlockDropIndicator(placement: activePlacement)
-                        .padding(.leading, activePlacement == .childAfter ? 28 : 0)
+                if let activeTarget {
+                    BlockDropIndicator(
+                        placement: activeTarget.placement,
+                        targetLevel: activeTarget.targetLevel
+                    )
+                    .padding(.leading, dropIndicatorLeadingPadding(for: activeTarget.targetLevel))
                 }
             }
             .onDrop(
@@ -6569,27 +7502,35 @@ private struct BlockDropSlot: View {
                     destinationBlockID: destinationBlockID,
                     slotKind: slotKind,
                     activeDropTarget: $activeDropTarget,
+                    destinationLevel: destinationLevel,
                     moveDroppedBlocks: moveDroppedBlocks
                 )
             )
             .accessibilityHidden(true)
     }
 
-    private var activePlacement: BlockDropPlacement? {
-        guard activeDropTarget?.blockID == destinationBlockID else {
+    private var activeTarget: BlockDropTarget? {
+        guard let activeDropTarget,
+              activeDropTarget.blockID == destinationBlockID else {
             return nil
         }
 
-        switch (slotKind, activeDropTarget?.placement) {
+        switch (slotKind, activeDropTarget.placement) {
         case (.before, .before):
-            return .before
+            return activeDropTarget
         case (.after, .after):
-            return .after
+            return activeDropTarget
         case (.after, .childAfter):
-            return .childAfter
+            return activeDropTarget
+        case (.after, .outdentAfter):
+            return activeDropTarget
         default:
             return nil
         }
+    }
+
+    private func dropIndicatorLeadingPadding(for targetLevel: Int?) -> CGFloat {
+        CGFloat(max(0, targetLevel ?? destinationLevel)) * BlockDropPlacementResolver.levelIndentWidth
     }
 }
 
@@ -6614,7 +7555,8 @@ private struct EditorBlockDropDelegate: DropDelegate {
     let destinationBlockID: String
     let slotKind: BlockDropSlotKind
     @Binding var activeDropTarget: BlockDropTarget?
-    let moveDroppedBlocks: ([String], String, BlockDropPlacement) -> Bool
+    let destinationLevel: Int
+    let moveDroppedBlocks: ([String], String, BlockDropPlacement, Int?) -> Bool
 
     func validateDrop(info: DropInfo) -> Bool {
         !info.itemProviders(for: [UTType.plainText.identifier, UTType.text.identifier]).isEmpty
@@ -6634,7 +7576,7 @@ private struct EditorBlockDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        let placement = updateTarget(for: info)
+        let resolution = updateTarget(for: info)
         guard let provider = info.itemProviders(for: [UTType.plainText.identifier, UTType.text.identifier]).first,
               let typeIdentifier = provider.registeredTypeIdentifiers.first(where: { identifier in
                   UTType(identifier)?.conforms(to: .text) == true
@@ -6650,28 +7592,40 @@ private struct EditorBlockDropDelegate: DropDelegate {
                 guard !blockIDs.isEmpty else {
                     return
                 }
-                _ = moveDroppedBlocks(blockIDs, destinationBlockID, placement)
+                _ = moveDroppedBlocks(
+                    blockIDs,
+                    destinationBlockID,
+                    resolution.placement,
+                    resolution.targetLevel
+                )
             }
         }
         return true
     }
 
     @discardableResult
-    private func updateTarget(for info: DropInfo) -> BlockDropPlacement {
-        let placement = placement(for: info)
-        let target = BlockDropTarget(blockID: destinationBlockID, placement: placement)
+    private func updateTarget(for info: DropInfo) -> BlockDropPlacementResolution {
+        let resolution = placementResolution(for: info)
+        let target = BlockDropTarget(
+            blockID: destinationBlockID,
+            placement: resolution.placement,
+            targetLevel: resolution.targetLevel
+        )
         if activeDropTarget != target {
             activeDropTarget = target
         }
-        return placement
+        return resolution
     }
 
-    private func placement(for info: DropInfo) -> BlockDropPlacement {
+    private func placementResolution(for info: DropInfo) -> BlockDropPlacementResolution {
         switch slotKind {
         case .before:
-            return .before
+            return BlockDropPlacementResolution(placement: .before, targetLevel: nil)
         case .after:
-            return info.location.x >= BlockDropPlacementResolver.indentationThreshold ? .childAfter : .after
+            return BlockDropPlacementResolver.afterResolution(
+                locationX: info.location.x,
+                destinationLevel: destinationLevel
+            )
         }
     }
 
@@ -6703,27 +7657,23 @@ private struct EditorBlockDropDelegate: DropDelegate {
 
 private struct BlockDropIndicator: View {
     let placement: BlockDropPlacement
+    let targetLevel: Int?
+
+    private var descriptor: BlockDropIndicatorDescriptor {
+        BlockDropIndicatorDescriptor(placement: placement, targetLevel: targetLevel)
+    }
 
     var body: some View {
         HStack(spacing: 7) {
-            Circle()
-                .fill(indicatorColor)
-                .frame(width: 4, height: 4)
+            BlockDropLevelRail(
+                dotCount: descriptor.levelDotCount,
+                color: indicatorColor
+            )
 
             Capsule()
                 .fill(indicatorColor)
                 .frame(maxWidth: 340)
                 .frame(height: 1)
-
-            if placement == .childAfter {
-                Text("缩进一级")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(indicatorColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(indicatorColor.opacity(0.08))
-                    .clipShape(Capsule())
-            }
 
             Spacer(minLength: 0)
         }
@@ -6733,7 +7683,7 @@ private struct BlockDropIndicator: View {
     }
 
     private var indicatorColor: Color {
-        placement == .childAfter
+        (placement == .childAfter || placement == .outdentAfter)
             ? EditorDesignTokens.Colors.accent.color.opacity(0.62)
             : EditorDesignTokens.Colors.accent.color.opacity(0.34)
     }
@@ -6746,47 +7696,100 @@ private struct BlockDropIndicator: View {
             return "拖拽到块下方"
         case .childAfter:
             return "拖拽为下级块"
+        case .outdentAfter:
+            return "拖拽为上级块"
         }
+    }
+}
+
+struct BlockDropIndicatorDescriptor: Equatable, Sendable {
+    let placement: BlockDropPlacement
+    let targetLevel: Int?
+
+    var levelDotCount: Int {
+        guard placement != .before else {
+            return 1
+        }
+        return max(1, (targetLevel ?? 0) + 1)
+    }
+
+    var visibleText: String? {
+        nil
+    }
+}
+
+private struct BlockDropLevelRail: View {
+    let dotCount: Int
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<min(max(dotCount, 1), 7), id: \.self) { index in
+                Circle()
+                    .fill(color.opacity(index == dotCount - 1 ? 1 : 0.42))
+                    .frame(width: 4, height: 4)
+            }
+        }
+        .frame(width: 48, alignment: .leading)
     }
 }
 
 private struct DragPreviewBlock: View {
     let block: BlockSnapshot
+    private let layout = DragPreviewLayoutDescriptor()
 
     var body: some View {
-        HStack(spacing: 0) {
-            Color.clear
-                .frame(width: 34)
+        VStack(alignment: .leading, spacing: 0) {
+            invisibleSpacer
+                .frame(height: CGFloat(layout.pointerVerticalOffset))
 
-            HStack(spacing: 9) {
-                Image(systemName: block.type.editorMenuSystemImage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18)
-                Text(previewText)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+            HStack(spacing: 0) {
+                invisibleSpacer
+                    .frame(width: CGFloat(layout.pointerHorizontalOffset))
+
+                HStack(spacing: 9) {
+                    Image(systemName: block.type.editorMenuSystemImage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+                    Text(previewText)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(width: 260, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(.regularMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .shadow(
+                    color: EditorDesignTokens.Shadows.popoverSmall.swiftUIColor,
+                    radius: CGFloat(EditorDesignTokens.Shadows.popoverSmall.radius),
+                    x: CGFloat(EditorDesignTokens.Shadows.popoverSmall.x),
+                    y: CGFloat(EditorDesignTokens.Shadows.popoverSmall.y)
+                )
+
+                invisibleSpacer
+                    .frame(width: CGFloat(layout.trailingInset))
             }
-            .frame(width: 260, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(.regularMaterial)
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .shadow(
-                color: EditorDesignTokens.Shadows.popoverSmall.swiftUIColor,
-                radius: CGFloat(EditorDesignTokens.Shadows.popoverSmall.radius),
-                x: CGFloat(EditorDesignTokens.Shadows.popoverSmall.x),
-                y: CGFloat(EditorDesignTokens.Shadows.popoverSmall.y)
-            )
+
+            invisibleSpacer
+                .frame(height: CGFloat(layout.bottomInset))
         }
-        .frame(width: 330, alignment: .leading)
-        .offset(x: 12, y: 8)
+        .frame(
+            width: CGFloat(layout.previewWidth),
+            height: CGFloat(layout.previewHeight),
+            alignment: .topLeading
+        )
+    }
+
+    private var invisibleSpacer: some View {
+        Color.white.opacity(layout.invisibleSpacerOpacity)
     }
 
     private var previewText: String {
@@ -6798,6 +7801,7 @@ private struct DragPreviewBlock: View {
 private struct SlashCommandMenu: View {
     let commands: [SlashCommandDescriptor]
     let selectedIndex: Int
+    let scrollsSelectionIntoView: Bool
     let onHover: (Int) -> Void
     let onSelect: (SlashCommandDescriptor) -> Void
 
@@ -6851,10 +7855,13 @@ private struct SlashCommandMenu: View {
             }
             .frame(maxHeight: 342)
             .onChange(of: selectedIndex) { _, index in
+                guard scrollsSelectionIntoView else {
+                    return
+                }
                 guard commands.indices.contains(index) else {
                     return
                 }
-                withAnimation(.easeOut(duration: 0.08)) {
+                withAnimation(.easeOut(duration: 0.06)) {
                     proxy.scrollTo(commands[index].id, anchor: .center)
                 }
             }
@@ -7303,7 +8310,8 @@ private struct TableInsertControl: View {
                 width: CGFloat(TableBlockChrome.primaryControlDiameter),
                 height: CGFloat(TableBlockChrome.primaryControlDiameter)
             )
-            .contentShape(Circle())
+            .background(Color.white.opacity(0.01))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
         .help(help)

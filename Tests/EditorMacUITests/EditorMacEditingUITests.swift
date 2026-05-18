@@ -58,6 +58,15 @@ final class EditorMacEditingUITests: XCTestCase {
         }
     }
 
+    @MainActor
+    private func clickElementByIdentifierCenter(_ element: XCUIElement) {
+        if element.isHittable {
+            element.click()
+        } else {
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        }
+    }
+
     private static func currentUserHomeDirectory() throws -> URL {
         guard let passwordEntry = getpwuid(getuid()),
               let homeDirectory = passwordEntry.pointee.pw_dir else {
@@ -1557,6 +1566,55 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testCodeBlockReturnInsertsNewlineAndCommandAStaysInText() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
+
+        let codeMenuItem = app.menuItems["代码"]
+        XCTAssertTrue(codeMenuItem.waitForExistence(timeout: 5), "Block type menu should expose the Code type")
+        codeMenuItem.click()
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Code blocks should keep the native text editor")
+        textView.click()
+        XCTAssertTrue(textView.waitForKeyboardFocus(timeout: 5), "Code text should receive keyboard focus")
+
+        textView.typeKey("a", modifierFlags: [.command])
+        app.typeText("let a = 1")
+        XCTAssertTrue(textView.waitForValue(equalTo: "let a = 1", timeout: 5))
+
+        let textViewCountBeforeReturn = app.textViews.count
+        textView.typeKey(.return, modifierFlags: [])
+        app.typeText("let b = 2")
+
+        XCTAssertEqual(
+            app.textViews.count,
+            textViewCountBeforeReturn,
+            "Return inside a code block should insert a newline instead of creating another block"
+        )
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "let a = 1\nlet b = 2", timeout: 5),
+            "Return inside a code block should keep editing the same multiline text view"
+        )
+
+        let blockRow = app.groups["editor.block.block-welcome-001"]
+        textView.typeKey("a", modifierFlags: [.command])
+        XCTAssertFalse(
+            blockRow.waitForLabelOrValue(containing: "当前块已选中", timeout: 1),
+            "Cmd+A in a code block should select text only, not enter block selection"
+        )
+        app.typeText("let c = 3")
+        XCTAssertTrue(
+            textView.waitForValue(equalTo: "let c = 3", timeout: 5),
+            "Typing after Cmd+A in a code block should replace the code text"
+        )
+    }
+
+    @MainActor
     func testBlockActionControlsExposeSemanticLabelsAndAvailability() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
@@ -1663,19 +1721,19 @@ final class EditorMacEditingUITests: XCTestCase {
         XCTAssertFalse(removeRowButton.exists, "Table rows should not show permanent remove-row chrome")
         XCTAssertFalse(removeColumnButton.exists, "Table columns should not show permanent remove-column chrome")
         XCTAssertTrue(
-            addRowButton.waitForValue(containing: "1 行，1 列", timeout: 5),
+            addRowButton.waitForValue(containing: "2 行，2 列", timeout: 5),
             "Table controls should expose the initial table dimensions"
         )
 
-        addRowButton.click()
+        clickElementByIdentifierCenter(addRowButton)
         XCTAssertTrue(
-            addRowButton.waitForValue(containing: "2 行，1 列", timeout: 5),
+            addRowButton.waitForValue(containing: "3 行，2 列", timeout: 5),
             "Adding a row should update the exposed table dimensions"
         )
 
-        addColumnButton.click()
+        clickElementByIdentifierCenter(addColumnButton)
         XCTAssertTrue(
-            addColumnButton.waitForValue(containing: "2 行，2 列", timeout: 5),
+            addColumnButton.waitForValue(containing: "3 行，3 列", timeout: 5),
             "Adding a column should update the exposed table dimensions"
         )
 
@@ -1687,7 +1745,7 @@ final class EditorMacEditingUITests: XCTestCase {
         )
         app.typeKey(.delete, modifierFlags: [])
         XCTAssertTrue(
-            addRowButton.waitForValue(containing: "1 行，2 列", timeout: 5),
+            addRowButton.waitForValue(containing: "2 行，3 列", timeout: 5),
             "Deleting a selected row should update the exposed table dimensions"
         )
 
@@ -1699,7 +1757,7 @@ final class EditorMacEditingUITests: XCTestCase {
         )
         app.typeKey(.delete, modifierFlags: [])
         XCTAssertTrue(
-            addColumnButton.waitForValue(containing: "1 行，1 列", timeout: 5),
+            addColumnButton.waitForValue(containing: "2 行，2 列", timeout: 5),
             "Deleting a selected column should update the exposed table dimensions"
         )
     }
@@ -1724,7 +1782,7 @@ final class EditorMacEditingUITests: XCTestCase {
             "Table chrome should expose a semantic container label"
         )
         XCTAssertTrue(
-            tableBlock.waitForLabelOrValue(containing: "1 行，1 列", timeout: 5),
+            tableBlock.waitForLabelOrValue(containing: "2 行，2 列", timeout: 5),
             "Table chrome should expose its current dimensions"
         )
 
@@ -1740,7 +1798,7 @@ final class EditorMacEditingUITests: XCTestCase {
         let addColumnButton = app.element(identifier: "editor.table.block-welcome-001.add-column")
         addColumnButton.click()
         XCTAssertTrue(
-            tableBlock.waitForLabelOrValue(containing: "1 行，2 列", timeout: 5),
+            tableBlock.waitForLabelOrValue(containing: "2 行，3 列", timeout: 5),
             "Table chrome should update dimensions after adding a column"
         )
     }

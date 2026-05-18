@@ -60,6 +60,15 @@ final class PlatformSecurityTests: XCTestCase {
         XCTAssertEqual(plist["UIBackgroundModes"] as? [String], ["remote-notification"])
     }
 
+    func testIOSProjectDeclaresLaunchScreenForFullResolutionPhones() throws {
+        let plist = try appPlist(named: "EditorIOS-Info.plist")
+
+        XCTAssertNotNil(
+            plist["UILaunchScreen"] as? [String: Any],
+            "iPhone renders letterboxed when the app bundle has no launch screen declaration."
+        )
+    }
+
     func testDataProtectionServiceKeepsProtectedFileReadable() throws {
         let fileURL = makeTemporaryDirectory().appendingPathComponent("protected.sqlite")
         try Data("protected".utf8).write(to: fileURL)
