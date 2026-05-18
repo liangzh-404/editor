@@ -665,13 +665,15 @@ enum TableBlockChrome {
     static let cellHeight: Double = 38
     static let maxViewportWidth: Double = 560
     static let cornerRadius: Double = 8
-    static let gridLineOpacity: Double = 0.055
-    static let outerBorderOpacity: Double = 0.105
+    static let gridLineOpacity: Double = 0.038
+    static let outerBorderOpacity: Double = 0.080
     static let primaryControlDiameter: Double = 14
     static let insertControlVisibleDiameter: Double = 2
     static let insertControlExpandedDiameter: Double = 9
     static let insertControlIconFontSize: Double = 6
     static let insertControlEdgeOffset: Double = 2
+    static let insertControlIdleOpacity: Double = 0.42
+    static let insertControlHoverOpacity: Double = 1
     static let selectorWidth: Double = 8
     static let selectorHeight: Double = 8
     static let selectorIndicatorOpacity: Double = 0
@@ -6829,7 +6831,7 @@ private struct TableInsertControl: View {
         Button(action: action) {
             ZStack {
                 Circle()
-                    .fill(Color.accentColor)
+                    .fill(insertControlColor)
                     .frame(
                         width: isHovered
                             ? CGFloat(TableBlockChrome.insertControlExpandedDiameter)
@@ -6861,6 +6863,13 @@ private struct TableInsertControl: View {
             isHovered = hovering
         }
 #endif
+    }
+
+    private var insertControlColor: Color {
+        if isHovered {
+            return Color.accentColor.opacity(TableBlockChrome.insertControlHoverOpacity)
+        }
+        return Color.secondary.opacity(TableBlockChrome.insertControlIdleOpacity)
     }
 }
 

@@ -29,13 +29,15 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(TableBlockChrome.cellHeight, 38)
         XCTAssertEqual(TableBlockChrome.maxViewportWidth, 560)
         XCTAssertEqual(TableBlockChrome.cornerRadius, 8)
-        XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.055)
-        XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.105)
+        XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.038)
+        XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.080)
         XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 14)
         XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 2)
         XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 9)
         XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 6)
         XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 2)
+        XCTAssertEqual(TableBlockChrome.insertControlIdleOpacity, 0.42)
+        XCTAssertEqual(TableBlockChrome.insertControlHoverOpacity, 1)
         XCTAssertEqual(TableBlockChrome.selectorWidth, 8)
         XCTAssertEqual(TableBlockChrome.selectorHeight, 8)
         XCTAssertEqual(TableBlockChrome.selectorIndicatorOpacity, 0)
@@ -77,6 +79,24 @@ final class EditorBlockChromeTests: XCTestCase {
             TableBlockChrome.selectorSelectedIndicatorThickness,
             2,
             "Selected edge feedback should stay Craft-like and avoid heavy table bars"
+        )
+    }
+
+    func testTableInsertControlChromeKeepsIdleDotQuietUntilHover() {
+        XCTAssertLessThan(
+            TableBlockChrome.insertControlIdleOpacity,
+            TableBlockChrome.insertControlHoverOpacity,
+            "Default table insert affordances should read as quiet dots until hover reveals the plus"
+        )
+        XCTAssertLessThanOrEqual(
+            TableBlockChrome.gridLineOpacity,
+            0.04,
+            "Document tables should use faint grid lines instead of a heavy spreadsheet frame"
+        )
+        XCTAssertLessThanOrEqual(
+            TableBlockChrome.outerBorderOpacity,
+            0.08,
+            "The table shell should stay subtle and embedded in the document"
         )
     }
 
