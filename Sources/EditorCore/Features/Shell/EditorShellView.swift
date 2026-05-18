@@ -651,20 +651,20 @@ enum TableBlockChrome {
     static let cellHeight: Double = 42
     static let maxViewportWidth: Double = 620
     static let cornerRadius: Double = 8
-    static let gridLineOpacity: Double = 0.045
-    static let outerBorderOpacity: Double = 0.09
+    static let gridLineOpacity: Double = 0.035
+    static let outerBorderOpacity: Double = 0.075
     static let primaryControlDiameter: Double = 18
-    static let insertControlVisibleDiameter: Double = 3
-    static let insertControlExpandedDiameter: Double = 10
-    static let insertControlIconFontSize: Double = 6
-    static let insertControlEdgeOffset: Double = 4
-    static let selectorWidth: Double = 12
-    static let selectorHeight: Double = 12
+    static let insertControlVisibleDiameter: Double = 2.5
+    static let insertControlExpandedDiameter: Double = 8
+    static let insertControlIconFontSize: Double = 5
+    static let insertControlEdgeOffset: Double = 5
+    static let selectorWidth: Double = 8
+    static let selectorHeight: Double = 8
     static let selectorIndicatorOpacity: Double = 0
     static let selectorHitOpacity: Double = 0.0001
-    static let selectorSelectedIndicatorOpacity: Double = 0.55
+    static let selectorSelectedIndicatorOpacity: Double = 0.42
     static let selectorSelectedIndicatorThickness: Double = 2
-    static let selectorSelectedIndicatorInset: Double = 7
+    static let selectorSelectedIndicatorInset: Double = 9
 }
 
 enum PastedAttachmentAnchorResolver {
@@ -1958,88 +1958,6 @@ private struct CollectionRailButton: View {
         .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor : SidebarChrome.foregroundColor)
         .accessibilityIdentifier(item.identifier)
         .accessibilityValue(item.isSelected ? "已选中，\(item.count)" : "未选中，\(item.count)")
-    }
-}
-
-private struct CloudKitAccountStatusSection: View {
-    @ObservedObject var viewModel: WorkspaceViewModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SidebarSectionLabel("同步")
-            HStack(spacing: 8) {
-                Image(systemName: statusIconName)
-                    .foregroundStyle(statusColor)
-                    .frame(width: 18)
-
-                Text(viewModel.cloudKitAccountStatusText)
-                    .font(.callout)
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .accessibilityIdentifier("editor.icloud-status")
-
-            HStack(spacing: 12) {
-                Button {
-                    viewModel.syncNow()
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath.icloud")
-                }
-                .buttonStyle(.borderless)
-                .help("立即同步")
-                .accessibilityIdentifier("editor.sync-now")
-
-                Button {
-                    viewModel.refreshCloudKitAccountStatusForUI()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("刷新 iCloud 状态")
-                .accessibilityIdentifier("editor.refresh-icloud-status")
-
-                Button {
-                    viewModel.purgeUnreferencedAttachmentsForUI()
-                } label: {
-                    Image(systemName: "trash.slash")
-                }
-                .buttonStyle(.borderless)
-                .help("清理未引用附件")
-                .accessibilityIdentifier("editor.clean-attachments")
-            }
-            .padding(.horizontal, 10)
-
-            Text(viewModel.syncStatusText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .accessibilityIdentifier("editor.sync-status")
-        }
-    }
-
-    private var statusIconName: String {
-        switch viewModel.cloudKitAccountStatus {
-        case .available:
-            return "checkmark.icloud"
-        case .noAccount, .restricted, .temporarilyUnavailable:
-            return "xmark.icloud"
-        case .couldNotDetermine, nil:
-            return "icloud"
-        }
-    }
-
-    private var statusColor: Color {
-        switch viewModel.cloudKitAccountStatus {
-        case .available:
-            return .green
-        case .noAccount, .restricted, .temporarilyUnavailable:
-            return .red
-        case .couldNotDetermine, nil:
-            return .secondary
-        }
     }
 }
 
