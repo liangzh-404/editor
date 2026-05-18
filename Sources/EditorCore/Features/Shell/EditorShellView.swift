@@ -9,6 +9,90 @@ import AppKit
 import UIKit
 #endif
 
+struct EditorColorToken: Equatable, Sendable {
+    let red: Double
+    let green: Double
+    let blue: Double
+
+    var color: Color {
+        Color(red: red, green: green, blue: blue)
+    }
+
+#if os(macOS)
+    var nsColor: NSColor {
+        NSColor(red: red, green: green, blue: blue, alpha: 1)
+    }
+#elseif os(iOS)
+    var uiColor: UIColor {
+        UIColor(red: red, green: green, blue: blue, alpha: 1)
+    }
+#endif
+
+    static func hex(_ red: Int, _ green: Int, _ blue: Int) -> EditorColorToken {
+        EditorColorToken(
+            red: Double(red) / 255,
+            green: Double(green) / 255,
+            blue: Double(blue) / 255
+        )
+    }
+}
+
+struct EditorShadowToken: Equatable, Sendable {
+    let color: EditorColorToken
+    let opacity: Double
+    let radius: Double
+    let x: Double
+    let y: Double
+
+    var swiftUIColor: Color {
+        color.color.opacity(opacity)
+    }
+}
+
+enum EditorDesignTokens {
+    enum Colors {
+        static let appBackground = EditorColorToken.hex(0xF3, 0xF1, 0xED)
+        static let sidebarBackground = EditorColorToken.hex(0xF7, 0xF4, 0xEF)
+        static let editorBackground = EditorColorToken.hex(0xFF, 0xFF, 0xFF)
+        static let primaryText = EditorColorToken.hex(0x24, 0x24, 0x24)
+        static let secondaryText = EditorColorToken.hex(0x5A, 0x58, 0x55)
+        static let tertiaryText = EditorColorToken.hex(0x76, 0x73, 0x6E)
+        static let border = EditorColorToken.hex(0xE8, 0xE4, 0xDE)
+        static let accent = EditorColorToken.hex(0x2F, 0x7D, 0xFA)
+        static let shadow = EditorColorToken.hex(0x1E, 0x19, 0x12)
+    }
+
+    enum Typography {
+        static let documentTitleSize: Double = 36
+        static let bodySize: Double = 17
+        static let bodyLineHeightMultiple: Double = 1.68
+    }
+
+    enum Layout {
+        static let editorMaxWidth: Double = 740
+        static let rowCornerRadius: Double = 8
+        static let specialBlockCornerRadius: Double = 12
+        static let popoverCornerRadius: Double = 16
+    }
+
+    enum Shadows {
+        static let popoverLarge = EditorShadowToken(
+            color: Colors.shadow,
+            opacity: 0.10,
+            radius: 48,
+            x: 0,
+            y: 16
+        )
+        static let popoverSmall = EditorShadowToken(
+            color: Colors.shadow,
+            opacity: 0.06,
+            radius: 8,
+            x: 0,
+            y: 2
+        )
+    }
+}
+
 struct EditorInsertMarkdownLinkActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
@@ -647,9 +731,9 @@ enum EditorBlockChrome {
 }
 
 enum CompactChrome {
-    static let backgroundRed: Double = 0.972
-    static let backgroundGreen: Double = 0.972
-    static let backgroundBlue: Double = 0.970
+    static let backgroundRed: Double = EditorDesignTokens.Colors.appBackground.red
+    static let backgroundGreen: Double = EditorDesignTokens.Colors.appBackground.green
+    static let backgroundBlue: Double = EditorDesignTokens.Colors.appBackground.blue
 
     static var backgroundYellowBias: Double {
         max(0, ((backgroundRed + backgroundGreen) / 2) - backgroundBlue)
@@ -1768,12 +1852,12 @@ enum SidebarChrome {
     static let selectedStrokeOpacity: Double = 0.025
     static let headerBadgeSize: Double = 30
     static let headerBadgeCornerRadius: Double = 8
-    static let backgroundRed: Double = 0.972
-    static let backgroundGreen: Double = 0.972
-    static let backgroundBlue: Double = 0.970
-    static let selectedFillRed: Double = 0.858
-    static let selectedFillGreen: Double = 0.860
-    static let selectedFillBlue: Double = 0.866
+    static let backgroundRed: Double = EditorDesignTokens.Colors.sidebarBackground.red
+    static let backgroundGreen: Double = EditorDesignTokens.Colors.sidebarBackground.green
+    static let backgroundBlue: Double = EditorDesignTokens.Colors.sidebarBackground.blue
+    static let selectedFillRed: Double = EditorDesignTokens.Colors.border.red
+    static let selectedFillGreen: Double = EditorDesignTokens.Colors.border.green
+    static let selectedFillBlue: Double = EditorDesignTokens.Colors.border.blue
 
     static var backgroundYellowBias: Double {
         max(0, ((backgroundRed + backgroundGreen) / 2) - backgroundBlue)
@@ -1792,15 +1876,15 @@ enum SidebarChrome {
     }
 
     static var selectedForegroundColor: Color {
-        Color(red: 0.22, green: 0.23, blue: 0.28)
+        EditorDesignTokens.Colors.primaryText.color
     }
 
     static var foregroundColor: Color {
-        Color(red: 0.34, green: 0.35, blue: 0.40)
+        EditorDesignTokens.Colors.secondaryText.color
     }
 
     static var mutedForegroundColor: Color {
-        Color(red: 0.55, green: 0.56, blue: 0.62)
+        EditorDesignTokens.Colors.tertiaryText.color
     }
 }
 
@@ -2018,7 +2102,12 @@ private struct CollectionRailButton: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
-                        .stroke(item.isSelected ? Color.black.opacity(SidebarChrome.selectedStrokeOpacity) : Color.clear, lineWidth: 1)
+                        .stroke(
+                            item.isSelected
+                                ? EditorDesignTokens.Colors.border.color.opacity(SidebarChrome.selectedStrokeOpacity)
+                                : Color.clear,
+                            lineWidth: 1
+                        )
                 )
         }
         .buttonStyle(.plain)
@@ -2059,7 +2148,7 @@ private struct PageListView: View {
             .padding(.vertical, 14)
         }
         .navigationTitle(navigationTitle)
-        .background(Color(red: 0.986, green: 0.987, blue: 0.989))
+        .background(EditorDesignTokens.Colors.appBackground.color)
     }
 
     @ViewBuilder
@@ -2360,7 +2449,7 @@ private struct CompactPageListView: View {
         }
         .navigationTitle("页面")
         .scrollContentBackground(.hidden)
-        .background(Color.white)
+        .background(EditorDesignTokens.Colors.editorBackground.color)
     }
 
     private func pages(in notebook: NotebookSummary) -> [PageSummary] {
@@ -2803,7 +2892,7 @@ private struct PageRow: View {
     private var richPreviewBody: some View {
         HStack(alignment: .top, spacing: 0) {
             RoundedRectangle(cornerRadius: 2)
-                .fill(isSelected ? Color.red.opacity(0.72) : Color.clear)
+                .fill(isSelected ? EditorDesignTokens.Colors.accent.color.opacity(0.72) : Color.clear)
                 .frame(width: 4)
                 .padding(.vertical, 8)
 
@@ -2880,10 +2969,10 @@ private struct PageRow: View {
             ForEach(tagNames, id: \.self) { tagName in
                 Text(tagName)
                     .font(.caption2.weight(.medium))
-                    .foregroundStyle(Color(red: 0.45, green: 0.28, blue: 0.70))
+                    .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color(red: 0.45, green: 0.28, blue: 0.70).opacity(0.10))
+                    .background(EditorDesignTokens.Colors.border.color.opacity(0.42))
                     .clipShape(Capsule())
             }
         }
@@ -3112,7 +3201,8 @@ private struct EditorCanvasView: View {
                 HStack(alignment: .center, spacing: 12) {
                     TextField("未命名", text: pageTitleBinding)
                         .textFieldStyle(.plain)
-                        .font(.largeTitle.weight(.semibold))
+                        .font(.system(size: EditorDesignTokens.Typography.documentTitleSize, weight: .semibold))
+                        .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
                         .padding(.leading, CGFloat(EditorBlockChrome.actionColumnWidth + EditorBlockChrome.actionColumnSpacing + 4))
                         .disabled(page == nil)
                         .accessibilityIdentifier("editor.page-title")
@@ -3149,10 +3239,10 @@ private struct EditorCanvasView: View {
                         ForEach(pageTagNames, id: \.self) { tagName in
                             Text(tagName)
                                 .font(.caption.weight(.medium))
-                                .foregroundStyle(Color(red: 0.45, green: 0.28, blue: 0.70))
+                                .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 3)
-                                .background(Color(red: 0.45, green: 0.28, blue: 0.70).opacity(0.10))
+                                .background(EditorDesignTokens.Colors.border.color.opacity(0.42))
                                 .clipShape(Capsule())
                         }
                     }
@@ -3413,7 +3503,7 @@ private struct EditorCanvasView: View {
                     }
                     .accessibilityIdentifier("editor.canvas-edit-region")
             }
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: CGFloat(EditorDesignTokens.Layout.editorMaxWidth), alignment: .leading)
             .padding(.horizontal, 40)
             .padding(.vertical, 36)
         }
@@ -3427,7 +3517,7 @@ private struct EditorCanvasView: View {
             scrollMetricsDebugProbe
         }
 #endif
-        .background(Color.white)
+        .background(EditorDesignTokens.Colors.editorBackground.color)
 #if os(iOS)
         .safeAreaInset(edge: .bottom) {
             if !editorSession.selectedBlockIDs.isEmpty {
@@ -5561,20 +5651,20 @@ private struct BlockRowView: View {
     }
 
     private var rowBackground: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
             .fill(rowBackgroundColor)
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(isBlockSelected ? Color.accentColor.opacity(0.28) : Color.clear, lineWidth: 1)
+                RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
+                    .stroke(isBlockSelected ? EditorDesignTokens.Colors.accent.color.opacity(0.28) : Color.clear, lineWidth: 1)
             )
     }
 
     private var rowBackgroundColor: Color {
         if isBlockSelected {
-            return Color.accentColor.opacity(0.08)
+            return EditorDesignTokens.Colors.accent.color.opacity(0.08)
         }
         if isRowActive {
-            return Color.secondary.opacity(0.045)
+            return EditorDesignTokens.Colors.border.color.opacity(0.32)
         }
         return Color.clear
     }
@@ -6347,7 +6437,9 @@ private struct BlockDropIndicator: View {
     }
 
     private var indicatorColor: Color {
-        placement == .childAfter ? Color.accentColor.opacity(0.78) : Color.accentColor.opacity(0.58)
+        placement == .childAfter
+            ? EditorDesignTokens.Colors.accent.color.opacity(0.78)
+            : EditorDesignTokens.Colors.accent.color.opacity(0.58)
     }
 
     private var accessibilityLabel: String {
@@ -6390,7 +6482,12 @@ private struct DragPreviewBlock: View {
                     .stroke(Color.primary.opacity(0.08), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .shadow(color: Color.black.opacity(0.13), radius: 12, x: 0, y: 7)
+            .shadow(
+                color: EditorDesignTokens.Shadows.popoverSmall.swiftUIColor,
+                radius: CGFloat(EditorDesignTokens.Shadows.popoverSmall.radius),
+                x: CGFloat(EditorDesignTokens.Shadows.popoverSmall.x),
+                y: CGFloat(EditorDesignTokens.Shadows.popoverSmall.y)
+            )
         }
         .frame(width: 330, alignment: .leading)
         .offset(x: 12, y: 8)
@@ -6419,7 +6516,7 @@ private struct SlashCommandMenu: View {
                             HStack(spacing: 9) {
                                 Image(systemName: command.type.editorMenuSystemImage)
                                     .font(.callout)
-                                    .foregroundStyle(index == selectedIndex ? Color.accentColor : .secondary)
+                                    .foregroundStyle(index == selectedIndex ? EditorDesignTokens.Colors.accent.color : .secondary)
                                     .frame(width: 18)
 
                                 VStack(alignment: .leading, spacing: 1) {
@@ -6438,7 +6535,7 @@ private struct SlashCommandMenu: View {
                             .padding(.vertical, 7)
                             .background(
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(index == selectedIndex ? Color.accentColor.opacity(0.08) : Color.clear)
+                                    .fill(index == selectedIndex ? EditorDesignTokens.Colors.accent.color.opacity(0.08) : Color.clear)
                             )
                             .contentShape(Rectangle())
                         }
@@ -6466,13 +6563,24 @@ private struct SlashCommandMenu: View {
             }
         }
         .frame(width: 260, alignment: .leading)
-        .background(Color.white)
+        .background(EditorDesignTokens.Colors.editorBackground.color)
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
+                .stroke(EditorDesignTokens.Colors.border.color, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 6)
+        .shadow(
+            color: EditorDesignTokens.Shadows.popoverLarge.swiftUIColor,
+            radius: CGFloat(EditorDesignTokens.Shadows.popoverLarge.radius),
+            x: CGFloat(EditorDesignTokens.Shadows.popoverLarge.x),
+            y: CGFloat(EditorDesignTokens.Shadows.popoverLarge.y)
+        )
+        .shadow(
+            color: EditorDesignTokens.Shadows.popoverSmall.swiftUIColor,
+            radius: CGFloat(EditorDesignTokens.Shadows.popoverSmall.radius),
+            x: CGFloat(EditorDesignTokens.Shadows.popoverSmall.x),
+            y: CGFloat(EditorDesignTokens.Shadows.popoverSmall.y)
+        )
         .accessibilityValue("可滚动，\(commands.count) 项")
         .accessibilityIdentifier("editor.slash-command-menu")
     }

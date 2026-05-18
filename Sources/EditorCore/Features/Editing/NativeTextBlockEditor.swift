@@ -703,7 +703,7 @@ struct NativeTextBlockEditor: View {
         case .codeBlock, .table:
             return .system(.body, design: .monospaced)
         default:
-            return .body
+            return .system(size: EditorDesignTokens.Typography.bodySize)
         }
     }
 
@@ -961,7 +961,8 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.delegate = context.coordinator
         context.coordinator.applyModelText(text, to: textView)
         textView.font = nsFont
-        textView.textColor = .labelColor
+        textView.textColor = EditorDesignTokens.Colors.primaryText.nsColor
+        textView.defaultParagraphStyle = paragraphStyle
         textView.backgroundColor = .clear
         textView.drawsBackground = false
         textView.isRichText = false
@@ -1057,6 +1058,8 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             context.coordinator.applyModelText(text, to: textView)
         }
         textView.font = nsFont
+        textView.textColor = EditorDesignTokens.Colors.primaryText.nsColor
+        textView.defaultParagraphStyle = paragraphStyle
         configureLineWrapping(textView: textView)
         if NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.hasMarkedText()) {
             context.coordinator.applyInlineMarkdownStyles(to: textView)
@@ -1085,8 +1088,14 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         case .codeBlock, .table:
             return .monospacedSystemFont(ofSize: 14, weight: .regular)
         default:
-            return .systemFont(ofSize: 15, weight: .regular)
+            return .systemFont(ofSize: EditorDesignTokens.Typography.bodySize, weight: .regular)
         }
+    }
+
+    private var paragraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = CGFloat(EditorDesignTokens.Typography.bodyLineHeightMultiple)
+        return style
     }
 
     @MainActor
@@ -1147,7 +1156,8 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         private var baseTextAttributes: [NSAttributedString.Key: Any] {
             [
                 .font: parent.nsFont,
-                .foregroundColor: NSColor.labelColor
+                .foregroundColor: EditorDesignTokens.Colors.primaryText.nsColor,
+                .paragraphStyle: parent.paragraphStyle
             ]
         }
 
@@ -1746,7 +1756,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.delegate = context.coordinator
         context.coordinator.applyModelText(text, to: textView)
         textView.font = uiFont
-        textView.textColor = .label
+        textView.textColor = EditorDesignTokens.Colors.primaryText.uiColor
+        textView.typingAttributes = baseTextAttributes
         textView.backgroundColor = .clear
         textView.isScrollEnabled = false
         textView.textContainerInset = .zero
@@ -1829,6 +1840,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             context.coordinator.applyModelText(text, to: textView)
         }
         textView.font = uiFont
+        textView.textColor = EditorDesignTokens.Colors.primaryText.uiColor
+        textView.typingAttributes = baseTextAttributes
         configureLineWrapping(textView: textView)
         if NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.markedTextRange != nil) {
             context.coordinator.applyInlineMarkdownStyles(to: textView)
@@ -1852,8 +1865,22 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         case .codeBlock, .table:
             return .monospacedSystemFont(ofSize: 15, weight: .regular)
         default:
-            return .preferredFont(forTextStyle: .body)
+            return .systemFont(ofSize: EditorDesignTokens.Typography.bodySize, weight: .regular)
         }
+    }
+
+    private var paragraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = CGFloat(EditorDesignTokens.Typography.bodyLineHeightMultiple)
+        return style
+    }
+
+    private var baseTextAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: uiFont,
+            .foregroundColor: EditorDesignTokens.Colors.primaryText.uiColor,
+            .paragraphStyle: paragraphStyle
+        ]
     }
 
     @MainActor
@@ -1911,7 +1938,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         private var baseTextAttributes: [NSAttributedString.Key: Any] {
             [
                 .font: parent.uiFont,
-                .foregroundColor: UIColor.label
+                .foregroundColor: EditorDesignTokens.Colors.primaryText.uiColor,
+                .paragraphStyle: parent.paragraphStyle
             ]
         }
 

@@ -1,6 +1,33 @@
 import XCTest
 
 final class EditorBlockChromeTests: XCTestCase {
+    func testCraftThingsDesignTokensMatchDesktopEditorialPalette() {
+        assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF3, green: 0xF1, blue: 0xED)
+        assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF7, green: 0xF4, blue: 0xEF)
+        assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
+        assertColor(EditorDesignTokens.Colors.primaryText, red: 0x24, green: 0x24, blue: 0x24)
+        assertColor(EditorDesignTokens.Colors.secondaryText, red: 0x5A, green: 0x58, blue: 0x55)
+        assertColor(EditorDesignTokens.Colors.tertiaryText, red: 0x76, green: 0x73, blue: 0x6E)
+        assertColor(EditorDesignTokens.Colors.border, red: 0xE8, green: 0xE4, blue: 0xDE)
+        assertColor(EditorDesignTokens.Colors.accent, red: 0x2F, green: 0x7D, blue: 0xFA)
+    }
+
+    func testCraftThingsDesignTokensKeepDocumentTypographyInRange() {
+        XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 36)
+        XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 17)
+        XCTAssertEqual(EditorDesignTokens.Typography.bodyLineHeightMultiple, 1.68)
+        XCTAssertEqual(EditorDesignTokens.Layout.editorMaxWidth, 740)
+    }
+
+    func testPopoverShadowTokensStayLightAndWarmNeutral() {
+        XCTAssertEqual(EditorDesignTokens.Shadows.popoverLarge.opacity, 0.10)
+        XCTAssertEqual(EditorDesignTokens.Shadows.popoverLarge.radius, 48)
+        XCTAssertEqual(EditorDesignTokens.Shadows.popoverLarge.y, 16)
+        XCTAssertEqual(EditorDesignTokens.Shadows.popoverSmall.opacity, 0.06)
+        XCTAssertEqual(EditorDesignTokens.Shadows.popoverSmall.radius, 8)
+        XCTAssertEqual(EditorDesignTokens.Shadows.popoverSmall.y, 2)
+    }
+
     func testCraftQuietChromeKeepsListRowsUnboxedAndCompact() {
         XCTAssertEqual(EditorBlockChrome.blockSpacing, 0)
         XCTAssertEqual(EditorBlockChrome.rowVerticalPadding, 0)
@@ -16,12 +43,10 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.trailingInsertHitHeight, 64)
     }
 
-    func testCompactChromeBackgroundStaysNeutralAcrossMobileLists() {
-        XCTAssertLessThanOrEqual(
-            CompactChrome.backgroundYellowBias,
-            0.003,
-            "Compact iOS home and collection lists should not drift back to the old warm/yellow surface"
-        )
+    func testCompactChromeUsesWarmAppBackgroundTokenAcrossMobileLists() {
+        XCTAssertEqual(CompactChrome.backgroundRed, EditorDesignTokens.Colors.appBackground.red)
+        XCTAssertEqual(CompactChrome.backgroundGreen, EditorDesignTokens.Colors.appBackground.green)
+        XCTAssertEqual(CompactChrome.backgroundBlue, EditorDesignTokens.Colors.appBackground.blue)
     }
 
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {
@@ -482,16 +507,25 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(SidebarChrome.selectedStrokeOpacity, 0.025)
         XCTAssertEqual(SidebarChrome.headerBadgeSize, 30)
         XCTAssertEqual(SidebarChrome.headerBadgeCornerRadius, 8)
-        XCTAssertLessThanOrEqual(
-            SidebarChrome.backgroundYellowBias,
-            0.003,
-            "Sidebar background should stay neutral instead of drifting back to the old warm/yellow rail"
-        )
-        XCTAssertLessThanOrEqual(
-            SidebarChrome.selectedFillYellowBias,
-            0.006,
-            "Selected rows should read as neutral gray, not beige"
-        )
+        XCTAssertEqual(SidebarChrome.backgroundRed, EditorDesignTokens.Colors.sidebarBackground.red)
+        XCTAssertEqual(SidebarChrome.backgroundGreen, EditorDesignTokens.Colors.sidebarBackground.green)
+        XCTAssertEqual(SidebarChrome.backgroundBlue, EditorDesignTokens.Colors.sidebarBackground.blue)
+        XCTAssertEqual(SidebarChrome.selectedFillRed, EditorDesignTokens.Colors.border.red)
+        XCTAssertEqual(SidebarChrome.selectedFillGreen, EditorDesignTokens.Colors.border.green)
+        XCTAssertEqual(SidebarChrome.selectedFillBlue, EditorDesignTokens.Colors.border.blue)
+    }
+
+    private func assertColor(
+        _ token: EditorColorToken,
+        red: Int,
+        green: Int,
+        blue: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(token.red, Double(red) / 255, accuracy: 0.0001, file: file, line: line)
+        XCTAssertEqual(token.green, Double(green) / 255, accuracy: 0.0001, file: file, line: line)
+        XCTAssertEqual(token.blue, Double(blue) / 255, accuracy: 0.0001, file: file, line: line)
     }
 
     func testCompactLibraryNavigationRoutesRowsByCollectionAndIncludesDiary() {
