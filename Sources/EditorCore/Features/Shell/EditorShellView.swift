@@ -793,6 +793,17 @@ enum MobileBlockSwipeActionResolver {
     }
 }
 
+enum MobileBlockRowSwipeGestureAttachment: Equatable, Sendable {
+    case nativeTextEditorOnly
+    case rowHighPriority
+}
+
+enum MobileBlockRowSwipeGestureAttachmentResolver {
+    static func attachment(usesNativeTextEditor: Bool) -> MobileBlockRowSwipeGestureAttachment {
+        usesNativeTextEditor ? .nativeTextEditorOnly : .rowHighPriority
+    }
+}
+
 enum MobileBlockSelectionReducer {
     static func selectionAfterSelecting(
         blockID: String,
@@ -5243,6 +5254,28 @@ struct AttachmentBlockChromeDescriptor: Equatable, Sendable {
     }
 }
 
+#if os(iOS)
+private struct MobileBlockRowSwipeGestureModifier: ViewModifier {
+    let attachment: MobileBlockRowSwipeGestureAttachment
+    let onSwipe: (CGSize) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        switch attachment {
+        case .nativeTextEditorOnly:
+            content
+        case .rowHighPriority:
+            content.highPriorityGesture(
+                DragGesture(minimumDistance: 24, coordinateSpace: .local)
+                    .onEnded { value in
+                        onSwipe(value.translation)
+                    }
+            )
+        }
+    }
+}
+#endif
+
 private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
@@ -5414,7 +5447,16 @@ private struct BlockRowView: View {
             }
         )
 #if os(iOS)
-        .simultaneousGesture(mobileHorizontalSwipeGesture)
+        .modifier(
+            MobileBlockRowSwipeGestureModifier(
+                attachment: MobileBlockRowSwipeGestureAttachmentResolver.attachment(
+                    usesNativeTextEditor: usesNativeTextEditor
+                ),
+                onSwipe: { translation in
+                    handleMobileHorizontalSwipe(translation: translation)
+                }
+            )
+        )
 #endif
 #if os(macOS)
         .onHover { hovering in

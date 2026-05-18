@@ -137,6 +137,17 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testMobileRowSwipeGestureAttachmentKeepsTextAndStructuredBlocksSeparate() {
+        XCTAssertEqual(
+            MobileBlockRowSwipeGestureAttachmentResolver.attachment(usesNativeTextEditor: true),
+            .nativeTextEditorOnly
+        )
+        XCTAssertEqual(
+            MobileBlockRowSwipeGestureAttachmentResolver.attachment(usesNativeTextEditor: false),
+            .rowHighPriority
+        )
+    }
+
     func testMobileBlockSelectionReducerAddsAndTogglesBlocks() {
         XCTAssertEqual(
             MobileBlockSelectionReducer.selectionAfterSelecting(
