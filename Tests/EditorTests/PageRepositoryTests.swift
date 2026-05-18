@@ -871,6 +871,81 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(migratedChildBlock.textPlain, "迁移到子页面")
     }
 
+    func testConvertHeadingBlockToPageKeepsSourceBlockTypography() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlock(blockID: blockID, type: .heading2, text: "章节标题")
+
+        let createdPage = try repository.convertTextBlockToPage(blockID: blockID)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let sourceBlock = try XCTUnwrap(reloadedSnapshot.blocks.first { $0.id == blockID })
+
+        XCTAssertEqual(createdPage.title, "章节标题")
+        XCTAssertEqual(sourceBlock.type, .heading2)
+        XCTAssertEqual(sourceBlock.textPlain, "章节标题")
+        XCTAssertEqual(sourceBlock.pageReferenceTargetPageID, createdPage.id)
+        XCTAssertEqual(
+            reloadedSnapshot.pageParentLinks,
+            [
+                PageParentLink(
+                    parentPageID: sourcePageID,
+                    childPageID: createdPage.id,
+                    sourceBlockID: blockID,
+                    orderKey: "000001"
+                )
+            ]
+        )
+    }
+
+    func testConvertListBlockToPageKeepsSourceBlockListType() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlock = try repository.appendBlock(
+            pageID: sourcePageID,
+            type: .orderedListItem,
+            text: "第一项"
+        )
+
+        let createdPage = try repository.convertTextBlockToPage(blockID: sourceBlock.id)
+        let reloadedSourceBlock = try XCTUnwrap(
+            repository.loadWorkspaceSnapshot().blocks.first { $0.id == sourceBlock.id }
+        )
+
+        XCTAssertEqual(createdPage.title, "第一项")
+        XCTAssertEqual(reloadedSourceBlock.type, .orderedListItem)
+        XCTAssertEqual(reloadedSourceBlock.textPlain, "第一项")
+        XCTAssertEqual(reloadedSourceBlock.pageReferenceTargetPageID, createdPage.id)
+    }
+
+    func testEditingConvertedHeadingKeepsChildPageTarget() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlock(blockID: blockID, type: .heading2, text: "章节标题")
+        let createdPage = try repository.convertTextBlockToPage(blockID: blockID)
+
+        try repository.updateBlockText(blockID: blockID, text: "章节标题更新")
+        let reloadedSourceBlock = try XCTUnwrap(
+            repository.loadWorkspaceSnapshot().blocks.first { $0.id == blockID }
+        )
+
+        XCTAssertEqual(reloadedSourceBlock.type, .heading2)
+        XCTAssertEqual(reloadedSourceBlock.textPlain, "章节标题更新")
+        XCTAssertEqual(reloadedSourceBlock.pageReferenceTargetPageID, createdPage.id)
+    }
+
     func testAppendBlockReferenceBlockCreatesTypedBlockAndBlockBacklink() throws {
         let database = try migratedDatabase()
         defer { database.close() }

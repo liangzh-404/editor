@@ -767,6 +767,7 @@ final class PageRepository {
         tableRows explicitTableRows: [[String]]? = nil
     ) throws {
         let now = Self.timestamp()
+        let referenceTargets = try currentReferenceTargets(blockID: blockID)
         let taskItemIsCompleted: Bool
         if type == .taskItem {
             if let explicitTaskItemIsCompleted {
@@ -803,6 +804,8 @@ final class PageRepository {
             taskItemIsCompleted: taskItemIsCompleted,
             toggleIsExpanded: toggleIsExpanded,
             codeBlockLineWrapping: codeBlockLineWrapping,
+            pageReferenceTargetPageID: referenceTargets.pageID,
+            blockReferenceTargetBlockID: referenceTargets.blockID,
             tableRows: explicitTableRows
         )
 
@@ -833,7 +836,9 @@ final class PageRepository {
         )
         try BacklinkRepository(database: database).rebuildLinksForBlock(
             blockID: blockID,
-            text: text
+            text: text,
+            pageReferenceTargetPageID: referenceTargets.pageID,
+            blockReferenceTargetBlockID: referenceTargets.blockID
         )
     }
 
@@ -1225,9 +1230,12 @@ final class PageRepository {
         let newPageID = "page-\(UUID().uuidString.lowercased())"
         let initialBlockID = "block-\(UUID().uuidString.lowercased())"
         let orderKey = try nextPageOrderKey(workspaceID: workspaceID, notebookID: notebookID)
+        let shouldPreserveSourceType = type != .paragraph
+        let sourceReferenceType = shouldPreserveSourceType ? type : BlockType.pageReference
+        let sourceReferenceText = shouldPreserveSourceType ? sourceText : title
         let pageReferencePayload = try blockPayloadJSON(
-            type: .pageReference,
-            text: title,
+            type: sourceReferenceType,
+            text: sourceReferenceText,
             pageReferenceTargetPageID: newPageID
         )
 
@@ -1293,9 +1301,9 @@ final class PageRepository {
                 WHERE id = ? AND is_deleted = 0
                 """,
                 bindings: [
-                    .text(BlockType.pageReference.rawValue),
+                    .text(sourceReferenceType.rawValue),
                     .text(pageReferencePayload),
-                    .text(title),
+                    .text(sourceReferenceText),
                     .text("local"),
                     .text(now),
                     .text(blockID)
@@ -1336,7 +1344,7 @@ final class PageRepository {
             try syncRepository.enqueue(entityType: "block", entityID: blockID, changeType: "update")
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: blockID,
-                text: title,
+                text: sourceReferenceText,
                 pageReferenceTargetPageID: newPageID
             )
         }
@@ -2291,7 +2299,12 @@ final class PageRepository {
                 "text": text
             ]
         default:
-            payload = ["text": text]
+            var defaultPayload: [String: Any] = ["text": text]
+            if let pageReferenceTargetPageID,
+               !pageReferenceTargetPageID.isEmpty {
+                defaultPayload["target_page_id"] = pageReferenceTargetPageID
+            }
+            payload = defaultPayload
         }
 
         let data = try JSONSerialization.data(
@@ -2342,6 +2355,26 @@ final class PageRepository {
         }
 
         return payload["attachment_id"] as? String
+    }
+
+    private func currentReferenceTargets(blockID: String) throws -> (pageID: String?, blockID: String?) {
+        guard let row = try database.query(
+            """
+            SELECT payload_json
+            FROM blocks
+            WHERE id = ? AND is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        ).first else {
+            return (nil, nil)
+        }
+
+        let payloadJSON = row["payload_json"] ?? ""
+        return (
+            Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
+            Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
+        )
     }
 
     private func currentTaskItemCompletion(blockID: String) throws -> Bool? {

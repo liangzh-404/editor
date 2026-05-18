@@ -63,9 +63,9 @@ enum EditorDesignTokens {
     }
 
     enum Typography {
-        static let documentTitleSize: Double = 36
-        static let bodySize: Double = 17
-        static let bodyLineHeightMultiple: Double = 1.68
+        static let documentTitleSize: Double = 34
+        static let bodySize: Double = 16
+        static let bodyLineHeightMultiple: Double = 1.64
     }
 
     enum Layout {
@@ -587,7 +587,7 @@ private struct CompactHomeView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
-        ScrollView {
+        ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 recentSection
@@ -781,8 +781,8 @@ enum EditorBlockChrome {
     static let listVerticalPadding: Double = 0
     static let listHorizontalPadding: Double = 0
     static let listBackgroundOpacity: Double = 0
-    static let listMarkerWidth: Double = 18
-    static let listTextSpacing: Double = 6
+    static let listMarkerWidth: Double = 22
+    static let listTextSpacing: Double = 4
     static let actionColumnWidth: Double = 18
     static let actionColumnSpacing: Double = 5
     static let dragHandleWidth: Double = 18
@@ -814,20 +814,20 @@ enum TableBlockChrome {
     static let cornerRadius: Double = 8
     static let gridLineOpacity: Double = 0.038
     static let outerBorderOpacity: Double = 0.080
-    static let primaryControlDiameter: Double = 14
-    static let insertControlVisibleDiameter: Double = 2
-    static let insertControlExpandedDiameter: Double = 9
-    static let insertControlIconFontSize: Double = 6
-    static let insertControlEdgeOffset: Double = 2
+    static let primaryControlDiameter: Double = 18
+    static let insertControlVisibleDiameter: Double = 4
+    static let insertControlExpandedDiameter: Double = 11
+    static let insertControlIconFontSize: Double = 7
+    static let insertControlEdgeOffset: Double = 0
     static let insertControlIdleOpacity: Double = 0.42
     static let insertControlHoverOpacity: Double = 1
     static let selectorWidth: Double = 8
     static let selectorHeight: Double = 8
     static let selectorIndicatorOpacity: Double = 0
     static let selectorHitOpacity: Double = 0.0001
-    static let selectorSelectedIndicatorOpacity: Double = 0.50
-    static let selectorSelectedIndicatorThickness: Double = 2
-    static let selectorSelectedIndicatorInset: Double = 8
+    static let selectorSelectedIndicatorOpacity: Double = 0.38
+    static let selectorSelectedIndicatorThickness: Double = 1.5
+    static let selectorSelectedIndicatorInset: Double = 10
 }
 
 enum PastedAttachmentAnchorResolver {
@@ -889,6 +889,7 @@ enum IOSEditorKeyboardShortcutActionResolver {
 enum IOSTableBlockKeyboardActionResolver {
     static let deleteBackwardInput = "\u{8}"
     static let deleteForwardInput = "\u{7F}"
+    static let escapeInput = "\u{1B}"
 
     static func action(
         input: String?,
@@ -902,6 +903,8 @@ enum IOSTableBlockKeyboardActionResolver {
         switch input {
         case deleteBackwardInput, deleteForwardInput:
             return .deleteSelection
+        case escapeInput:
+            return .cancelSelection
         case IOSEditorKeyboardShortcutActionResolver.upArrowInput:
             return .moveFocus(.previous)
         case IOSEditorKeyboardShortcutActionResolver.downArrowInput:
@@ -1176,7 +1179,7 @@ enum BlockDropTargetLifecycleReducer {
 }
 
 enum BlockDropPlacementResolver {
-    static let indentationThreshold: CGFloat = 180
+    static let indentationThreshold: CGFloat = 112
     static let beforeBandHeight: CGFloat = 10
 
     static func placement(location: CGPoint, rowSize: CGSize) -> BlockDropPlacement {
@@ -1956,7 +1959,7 @@ private struct WorkspaceSidebar: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
-        ScrollView {
+        ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.sectionSpacing)) {
                 sidebarHeader
                 newDocumentButton
@@ -2185,7 +2188,7 @@ private struct PageListView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
-        ScrollView {
+        ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 6) {
                 switch viewModel.selectedCollection {
                 case .recent:
@@ -2565,7 +2568,7 @@ private struct CompactCollectionPageListView: View {
     let collection: WorkspaceCollection
 
     var body: some View {
-        ScrollView {
+        ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 10) {
                 ForEach(items) { item in
                     NavigationLink(value: CompactRoute.page(item.page.id)) {
@@ -3267,10 +3270,11 @@ private struct EditorCanvasView: View {
     @State private var pendingFocusRequest: BlockFocusRequest?
     @State private var activeBlockDropTarget: BlockDropTarget?
     @State private var scrollMetricsTracker = EditorCanvasScrollMetricsTracker(pageID: nil, blockCount: 0)
+    @State private var isAuxiliaryRailCollapsed = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 24) {
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
                 HStack(alignment: .center, spacing: 12) {
                     TextField("未命名", text: pageTitleBinding)
@@ -3580,18 +3584,27 @@ private struct EditorCanvasView: View {
             }
 #endif
 
-            if shouldShowAuxiliaryRail {
-                EditorAuxiliaryRail(
-                    outlineItems: outlineItems,
-                    backlinks: backlinks,
-                    externalLinks: externalLinks,
-                    onSelectOutlineItem: onSelectOutlineItem,
-                    onSelectBacklink: onSelectBacklink
-                )
-                .frame(width: CGFloat(EditorDesignTokens.Layout.auxiliaryRailWidth), alignment: .topLeading)
-                .padding(.top, 72)
-                .padding(.trailing, 28)
-                .accessibilityIdentifier("editor.auxiliary-rail")
+            if shouldOfferAuxiliaryRail {
+                if isAuxiliaryRailCollapsed {
+                    auxiliaryRailExpandButton
+                        .padding(.top, 72)
+                        .padding(.trailing, 28)
+                } else {
+                    EditorAuxiliaryRail(
+                        outlineItems: outlineItems,
+                        backlinks: backlinks,
+                        externalLinks: externalLinks,
+                        onSelectOutlineItem: onSelectOutlineItem,
+                        onSelectBacklink: onSelectBacklink,
+                        onCollapse: {
+                            isAuxiliaryRailCollapsed = true
+                        }
+                    )
+                    .frame(width: CGFloat(EditorDesignTokens.Layout.auxiliaryRailWidth), alignment: .topLeading)
+                    .padding(.top, 72)
+                    .padding(.trailing, 28)
+                    .accessibilityIdentifier("editor.auxiliary-rail")
+                }
             }
         }
         .background(EditorDesignTokens.Colors.editorBackground.color)
@@ -3778,6 +3791,26 @@ private struct EditorCanvasView: View {
         showsAuxiliaryRail
             && displayMode.showsAuxiliaryRail
             && (!outlineItems.isEmpty || !backlinks.isEmpty || !externalLinks.isEmpty)
+    }
+
+    private var shouldOfferAuxiliaryRail: Bool {
+        shouldShowAuxiliaryRail
+    }
+
+    private var auxiliaryRailExpandButton: some View {
+        Button {
+            isAuxiliaryRailCollapsed = false
+        } label: {
+            Image(systemName: "sidebar.right")
+                .font(.callout)
+                .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("展开右侧栏")
+        .accessibilityLabel("展开右侧栏")
+        .accessibilityIdentifier("editor.auxiliary-rail.expand")
     }
 
     private var pageActionsMenu: some View {
@@ -4297,6 +4330,8 @@ private struct EditorCanvasView: View {
     }
 
     private func focusCanvas() {
+        editorSession.clearBlockSelection()
+        activeBlockDropTarget = nil
         guard let blockID = onFocusCanvas() else {
             return
         }
@@ -4796,9 +4831,26 @@ private struct EditorAuxiliaryRail: View {
     let externalLinks: [ExternalLink]
     let onSelectOutlineItem: (PageOutlineItem) -> Void
     let onSelectBacklink: (Backlink) -> Void
+    let onCollapse: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Spacer()
+                Button(action: onCollapse) {
+                    Image(systemName: "sidebar.right")
+                        .font(.callout)
+                        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                        .frame(width: 28, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("收起右侧栏")
+                .accessibilityLabel("收起右侧栏")
+                .accessibilityIdentifier("editor.auxiliary-rail.collapse")
+            }
+            .padding(.bottom, -4)
+
             if !outlineItems.isEmpty {
                 OutlinePanel(outlineItems: outlineItems, onSelectOutlineItem: onSelectOutlineItem)
             }
@@ -5350,20 +5402,20 @@ private struct ListMarkerGlyph: View {
         Group {
             if descriptor.marker.hasSuffix(".") {
                 Text(descriptor.marker)
-                    .font(.system(size: 15, weight: .regular))
+                    .font(.system(size: 16, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(Color.primary)
             } else if isNested {
                 Circle()
                     .stroke(Color.primary, lineWidth: 1.7)
-                    .frame(width: 5.6, height: 5.6)
+                    .frame(width: 5.8, height: 5.8)
             } else {
                 Circle()
                     .fill(Color.primary)
-                    .frame(width: 5.6, height: 5.6)
+                    .frame(width: 5.8, height: 5.8)
             }
         }
-        .frame(width: CGFloat(EditorBlockChrome.listMarkerWidth), height: 21, alignment: .leading)
+        .frame(width: CGFloat(EditorBlockChrome.listMarkerWidth), height: 24, alignment: .trailing)
         .accessibilityHidden(true)
     }
 }
@@ -5736,6 +5788,7 @@ private struct BlockRowView: View {
                 blockID: block.id,
                 text: block.textPlain,
                 rows: block.tableRows,
+                focusedBlockID: editorSession.focusedBlockID,
                 onRowsChange: onTableRowsChange,
                 onMoveFocusByKeyboard: onMoveFocusByKeyboard
             )
@@ -5785,6 +5838,9 @@ private struct BlockRowView: View {
     }
 
     private var rowBackgroundColor: Color {
+        if block.type == .table {
+            return Color.clear
+        }
         if isBlockSelected {
             return EditorDesignTokens.Colors.accent.color.opacity(0.08)
         }
@@ -5999,7 +6055,7 @@ private struct BlockRowView: View {
             let descriptor = ListBlockChromeDescriptor(block: block, ordinal: listOrdinal)
             HStack(alignment: .top, spacing: CGFloat(EditorBlockChrome.listTextSpacing)) {
                 ListMarkerGlyph(descriptor: descriptor, isNested: block.parentBlockID != nil)
-                    .padding(.top, 2)
+                    .padding(.top, 3)
 
                 nativeTextBlockEditor
             }
@@ -6360,6 +6416,10 @@ private struct BlockRowView: View {
 
     private func requestRowFocus() {
         onClearDropTarget()
+        editorSession.clearBlockSelection()
+        guard block.type != .table else {
+            return
+        }
         guard usesNativeTextEditor else {
             onSelectCurrentBlock()
             return
@@ -6537,12 +6597,12 @@ private struct BlockDropIndicator: View {
         HStack(spacing: 7) {
             Circle()
                 .fill(indicatorColor)
-                .frame(width: 5, height: 5)
+                .frame(width: 4, height: 4)
 
             Capsule()
                 .fill(indicatorColor)
-                .frame(maxWidth: 520)
-                .frame(height: 2)
+                .frame(maxWidth: 420)
+                .frame(height: 1.5)
 
             if placement == .childAfter {
                 Text("缩进一级")
@@ -6563,8 +6623,8 @@ private struct BlockDropIndicator: View {
 
     private var indicatorColor: Color {
         placement == .childAfter
-            ? EditorDesignTokens.Colors.accent.color.opacity(0.78)
-            : EditorDesignTokens.Colors.accent.color.opacity(0.58)
+            ? EditorDesignTokens.Colors.accent.color.opacity(0.62)
+            : EditorDesignTokens.Colors.accent.color.opacity(0.42)
     }
 
     private var accessibilityLabel: String {
@@ -6632,7 +6692,7 @@ private struct SlashCommandMenu: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: true) {
+            ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(commands.enumerated()), id: \.element.id) { index, command in
                         Button {
@@ -6716,6 +6776,7 @@ private struct StructuredTableBlockEditor: View {
     let blockID: String
     let text: String
     let rows: [[String]]
+    let focusedBlockID: String?
     let onRowsChange: ([[String]]) -> Void
     let onMoveFocusByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     @State private var isTableHovered = false
@@ -6784,6 +6845,8 @@ private struct StructuredTableBlockEditor: View {
         .background(
             TableDeleteKeyBridge(isEnabled: !selection.isEmpty) {
                 deleteSelection()
+            } onCancelSelection: {
+                selection = .empty
             } onMoveFocus: { direction in
                 onMoveFocusByKeyboard(direction)
             }
@@ -6793,6 +6856,8 @@ private struct StructuredTableBlockEditor: View {
         .background(
             IOSTableKeyboardShortcutBridge(isEnabled: !selection.isEmpty) {
                 deleteSelection()
+            } onCancelSelection: {
+                selection = .empty
             } onMoveFocus: { direction in
                 onMoveFocusByKeyboard(direction)
             }
@@ -6803,6 +6868,11 @@ private struct StructuredTableBlockEditor: View {
         .accessibilityLabel("表格块，\(tableDimensions)")
         .accessibilityValue(tableDimensions)
         .accessibilityIdentifier("editor.table.\(blockID)")
+        .onChange(of: focusedBlockID) { _, focusedBlockID in
+            if focusedBlockID != blockID {
+                selection = .empty
+            }
+        }
     }
 
     private var editableRows: [[String]] {
@@ -6915,7 +6985,7 @@ private struct StructuredTableBlockEditor: View {
         .overlay {
             if selection.rows.contains(rowIndex) || selection.columns.contains(columnIndex) {
                 RoundedRectangle(cornerRadius: 0)
-                    .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+                    .stroke(Color.accentColor.opacity(0.14), lineWidth: 1)
             }
         }
         .overlay(alignment: .trailing) {
@@ -6940,7 +7010,7 @@ private struct StructuredTableBlockEditor: View {
 
     private func cellBackgroundColor(row rowIndex: Int, column columnIndex: Int) -> Color {
         if selection.rows.contains(rowIndex) || selection.columns.contains(columnIndex) {
-            return Color.accentColor.opacity(0.08)
+            return Color.accentColor.opacity(0.045)
         }
         return rowIndex == 0 ? Color.secondary.opacity(0.012) : Color.white
     }
@@ -7146,12 +7216,14 @@ private struct TableInsertControl: View {
 private struct IOSTableKeyboardShortcutBridge: UIViewRepresentable {
     let isEnabled: Bool
     let onDelete: () -> Void
+    let onCancelSelection: () -> Void
     let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
 
     func makeUIView(context: Context) -> TableKeyCaptureView {
         let view = TableKeyCaptureView(frame: .zero)
         view.isEnabled = isEnabled
         view.onDelete = onDelete
+        view.onCancelSelection = onCancelSelection
         view.onMoveFocus = onMoveFocus
         return view
     }
@@ -7159,6 +7231,7 @@ private struct IOSTableKeyboardShortcutBridge: UIViewRepresentable {
     func updateUIView(_ uiView: TableKeyCaptureView, context: Context) {
         uiView.isEnabled = isEnabled
         uiView.onDelete = onDelete
+        uiView.onCancelSelection = onCancelSelection
         uiView.onMoveFocus = onMoveFocus
         uiView.updateFirstResponderIfNeeded()
     }
@@ -7166,6 +7239,7 @@ private struct IOSTableKeyboardShortcutBridge: UIViewRepresentable {
     final class TableKeyCaptureView: UIView {
         var isEnabled = false
         var onDelete: () -> Void = {}
+        var onCancelSelection: () -> Void = {}
         var onMoveFocus: (BlockKeyboardFocusDirection) -> Bool = { _ in false }
         private var isCapturingKeyboard = false
 
@@ -7198,6 +7272,11 @@ private struct IOSTableKeyboardShortcutBridge: UIViewRepresentable {
                     input: IOSTableBlockKeyboardActionResolver.deleteForwardInput,
                     modifierFlags: [],
                     action: #selector(deleteSelectionCommand)
+                ),
+                UIKeyCommand(
+                    input: IOSTableBlockKeyboardActionResolver.escapeInput,
+                    modifierFlags: [],
+                    action: #selector(cancelSelectionCommand)
                 )
             ]
         }
@@ -7230,6 +7309,10 @@ private struct IOSTableKeyboardShortcutBridge: UIViewRepresentable {
             performShortcut(input: IOSTableBlockKeyboardActionResolver.deleteBackwardInput)
         }
 
+        @objc private func cancelSelectionCommand(_ sender: Any?) {
+            performShortcut(input: IOSTableBlockKeyboardActionResolver.escapeInput)
+        }
+
         private func performShortcut(input: String?) {
             switch IOSTableBlockKeyboardActionResolver.action(
                 input: input,
@@ -7238,6 +7321,8 @@ private struct IOSTableKeyboardShortcutBridge: UIViewRepresentable {
             ) {
             case .deleteSelection:
                 onDelete()
+            case .cancelSelection:
+                onCancelSelection()
             case .moveFocus(let direction):
                 _ = onMoveFocus(direction)
             case nil:
@@ -7313,12 +7398,14 @@ private struct NonEditableBlockKeyboardFocusBridge: NSViewRepresentable {
 private struct TableDeleteKeyBridge: NSViewRepresentable {
     let isEnabled: Bool
     let onDelete: () -> Void
+    let onCancelSelection: () -> Void
     let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
 
     func makeNSView(context: Context) -> TableDeleteKeyCaptureView {
         let view = TableDeleteKeyCaptureView(frame: .zero)
         view.isEnabled = isEnabled
         view.onDelete = onDelete
+        view.onCancelSelection = onCancelSelection
         view.onMoveFocus = onMoveFocus
         return view
     }
@@ -7326,9 +7413,15 @@ private struct TableDeleteKeyBridge: NSViewRepresentable {
     func updateNSView(_ nsView: TableDeleteKeyCaptureView, context: Context) {
         nsView.isEnabled = isEnabled
         nsView.onDelete = onDelete
+        nsView.onCancelSelection = onCancelSelection
         nsView.onMoveFocus = onMoveFocus
 
         guard isEnabled else {
+            DispatchQueue.main.async {
+                if nsView.window?.firstResponder === nsView {
+                    nsView.window?.makeFirstResponder(nil)
+                }
+            }
             return
         }
 
@@ -7343,10 +7436,12 @@ private struct TableDeleteKeyBridge: NSViewRepresentable {
     final class TableDeleteKeyCaptureView: NSView {
         var isEnabled = false
         var onDelete: () -> Void
+        var onCancelSelection: () -> Void
         var onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
 
         override init(frame frameRect: NSRect) {
             self.onDelete = {}
+            self.onCancelSelection = {}
             self.onMoveFocus = { _ in false }
             super.init(frame: frameRect)
         }
@@ -7366,6 +7461,11 @@ private struct TableDeleteKeyBridge: NSViewRepresentable {
                 modifiers: event.blockKeyboardShortcutModifiers,
                 hasSelection: isEnabled
             ) else {
+                if isEnabled,
+                   event.blockKeyboardShortcutModifiers.isEmpty,
+                   !(event.charactersIgnoringModifiers ?? "").isEmpty {
+                    onCancelSelection()
+                }
                 nextResponder?.keyDown(with: event)
                 return
             }
@@ -7373,6 +7473,8 @@ private struct TableDeleteKeyBridge: NSViewRepresentable {
             switch action {
             case .deleteSelection:
                 onDelete()
+            case .cancelSelection:
+                onCancelSelection()
             case .moveFocus(let direction):
                 if !onMoveFocus(direction) {
                     nextResponder?.keyDown(with: event)

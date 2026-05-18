@@ -13,9 +13,9 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testCraftThingsDesignTokensKeepDocumentTypographyInRange() {
-        XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 36)
-        XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 17)
-        XCTAssertEqual(EditorDesignTokens.Typography.bodyLineHeightMultiple, 1.68)
+        XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 34)
+        XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 16)
+        XCTAssertEqual(EditorDesignTokens.Typography.bodyLineHeightMultiple, 1.64)
         XCTAssertEqual(EditorDesignTokens.Layout.editorMaxWidth, 740)
     }
 
@@ -60,8 +60,8 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.rowVerticalPadding, 0)
         XCTAssertEqual(EditorBlockChrome.listVerticalPadding, 0)
         XCTAssertEqual(EditorBlockChrome.listBackgroundOpacity, 0)
-        XCTAssertEqual(EditorBlockChrome.listMarkerWidth, 18)
-        XCTAssertEqual(EditorBlockChrome.listTextSpacing, 6)
+        XCTAssertEqual(EditorBlockChrome.listMarkerWidth, 22)
+        XCTAssertEqual(EditorBlockChrome.listTextSpacing, 4)
         XCTAssertEqual(EditorBlockChrome.actionColumnWidth, 18)
         XCTAssertEqual(EditorBlockChrome.actionColumnSpacing, 5)
         XCTAssertEqual(EditorBlockChrome.inactiveHandleOpacity, 0)
@@ -83,20 +83,20 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(TableBlockChrome.cornerRadius, 8)
         XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.038)
         XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.080)
-        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 14)
-        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 2)
-        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 9)
-        XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 6)
-        XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 2)
+        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 18)
+        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 4)
+        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 11)
+        XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 7)
+        XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 0)
         XCTAssertEqual(TableBlockChrome.insertControlIdleOpacity, 0.42)
         XCTAssertEqual(TableBlockChrome.insertControlHoverOpacity, 1)
         XCTAssertEqual(TableBlockChrome.selectorWidth, 8)
         XCTAssertEqual(TableBlockChrome.selectorHeight, 8)
         XCTAssertEqual(TableBlockChrome.selectorIndicatorOpacity, 0)
         XCTAssertEqual(TableBlockChrome.selectorHitOpacity, 0.0001)
-        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorOpacity, 0.50)
-        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorThickness, 2)
-        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorInset, 8)
+        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorOpacity, 0.38)
+        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorThickness, 1.5)
+        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorInset, 10)
     }
 
     func testTableInsertControlChromeKeepsExpandedPlusInsideGridEdge() {
@@ -124,7 +124,7 @@ final class EditorBlockChromeTests: XCTestCase {
         )
         XCTAssertGreaterThan(
             TableBlockChrome.selectorSelectedIndicatorOpacity,
-            0.4,
+            0.3,
             "Selected rows and columns need a visible edge cue so border selection does not feel invisible"
         )
         XCTAssertLessThanOrEqual(
@@ -375,14 +375,14 @@ final class EditorBlockChromeTests: XCTestCase {
         )
         XCTAssertEqual(
             BlockDropPlacementResolver.placement(
-                location: CGPoint(x: 128, y: 20),
+                location: CGPoint(x: 96, y: 20),
                 rowSize: CGSize(width: 480, height: 48)
             ),
             .after
         )
         XCTAssertEqual(
             BlockDropPlacementResolver.placement(
-                location: CGPoint(x: 204, y: 20),
+                location: CGPoint(x: 128, y: 20),
                 rowSize: CGSize(width: 480, height: 48)
             ),
             .childAfter

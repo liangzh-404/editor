@@ -732,6 +732,14 @@ final class NativeTextBlockEditorTests: XCTestCase {
             ),
             .deleteSelection
         )
+        XCTAssertEqual(
+            TableBlockKeyboardActionResolver.action(
+                keyCode: BlockSelectionCancelKeyboardResolver.escapeKeyCode,
+                modifiers: [],
+                hasSelection: true
+            ),
+            .cancelSelection
+        )
         XCTAssertNil(
             TableBlockKeyboardActionResolver.action(
                 keyCode: BlockKeyboardShortcutResolver.downArrowKeyCode,
@@ -772,6 +780,14 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 hasSelection: true
             ),
             .deleteSelection
+        )
+        XCTAssertEqual(
+            IOSTableBlockKeyboardActionResolver.action(
+                input: IOSTableBlockKeyboardActionResolver.escapeInput,
+                modifiers: [],
+                hasSelection: true
+            ),
+            .cancelSelection
         )
         XCTAssertNil(
             IOSTableBlockKeyboardActionResolver.action(

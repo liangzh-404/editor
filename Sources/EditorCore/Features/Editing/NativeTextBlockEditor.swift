@@ -356,12 +356,14 @@ enum NonEditableBlockKeyboardBridgeActivationResolver {
 
 enum TableBlockKeyboardAction: Equatable, Sendable {
     case deleteSelection
+    case cancelSelection
     case moveFocus(BlockKeyboardFocusDirection)
 }
 
 enum TableBlockKeyboardActionResolver {
     static let deleteBackwardKeyCode: UInt16 = 51
     static let deleteForwardKeyCode: UInt16 = 117
+    static let escapeKeyCode: UInt16 = BlockSelectionCancelKeyboardResolver.escapeKeyCode
 
     static func action(
         keyCode: UInt16,
@@ -375,6 +377,8 @@ enum TableBlockKeyboardActionResolver {
         switch keyCode {
         case deleteBackwardKeyCode, deleteForwardKeyCode:
             return .deleteSelection
+        case escapeKeyCode:
+            return .cancelSelection
         default:
             guard let direction = NonEditableBlockKeyboardFocusResolver.focusDirection(
                 keyCode: keyCode,
