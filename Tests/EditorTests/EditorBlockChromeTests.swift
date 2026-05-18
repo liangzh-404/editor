@@ -13,7 +13,15 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.inactiveHandleOpacity, 0)
         XCTAssertEqual(EditorBlockChrome.dropTargetHeight, 32)
         XCTAssertEqual(EditorBlockChrome.dropSlotHeight, 8)
-        XCTAssertEqual(EditorBlockChrome.trailingInsertHitHeight, 28)
+        XCTAssertEqual(EditorBlockChrome.trailingInsertHitHeight, 64)
+    }
+
+    func testCompactChromeBackgroundStaysNeutralAcrossMobileLists() {
+        XCTAssertLessThanOrEqual(
+            CompactChrome.backgroundYellowBias,
+            0.003,
+            "Compact iOS home and collection lists should not drift back to the old warm/yellow surface"
+        )
     }
 
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {

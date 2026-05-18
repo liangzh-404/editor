@@ -451,7 +451,7 @@ private struct CompactHomeView: View {
             .padding(.vertical, 20)
         }
         .navigationTitle("近期打开")
-        .background(Color(red: 0.972, green: 0.972, blue: 0.970))
+        .background(CompactChrome.backgroundColor)
     }
 
     private var header: some View {
@@ -643,7 +643,21 @@ enum EditorBlockChrome {
     static let specialBlockCornerRadius: Double = 5
     static let dropTargetHeight: Double = 32
     static let dropSlotHeight: Double = 8
-    static let trailingInsertHitHeight: Double = 28
+    static let trailingInsertHitHeight: Double = 64
+}
+
+enum CompactChrome {
+    static let backgroundRed: Double = 0.972
+    static let backgroundGreen: Double = 0.972
+    static let backgroundBlue: Double = 0.970
+
+    static var backgroundYellowBias: Double {
+        max(0, ((backgroundRed + backgroundGreen) / 2) - backgroundBlue)
+    }
+
+    static var backgroundColor: Color {
+        Color(red: backgroundRed, green: backgroundGreen, blue: backgroundBlue)
+    }
 }
 
 enum TableBlockChrome {
@@ -2372,7 +2386,7 @@ private struct CompactCollectionPageListView: View {
             .padding(.vertical, 14)
         }
         .navigationTitle(navigationTitle)
-        .background(Color(red: 0.965, green: 0.958, blue: 0.948))
+        .background(CompactChrome.backgroundColor)
     }
 
     private var items: [CompactCollectionPageListItem] {
