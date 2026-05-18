@@ -63,9 +63,9 @@ enum EditorDesignTokens {
     }
 
     enum Typography {
-        static let documentTitleSize: Double = 30
-        static let bodySize: Double = 15
-        static let bodyLineHeightMultiple: Double = 1.58
+        static let documentTitleSize: Double = 28
+        static let bodySize: Double = 14
+        static let bodyLineHeightMultiple: Double = 1.34
     }
 
     enum Layout {
@@ -81,7 +81,7 @@ enum EditorDesignTokens {
         static let slashMenuWidth: Double = 520
         static let slashMenuRowHeight: Double = 54
         static let slashMenuCornerRadius: Double = 16
-        static let auxiliaryRailWidth: Double = 220
+        static let auxiliaryRailWidth: Double = 180
         static let popoverCornerRadius: Double = 16
     }
 
@@ -781,8 +781,8 @@ enum EditorBlockChrome {
     static let listVerticalPadding: Double = 0
     static let listHorizontalPadding: Double = 0
     static let listBackgroundOpacity: Double = 0
-    static let listMarkerWidth: Double = 20
-    static let listTextSpacing: Double = 5
+    static let listMarkerWidth: Double = 18
+    static let listTextSpacing: Double = 6
     static let listMarkerTopPadding: Double = 0
     static let actionColumnWidth: Double = 18
     static let actionColumnSpacing: Double = 5
@@ -790,8 +790,8 @@ enum EditorBlockChrome {
     static let inactiveHandleOpacity: Double = 0
     static let specialBlockCornerRadius: Double = 5
     static let dropTargetHeight: Double = 32
-    static let dropSlotHeight: Double = 8
-    static let dropIndicatorAfterOffset: Double = 7
+    static let dropSlotHeight: Double = 10
+    static let dropIndicatorAfterOffset: Double = 0
     static let trailingInsertHitHeight: Double = 64
 }
 
@@ -810,18 +810,18 @@ enum CompactChrome {
 }
 
 enum TableBlockChrome {
-    static let cellWidth: Double = 126
-    static let cellHeight: Double = 38
-    static let maxViewportWidth: Double = 560
+    static let cellWidth: Double = 112
+    static let cellHeight: Double = 28
+    static let maxViewportWidth: Double = 520
     static let cornerRadius: Double = 8
     static let gridLineOpacity: Double = 0.038
     static let outerBorderOpacity: Double = 0.080
     static let primaryControlDiameter: Double = 18
-    static let insertControlVisibleDiameter: Double = 4
-    static let insertControlExpandedDiameter: Double = 11
+    static let insertControlVisibleDiameter: Double = 6
+    static let insertControlExpandedDiameter: Double = 12
     static let insertControlIconFontSize: Double = 7
     static let insertControlEdgeOffset: Double = 0
-    static let insertControlIdleOpacity: Double = 0.42
+    static let insertControlIdleOpacity: Double = 0.54
     static let insertControlHoverOpacity: Double = 1
     static let selectorWidth: Double = 8
     static let selectorHeight: Double = 8
@@ -830,6 +830,30 @@ enum TableBlockChrome {
     static let selectorSelectedIndicatorOpacity: Double = 0.38
     static let selectorSelectedIndicatorThickness: Double = 1.5
     static let selectorSelectedIndicatorInset: Double = 10
+}
+
+enum TableBlockDefaultGridResolver {
+    static let emptyGridRows = [
+        ["", ""],
+        ["", ""]
+    ]
+
+    static func editableRows(text: String, rows: [[String]]) -> [[String]] {
+        if !rows.isEmpty {
+            return rows
+        }
+
+        let markdownRows = MarkdownTableDocument(markdown: text).rows
+        if !markdownRows.isEmpty {
+            return markdownRows
+        }
+
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return emptyGridRows
+        }
+
+        return [[text]]
+    }
 }
 
 enum PastedAttachmentAnchorResolver {
@@ -1854,15 +1878,6 @@ struct SidebarNavigationModel: Equatable, Sendable {
 
         primaryItems = [
             SidebarNavigationItem(
-                id: "recent",
-                title: "近期文件",
-                systemImage: "clock.arrow.circlepath",
-                count: snapshot.pages.count,
-                collection: .recent,
-                identifier: "editor.collection.recent",
-                isSelected: selectedCollection == .recent
-            ),
-            SidebarNavigationItem(
                 id: "all-documents",
                 title: "全部文档",
                 systemImage: "doc.text",
@@ -1929,13 +1944,13 @@ struct SidebarNavigationModel: Equatable, Sendable {
 }
 
 enum SidebarChrome {
-    static let horizontalPadding: Double = 10
-    static let verticalPadding: Double = 12
-    static let sectionSpacing: Double = 10
-    static let rowSpacing: Double = 3
-    static let rowCornerRadius: Double = 14
-    static let rowVerticalPadding: Double = 9
-    static let nestedItemIndent: Double = 18
+    static let horizontalPadding: Double = 8
+    static let verticalPadding: Double = 10
+    static let sectionSpacing: Double = 6
+    static let rowSpacing: Double = 1
+    static let rowCornerRadius: Double = 12
+    static let rowVerticalPadding: Double = 6
+    static let nestedItemIndent: Double = 12
     static let dividerOpacity: Double = 0.07
     static let selectedFillOpacity: Double = 0.70
     static let selectedStrokeOpacity: Double = 0.025
@@ -1979,11 +1994,12 @@ enum SidebarChrome {
 
 private struct WorkspaceSidebar: View {
     @ObservedObject var viewModel: WorkspaceViewModel
+    @AppStorage("editor.sidebar.favorites.expanded") private var isFavoritesExpanded = true
+    @AppStorage("editor.sidebar.tags.expanded") private var isTagsExpanded = true
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.sectionSpacing)) {
-                sidebarHeader
                 newDocumentButton
                 sidebarDivider
                 sidebarGroup(items: sidebarModel.primaryItems)
@@ -2004,37 +2020,6 @@ private struct WorkspaceSidebar: View {
             snapshot: viewModel.snapshot,
             selectedCollection: viewModel.selectedCollection
         )
-    }
-
-    private var sidebarHeader: some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.headerBadgeCornerRadius), style: .continuous)
-                .fill(Color(red: 0.52, green: 0.55, blue: 0.62))
-                .frame(
-                    width: CGFloat(SidebarChrome.headerBadgeSize),
-                    height: CGFloat(SidebarChrome.headerBadgeSize)
-                )
-                .overlay {
-                    Text("文")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                }
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Editor")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(SidebarChrome.selectedForegroundColor)
-                Text("本地文档")
-                    .font(.caption2)
-                    .foregroundStyle(SidebarChrome.mutedForegroundColor)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 8)
-        .padding(.bottom, 2)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Editor 本地文档")
     }
 
     private var newDocumentButton: some View {
@@ -2081,28 +2066,37 @@ private struct WorkspaceSidebar: View {
     private var favoritePageShortcuts: some View {
         if !viewModel.snapshot.favoritePages.isEmpty {
             VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.rowSpacing)) {
-                SidebarSectionLabel("收藏")
-                ForEach(viewModel.snapshot.favoritePages) { page in
-                    Button {
-                        viewModel.selectPage(id: page.id)
-                    } label: {
-                        HStack(spacing: 9) {
-                            Image(systemName: "star.fill")
-                                .font(.caption.weight(.semibold))
-                                .frame(width: 18)
-                                .foregroundStyle(Color(red: 0.74, green: 0.62, blue: 0.30))
-                            Text(page.title)
-                                .font(.callout)
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
+                SidebarDisclosureHeader(
+                    title: "收藏",
+                    count: viewModel.snapshot.favoritePages.count,
+                    isExpanded: isFavoritesExpanded
+                ) {
+                    isFavoritesExpanded.toggle()
+                }
+
+                if isFavoritesExpanded {
+                    ForEach(viewModel.snapshot.favoritePages) { page in
+                        Button {
+                            viewModel.selectPage(id: page.id)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "star.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .frame(width: 16)
+                                    .foregroundStyle(Color(red: 0.74, green: 0.62, blue: 0.30))
+                                Text(page.title)
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.leading, 18)
+                            .padding(.trailing, 10)
+                            .padding(.vertical, 4)
                         }
-                        .padding(.leading, 24)
-                        .padding(.trailing, 12)
-                        .padding(.vertical, 5)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(SidebarChrome.foregroundColor)
+                        .accessibilityIdentifier("editor.favorite-page.\(page.id)")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(SidebarChrome.foregroundColor)
-                    .accessibilityIdentifier("editor.favorite-page.\(page.id)")
                 }
             }
         }
@@ -2111,26 +2105,22 @@ private struct WorkspaceSidebar: View {
     @ViewBuilder
     private var tagGroup: some View {
         if !sidebarModel.tagItems.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                CollectionRailButton(
-                    item: SidebarNavigationItem(
-                        id: "tags",
-                        title: "标签",
-                        systemImage: "tag",
-                        count: sidebarModel.tagItems.count,
-                        collection: .tag(""),
-                        identifier: "editor.collection.tags",
-                        isSelected: isTagsSelected
-                    )
+            VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.rowSpacing)) {
+                SidebarDisclosureHeader(
+                    title: "标签",
+                    count: sidebarModel.tagItems.count,
+                    isExpanded: isTagsExpanded
                 ) {
-                    viewModel.selectCollection(.tag(""))
+                    isTagsExpanded.toggle()
                 }
 
-                ForEach(sidebarModel.tagItems) { item in
-                    CollectionRailButton(item: item) {
-                        viewModel.selectCollection(item.collection)
+                if isTagsExpanded {
+                    ForEach(sidebarModel.tagItems) { item in
+                        CollectionRailButton(item: item) {
+                            viewModel.selectCollection(item.collection)
+                        }
+                        .padding(.leading, CGFloat(SidebarChrome.nestedItemIndent))
                     }
-                    .padding(.leading, CGFloat(SidebarChrome.nestedItemIndent))
                 }
             }
         }
@@ -2144,19 +2134,32 @@ private struct WorkspaceSidebar: View {
     }
 }
 
-private struct SidebarSectionLabel: View {
+private struct SidebarDisclosureHeader: View {
     let title: String
-
-    init(_ title: String) {
-        self.title = title
-    }
+    let count: Int
+    let isExpanded: Bool
+    let action: () -> Void
 
     var body: some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(SidebarChrome.mutedForegroundColor.opacity(0.78))
-            .padding(.horizontal, 12)
-            .padding(.top, 2)
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 12)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                Spacer(minLength: 4)
+                Text("\(count)")
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(SidebarChrome.mutedForegroundColor.opacity(0.82))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title)，\(isExpanded ? "已展开" : "已收起")")
     }
 }
 
@@ -2168,16 +2171,16 @@ private struct CollectionRailButton: View {
         Button(action: action) {
             HStack(spacing: 11) {
                 Image(systemName: item.systemImage)
-                    .font(.body.weight(.medium))
-                    .frame(width: 22)
+                    .font(.callout.weight(.medium))
+                    .frame(width: 20)
                     .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor : SidebarChrome.mutedForegroundColor)
                 Text(item.title)
-                    .font(item.isSelected ? .body.weight(.semibold) : .body.weight(.medium))
+                    .font(item.isSelected ? .callout.weight(.semibold) : .callout.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 if item.showsCount {
                     Text("\(item.count)")
-                        .font(.callout.weight(.medium))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor.opacity(0.80) : SidebarChrome.mutedForegroundColor)
                         .monospacedDigit()
                 }
@@ -3293,10 +3296,10 @@ private struct EditorCanvasView: View {
     @State private var activeBlockDropTarget: BlockDropTarget?
     @State private var transientSelectionResetRequest = TransientSelectionResetRequest.none
     @State private var scrollMetricsTracker = EditorCanvasScrollMetricsTracker(pageID: nil, blockCount: 0)
-    @State private var isAuxiliaryRailCollapsed = false
+    @State private var isAuxiliaryRailCollapsed = true
 
     var body: some View {
-        HStack(alignment: .top, spacing: 24) {
+        HStack(alignment: .top, spacing: 12) {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
                 HStack(alignment: .center, spacing: 12) {
@@ -3620,8 +3623,8 @@ private struct EditorCanvasView: View {
             if shouldOfferAuxiliaryRail {
                 if isAuxiliaryRailCollapsed {
                     auxiliaryRailExpandButton
-                        .padding(.top, 72)
-                        .padding(.trailing, 28)
+                        .padding(.top, 18)
+                        .padding(.trailing, 10)
                 } else {
                     EditorAuxiliaryRail(
                         outlineItems: outlineItems,
@@ -3634,8 +3637,8 @@ private struct EditorCanvasView: View {
                         }
                     )
                     .frame(width: CGFloat(EditorDesignTokens.Layout.auxiliaryRailWidth), alignment: .topLeading)
-                    .padding(.top, 72)
-                    .padding(.trailing, 28)
+                    .padding(.top, 18)
+                    .padding(.trailing, 10)
                     .accessibilityIdentifier("editor.auxiliary-rail")
                 }
             }
@@ -3709,6 +3712,9 @@ private struct EditorCanvasView: View {
                         direction: direction,
                         clearsBlockSelection: true
                     )
+                },
+                onPromoteBlockToPage: {
+                    promoteCurrentBlockToPageFromKeyboard()
                 }
             )
         )
@@ -4057,6 +4063,15 @@ private struct EditorCanvasView: View {
         return {
             onConvertBlockToPage(blockID)
         }
+    }
+
+    private func promoteCurrentBlockToPageFromKeyboard() -> Bool {
+        guard let promoteCurrentBlockToPageAction else {
+            return false
+        }
+
+        promoteCurrentBlockToPageAction()
+        return true
     }
 
     private var openParentPageAction: (() -> Void)? {
@@ -4605,6 +4620,7 @@ enum MacEditorKeyboardShortcutAction: Equatable, Sendable {
     case insertLink
     case pasteAttachments
     case moveFocus(BlockKeyboardFocusDirection)
+    case promoteBlockToPage
 }
 
 enum MacEditorKeyboardShortcutActionResolver {
@@ -4639,6 +4655,13 @@ enum MacEditorKeyboardShortcutActionResolver {
             return .insertLink
         }
 
+        if DiaryPromotionKeyboardResolver.requestsPromotion(
+            input: input,
+            modifiers: modifiers
+        ) {
+            return .promoteBlockToPage
+        }
+
         if hasPasteableAttachments,
            MacPasteKeyboardShortcutResolver.requestsAttachmentPaste(
             keyCode: keyCode,
@@ -4658,6 +4681,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
     let hasBlockSelection: () -> Bool
     let onCancelSelection: () -> Bool
     let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
+    let onPromoteBlockToPage: () -> Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -4669,6 +4693,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         context.coordinator.hasBlockSelection = hasBlockSelection
         context.coordinator.onCancelSelection = onCancelSelection
         context.coordinator.onMoveFocus = onMoveFocus
+        context.coordinator.onPromoteBlockToPage = onPromoteBlockToPage
         context.coordinator.install()
         return NSView(frame: .zero)
     }
@@ -4679,6 +4704,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         context.coordinator.hasBlockSelection = hasBlockSelection
         context.coordinator.onCancelSelection = onCancelSelection
         context.coordinator.onMoveFocus = onMoveFocus
+        context.coordinator.onPromoteBlockToPage = onPromoteBlockToPage
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -4691,6 +4717,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         var hasBlockSelection: (() -> Bool)?
         var onCancelSelection: (() -> Bool)?
         var onMoveFocus: ((BlockKeyboardFocusDirection) -> Bool)?
+        var onPromoteBlockToPage: (() -> Bool)?
         private var eventMonitor: Any?
 
         func install() {
@@ -4726,6 +4753,10 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
                     }
                 case .moveFocus(let direction):
                     if self.onMoveFocus?(direction) == true {
+                        return nil
+                    }
+                case .promoteBlockToPage:
+                    if self.onPromoteBlockToPage?() == true {
                         return nil
                     }
                 case nil:
@@ -5442,20 +5473,20 @@ private struct ListMarkerGlyph: View {
         Group {
             if descriptor.marker.hasSuffix(".") {
                 Text(descriptor.marker)
-                    .font(.system(size: 15, weight: .regular))
+                    .font(.system(size: EditorDesignTokens.Typography.bodySize, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(Color.primary)
             } else if isNested {
-                Circle()
-                    .stroke(Color.primary, lineWidth: 1.7)
-                    .frame(width: 5.4, height: 5.4)
+                Text("◦")
+                    .font(.system(size: EditorDesignTokens.Typography.bodySize, weight: .regular))
+                    .foregroundStyle(Color.primary)
             } else {
-                Circle()
-                    .fill(Color.primary)
-                    .frame(width: 5.4, height: 5.4)
+                Text("•")
+                    .font(.system(size: EditorDesignTokens.Typography.bodySize, weight: .regular))
+                    .foregroundStyle(Color.primary)
             }
         }
-        .frame(width: CGFloat(EditorBlockChrome.listMarkerWidth), height: 22, alignment: .trailing)
+        .frame(width: CGFloat(EditorBlockChrome.listMarkerWidth), alignment: .trailing)
         .accessibilityHidden(true)
     }
 }
@@ -5762,13 +5793,6 @@ private struct BlockRowView: View {
         HStack(alignment: .top, spacing: CGFloat(EditorBlockChrome.actionColumnSpacing)) {
             blockActionColumn
             blockContent
-        }
-        .overlay(alignment: dropIndicatorAlignment) {
-            if let dropPlacement {
-                BlockDropIndicator(placement: dropPlacement)
-                    .padding(.leading, dropIndicatorLeadingPadding(for: dropPlacement))
-                    .offset(y: dropIndicatorVerticalOffset(for: dropPlacement))
-            }
         }
         .padding(.vertical, CGFloat(EditorBlockChrome.rowVerticalPadding))
         .padding(.leading, CGFloat(nestingLevel) * 24)
@@ -6113,7 +6137,7 @@ private struct BlockRowView: View {
                 .accessibilityAddTraits(.isHeader)
         } else if block.type == .unorderedListItem || block.type == .orderedListItem {
             let descriptor = ListBlockChromeDescriptor(block: block, ordinal: listOrdinal)
-            HStack(alignment: .top, spacing: CGFloat(EditorBlockChrome.listTextSpacing)) {
+            HStack(alignment: .firstTextBaseline, spacing: CGFloat(EditorBlockChrome.listTextSpacing)) {
                 ListMarkerGlyph(descriptor: descriptor, isNested: block.parentBlockID != nil)
                     .padding(.top, CGFloat(EditorBlockChrome.listMarkerTopPadding))
 
@@ -6342,6 +6366,10 @@ private struct BlockRowView: View {
                 editorSession.clearBlockSelection()
                 return hadBlockSelection
             },
+            onPromoteBlockToPageByKeyboard: {
+                onConvertToPage()
+                return true
+            },
             onHorizontalSwipe: { translationWidth in
 #if os(iOS)
                 handleMobileHorizontalSwipe(translation: CGSize(width: translationWidth, height: 0))
@@ -6529,6 +6557,12 @@ private struct BlockDropSlot: View {
             .frame(maxWidth: .infinity)
             .frame(height: CGFloat(EditorBlockChrome.dropSlotHeight))
             .contentShape(Rectangle())
+            .overlay(alignment: .center) {
+                if let activePlacement {
+                    BlockDropIndicator(placement: activePlacement)
+                        .padding(.leading, activePlacement == .childAfter ? 28 : 0)
+                }
+            }
             .onDrop(
                 of: [UTType.plainText.identifier, UTType.text.identifier],
                 delegate: EditorBlockDropDelegate(
@@ -6539,6 +6573,23 @@ private struct BlockDropSlot: View {
                 )
             )
             .accessibilityHidden(true)
+    }
+
+    private var activePlacement: BlockDropPlacement? {
+        guard activeDropTarget?.blockID == destinationBlockID else {
+            return nil
+        }
+
+        switch (slotKind, activeDropTarget?.placement) {
+        case (.before, .before):
+            return .before
+        case (.after, .after):
+            return .after
+        case (.after, .childAfter):
+            return .childAfter
+        default:
+            return nil
+        }
     }
 }
 
@@ -6661,8 +6712,8 @@ private struct BlockDropIndicator: View {
 
             Capsule()
                 .fill(indicatorColor)
-                .frame(maxWidth: 420)
-                .frame(height: 1.5)
+                .frame(maxWidth: 340)
+                .frame(height: 1)
 
             if placement == .childAfter {
                 Text("缩进一级")
@@ -6684,7 +6735,7 @@ private struct BlockDropIndicator: View {
     private var indicatorColor: Color {
         placement == .childAfter
             ? EditorDesignTokens.Colors.accent.color.opacity(0.62)
-            : EditorDesignTokens.Colors.accent.color.opacity(0.42)
+            : EditorDesignTokens.Colors.accent.color.opacity(0.34)
     }
 
     private var accessibilityLabel: String {
@@ -6944,16 +6995,7 @@ private struct StructuredTableBlockEditor: View {
     }
 
     private var editableRows: [[String]] {
-        if !rows.isEmpty {
-            return rows
-        }
-
-        let markdownRows = MarkdownTableDocument(markdown: text).rows
-        if !markdownRows.isEmpty {
-            return markdownRows
-        }
-
-        return [[text]]
+        TableBlockDefaultGridResolver.editableRows(text: text, rows: rows)
     }
 
     private func tableDimensionAccessibilityValue(rows: [[String]]) -> String {
@@ -7041,9 +7083,9 @@ private struct StructuredTableBlockEditor: View {
             text: cellBinding(row: rowIndex, column: columnIndex)
         )
         .textFieldStyle(.plain)
-        .font(.system(size: 14, weight: rowIndex == 0 ? .semibold : .regular))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .font(.system(size: 13, weight: rowIndex == 0 ? .semibold : .regular))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .frame(
             width: CGFloat(TableBlockChrome.cellWidth),
             height: CGFloat(TableBlockChrome.cellHeight),

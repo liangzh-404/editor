@@ -529,6 +529,19 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testMacEditorKeyboardShortcutActionResolverPromotesBlockWithCommandRightBracket() {
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: 0,
+                input: "]",
+                modifiers: [.command],
+                hasBlockSelection: false,
+                hasPasteableAttachments: false
+            ),
+            .promoteBlockToPage
+        )
+    }
+
     func testBlockKeyboardFocusResolverMovesOnlyAtTextBoundaries() {
         XCTAssertEqual(
             BlockKeyboardFocusResolver.focusDirection(
@@ -1402,6 +1415,20 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 placement: .after
             ),
             2
+        )
+    }
+
+    func testBlockDragReorderResolverAllowsChildDropWhenOnlyIndentationChanges() {
+        let visibleBlockIDs = ["parent", "child"]
+
+        XCTAssertEqual(
+            BlockDragReorderResolver.targetIndex(
+                draggedBlockID: "child",
+                destinationBlockID: "parent",
+                visibleBlockIDs: visibleBlockIDs,
+                placement: .childAfter
+            ),
+            1
         )
     }
 

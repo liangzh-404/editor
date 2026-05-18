@@ -465,6 +465,9 @@ enum BlockDragReorderResolver {
         reorderedBlockIDs.insert(contentsOf: movingBlockIDs, at: min(max(adjustedTargetIndex, 0), remainingBlockIDs.count))
 
         guard reorderedBlockIDs != visibleBlockIDs else {
+            if placement == .childAfter {
+                return adjustedTargetIndex
+            }
             return nil
         }
         return adjustedTargetIndex
@@ -597,6 +600,7 @@ struct NativeTextBlockEditor: View {
     let onPasteAttachmentURLs: ([URL]) -> Bool
     let onSelectAllBlocksByKeyboard: () -> Bool
     let onCancelSelectionByKeyboard: () -> Bool
+    let onPromoteBlockToPageByKeyboard: () -> Bool
     let onHorizontalSwipe: (CGFloat) -> Bool
     let onTextChange: (String) -> Void
     @State private var measuredHeight: CGFloat = 0
@@ -623,6 +627,7 @@ struct NativeTextBlockEditor: View {
         onPasteAttachmentURLs: @escaping ([URL]) -> Bool = { _ in false },
         onSelectAllBlocksByKeyboard: @escaping () -> Bool = { false },
         onCancelSelectionByKeyboard: @escaping () -> Bool = { false },
+        onPromoteBlockToPageByKeyboard: @escaping () -> Bool = { false },
         onHorizontalSwipe: @escaping (CGFloat) -> Bool = { _ in false },
         onTextChange: @escaping (String) -> Void
     ) {
@@ -647,6 +652,7 @@ struct NativeTextBlockEditor: View {
         self.onPasteAttachmentURLs = onPasteAttachmentURLs
         self.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
         self.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
+        self.onPromoteBlockToPageByKeyboard = onPromoteBlockToPageByKeyboard
         self.onHorizontalSwipe = onHorizontalSwipe
         self.onTextChange = onTextChange
     }
@@ -675,6 +681,7 @@ struct NativeTextBlockEditor: View {
                 onPasteAttachmentURLs: onPasteAttachmentURLs,
                 onSelectAllBlocksByKeyboard: onSelectAllBlocksByKeyboard,
                 onCancelSelectionByKeyboard: onCancelSelectionByKeyboard,
+                onPromoteBlockToPageByKeyboard: onPromoteBlockToPageByKeyboard,
                 onHorizontalSwipe: onHorizontalSwipe,
                 minimumHeight: minimumHeight,
                 onContentHeightChange: updateMeasuredHeight,
@@ -714,15 +721,15 @@ struct NativeTextBlockEditor: View {
     private var minimumHeight: CGFloat {
         switch blockType {
         case .heading1:
-            return 30
-        case .heading2:
             return 27
+        case .heading2:
+            return 24
         case .heading3:
-            return 25
+            return 22
         case .codeBlock, .table:
-            return 28
+            return 21
         default:
-            return 23
+            return 20
         }
     }
 
@@ -869,6 +876,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onPasteAttachmentURLs: ([URL]) -> Bool
     let onSelectAllBlocksByKeyboard: () -> Bool
     let onCancelSelectionByKeyboard: () -> Bool
+    let onPromoteBlockToPageByKeyboard: () -> Bool
     let onHorizontalSwipe: (CGFloat) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
@@ -961,6 +969,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         }
         textView.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
         textView.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
+        textView.onPromoteBlockToPageByKeyboard = onPromoteBlockToPageByKeyboard
         textView.setAccessibilityIdentifier("editor.text.\(blockID)")
         textView.delegate = context.coordinator
         context.coordinator.applyModelText(text, to: textView)
@@ -1056,6 +1065,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             }
             textView.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
             textView.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
+            textView.onPromoteBlockToPageByKeyboard = onPromoteBlockToPageByKeyboard
         }
         if NativeTextCompositionPolicy.shouldApplyModelText(isComposing: textView.hasMarkedText()),
            textView.string != text {
@@ -1084,13 +1094,13 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     private var nsFont: NSFont {
         switch blockType {
         case .heading1:
-            return .systemFont(ofSize: 20, weight: .semibold)
+            return .systemFont(ofSize: 18, weight: .semibold)
         case .heading2:
-            return .systemFont(ofSize: 17, weight: .semibold)
+            return .systemFont(ofSize: 16, weight: .semibold)
         case .heading3:
-            return .systemFont(ofSize: 15, weight: .semibold)
+            return .systemFont(ofSize: 14, weight: .semibold)
         case .codeBlock, .table:
-            return .monospacedSystemFont(ofSize: 14, weight: .regular)
+            return .monospacedSystemFont(ofSize: 13, weight: .regular)
         default:
             return .systemFont(ofSize: EditorDesignTokens.Typography.bodySize, weight: .regular)
         }
@@ -1378,6 +1388,7 @@ private final class EditorNSTextView: NSTextView {
     var onSelectCurrentBlockByKeyboard: (() -> Bool)?
     var onSelectAllBlocksByKeyboard: (() -> Bool)?
     var onCancelSelectionByKeyboard: (() -> Bool)?
+    var onPromoteBlockToPageByKeyboard: (() -> Bool)?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         NativeTextBlockEditor.acceptsInactiveWindowFirstMouse
@@ -1448,6 +1459,13 @@ private final class EditorNSTextView: NSTextView {
             return
         }
 
+        if DiaryPromotionKeyboardResolver.requestsPromotion(
+            input: event.charactersIgnoringModifiers,
+            modifiers: event.blockKeyboardShortcutModifiers
+        ), onPromoteBlockToPageByKeyboard?() == true {
+            return
+        }
+
         if let direction = BlockKeyboardFocusResolver.focusDirection(
             keyCode: event.keyCode,
             modifiers: event.blockKeyboardShortcutModifiers,
@@ -1476,6 +1494,13 @@ private final class EditorNSTextView: NSTextView {
             input: event.charactersIgnoringModifiers,
             modifiers: event.blockKeyboardShortcutModifiers
         ), onKeyboardLinkInsertion?(selectedRange()) == true {
+            return true
+        }
+
+        if DiaryPromotionKeyboardResolver.requestsPromotion(
+            input: event.charactersIgnoringModifiers,
+            modifiers: event.blockKeyboardShortcutModifiers
+        ), onPromoteBlockToPageByKeyboard?() == true {
             return true
         }
 
@@ -1685,6 +1710,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onPasteAttachmentURLs: ([URL]) -> Bool
     let onSelectAllBlocksByKeyboard: () -> Bool
     let onCancelSelectionByKeyboard: () -> Bool
+    let onPromoteBlockToPageByKeyboard: () -> Bool
     let onHorizontalSwipe: (CGFloat) -> Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
@@ -1753,6 +1779,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
         textView.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
         textView.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
+        textView.onPromoteBlockToPageByKeyboard = onPromoteBlockToPageByKeyboard
         textView.onPasteAttachmentURLs = onPasteAttachmentURLs
         textView.onHorizontalSwipe = onHorizontalSwipe
         textView.installHorizontalSwipeRecognizersIfNeeded()
@@ -1835,6 +1862,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             }
             textView.onSelectAllBlocksByKeyboard = onSelectAllBlocksByKeyboard
             textView.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
+            textView.onPromoteBlockToPageByKeyboard = onPromoteBlockToPageByKeyboard
             textView.onPasteAttachmentURLs = onPasteAttachmentURLs
             textView.onHorizontalSwipe = onHorizontalSwipe
             textView.installHorizontalSwipeRecognizersIfNeeded()
@@ -1861,13 +1889,13 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     private var uiFont: UIFont {
         switch blockType {
         case .heading1:
-            return .systemFont(ofSize: 20, weight: .semibold)
+            return .systemFont(ofSize: 18, weight: .semibold)
         case .heading2:
-            return .systemFont(ofSize: 17, weight: .semibold)
+            return .systemFont(ofSize: 16, weight: .semibold)
         case .heading3:
-            return .systemFont(ofSize: 15, weight: .semibold)
+            return .systemFont(ofSize: 14, weight: .semibold)
         case .codeBlock, .table:
-            return .monospacedSystemFont(ofSize: 15, weight: .regular)
+            return .monospacedSystemFont(ofSize: 13, weight: .regular)
         default:
             return .systemFont(ofSize: EditorDesignTokens.Typography.bodySize, weight: .regular)
         }
@@ -2176,6 +2204,7 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     var onSelectCurrentBlockByKeyboard: (() -> Bool)?
     var onSelectAllBlocksByKeyboard: (() -> Bool)?
     var onCancelSelectionByKeyboard: (() -> Bool)?
+    var onPromoteBlockToPageByKeyboard: (() -> Bool)?
     var onPasteAttachmentURLs: (([URL]) -> Bool)?
     var onHorizontalSwipe: ((CGFloat) -> Bool)?
     private var didInstallHorizontalSwipeRecognizers = false
@@ -2248,6 +2277,11 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
                 input: "v",
                 modifierFlags: [.command],
                 action: #selector(pasteFromKeyboard)
+            ),
+            UIKeyCommand(
+                input: "]",
+                modifierFlags: [.command],
+                action: #selector(promoteBlockToPage)
             ),
             UIKeyCommand(
                 input: "a",
@@ -2424,6 +2458,13 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
             return
         }
         _ = onKeyboardLinkInsertion?(selectedRange)
+    }
+
+    @objc private func promoteBlockToPage() {
+        guard NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: markedTextRange != nil) else {
+            return
+        }
+        _ = onPromoteBlockToPageByKeyboard?()
     }
 
     @objc private func pasteFromKeyboard() {

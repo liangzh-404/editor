@@ -13,9 +13,9 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testCraftThingsDesignTokensKeepDocumentTypographyInRange() {
-        XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 30)
-        XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 15)
-        XCTAssertEqual(EditorDesignTokens.Typography.bodyLineHeightMultiple, 1.58)
+        XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 28)
+        XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 14)
+        XCTAssertEqual(EditorDesignTokens.Typography.bodyLineHeightMultiple, 1.34)
         XCTAssertEqual(EditorDesignTokens.Layout.editorMaxWidth, 740)
     }
 
@@ -38,7 +38,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorDesignTokens.Layout.slashMenuWidth, 520)
         XCTAssertEqual(EditorDesignTokens.Layout.slashMenuRowHeight, 54)
         XCTAssertEqual(EditorDesignTokens.Layout.slashMenuCornerRadius, 16)
-        XCTAssertEqual(EditorDesignTokens.Layout.auxiliaryRailWidth, 220)
+        XCTAssertEqual(EditorDesignTokens.Layout.auxiliaryRailWidth, 180)
     }
 
     func testEditorDisplayModesProgressivelyHideSecondaryChrome() {
@@ -60,15 +60,15 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.rowVerticalPadding, 0)
         XCTAssertEqual(EditorBlockChrome.listVerticalPadding, 0)
         XCTAssertEqual(EditorBlockChrome.listBackgroundOpacity, 0)
-        XCTAssertEqual(EditorBlockChrome.listMarkerWidth, 20)
-        XCTAssertEqual(EditorBlockChrome.listTextSpacing, 5)
+        XCTAssertEqual(EditorBlockChrome.listMarkerWidth, 18)
+        XCTAssertEqual(EditorBlockChrome.listTextSpacing, 6)
         XCTAssertEqual(EditorBlockChrome.listMarkerTopPadding, 0)
         XCTAssertEqual(EditorBlockChrome.actionColumnWidth, 18)
         XCTAssertEqual(EditorBlockChrome.actionColumnSpacing, 5)
         XCTAssertEqual(EditorBlockChrome.inactiveHandleOpacity, 0)
         XCTAssertEqual(EditorBlockChrome.dropTargetHeight, 32)
-        XCTAssertEqual(EditorBlockChrome.dropSlotHeight, 8)
-        XCTAssertEqual(EditorBlockChrome.dropIndicatorAfterOffset, 7)
+        XCTAssertEqual(EditorBlockChrome.dropSlotHeight, 10)
+        XCTAssertEqual(EditorBlockChrome.dropIndicatorAfterOffset, 0)
         XCTAssertEqual(EditorBlockChrome.trailingInsertHitHeight, 64)
     }
 
@@ -79,18 +79,18 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {
-        XCTAssertEqual(TableBlockChrome.cellWidth, 126)
-        XCTAssertEqual(TableBlockChrome.cellHeight, 38)
-        XCTAssertEqual(TableBlockChrome.maxViewportWidth, 560)
+        XCTAssertEqual(TableBlockChrome.cellWidth, 112)
+        XCTAssertEqual(TableBlockChrome.cellHeight, 28)
+        XCTAssertEqual(TableBlockChrome.maxViewportWidth, 520)
         XCTAssertEqual(TableBlockChrome.cornerRadius, 8)
         XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.038)
         XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.080)
         XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 18)
-        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 4)
-        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 11)
+        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 6)
+        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 12)
         XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 7)
         XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 0)
-        XCTAssertEqual(TableBlockChrome.insertControlIdleOpacity, 0.42)
+        XCTAssertEqual(TableBlockChrome.insertControlIdleOpacity, 0.54)
         XCTAssertEqual(TableBlockChrome.insertControlHoverOpacity, 1)
         XCTAssertEqual(TableBlockChrome.selectorWidth, 8)
         XCTAssertEqual(TableBlockChrome.selectorHeight, 8)
@@ -151,6 +151,21 @@ final class EditorBlockChromeTests: XCTestCase {
             TableBlockChrome.outerBorderOpacity,
             0.08,
             "The table shell should stay subtle and embedded in the document"
+        )
+    }
+
+    func testEmptyTableBlocksStartAsTwoByTwoDocumentGrid() {
+        XCTAssertEqual(
+            TableBlockDefaultGridResolver.editableRows(text: "", rows: []),
+            [["", ""], ["", ""]]
+        )
+        XCTAssertEqual(
+            TableBlockDefaultGridResolver.editableRows(text: "单元格", rows: []),
+            [["单元格"]]
+        )
+        XCTAssertEqual(
+            TableBlockDefaultGridResolver.editableRows(text: "", rows: [["已有"]]),
+            [["已有"]]
         )
     }
 
@@ -491,7 +506,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(preview.fileAttachment?.id, file.id)
     }
 
-    func testSidebarNavigationModelShowsRecentCountsAndTagCounts() {
+    func testSidebarNavigationModelOmitsRecentFromPrimaryRailAndShowsTagCounts() {
         let workspaceID = "workspace"
         let pages = [
             PageSummary(id: "page-recent", workspaceID: workspaceID, title: "最近文件"),
@@ -520,27 +535,27 @@ final class EditorBlockChromeTests: XCTestCase {
             selectedPageID: "page-recent"
         )
 
-        let model = SidebarNavigationModel(snapshot: snapshot, selectedCollection: .recent)
+        let model = SidebarNavigationModel(snapshot: snapshot, selectedCollection: .allDocuments)
 
         XCTAssertEqual(
             model.primaryItems.map(\.title),
-            ["近期文件", "全部文档", "日记", "收藏"]
+            ["全部文档", "日记", "收藏"]
         )
-        XCTAssertEqual(model.primaryItems.map(\.count), [3, 2, 1, 1])
-        XCTAssertEqual(model.primaryItems.first?.identifier, "editor.collection.recent")
+        XCTAssertEqual(model.primaryItems.map(\.count), [2, 1, 1])
+        XCTAssertEqual(model.primaryItems.first?.identifier, "editor.collection.all-documents")
         XCTAssertEqual(model.primaryItems.first?.isSelected, true)
         XCTAssertEqual(model.tagItems.map(\.title), ["工作", "生活"])
         XCTAssertEqual(model.tagItems.map(\.count), [2, 1])
     }
 
     func testSidebarChromeUsesCompactBearLikeRailMetrics() {
-        XCTAssertEqual(SidebarChrome.horizontalPadding, 10)
-        XCTAssertEqual(SidebarChrome.verticalPadding, 12)
-        XCTAssertEqual(SidebarChrome.sectionSpacing, 10)
-        XCTAssertEqual(SidebarChrome.rowSpacing, 3)
-        XCTAssertEqual(SidebarChrome.rowCornerRadius, 14)
-        XCTAssertEqual(SidebarChrome.rowVerticalPadding, 9)
-        XCTAssertEqual(SidebarChrome.nestedItemIndent, 18)
+        XCTAssertEqual(SidebarChrome.horizontalPadding, 8)
+        XCTAssertEqual(SidebarChrome.verticalPadding, 10)
+        XCTAssertEqual(SidebarChrome.sectionSpacing, 6)
+        XCTAssertEqual(SidebarChrome.rowSpacing, 1)
+        XCTAssertEqual(SidebarChrome.rowCornerRadius, 12)
+        XCTAssertEqual(SidebarChrome.rowVerticalPadding, 6)
+        XCTAssertEqual(SidebarChrome.nestedItemIndent, 12)
         XCTAssertEqual(SidebarChrome.dividerOpacity, 0.07)
         XCTAssertEqual(SidebarChrome.selectedFillOpacity, 0.70)
         XCTAssertEqual(SidebarChrome.selectedStrokeOpacity, 0.025)
