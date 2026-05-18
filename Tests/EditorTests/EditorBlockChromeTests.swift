@@ -41,6 +41,17 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorDesignTokens.Layout.auxiliaryRailWidth, 180)
     }
 
+    func testEditorCanvasChromeKeepsContentCloseToPhoneEdges() {
+#if os(iOS)
+        XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, 20)
+        XCTAssertEqual(EditorCanvasChromeLayout.verticalPadding, 18)
+#else
+        XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, 40)
+        XCTAssertEqual(EditorCanvasChromeLayout.verticalPadding, 36)
+#endif
+        XCTAssertEqual(EditorCanvasChromeLayout.pageTitleLeadingPadding, 27)
+    }
+
     func testEditorDisplayModesProgressivelyHideSecondaryChrome() {
         XCTAssertTrue(EditorDisplayMode.standard.showsSidebar)
         XCTAssertTrue(EditorDisplayMode.standard.showsDocumentList)

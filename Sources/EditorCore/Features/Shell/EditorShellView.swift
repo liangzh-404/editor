@@ -103,6 +103,28 @@ enum EditorDesignTokens {
     }
 }
 
+enum EditorCanvasChromeLayout {
+    static var horizontalPadding: Double {
+#if os(iOS)
+        20
+#else
+        40
+#endif
+    }
+
+    static var verticalPadding: Double {
+#if os(iOS)
+        18
+#else
+        36
+#endif
+    }
+
+    static var pageTitleLeadingPadding: Double {
+        EditorBlockChrome.actionColumnWidth + EditorBlockChrome.actionColumnSpacing + 4
+    }
+}
+
 enum EditorDisplayMode: Equatable, Sendable {
     case standard
     case writing
@@ -3763,7 +3785,7 @@ private struct EditorCanvasView: View {
                         .textFieldStyle(.plain)
                         .font(.system(size: EditorDesignTokens.Typography.documentTitleSize, weight: .semibold))
                         .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
-                        .padding(.leading, CGFloat(EditorBlockChrome.actionColumnWidth + EditorBlockChrome.actionColumnSpacing + 4))
+                        .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
                         .disabled(page == nil)
                         .accessibilityIdentifier("editor.page-title")
                         .simultaneousGesture(
@@ -4068,8 +4090,8 @@ private struct EditorCanvasView: View {
                     .accessibilityIdentifier("editor.canvas-edit-region")
             }
             .frame(maxWidth: CGFloat(EditorDesignTokens.Layout.editorMaxWidth), alignment: .leading)
-            .padding(.horizontal, 40)
-            .padding(.vertical, 36)
+            .padding(.horizontal, CGFloat(EditorCanvasChromeLayout.horizontalPadding))
+            .padding(.vertical, CGFloat(EditorCanvasChromeLayout.verticalPadding))
             }
             .accessibilityIdentifier("editor.canvas-scroll")
             .coordinateSpace(name: EditorCanvasCoordinateSpace.blockSelection)
@@ -4081,7 +4103,9 @@ private struct EditorCanvasView: View {
                     BlockSelectionMarqueeOverlay(rect: blockSelectionMarqueeRect)
                 }
             }
+#if os(macOS)
             .simultaneousGesture(blockSelectionMarqueeGesture())
+#endif
             .onChange(of: editorSession.focusedBlockID) { _, _ in
                 activeBlockDropTarget = BlockDropTargetLifecycleReducer
                     .targetAfterEditorInteraction(current: activeBlockDropTarget)
@@ -4271,7 +4295,12 @@ private struct EditorCanvasView: View {
             .frame(width: 0, height: 0)
         )
 #endif
+#if os(iOS)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+#else
         .navigationTitle(page?.title ?? "编辑器")
+#endif
         .focusedValue(\.insertMarkdownLinkAction, insertMarkdownLinkAction)
         .focusedValue(\.promoteDiarySelectionAction, promoteCurrentBlockToPageAction)
         .focusedValue(\.openParentPageAction, openParentPageAction)
