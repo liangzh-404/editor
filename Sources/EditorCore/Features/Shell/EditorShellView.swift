@@ -70,8 +70,18 @@ enum EditorDesignTokens {
 
     enum Layout {
         static let editorMaxWidth: Double = 740
+        static let documentListMinWidth: Double = 280
+        static let documentListIdealWidth: Double = 300
+        static let documentListMaxWidth: Double = 320
+        static let documentListRowMinHeight: Double = 72
+        static let documentListSelectedAccentWidth: Double = 3
         static let rowCornerRadius: Double = 8
         static let specialBlockCornerRadius: Double = 12
+        static let pageLinkCornerRadius: Double = 13
+        static let slashMenuWidth: Double = 520
+        static let slashMenuRowHeight: Double = 54
+        static let slashMenuCornerRadius: Double = 16
+        static let auxiliaryRailWidth: Double = 220
         static let popoverCornerRadius: Double = 16
     }
 
@@ -90,6 +100,35 @@ enum EditorDesignTokens {
             x: 0,
             y: 2
         )
+    }
+}
+
+enum EditorDisplayMode: Equatable, Sendable {
+    case standard
+    case writing
+    case focus
+
+    var showsSidebar: Bool {
+        self != .focus
+    }
+
+    var showsDocumentList: Bool {
+        self == .standard
+    }
+
+    var showsAuxiliaryRail: Bool {
+        self == .standard
+    }
+
+    var splitVisibility: NavigationSplitViewVisibility {
+        switch self {
+        case .standard:
+            return .all
+        case .writing:
+            return .all
+        case .focus:
+            return .detailOnly
+        }
     }
 }
 
@@ -230,12 +269,26 @@ private struct AdaptiveEditorShell: View {
 
 private struct ThreeColumnEditorShell: View {
     @ObservedObject var viewModel: WorkspaceViewModel
+    @State private var displayMode: EditorDisplayMode = .standard
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView {
-            WorkspaceSidebar(viewModel: viewModel)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            if displayMode.showsSidebar {
+                WorkspaceSidebar(viewModel: viewModel)
+            } else {
+                Color.clear
+                    .frame(width: 0)
+                    .navigationSplitViewColumnWidth(min: 0, ideal: 0, max: 0)
+            }
         } content: {
-            PageListView(viewModel: viewModel)
+            if displayMode.showsDocumentList {
+                PageListView(viewModel: viewModel)
+            } else {
+                Color.clear
+                    .frame(width: 0)
+                    .navigationSplitViewColumnWidth(min: 0, ideal: 0, max: 0)
+            }
         } detail: {
             if viewModel.selectedPage != nil {
                 EditorCanvasView(
@@ -254,6 +307,10 @@ private struct ThreeColumnEditorShell: View {
                     pageTagNames: viewModel.selectedPageTagNames,
                     pendingFocusBlockID: viewModel.pendingFocusBlockID,
                     canUndoTextEdit: viewModel.canUndoTextEdit,
+                    displayMode: displayMode,
+                    onDisplayModeChange: { mode in
+                        displayMode = mode
+                    },
                     onAddParagraphBlock: {
                         viewModel.addParagraphBlockToCurrentPage()
                     },
@@ -414,9 +471,15 @@ private struct ThreeColumnEditorShell: View {
                     }
                 )
             } else {
-                Color.white
+                EditorDesignTokens.Colors.editorBackground.color
                     .navigationTitle("编辑器")
             }
+        }
+        .onAppear {
+            columnVisibility = displayMode.splitVisibility
+        }
+        .onChange(of: displayMode) { _, mode in
+            columnVisibility = mode.splitVisibility
         }
         .focusedValue(\.createNewDocumentAction, {
             _ = viewModel.createNewDocumentForUI()
@@ -1540,6 +1603,7 @@ private struct CompactPageDestination: View {
                 pageTagNames: viewModel.selectedPageTagNames,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
+                showsAuxiliaryRail: false,
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
                 },
@@ -2148,6 +2212,11 @@ private struct PageListView: View {
             .padding(.vertical, 14)
         }
         .navigationTitle(navigationTitle)
+        .navigationSplitViewColumnWidth(
+            min: CGFloat(EditorDesignTokens.Layout.documentListMinWidth),
+            ideal: CGFloat(EditorDesignTokens.Layout.documentListIdealWidth),
+            max: CGFloat(EditorDesignTokens.Layout.documentListMaxWidth)
+        )
         .background(EditorDesignTokens.Colors.appBackground.color)
     }
 
@@ -2893,7 +2962,7 @@ private struct PageRow: View {
         HStack(alignment: .top, spacing: 0) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(isSelected ? EditorDesignTokens.Colors.accent.color.opacity(0.72) : Color.clear)
-                .frame(width: 4)
+                .frame(width: CGFloat(EditorDesignTokens.Layout.documentListSelectedAccentWidth))
                 .padding(.vertical, 8)
 
             VStack(alignment: .leading, spacing: 9) {
@@ -2944,15 +3013,16 @@ private struct PageRow: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
         }
+        .frame(minHeight: CGFloat(EditorDesignTokens.Layout.documentListRowMinHeight), alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.secondary.opacity(0.08) : Color.clear)
+                .fill(isSelected ? EditorDesignTokens.Colors.border.color.opacity(0.52) : Color.clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? Color.secondary.opacity(0.06) : Color.clear, lineWidth: 1)
+                .stroke(isSelected ? EditorDesignTokens.Colors.border.color.opacity(0.36) : Color.clear, lineWidth: 1)
         )
         .accessibilityElement(children: .contain)
     }
@@ -3131,6 +3201,9 @@ private struct EditorCanvasView: View {
     let pageTagNames: [String]
     let pendingFocusBlockID: String?
     let canUndoTextEdit: Bool
+    var displayMode: EditorDisplayMode = .standard
+    var showsAuxiliaryRail = true
+    var onDisplayModeChange: (EditorDisplayMode) -> Void = { _ in }
     let onAddParagraphBlock: () -> String?
     let onAddPageReference: (String) -> Void
     let onAddBlockReference: (String) -> Void
@@ -3196,8 +3269,9 @@ private struct EditorCanvasView: View {
     @State private var scrollMetricsTracker = EditorCanvasScrollMetricsTracker(pageID: nil, blockCount: 0)
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
+        HStack(alignment: .top, spacing: 24) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
                 HStack(alignment: .center, spacing: 12) {
                     TextField("未命名", text: pageTitleBinding)
                         .textFieldStyle(.plain)
@@ -3467,18 +3541,6 @@ private struct EditorCanvasView: View {
                     }
                 }
 
-                if !outlineItems.isEmpty {
-                    OutlinePanel(outlineItems: outlineItems, onSelectOutlineItem: onSelectOutlineItem)
-                }
-
-                if !backlinks.isEmpty {
-                    BacklinksPanel(backlinks: backlinks, onSelectBacklink: onSelectBacklink)
-                }
-
-                if !externalLinks.isEmpty {
-                    ExternalLinksPanel(externalLinks: externalLinks)
-                }
-
                 if !conflicts.isEmpty {
                     ConflictPanel(
                         conflicts: conflicts,
@@ -3506,17 +3568,32 @@ private struct EditorCanvasView: View {
             .frame(maxWidth: CGFloat(EditorDesignTokens.Layout.editorMaxWidth), alignment: .leading)
             .padding(.horizontal, 40)
             .padding(.vertical, 36)
-        }
-        .accessibilityIdentifier("editor.canvas-scroll")
-        .onChange(of: editorSession.focusedBlockID) { _, _ in
-            activeBlockDropTarget = BlockDropTargetLifecycleReducer
-                .targetAfterEditorInteraction(current: activeBlockDropTarget)
-        }
+            }
+            .accessibilityIdentifier("editor.canvas-scroll")
+            .onChange(of: editorSession.focusedBlockID) { _, _ in
+                activeBlockDropTarget = BlockDropTargetLifecycleReducer
+                    .targetAfterEditorInteraction(current: activeBlockDropTarget)
+            }
 #if DEBUG
-        .overlay(alignment: .topLeading) {
-            scrollMetricsDebugProbe
-        }
+            .overlay(alignment: .topLeading) {
+                scrollMetricsDebugProbe
+            }
 #endif
+
+            if shouldShowAuxiliaryRail {
+                EditorAuxiliaryRail(
+                    outlineItems: outlineItems,
+                    backlinks: backlinks,
+                    externalLinks: externalLinks,
+                    onSelectOutlineItem: onSelectOutlineItem,
+                    onSelectBacklink: onSelectBacklink
+                )
+                .frame(width: CGFloat(EditorDesignTokens.Layout.auxiliaryRailWidth), alignment: .topLeading)
+                .padding(.top, 72)
+                .padding(.trailing, 28)
+                .accessibilityIdentifier("editor.auxiliary-rail")
+            }
+        }
         .background(EditorDesignTokens.Colors.editorBackground.color)
 #if os(iOS)
         .safeAreaInset(edge: .bottom) {
@@ -3697,8 +3774,28 @@ private struct EditorCanvasView: View {
         }
     }
 
+    private var shouldShowAuxiliaryRail: Bool {
+        showsAuxiliaryRail
+            && displayMode.showsAuxiliaryRail
+            && (!outlineItems.isEmpty || !backlinks.isEmpty || !externalLinks.isEmpty)
+    }
+
     private var pageActionsMenu: some View {
         Menu {
+            Section("视图") {
+                Button {
+                    onDisplayModeChange(displayMode == .writing ? .standard : .writing)
+                } label: {
+                    Label(displayMode == .writing ? "退出写作模式" : "写作模式", systemImage: "sidebar.trailing")
+                }
+
+                Button {
+                    onDisplayModeChange(displayMode == .focus ? .standard : .focus)
+                } label: {
+                    Label(displayMode == .focus ? "退出专注模式" : "专注模式", systemImage: "rectangle.center.inset.filled")
+                }
+            }
+
             Section("块") {
                 Button {
                     if let blockID = onAddParagraphBlock() {
@@ -4693,6 +4790,34 @@ private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
 }
 #endif
 
+private struct EditorAuxiliaryRail: View {
+    let outlineItems: [PageOutlineItem]
+    let backlinks: [Backlink]
+    let externalLinks: [ExternalLink]
+    let onSelectOutlineItem: (PageOutlineItem) -> Void
+    let onSelectBacklink: (Backlink) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if !outlineItems.isEmpty {
+                OutlinePanel(outlineItems: outlineItems, onSelectOutlineItem: onSelectOutlineItem)
+            }
+
+            if !backlinks.isEmpty {
+                BacklinksPanel(backlinks: backlinks, onSelectBacklink: onSelectBacklink)
+            }
+
+            if !externalLinks.isEmpty {
+                ExternalLinksPanel(externalLinks: externalLinks)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+        .opacity(0.76)
+    }
+}
+
 private struct BacklinksPanel: View {
     let backlinks: [Backlink]
     let onSelectBacklink: (Backlink) -> Void
@@ -5663,7 +5788,7 @@ private struct BlockRowView: View {
         if isBlockSelected {
             return EditorDesignTokens.Colors.accent.color.opacity(0.08)
         }
-        if isRowActive {
+        if editorSession.focusedBlockID == block.id {
             return EditorDesignTokens.Colors.border.color.opacity(0.32)
         }
         return Color.clear
@@ -6508,18 +6633,18 @@ private struct SlashCommandMenu: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(commands.enumerated()), id: \.element.id) { index, command in
                         Button {
                             onSelect(command)
                         } label: {
-                            HStack(spacing: 9) {
+                            HStack(spacing: 12) {
                                 Image(systemName: command.type.editorMenuSystemImage)
                                     .font(.callout)
                                     .foregroundStyle(index == selectedIndex ? EditorDesignTokens.Colors.accent.color : .secondary)
-                                    .frame(width: 18)
+                                    .frame(width: 22)
 
-                                VStack(alignment: .leading, spacing: 1) {
+                                VStack(alignment: .leading, spacing: 2) {
                                     Text(command.title)
                                         .font(.callout.weight(.medium))
                                         .foregroundStyle(.primary)
@@ -6531,10 +6656,10 @@ private struct SlashCommandMenu: View {
 
                                 Spacer(minLength: 12)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
+                            .frame(minHeight: CGFloat(EditorDesignTokens.Layout.slashMenuRowHeight), alignment: .leading)
+                            .padding(.horizontal, 14)
                             .background(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .fill(index == selectedIndex ? EditorDesignTokens.Colors.accent.color.opacity(0.08) : Color.clear)
                             )
                             .contentShape(Rectangle())
@@ -6550,9 +6675,10 @@ private struct SlashCommandMenu: View {
                         .accessibilityIdentifier("editor.slash-command.\(command.id)")
                     }
                 }
-                .padding(.vertical, 5)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
             }
-            .frame(maxHeight: 278)
+            .frame(maxHeight: 342)
             .onChange(of: selectedIndex) { _, index in
                 guard commands.indices.contains(index) else {
                     return
@@ -6562,13 +6688,13 @@ private struct SlashCommandMenu: View {
                 }
             }
         }
-        .frame(width: 260, alignment: .leading)
+        .frame(width: CGFloat(EditorDesignTokens.Layout.slashMenuWidth), alignment: .leading)
         .background(EditorDesignTokens.Colors.editorBackground.color)
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.slashMenuCornerRadius), style: .continuous)
                 .stroke(EditorDesignTokens.Colors.border.color, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.slashMenuCornerRadius), style: .continuous))
         .shadow(
             color: EditorDesignTokens.Shadows.popoverLarge.swiftUIColor,
             radius: CGFloat(EditorDesignTokens.Shadows.popoverLarge.radius),
@@ -7394,8 +7520,22 @@ private struct PageReferenceBlockRow: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 2)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(
+                    cornerRadius: CGFloat(EditorDesignTokens.Layout.pageLinkCornerRadius),
+                    style: .continuous
+                )
+                .fill(EditorDesignTokens.Colors.appBackground.color.opacity(0.52))
+            )
+            .overlay(
+                RoundedRectangle(
+                    cornerRadius: CGFloat(EditorDesignTokens.Layout.pageLinkCornerRadius),
+                    style: .continuous
+                )
+                .stroke(EditorDesignTokens.Colors.border.color.opacity(0.82), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
         .disabled(block.pageReferenceTargetPageID == nil)

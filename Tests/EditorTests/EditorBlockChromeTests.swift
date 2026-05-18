@@ -28,6 +28,33 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorDesignTokens.Shadows.popoverSmall.y, 2)
     }
 
+    func testSecondRoundComponentHierarchyTokensMatchCraftThingsDensity() {
+        XCTAssertEqual(EditorDesignTokens.Layout.documentListMinWidth, 280)
+        XCTAssertEqual(EditorDesignTokens.Layout.documentListIdealWidth, 300)
+        XCTAssertEqual(EditorDesignTokens.Layout.documentListMaxWidth, 320)
+        XCTAssertEqual(EditorDesignTokens.Layout.documentListRowMinHeight, 72)
+        XCTAssertEqual(EditorDesignTokens.Layout.documentListSelectedAccentWidth, 3)
+        XCTAssertEqual(EditorDesignTokens.Layout.pageLinkCornerRadius, 13)
+        XCTAssertEqual(EditorDesignTokens.Layout.slashMenuWidth, 520)
+        XCTAssertEqual(EditorDesignTokens.Layout.slashMenuRowHeight, 54)
+        XCTAssertEqual(EditorDesignTokens.Layout.slashMenuCornerRadius, 16)
+        XCTAssertEqual(EditorDesignTokens.Layout.auxiliaryRailWidth, 220)
+    }
+
+    func testEditorDisplayModesProgressivelyHideSecondaryChrome() {
+        XCTAssertTrue(EditorDisplayMode.standard.showsSidebar)
+        XCTAssertTrue(EditorDisplayMode.standard.showsDocumentList)
+        XCTAssertTrue(EditorDisplayMode.standard.showsAuxiliaryRail)
+
+        XCTAssertTrue(EditorDisplayMode.writing.showsSidebar)
+        XCTAssertFalse(EditorDisplayMode.writing.showsDocumentList)
+        XCTAssertFalse(EditorDisplayMode.writing.showsAuxiliaryRail)
+
+        XCTAssertFalse(EditorDisplayMode.focus.showsSidebar)
+        XCTAssertFalse(EditorDisplayMode.focus.showsDocumentList)
+        XCTAssertFalse(EditorDisplayMode.focus.showsAuxiliaryRail)
+    }
+
     func testCraftQuietChromeKeepsListRowsUnboxedAndCompact() {
         XCTAssertEqual(EditorBlockChrome.blockSpacing, 0)
         XCTAssertEqual(EditorBlockChrome.rowVerticalPadding, 0)
