@@ -17,24 +17,24 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {
-        XCTAssertEqual(TableBlockChrome.cellWidth, 136)
-        XCTAssertEqual(TableBlockChrome.cellHeight, 42)
-        XCTAssertEqual(TableBlockChrome.maxViewportWidth, 620)
+        XCTAssertEqual(TableBlockChrome.cellWidth, 126)
+        XCTAssertEqual(TableBlockChrome.cellHeight, 38)
+        XCTAssertEqual(TableBlockChrome.maxViewportWidth, 560)
         XCTAssertEqual(TableBlockChrome.cornerRadius, 8)
-        XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.035)
-        XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.075)
-        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 18)
-        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 2.5)
-        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 8)
-        XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 5)
-        XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 5)
+        XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.055)
+        XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.105)
+        XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 14)
+        XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 2)
+        XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 9)
+        XCTAssertEqual(TableBlockChrome.insertControlIconFontSize, 6)
+        XCTAssertEqual(TableBlockChrome.insertControlEdgeOffset, 2)
         XCTAssertEqual(TableBlockChrome.selectorWidth, 8)
         XCTAssertEqual(TableBlockChrome.selectorHeight, 8)
         XCTAssertEqual(TableBlockChrome.selectorIndicatorOpacity, 0)
         XCTAssertEqual(TableBlockChrome.selectorHitOpacity, 0.0001)
-        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorOpacity, 0.42)
+        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorOpacity, 0.50)
         XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorThickness, 2)
-        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorInset, 9)
+        XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorInset, 8)
     }
 
     func testTableInsertControlChromeKeepsExpandedPlusInsideGridEdge() {
@@ -443,6 +443,16 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(SidebarChrome.selectedStrokeOpacity, 0.025)
         XCTAssertEqual(SidebarChrome.headerBadgeSize, 30)
         XCTAssertEqual(SidebarChrome.headerBadgeCornerRadius, 8)
+        XCTAssertLessThanOrEqual(
+            SidebarChrome.backgroundYellowBias,
+            0.003,
+            "Sidebar background should stay neutral instead of drifting back to the old warm/yellow rail"
+        )
+        XCTAssertLessThanOrEqual(
+            SidebarChrome.selectedFillYellowBias,
+            0.006,
+            "Selected rows should read as neutral gray, not beige"
+        )
     }
 
     func testCompactLibraryNavigationRoutesRowsByCollectionAndIncludesDiary() {

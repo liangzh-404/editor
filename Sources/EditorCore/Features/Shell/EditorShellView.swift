@@ -451,7 +451,7 @@ private struct CompactHomeView: View {
             .padding(.vertical, 20)
         }
         .navigationTitle("近期打开")
-        .background(Color(red: 0.965, green: 0.958, blue: 0.948))
+        .background(Color(red: 0.972, green: 0.972, blue: 0.970))
     }
 
     private var header: some View {
@@ -647,24 +647,24 @@ enum EditorBlockChrome {
 }
 
 enum TableBlockChrome {
-    static let cellWidth: Double = 136
-    static let cellHeight: Double = 42
-    static let maxViewportWidth: Double = 620
+    static let cellWidth: Double = 126
+    static let cellHeight: Double = 38
+    static let maxViewportWidth: Double = 560
     static let cornerRadius: Double = 8
-    static let gridLineOpacity: Double = 0.035
-    static let outerBorderOpacity: Double = 0.075
-    static let primaryControlDiameter: Double = 18
-    static let insertControlVisibleDiameter: Double = 2.5
-    static let insertControlExpandedDiameter: Double = 8
-    static let insertControlIconFontSize: Double = 5
-    static let insertControlEdgeOffset: Double = 5
+    static let gridLineOpacity: Double = 0.055
+    static let outerBorderOpacity: Double = 0.105
+    static let primaryControlDiameter: Double = 14
+    static let insertControlVisibleDiameter: Double = 2
+    static let insertControlExpandedDiameter: Double = 9
+    static let insertControlIconFontSize: Double = 6
+    static let insertControlEdgeOffset: Double = 2
     static let selectorWidth: Double = 8
     static let selectorHeight: Double = 8
     static let selectorIndicatorOpacity: Double = 0
     static let selectorHitOpacity: Double = 0.0001
-    static let selectorSelectedIndicatorOpacity: Double = 0.42
+    static let selectorSelectedIndicatorOpacity: Double = 0.50
     static let selectorSelectedIndicatorThickness: Double = 2
-    static let selectorSelectedIndicatorInset: Double = 9
+    static let selectorSelectedIndicatorInset: Double = 8
 }
 
 enum PastedAttachmentAnchorResolver {
@@ -1715,25 +1715,39 @@ enum SidebarChrome {
     static let selectedStrokeOpacity: Double = 0.025
     static let headerBadgeSize: Double = 30
     static let headerBadgeCornerRadius: Double = 8
+    static let backgroundRed: Double = 0.972
+    static let backgroundGreen: Double = 0.972
+    static let backgroundBlue: Double = 0.970
+    static let selectedFillRed: Double = 0.858
+    static let selectedFillGreen: Double = 0.860
+    static let selectedFillBlue: Double = 0.866
+
+    static var backgroundYellowBias: Double {
+        max(0, ((backgroundRed + backgroundGreen) / 2) - backgroundBlue)
+    }
+
+    static var selectedFillYellowBias: Double {
+        max(0, ((selectedFillRed + selectedFillGreen) / 2) - selectedFillBlue)
+    }
 
     static var backgroundColor: Color {
-        Color(red: 0.976, green: 0.970, blue: 0.960)
+        Color(red: backgroundRed, green: backgroundGreen, blue: backgroundBlue)
     }
 
     static var selectedFillColor: Color {
-        Color(red: 0.82, green: 0.79, blue: 0.74)
+        Color(red: selectedFillRed, green: selectedFillGreen, blue: selectedFillBlue)
     }
 
     static var selectedForegroundColor: Color {
-        Color(red: 0.27, green: 0.25, blue: 0.39)
+        Color(red: 0.22, green: 0.23, blue: 0.28)
     }
 
     static var foregroundColor: Color {
-        Color(red: 0.38, green: 0.36, blue: 0.47)
+        Color(red: 0.34, green: 0.35, blue: 0.40)
     }
 
     static var mutedForegroundColor: Color {
-        Color(red: 0.57, green: 0.55, blue: 0.65)
+        Color(red: 0.55, green: 0.56, blue: 0.62)
     }
 }
 
@@ -1769,7 +1783,7 @@ private struct WorkspaceSidebar: View {
     private var sidebarHeader: some View {
         HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.headerBadgeCornerRadius), style: .continuous)
-                .fill(Color(red: 0.80, green: 0.70, blue: 0.61))
+                .fill(Color(red: 0.52, green: 0.55, blue: 0.62))
                 .frame(
                     width: CGFloat(SidebarChrome.headerBadgeSize),
                     height: CGFloat(SidebarChrome.headerBadgeSize)
