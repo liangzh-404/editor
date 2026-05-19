@@ -40,6 +40,7 @@ enum AppEnvironment {
 
     @MainActor
     private static func makeWorkspaceViewModel() throws -> WorkspaceViewModel {
+        try resetApplicationDataForUITestingIfNeeded()
         let databasePath = try databasePath()
         let database = try SQLiteDatabase.open(path: databasePath)
         try SchemaMigrator.migrate(database: database)
@@ -149,6 +150,18 @@ enum AppEnvironment {
             for: .applicationSupportDirectory,
             in: .userDomainMask
         )[0]
+    }
+
+    private static func resetApplicationDataForUITestingIfNeeded() throws {
+        guard ProcessInfo.processInfo.environment["EDITOR_UI_TEST_RESET_STORE"] == "1" else {
+            return
+        }
+
+        let editorDirectory = applicationSupportRoot()
+            .appendingPathComponent("Editor", isDirectory: true)
+        if FileManager.default.fileExists(atPath: editorDirectory.path) {
+            try FileManager.default.removeItem(at: editorDirectory)
+        }
     }
 
     private static func seedLargePageForUITestingIfNeeded(

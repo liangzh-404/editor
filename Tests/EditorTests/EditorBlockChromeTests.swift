@@ -2,13 +2,13 @@ import XCTest
 
 final class EditorBlockChromeTests: XCTestCase {
     func testCraftThingsDesignTokensMatchDesktopEditorialPalette() {
-        assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF3, green: 0xF1, blue: 0xED)
-        assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF7, green: 0xF4, blue: 0xEF)
-        assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
-        assertColor(EditorDesignTokens.Colors.primaryText, red: 0x24, green: 0x24, blue: 0x24)
-        assertColor(EditorDesignTokens.Colors.secondaryText, red: 0x5A, green: 0x58, blue: 0x55)
-        assertColor(EditorDesignTokens.Colors.tertiaryText, red: 0x76, green: 0x73, blue: 0x6E)
-        assertColor(EditorDesignTokens.Colors.border, red: 0xE8, green: 0xE4, blue: 0xDE)
+        assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF7, green: 0xF5, blue: 0xF1)
+        assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xFB, green: 0xFA, blue: 0xF7)
+        assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFF, green: 0xFE, blue: 0xFC)
+        assertColor(EditorDesignTokens.Colors.primaryText, red: 0x22, green: 0x21, blue: 0x1F)
+        assertColor(EditorDesignTokens.Colors.secondaryText, red: 0x62, green: 0x5F, blue: 0x59)
+        assertColor(EditorDesignTokens.Colors.tertiaryText, red: 0x8A, green: 0x86, blue: 0x7E)
+        assertColor(EditorDesignTokens.Colors.border, red: 0xEB, green: 0xE7, blue: 0xDF)
         assertColor(EditorDesignTokens.Colors.accent, red: 0x2F, green: 0x7D, blue: 0xFA)
     }
 
@@ -16,7 +16,8 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 28)
         XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 14)
         XCTAssertEqual(EditorDesignTokens.Typography.bodyLineHeightMultiple, 1.34)
-        XCTAssertEqual(EditorDesignTokens.Layout.editorMaxWidth, 740)
+        XCTAssertEqual(EditorDesignTokens.Layout.editorMaxWidth, 680)
+        XCTAssertGreaterThan(EditorDesignTokens.Layout.editorExpandedMaxWidth, EditorDesignTokens.Layout.editorMaxWidth)
     }
 
     func testPopoverShadowTokensStayLightAndWarmNeutral() {
@@ -29,27 +30,93 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testSecondRoundComponentHierarchyTokensMatchCraftThingsDensity() {
-        XCTAssertEqual(EditorDesignTokens.Layout.documentListMinWidth, 280)
-        XCTAssertEqual(EditorDesignTokens.Layout.documentListIdealWidth, 300)
-        XCTAssertEqual(EditorDesignTokens.Layout.documentListMaxWidth, 320)
+        XCTAssertEqual(EditorDesignTokens.Layout.sidebarMinWidth, 240)
+        XCTAssertEqual(EditorDesignTokens.Layout.sidebarIdealWidth, 288)
+        XCTAssertEqual(EditorDesignTokens.Layout.sidebarMaxWidth, 360)
+        XCTAssertEqual(EditorDesignTokens.Layout.documentListMinWidth, 300)
+        XCTAssertEqual(EditorDesignTokens.Layout.documentListIdealWidth, 360)
+        XCTAssertEqual(EditorDesignTokens.Layout.documentListMaxWidth, 460)
         XCTAssertEqual(EditorDesignTokens.Layout.documentListRowMinHeight, 72)
         XCTAssertEqual(EditorDesignTokens.Layout.documentListSelectedAccentWidth, 3)
         XCTAssertEqual(EditorDesignTokens.Layout.pageLinkCornerRadius, 13)
         XCTAssertEqual(EditorDesignTokens.Layout.slashMenuWidth, 380)
         XCTAssertEqual(EditorDesignTokens.Layout.slashMenuRowHeight, 48)
         XCTAssertEqual(EditorDesignTokens.Layout.slashMenuCornerRadius, 14)
-        XCTAssertEqual(EditorDesignTokens.Layout.auxiliaryRailWidth, 180)
+        XCTAssertEqual(EditorDesignTokens.Layout.auxiliaryRailWidth, 285)
     }
 
     func testEditorCanvasChromeKeepsContentCloseToPhoneEdges() {
 #if os(iOS)
         XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, 20)
         XCTAssertEqual(EditorCanvasChromeLayout.verticalPadding, 18)
+        XCTAssertEqual(EditorCanvasChromeLayout.pageTitleLeadingPadding, 27)
 #else
         XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, 40)
         XCTAssertEqual(EditorCanvasChromeLayout.verticalPadding, 36)
-#endif
         XCTAssertEqual(EditorCanvasChromeLayout.pageTitleLeadingPadding, 27)
+        XCTAssertEqual(EditorCanvasChromeLayout.blockRowTitleAlignmentCompensation, 0)
+#endif
+    }
+
+    func testDesktopColumnDividerStaysVisualOnlyAndSubtle() {
+        XCTAssertEqual(DesktopColumnDividerChrome.hitWidth, 9)
+        XCTAssertEqual(DesktopColumnDividerChrome.lineWidth, 1)
+        XCTAssertLessThan(DesktopColumnDividerChrome.idleOpacity, 0.05)
+        XCTAssertGreaterThan(DesktopColumnDividerChrome.hoverOpacity, DesktopColumnDividerChrome.idleOpacity)
+        XCTAssertGreaterThan(DesktopColumnDividerChrome.draggingOpacity, DesktopColumnDividerChrome.hoverOpacity)
+    }
+
+    func testDesktopColumnResizeUsesDragStartWidthWithoutAccumulatingMovingDividerDeltas() {
+        let startWidth: CGFloat = 300
+
+        XCTAssertEqual(
+            DesktopColumnResizeDragResolver.width(
+                startWidth: startWidth,
+                translation: 20,
+                min: EditorDesignTokens.Layout.sidebarMinWidth,
+                max: EditorDesignTokens.Layout.sidebarMaxWidth
+            ),
+            320
+        )
+        XCTAssertEqual(
+            DesktopColumnResizeDragResolver.width(
+                startWidth: startWidth,
+                translation: 25,
+                min: EditorDesignTokens.Layout.sidebarMinWidth,
+                max: EditorDesignTokens.Layout.sidebarMaxWidth
+            ),
+            325,
+            "A later drag event reports the total translation; it should not add the previous frame again."
+        )
+        XCTAssertEqual(
+            DesktopColumnResizeDragResolver.width(
+                startWidth: startWidth,
+                translation: -200,
+                min: EditorDesignTokens.Layout.sidebarMinWidth,
+                max: EditorDesignTokens.Layout.sidebarMaxWidth
+            ),
+            CGFloat(EditorDesignTokens.Layout.sidebarMinWidth)
+        )
+        XCTAssertEqual(
+            DesktopColumnResizeDragResolver.width(
+                startWidth: startWidth,
+                translation: 200,
+                min: EditorDesignTokens.Layout.sidebarMinWidth,
+                max: EditorDesignTokens.Layout.sidebarMaxWidth
+            ),
+            CGFloat(EditorDesignTokens.Layout.sidebarMaxWidth)
+        )
+    }
+
+    func testEditorCanvasWidensWhenAuxiliaryRailIsHidden() {
+        XCTAssertEqual(
+            EditorCanvasWidthPolicy.maxWidth(hasVisibleAuxiliaryRail: true),
+            EditorDesignTokens.Layout.editorMaxWidth
+        )
+        XCTAssertEqual(
+            EditorCanvasWidthPolicy.maxWidth(hasVisibleAuxiliaryRail: false),
+            EditorDesignTokens.Layout.editorExpandedMaxWidth
+        )
     }
 
     func testEditorDisplayModesProgressivelyHideSecondaryChrome() {
@@ -73,8 +140,13 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.listBackgroundOpacity, 0)
         XCTAssertEqual(EditorBlockChrome.listMarkerWidth, 18)
         XCTAssertEqual(EditorBlockChrome.listTextSpacing, 6)
-        XCTAssertEqual(EditorBlockChrome.listMarkerTopPadding, 3)
+        XCTAssertEqual(
+            EditorBlockChrome.listMarkerTopPadding,
+            3,
+            "List rows use explicit top alignment because NSTextView does not expose a reliable SwiftUI firstTextBaseline; do not reset this to 0."
+        )
         XCTAssertEqual(EditorBlockChrome.listMarkerLineHeight, 20)
+        XCTAssertEqual(EditorBlockChrome.canvasTrailingFocusHitHeight, 760)
         XCTAssertEqual(EditorBlockChrome.listNestingIndentWidth, 48)
         XCTAssertEqual(EditorBlockChrome.actionColumnWidth, 18)
         XCTAssertEqual(EditorBlockChrome.actionColumnSpacing, 5)
@@ -83,6 +155,11 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.dropSlotHeight, 4)
         XCTAssertEqual(EditorBlockChrome.dropIndicatorAfterOffset, 0)
         XCTAssertEqual(EditorBlockChrome.trailingInsertHitHeight, 64)
+    }
+
+    func testBlockDragHandleOnlyAppearsWhenPointerHoversTheRow() {
+        XCTAssertEqual(BlockDragHandleVisibilityPolicy.opacity(isHovered: false), 0)
+        XCTAssertEqual(BlockDragHandleVisibilityPolicy.opacity(isHovered: true), 1)
     }
 
     func testNestedListVerticalRhythmKeepsDropSlotsSubtleLikeCraft() {
@@ -174,17 +251,17 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertGreaterThan(descriptor.strokeOpacity, 0.45)
     }
 
-    func testInlineLeadingControlsShareTextBaselineMetricsAcrossListTaskAndToggle() {
+    func testInlineLeadingControlsKeepTaskAndToggleTextBaselineCompensation() {
         let descriptor = InlineLeadingControlFrameDescriptor()
 
         XCTAssertEqual(descriptor.width, EditorBlockChrome.listMarkerWidth)
         XCTAssertEqual(descriptor.height, EditorBlockChrome.listMarkerLineHeight)
         XCTAssertEqual(descriptor.topPadding, EditorBlockChrome.listMarkerTopPadding)
         XCTAssertEqual(descriptor.textSpacing, EditorBlockChrome.listTextSpacing)
-        XCTAssertLessThan(
+        XCTAssertEqual(
             descriptor.textVerticalOffset,
-            0,
-            "List/task/toggle body text should sit slightly higher than the marker control to compensate NSTextView metrics"
+            -4,
+            "Task/toggle body text must sit high enough to visually align with the control baseline; list rows share this explicit NSTextView compensation."
         )
         XCTAssertEqual(TextEditableBlockChromePolicy.backgroundOpacity(blockType: .taskItem), 0)
         XCTAssertEqual(TextEditableBlockChromePolicy.backgroundOpacity(blockType: .toggle), 0)
@@ -195,11 +272,24 @@ final class EditorBlockChromeTests: XCTestCase {
 
         XCTAssertGreaterThan(descriptor.pointerHorizontalOffset, descriptor.visibleCardWidth)
         XCTAssertGreaterThan(descriptor.pointerVerticalOffset, descriptor.visibleCardMaxHeight)
-        XCTAssertGreaterThanOrEqual(descriptor.visibleCardLeadingFromCenteredPointer, 36)
+        XCTAssertEqual(descriptor.visibleCardLeadingFromCenteredPointer, 14)
+        XCTAssertEqual(descriptor.visibleCardTopFromCenteredPointer, 12)
+        XCTAssertGreaterThan(
+            descriptor.visibleCardLeadingFromCenteredPointer,
+            0,
+            "The drag preview should stay to the lower-right of the pointer."
+        )
         XCTAssertGreaterThanOrEqual(
             descriptor.visibleCardTopFromCenteredPointer,
-            EditorBlockChrome.dropSlotHeight + 20
+            EditorBlockChrome.dropSlotHeight + 8,
+            "The drag preview should stay below the blue drop line instead of covering it."
         )
+    }
+
+    func testBlockDropIndicatorChromeKeepsBlueLineClearButQuiet() {
+        XCTAssertEqual(BlockDropIndicatorChrome.lineHeight, 1.5)
+        XCTAssertGreaterThanOrEqual(BlockDropIndicatorChrome.standardOpacity, 0.55)
+        XCTAssertGreaterThan(BlockDropIndicatorChrome.emphasizedOpacity, BlockDropIndicatorChrome.standardOpacity)
     }
 
     func testCompactChromeUsesWarmAppBackgroundTokenAcrossMobileLists() {
@@ -208,13 +298,20 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(CompactChrome.backgroundBlue, EditorDesignTokens.Colors.appBackground.blue)
     }
 
+    func testCompactLibraryChromeUsesBearLikeDarkSidebar() {
+        assertColor(CompactLibraryChrome.backgroundToken, red: 0x30, green: 0x34, blue: 0x37)
+        XCTAssertEqual(CompactLibraryChrome.rowCornerRadius, 13)
+        XCTAssertEqual(CompactLibraryChrome.selectedRowOpacity, 0.13)
+        XCTAssertEqual(CompactLibraryChrome.mutedForegroundOpacity, 0.58)
+    }
+
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {
-        XCTAssertEqual(TableBlockChrome.cellWidth, 112)
-        XCTAssertEqual(TableBlockChrome.cellHeight, 28)
+        XCTAssertEqual(TableBlockChrome.cellWidth, 168)
+        XCTAssertEqual(TableBlockChrome.cellHeight, 44)
         XCTAssertEqual(TableBlockChrome.maxViewportWidth, 520)
         XCTAssertEqual(TableBlockChrome.cornerRadius, 8)
-        XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.038)
-        XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.080)
+        XCTAssertEqual(TableBlockChrome.gridLineOpacity, 0.070)
+        XCTAssertEqual(TableBlockChrome.outerBorderOpacity, 0.120)
         XCTAssertEqual(TableBlockChrome.primaryControlDiameter, 18)
         XCTAssertEqual(TableBlockChrome.insertControlVisibleDiameter, 4)
         XCTAssertEqual(TableBlockChrome.insertControlExpandedDiameter, 10)
@@ -274,12 +371,12 @@ final class EditorBlockChromeTests: XCTestCase {
         )
         XCTAssertLessThanOrEqual(
             TableBlockChrome.gridLineOpacity,
-            0.04,
-            "Document tables should use faint grid lines instead of a heavy spreadsheet frame"
+            0.08,
+            "Document tables should use readable but quiet grid lines instead of a heavy spreadsheet frame"
         )
         XCTAssertLessThanOrEqual(
             TableBlockChrome.outerBorderOpacity,
-            0.08,
+            0.12,
             "The table shell should stay subtle and embedded in the document"
         )
     }
@@ -325,19 +422,45 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(block.tableRows, [["单元格", ""], ["", ""]])
     }
 
-    func testMobileBlockSwipeResolverSeparatesSelectionFromIndenting() {
+    func testMobileBlockSwipeResolverSeparatesCursorIndentingFromPanelNavigation() {
         XCTAssertEqual(
             MobileBlockSwipeActionResolver.action(
                 translation: CGSize(width: -72, height: 8),
                 isEditingBlock: false,
                 nestingLevel: 0
             ),
-            .select
+            .revealOutline
+        )
+        XCTAssertEqual(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: 72, height: 8),
+                isEditingBlock: false,
+                nestingLevel: 0,
+                isOutlinePresented: true
+            ),
+            .closeOutline
+        )
+        XCTAssertEqual(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: 72, height: 8),
+                isEditingBlock: false,
+                nestingLevel: 0
+            ),
+            .revealPageList
         )
         XCTAssertEqual(
             MobileBlockSwipeActionResolver.action(
                 translation: CGSize(width: 72, height: 6),
-                isEditingBlock: false,
+                isEditingBlock: true,
+                nestingLevel: 0,
+                isOutlinePresented: true
+            ),
+            .closeOutline
+        )
+        XCTAssertEqual(
+            MobileBlockSwipeActionResolver.action(
+                translation: CGSize(width: 72, height: 6),
+                isEditingBlock: true,
                 nestingLevel: 0
             ),
             .indent
@@ -358,13 +481,12 @@ final class EditorBlockChromeTests: XCTestCase {
             ),
             .outdent
         )
-        XCTAssertEqual(
+        XCTAssertNil(
             MobileBlockSwipeActionResolver.action(
                 translation: CGSize(width: -72, height: 6),
                 isEditingBlock: true,
                 nestingLevel: 0
-            ),
-            .select
+            )
         )
         XCTAssertNil(
             MobileBlockSwipeActionResolver.action(
@@ -595,6 +717,42 @@ final class EditorBlockChromeTests: XCTestCase {
                 selectedPageID: nil,
                 availablePageIDs: []
             )
+        )
+    }
+
+    func testCompactShellScreenOrderDefaultsToEditorAsThirdScreen() {
+        XCTAssertEqual(CompactShellScreen.library.rawValue, 1)
+        XCTAssertEqual(CompactShellScreen.documentList.rawValue, 2)
+        XCTAssertEqual(CompactShellScreen.editor.rawValue, 3)
+        XCTAssertEqual(CompactShellRoutePlanner.defaultActiveScreen, .editor)
+    }
+
+    func testCompactShellInitialPathRoutesThroughDocumentListToEditor() {
+        let workspaceID = "workspace"
+        let page = PageSummary(id: "page-a", workspaceID: workspaceID, title: "A")
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [page],
+            blocks: [],
+            attachments: [],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: page.id
+        )
+
+        XCTAssertEqual(
+            CompactShellRoutePlanner.initialPath(snapshot: snapshot, selectedCollection: .recent),
+            [.collection(.allDocuments), .page(page.id)]
+        )
+    }
+
+    func testCompactShellRevealPageListUsesCurrentDocumentCollection() {
+        XCTAssertEqual(
+            CompactShellRoutePlanner.documentListRoute(selectedCollection: .favorites),
+            .collection(.favorites)
+        )
+        XCTAssertEqual(
+            CompactShellRoutePlanner.documentListRoute(selectedCollection: .recent),
+            .collection(.allDocuments)
         )
     }
 
@@ -888,6 +1046,42 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(preview.fileAttachment?.id, file.id)
     }
 
+    func testPageListDateSectionsGroupRecentPagesByLocalDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_779_171_600) // 2026-05-19T06:20:00Z
+        let pages = [
+            PageSummary(
+                id: "today",
+                workspaceID: "workspace",
+                title: "今天",
+                updatedAt: "2026-05-19T08:00:00.000Z"
+            ),
+            PageSummary(
+                id: "yesterday",
+                workspaceID: "workspace",
+                title: "昨天",
+                updatedAt: "2026-05-18T21:30:00.000Z"
+            ),
+            PageSummary(
+                id: "older",
+                workspaceID: "workspace",
+                title: "较早",
+                updatedAt: "2026-05-12T09:00:00.000Z"
+            ),
+            PageSummary(id: "unknown", workspaceID: "workspace", title: "未知")
+        ]
+
+        let sections = PageListDateSectionModel.sections(
+            pages: pages,
+            now: now,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(sections.map(\.title), ["今天", "昨天", "5月12日", "较早"])
+        XCTAssertEqual(sections.map { $0.pages.map(\.id) }, [["today"], ["yesterday"], ["older"], ["unknown"]])
+    }
+
     func testSidebarNavigationModelOmitsRecentFromPrimaryRailAndShowsTagCounts() {
         let workspaceID = "workspace"
         let pages = [
@@ -938,8 +1132,8 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(SidebarChrome.rowCornerRadius, 12)
         XCTAssertEqual(SidebarChrome.rowVerticalPadding, 6)
         XCTAssertEqual(SidebarChrome.nestedItemIndent, 12)
-        XCTAssertEqual(SidebarChrome.dividerOpacity, 0.07)
-        XCTAssertEqual(SidebarChrome.selectedFillOpacity, 0.70)
+        XCTAssertEqual(SidebarChrome.dividerOpacity, 0.05)
+        XCTAssertEqual(SidebarChrome.selectedFillOpacity, 0.44)
         XCTAssertEqual(SidebarChrome.selectedStrokeOpacity, 0.025)
         XCTAssertEqual(SidebarChrome.headerBadgeSize, 30)
         XCTAssertEqual(SidebarChrome.headerBadgeCornerRadius, 8)

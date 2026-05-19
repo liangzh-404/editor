@@ -148,7 +148,8 @@ final class DiaryRepository {
                    pages.workspace_id,
                    pages.notebook_id,
                    pages.title,
-                   pages.is_favorite
+                   pages.is_favorite,
+                   pages.updated_at
             FROM diary_pages
             INNER JOIN pages ON pages.id = diary_pages.page_id
             WHERE diary_pages.workspace_id = ?
@@ -166,7 +167,8 @@ final class DiaryRepository {
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
                 title: row["title"] ?? "",
-                isFavorite: Self.sqliteBool(row["is_favorite"])
+                isFavorite: Self.sqliteBool(row["is_favorite"]),
+                updatedAt: row["updated_at"]
             )
         }
     }

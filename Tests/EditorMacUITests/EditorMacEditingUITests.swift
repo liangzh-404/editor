@@ -216,6 +216,32 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    private func clickPageActionMenuItem(
+        _ title: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let pageActions = app.element(identifier: "editor.page-actions")
+        XCTAssertTrue(
+            pageActions.waitForExistence(timeout: 5),
+            "Page actions menu should be visible before selecting \(title)",
+            file: file,
+            line: line
+        )
+        pageActions.click()
+
+        let menuItem = app.menuItems[title]
+        XCTAssertTrue(
+            menuItem.waitForExistence(timeout: 5),
+            "Page actions menu should expose \(title)",
+            file: file,
+            line: line
+        )
+        menuItem.click()
+    }
+
+    @MainActor
     func testLaunchStartsInDailyPageBlockEditorForFastTyping() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
@@ -697,17 +723,31 @@ final class EditorMacEditingUITests: XCTestCase {
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before adding")
         let initialTextViewCount = app.textViews.count
 
-        app.buttons["editor.add-block"].click()
+        clickPageActionMenuItem("新增文本块", in: app)
 
         let insertedTextView = app.textViews.element(boundBy: initialTextViewCount)
         XCTAssertTrue(insertedTextView.waitForExistence(timeout: 5), "Add should insert a new editable text block")
-
-        app.typeText("Added with toolbar")
-
-        let insertedValue = insertedTextView.value as? String ?? ""
         XCTAssertTrue(
-            insertedValue.contains("Added with toolbar"),
-            "Typing after Add should continue in the inserted block"
+            insertedTextView.waitForKeyboardFocus(timeout: 5),
+            "Add should focus the inserted block before typing continues"
+        )
+
+        insertedTextView.typeText("abc")
+
+        let typedValuePredicate = NSPredicate { element, _ in
+            guard let element = element as? XCUIElement,
+                  let value = element.value as? String else {
+                return false
+            }
+            return value.localizedCaseInsensitiveContains("abc")
+        }
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(predicate: typedValuePredicate, object: insertedTextView)],
+                timeout: 5
+            ),
+            .completed,
+            "Typing after Add should continue in the inserted block; value=\(insertedTextView.value as? String ?? "")"
         )
     }
 
@@ -1998,9 +2038,7 @@ final class EditorMacEditingUITests: XCTestCase {
 
         openWelcomePageForPageToolbarActions(in: app)
 
-        let importButton = app.buttons["editor.import-markdown"]
-        XCTAssertTrue(importButton.waitForExistence(timeout: 5), "Markdown import toolbar button should be visible")
-        importButton.click()
+        clickPageActionMenuItem("导入 Markdown", in: app)
 
         let importedParagraph = app.textViews
             .matching(NSPredicate(format: "value CONTAINS %@", "Imported paragraph from toolbar"))
@@ -2029,9 +2067,7 @@ final class EditorMacEditingUITests: XCTestCase {
 
         openWelcomePageForPageToolbarActions(in: app)
 
-        let importButton = app.buttons["editor.import-markdown"]
-        XCTAssertTrue(importButton.waitForExistence(timeout: 5), "Markdown import toolbar button should be visible")
-        importButton.click()
+        clickPageActionMenuItem("导入 Markdown", in: app)
 
         let quote = app.element(identifierPrefix: "editor.quote.")
         XCTAssertTrue(
@@ -2079,9 +2115,7 @@ final class EditorMacEditingUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(body.waitForExistence(timeout: 5), "Markdown import should keep following body text")
 
-        let exportButton = app.buttons["editor.export-markdown"]
-        XCTAssertTrue(exportButton.waitForExistence(timeout: 5), "Markdown export toolbar button should be visible")
-        exportButton.click()
+        clickPageActionMenuItem("导出 Markdown", in: app)
 
         let exportedMarkdown = app.staticTexts["editor.markdown-export-test-output"]
         XCTAssertTrue(exportedMarkdown.waitForExistence(timeout: 5), "Markdown export should publish captured test output")
@@ -2113,9 +2147,7 @@ final class EditorMacEditingUITests: XCTestCase {
 
         openWelcomePageForPageToolbarActions(in: app)
 
-        let importButton = app.buttons["editor.import-markdown"]
-        XCTAssertTrue(importButton.waitForExistence(timeout: 5), "Markdown import toolbar button should be visible")
-        importButton.click()
+        clickPageActionMenuItem("导入 Markdown", in: app)
 
         let outlinePanel = app.element(identifier: "editor.outline")
         XCTAssertTrue(outlinePanel.waitForExistence(timeout: 5), "Imported heading should create an Outline panel")
@@ -2162,9 +2194,7 @@ final class EditorMacEditingUITests: XCTestCase {
             "Welcome block text should be loaded before exporting"
         )
 
-        let exportButton = app.buttons["editor.export-markdown"]
-        XCTAssertTrue(exportButton.waitForExistence(timeout: 5), "Markdown export toolbar button should be visible")
-        exportButton.click()
+        clickPageActionMenuItem("导出 Markdown", in: app)
 
         let exportedMarkdown = app.staticTexts["editor.markdown-export-test-output"]
         XCTAssertTrue(exportedMarkdown.waitForExistence(timeout: 5), "Markdown export should publish captured test output")
@@ -2184,9 +2214,7 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_UI_TEST_ATTACHMENT_IMPORT_CONTENTS"] = "Attachment imported through the toolbar"
         app.launch()
 
-        let attachmentButton = app.buttons["editor.insert-attachment"]
-        XCTAssertTrue(attachmentButton.waitForExistence(timeout: 5), "Attachment toolbar button should be visible")
-        attachmentButton.click()
+        clickPageActionMenuItem("附件", in: app)
 
         let insertedAttachment = app.element(identifierPrefix: "editor.attachment.")
         XCTAssertTrue(insertedAttachment.waitForExistence(timeout: 10), "Toolbar attachment import should render an attachment row")
@@ -2204,9 +2232,7 @@ final class EditorMacEditingUITests: XCTestCase {
         app.launchEnvironment["EDITOR_UI_TEST_ATTACHMENT_IMPORT_CONTENTS"] = "Attachment before trailing editor hit area"
         app.launch()
 
-        let attachmentButton = app.buttons["editor.insert-attachment"]
-        XCTAssertTrue(attachmentButton.waitForExistence(timeout: 5), "Attachment toolbar button should be visible")
-        attachmentButton.click()
+        clickPageActionMenuItem("附件", in: app)
 
         let insertedAttachment = app.element(identifierPrefix: "editor.attachment.")
         XCTAssertTrue(insertedAttachment.waitForExistence(timeout: 10), "Toolbar attachment import should render a trailing non-editable row")

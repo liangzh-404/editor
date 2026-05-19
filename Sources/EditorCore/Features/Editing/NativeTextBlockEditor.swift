@@ -621,13 +621,17 @@ enum NativeTextDropPolicy {
 enum NativeTextInsertionPointRectResolver {
     static let verticalPadding: CGFloat = 2
 
-    static func rect(original: CGRect, fontLineHeight: CGFloat?) -> CGRect {
+    static func rect(
+        original: CGRect,
+        fontLineHeight: CGFloat?,
+        verticalOffset: CGFloat = 0
+    ) -> CGRect {
         guard let fontLineHeight, fontLineHeight > 0 else {
             return original
         }
 
         let clampedHeight = min(original.height, ceil(fontLineHeight + verticalPadding))
-        let originY = original.midY - clampedHeight / 2
+        let originY = original.midY - clampedHeight / 2 + verticalOffset
         return CGRect(
             x: original.origin.x,
             y: originY,
@@ -640,9 +644,29 @@ enum NativeTextInsertionPointRectResolver {
 enum NativeTextEditorLayout {
     static let verticalTextInset: CGFloat = 2
     static let textContainerInset = CGSize(width: 0, height: verticalTextInset)
+#if os(iOS)
+    static let uiTextContainerInset = UIEdgeInsets(top: 0, left: 0, bottom: 1, right: 0)
+    static let uiVerticalTextInset = uiTextContainerInset.top + uiTextContainerInset.bottom
+    static let uiCaretVerticalOffset: CGFloat = -1
+    static let placeholderTopPadding: CGFloat = 5
+    static let keyboardToolbarHeight: CGFloat = 50
+    static let keyboardFormatPanelHeight: CGFloat = 220
+#endif
 
     static func measuredHeight(contentHeight: CGFloat, minimumHeight: CGFloat) -> CGFloat {
-        max(minimumHeight, ceil(contentHeight + verticalTextInset * 2))
+        measuredHeight(
+            contentHeight: contentHeight,
+            minimumHeight: minimumHeight,
+            verticalInset: verticalTextInset * 2
+        )
+    }
+
+    static func measuredHeight(
+        contentHeight: CGFloat,
+        minimumHeight: CGFloat,
+        verticalInset: CGFloat
+    ) -> CGFloat {
+        max(minimumHeight, ceil(contentHeight + verticalInset))
     }
 }
 
@@ -716,6 +740,9 @@ struct NativeTextBlockEditor: View {
     let onCancelSelectionByKeyboard: () -> Bool
     let onPromoteBlockToPageByKeyboard: () -> Bool
     let onHorizontalSwipe: (CGFloat) -> Bool
+    let keyboardAccessory: AnyView?
+    let keyboardAccessoryHeight: CGFloat?
+    let keyboardAccessoryReplacesKeyboard: Bool
     let onTextChange: (String) -> Void
     @State private var measuredHeight: CGFloat = 0
 
@@ -744,6 +771,9 @@ struct NativeTextBlockEditor: View {
         onCancelSelectionByKeyboard: @escaping () -> Bool = { false },
         onPromoteBlockToPageByKeyboard: @escaping () -> Bool = { false },
         onHorizontalSwipe: @escaping (CGFloat) -> Bool = { _ in false },
+        keyboardAccessory: AnyView? = nil,
+        keyboardAccessoryHeight: CGFloat? = nil,
+        keyboardAccessoryReplacesKeyboard: Bool = false,
         onTextChange: @escaping (String) -> Void
     ) {
         self.blockID = blockID
@@ -770,6 +800,9 @@ struct NativeTextBlockEditor: View {
         self.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
         self.onPromoteBlockToPageByKeyboard = onPromoteBlockToPageByKeyboard
         self.onHorizontalSwipe = onHorizontalSwipe
+        self.keyboardAccessory = keyboardAccessory
+        self.keyboardAccessoryHeight = keyboardAccessoryHeight
+        self.keyboardAccessoryReplacesKeyboard = keyboardAccessoryReplacesKeyboard
         self.onTextChange = onTextChange
     }
 
@@ -800,6 +833,9 @@ struct NativeTextBlockEditor: View {
                 onCancelSelectionByKeyboard: onCancelSelectionByKeyboard,
                 onPromoteBlockToPageByKeyboard: onPromoteBlockToPageByKeyboard,
                 onHorizontalSwipe: onHorizontalSwipe,
+                keyboardAccessory: keyboardAccessory,
+                keyboardAccessoryHeight: keyboardAccessoryHeight,
+                keyboardAccessoryReplacesKeyboard: keyboardAccessoryReplacesKeyboard,
                 minimumHeight: minimumHeight,
                 onContentHeightChange: updateMeasuredHeight,
                 onTextChange: onTextChange
@@ -809,7 +845,11 @@ struct NativeTextBlockEditor: View {
                 Text("按 \"/\" 快速操作")
                     .font(placeholderFont)
                     .foregroundStyle(.secondary.opacity(0.72))
+#if os(iOS)
+                    .padding(.top, NativeTextEditorLayout.placeholderTopPadding)
+#else
                     .padding(.top, NativeTextEditorLayout.verticalTextInset)
+#endif
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -828,19 +868,53 @@ struct NativeTextBlockEditor: View {
     private var placeholderFont: Font {
         switch blockType {
         case .heading1:
+#if os(iOS)
+            return .system(size: 28, weight: .semibold)
+#else
             return .title2.weight(.semibold)
+#endif
         case .heading2:
+#if os(iOS)
+            return .system(size: 24, weight: .semibold)
+#else
             return .title3.weight(.semibold)
+#endif
         case .heading3:
+#if os(iOS)
+            return .system(size: 20, weight: .semibold)
+#else
             return .headline
+#endif
         case .codeBlock, .table:
+#if os(iOS)
+            return .system(size: 16, weight: .regular, design: .monospaced)
+#else
             return .system(.body, design: .monospaced)
+#endif
         default:
+#if os(iOS)
+            return .system(size: 18)
+#else
             return .system(size: EditorDesignTokens.Typography.bodySize)
+#endif
         }
     }
 
     private var minimumHeight: CGFloat {
+#if os(iOS)
+        switch blockType {
+        case .heading1:
+            return 36
+        case .heading2:
+            return 32
+        case .heading3:
+            return 28
+        case .codeBlock, .table:
+            return 24
+        default:
+            return 26
+        }
+#else
         switch blockType {
         case .heading1:
             return 27
@@ -853,6 +927,7 @@ struct NativeTextBlockEditor: View {
         default:
             return 20
         }
+#endif
     }
 
     private var effectiveHeight: CGFloat {
@@ -1001,6 +1076,9 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onCancelSelectionByKeyboard: () -> Bool
     let onPromoteBlockToPageByKeyboard: () -> Bool
     let onHorizontalSwipe: (CGFloat) -> Bool
+    let keyboardAccessory: AnyView?
+    let keyboardAccessoryHeight: CGFloat?
+    let keyboardAccessoryReplacesKeyboard: Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -1119,6 +1197,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         configureLineWrapping(textView: textView)
         context.coordinator.scheduleHeightMeasurement(for: textView)
+        context.coordinator.handleFocusRequestIfNeeded(textView: textView)
         if textView.textLayoutManager == nil {
             EditorLog.input.error("textkit2_unavailable platform=macOS block_id=\(blockID, privacy: .public)")
         }
@@ -1950,6 +2029,54 @@ enum IOSPasteboardAttachmentResolver {
     }
 }
 
+private final class EditorKeyboardAccessoryContainerView: UIInputView {
+    private var heightConstraint: NSLayoutConstraint?
+
+    var accessoryHeight: CGFloat {
+        didSet {
+            heightConstraint?.constant = accessoryHeight
+            invalidateIntrinsicContentSize()
+        }
+    }
+
+    init(height: CGFloat) {
+        accessoryHeight = height
+        super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: height), inputViewStyle: .keyboard)
+        allowsSelfSizing = true
+        autoresizingMask = [.flexibleWidth]
+        backgroundColor = .clear
+        let constraint = heightAnchor.constraint(equalToConstant: height)
+        constraint.priority = .required
+        constraint.isActive = true
+        heightConstraint = constraint
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: accessoryHeight)
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        CGSize(width: size.width > 0 ? size.width : UIScreen.main.bounds.width, height: accessoryHeight)
+    }
+
+    override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
+        CGSize(width: targetSize.width > 0 ? targetSize.width : UIScreen.main.bounds.width, height: accessoryHeight)
+    }
+
+    override func systemLayoutSizeFitting(
+        _ targetSize: CGSize,
+        withHorizontalFittingPriority horizontalFittingPriority: UILayoutPriority,
+        verticalFittingPriority: UILayoutPriority
+    ) -> CGSize {
+        CGSize(width: targetSize.width > 0 ? targetSize.width : UIScreen.main.bounds.width, height: accessoryHeight)
+    }
+}
+
 private struct PlatformNativeTextView: UIViewRepresentable {
     let blockID: String
     let text: String
@@ -1975,6 +2102,9 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onCancelSelectionByKeyboard: () -> Bool
     let onPromoteBlockToPageByKeyboard: () -> Bool
     let onHorizontalSwipe: (CGFloat) -> Bool
+    let keyboardAccessory: AnyView?
+    let keyboardAccessoryHeight: CGFloat?
+    let keyboardAccessoryReplacesKeyboard: Bool
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
@@ -2060,15 +2190,16 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.typingAttributes = baseTextAttributes
         textView.backgroundColor = .clear
         textView.isScrollEnabled = false
-        textView.textContainerInset = UIEdgeInsets(
-            top: NativeTextEditorLayout.verticalTextInset,
-            left: 0,
-            bottom: NativeTextEditorLayout.verticalTextInset,
-            right: 0
-        )
+        textView.textContainerInset = NativeTextEditorLayout.uiTextContainerInset
         textView.textContainer.lineFragmentPadding = 0
         configureLineWrapping(textView: textView)
         textView.adjustsFontForContentSizeCategory = true
+        context.coordinator.configureKeyboardAccessory(
+            keyboardAccessory,
+            height: keyboardAccessoryHeight,
+            replacesKeyboard: keyboardAccessoryReplacesKeyboard,
+            for: textView
+        )
         context.coordinator.scheduleHeightMeasurement(for: textView)
         if textView.textLayoutManager == nil {
             EditorLog.input.error("textkit2_unavailable platform=iOS block_id=\(blockID, privacy: .public)")
@@ -2155,6 +2286,12 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.textColor = EditorDesignTokens.Colors.primaryText.uiColor
         textView.typingAttributes = baseTextAttributes
         configureLineWrapping(textView: textView)
+        context.coordinator.configureKeyboardAccessory(
+            keyboardAccessory,
+            height: keyboardAccessoryHeight,
+            replacesKeyboard: keyboardAccessoryReplacesKeyboard,
+            for: textView
+        )
         if NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.markedTextRange != nil) {
             context.coordinator.applyTextStyles(to: textView)
         }
@@ -2169,15 +2306,15 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     private var uiFont: UIFont {
         switch blockType {
         case .heading1:
-            return .systemFont(ofSize: 18, weight: .semibold)
+            return .systemFont(ofSize: 28, weight: .semibold)
         case .heading2:
-            return .systemFont(ofSize: 16, weight: .semibold)
+            return .systemFont(ofSize: 24, weight: .semibold)
         case .heading3:
-            return .systemFont(ofSize: 14, weight: .semibold)
+            return .systemFont(ofSize: 20, weight: .semibold)
         case .codeBlock, .table:
-            return .monospacedSystemFont(ofSize: 13, weight: .regular)
+            return .monospacedSystemFont(ofSize: 16, weight: .regular)
         default:
-            return .systemFont(ofSize: EditorDesignTokens.Typography.bodySize, weight: .regular)
+            return .systemFont(ofSize: 18, weight: .regular)
         }
     }
 
@@ -2203,9 +2340,119 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         private var isHeightMeasurementScheduled = false
         private let codeSyntaxHighlighter = Highlight()
         private var codeSyntaxHighlightTask: Task<Void, Never>?
+        private var keyboardAccessoryHostingController: UIHostingController<AnyView>?
+        private var keyboardAccessoryContainer: EditorKeyboardAccessoryContainerView?
+        private var configuredKeyboardAccessoryHeight: CGFloat?
+        private var configuredKeyboardReplacesKeyboard = false
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
+        }
+
+        func configureKeyboardAccessory(
+            _ accessory: AnyView?,
+            height: CGFloat?,
+            replacesKeyboard: Bool,
+            for textView: UITextView
+        ) {
+            guard let accessory else {
+                let needsReload = textView.inputAccessoryView != nil || textView.inputView != nil
+                if let container = keyboardAccessoryContainer,
+                   textView.inputAccessoryView === container {
+                    textView.inputAccessoryView = nil
+                }
+                if textView.inputView != nil {
+                    textView.inputView = nil
+                }
+                keyboardAccessoryHostingController = nil
+                keyboardAccessoryContainer = nil
+                configuredKeyboardAccessoryHeight = nil
+                configuredKeyboardReplacesKeyboard = false
+                if needsReload, textView.isFirstResponder {
+                    textView.reloadInputViews()
+                }
+                return
+            }
+
+            let effectiveHeight = height ?? NativeTextEditorLayout.keyboardToolbarHeight
+            let wasReplacingKeyboard = configuredKeyboardReplacesKeyboard
+            let keyboardModeChanged = wasReplacingKeyboard != replacesKeyboard
+            let shouldRestoreSystemKeyboard = wasReplacingKeyboard && !replacesKeyboard
+            let container: EditorKeyboardAccessoryContainerView
+            if let hostingController = keyboardAccessoryHostingController, !keyboardModeChanged {
+                hostingController.rootView = accessory
+                container = keyboardAccessoryContainer ?? EditorKeyboardAccessoryContainerView(height: effectiveHeight)
+            } else {
+                let newContainer = EditorKeyboardAccessoryContainerView(height: effectiveHeight)
+                newContainer.accessibilityIdentifier = "editor.mobile-format-accessory"
+                let hostingController = UIHostingController(rootView: accessory)
+                hostingController.view.backgroundColor = .clear
+                hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+                newContainer.addSubview(hostingController.view)
+                NSLayoutConstraint.activate([
+                    hostingController.view.leadingAnchor.constraint(equalTo: newContainer.leadingAnchor),
+                    hostingController.view.trailingAnchor.constraint(equalTo: newContainer.trailingAnchor),
+                    hostingController.view.topAnchor.constraint(equalTo: newContainer.topAnchor),
+                    hostingController.view.bottomAnchor.constraint(equalTo: newContainer.bottomAnchor)
+                ])
+                keyboardAccessoryHostingController = hostingController
+                keyboardAccessoryContainer = newContainer
+                container = newContainer
+            }
+
+            let heightChanged = configuredKeyboardAccessoryHeight != effectiveHeight
+            if heightChanged {
+                container.accessoryHeight = effectiveHeight
+                container.frame.size.height = effectiveHeight
+            }
+
+            var needsReload = heightChanged || keyboardModeChanged
+            if replacesKeyboard {
+                if textView.inputAccessoryView != nil {
+                    textView.inputAccessoryView = nil
+                    needsReload = true
+                }
+                if textView.inputView !== container || heightChanged {
+                    if textView.inputView === container {
+                        textView.inputView = nil
+                    }
+                    textView.inputView = container
+                    needsReload = true
+                }
+            } else {
+                if textView.inputView != nil {
+                    textView.inputView = nil
+                    needsReload = true
+                }
+                let accessoryChanged = textView.inputAccessoryView !== container
+                if accessoryChanged || heightChanged {
+                    if heightChanged, !accessoryChanged {
+                        textView.inputAccessoryView = nil
+                    }
+                    textView.inputAccessoryView = container
+                    needsReload = true
+                }
+            }
+
+            configuredKeyboardAccessoryHeight = effectiveHeight
+            configuredKeyboardReplacesKeyboard = replacesKeyboard
+
+            if textView.isFirstResponder, needsReload {
+                textView.reloadInputViews()
+            }
+            if shouldRestoreSystemKeyboard {
+                DispatchQueue.main.async { [weak textView] in
+                    guard let textView, textView.window != nil else {
+                        return
+                    }
+                    guard textView.isFirstResponder else {
+                        textView.becomeFirstResponder()
+                        return
+                    }
+                    textView.resignFirstResponder()
+                    textView.becomeFirstResponder()
+                }
+            }
         }
 
         func applyModelText(_ text: String, to textView: UITextView) {
@@ -2557,10 +2804,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             let fittingSize = textView.sizeThatFits(
                 CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
             )
-            let contentHeight = max(0, fittingSize.height - NativeTextEditorLayout.verticalTextInset * 2)
+            let contentHeight = max(0, fittingSize.height - NativeTextEditorLayout.uiVerticalTextInset)
             return NativeTextEditorLayout.measuredHeight(
                 contentHeight: contentHeight,
-                minimumHeight: parent.minimumHeight
+                minimumHeight: parent.minimumHeight,
+                verticalInset: NativeTextEditorLayout.uiVerticalTextInset
             )
         }
 
@@ -2591,6 +2839,14 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     var onPasteAttachmentURLs: (([URL]) -> Bool)?
     var onHorizontalSwipe: ((CGFloat) -> Bool)?
     private var didInstallHorizontalSwipeRecognizers = false
+
+    override func caretRect(for position: UITextPosition) -> CGRect {
+        NativeTextInsertionPointRectResolver.rect(
+            original: super.caretRect(for: position),
+            fontLineHeight: font?.lineHeight,
+            verticalOffset: NativeTextEditorLayout.uiCaretVerticalOffset
+        )
+    }
 
     func installHorizontalSwipeRecognizersIfNeeded() {
         guard !didInstallHorizontalSwipeRecognizers else {

@@ -149,6 +149,19 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(resolved.midY, originalRect.midY, accuracy: 0.001)
     }
 
+    func testNativeTextInsertionPointRectResolverCanOffsetCaretForPlatformAlignment() {
+        let originalRect = CGRect(x: 12, y: 4, width: 2, height: 28)
+
+        let resolved = NativeTextInsertionPointRectResolver.rect(
+            original: originalRect,
+            fontLineHeight: 16,
+            verticalOffset: -1
+        )
+
+        XCTAssertEqual(resolved.size.height, 18)
+        XCTAssertEqual(resolved.origin.y, 8)
+    }
+
     func testNativeTextEditorLayoutAddsVerticalInsetToAvoidSelectionClipping() {
         XCTAssertEqual(NativeTextEditorLayout.textContainerInset.height, 2)
         XCTAssertEqual(

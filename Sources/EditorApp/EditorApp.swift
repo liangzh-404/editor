@@ -19,6 +19,10 @@ struct EditorApp: App {
         WindowGroup {
             AppEnvironment.makeRootView()
         }
+#if os(macOS)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1600, height: 860)
+#endif
         .commands {
             EditorEditingCommands()
         }
@@ -52,7 +56,7 @@ private struct EditorEditingCommands: Commands {
     @AppStorage(EditorShortcutCommand.insertMarkdownLink.userDefaultsKey) private var insertMarkdownLinkShortcut = EditorShortcutCommand.insertMarkdownLink.defaultShortcutRawValue
 
     var body: some Commands {
-        CommandGroup(replacing: .newItem) {
+        CommandGroup(after: .newItem) {
             Button("新建文档") {
                 createNewDocumentAction?()
             }
@@ -182,10 +186,32 @@ private struct ShortcutSettingRow: View {
 #if os(macOS)
 @MainActor
 final class EditorMacAppDelegate: NSObject, NSApplicationDelegate {
+    private var keyWindowObserver: NSObjectProtocol?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        keyWindowObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let window = notification.object as? NSWindow else {
+                return
+            }
+            MainActor.assumeIsolated {
+                self?.configureMainWindowChrome(window)
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            self.requestMainWindowIfNeeded()
+        }
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldSaveApplicationState(_ app: NSApplication) -> Bool {
         false
     }
 
@@ -204,14 +230,21 @@ final class EditorMacAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestMainWindowIfNeeded(_ application: NSApplication = .shared) {
-        let hasVisibleWindow = application.windows.contains { window in
-            window.isVisible && window.canBecomeKey
-        }
-        guard MacWindowVisibilityPolicy.shouldRequestMainWindow(hasVisibleWindows: hasVisibleWindow) else {
-            return
+        let hasMainWindow = application.windows.contains { window in
+            window.canBecomeKey
         }
 
         application.activate(ignoringOtherApps: true)
+        if MacWindowVisibilityPolicy.shouldRequestMainWindow(hasVisibleWindows: hasMainWindow) {
+            requestNewWindow(application)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.bringMainWindowsToFront(application)
+        }
+    }
+
+    private func requestNewWindow(_ application: NSApplication) {
         if application.sendAction(Selector(("newWindow:")), to: nil, from: nil) {
             return
         }
@@ -228,6 +261,38 @@ final class EditorMacAppDelegate: NSObject, NSApplicationDelegate {
                 fileMenu.performActionForItem(at: newWindowItemIndex)
             }
         }
+    }
+
+    private func bringMainWindowsToFront(_ application: NSApplication) {
+        application.activate(ignoringOtherApps: true)
+        for window in application.windows where window.canBecomeKey {
+            configureMainWindowChrome(window)
+            window.collectionBehavior = window.collectionBehavior.union(.moveToActiveSpace)
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.orderFrontRegardless()
+            window.makeKeyAndOrderFront(nil)
+            window.makeMain()
+        }
+    }
+
+    private func configureMainWindowChrome(_ window: NSWindow) {
+        window.styleMask.insert(.fullSizeContentView)
+        window.toolbar = nil
+        window.title = ""
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        if #available(macOS 11.0, *) {
+            window.titlebarSeparatorStyle = .none
+        }
+        let backgroundColor = EditorDesignTokens.Colors.appBackground.nsColor
+        window.backgroundColor = backgroundColor
+        window.isOpaque = false
+        window.contentView?.wantsLayer = true
+        window.contentView?.layer?.backgroundColor = backgroundColor.cgColor
+        window.contentView?.superview?.wantsLayer = true
+        window.contentView?.superview?.layer?.backgroundColor = backgroundColor.cgColor
     }
 }
 #endif

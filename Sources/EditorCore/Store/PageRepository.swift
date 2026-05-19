@@ -70,7 +70,8 @@ final class PageRepository {
                    pages.workspace_id,
                    pages.notebook_id,
                    pages.title,
-                   pages.is_favorite
+                   pages.is_favorite,
+                   pages.updated_at
             FROM pages
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
             WHERE pages.workspace_id = ?
@@ -84,7 +85,8 @@ final class PageRepository {
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
                 title: row["title"] ?? "",
-                isFavorite: Self.sqliteBool(row["is_favorite"])
+                isFavorite: Self.sqliteBool(row["is_favorite"]),
+                updatedAt: row["updated_at"]
             )
         }
 
@@ -94,7 +96,8 @@ final class PageRepository {
                    pages.workspace_id,
                    pages.notebook_id,
                    pages.title,
-                   pages.is_favorite
+                   pages.is_favorite,
+                   pages.updated_at
             FROM pages
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
             WHERE pages.workspace_id = ?
@@ -108,7 +111,8 @@ final class PageRepository {
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
                 title: row["title"] ?? "",
-                isFavorite: Self.sqliteBool(row["is_favorite"])
+                isFavorite: Self.sqliteBool(row["is_favorite"]),
+                updatedAt: row["updated_at"]
             )
         }
 
@@ -638,7 +642,8 @@ final class PageRepository {
             workspaceID: workspaceID,
             notebookID: resolvedNotebookID,
             title: title,
-            isFavorite: false
+            isFavorite: false,
+            updatedAt: now
         )
     }
 
@@ -1525,7 +1530,8 @@ final class PageRepository {
             workspaceID: workspaceID,
             notebookID: notebookID,
             title: title,
-            isFavorite: false
+            isFavorite: false,
+            updatedAt: now
         )
     }
 
@@ -1536,7 +1542,8 @@ final class PageRepository {
                    workspace_id,
                    notebook_id,
                    title,
-                   is_favorite
+                   is_favorite,
+                   updated_at
             FROM pages
             WHERE id = ?
               AND is_archived = 0
@@ -1549,7 +1556,8 @@ final class PageRepository {
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
                 title: row["title"] ?? "",
-                isFavorite: Self.sqliteBool(row["is_favorite"])
+                isFavorite: Self.sqliteBool(row["is_favorite"]),
+                updatedAt: row["updated_at"]
             )
         }
     }

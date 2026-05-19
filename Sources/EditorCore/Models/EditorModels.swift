@@ -26,19 +26,22 @@ struct PageSummary: Identifiable, Equatable, Sendable {
     let notebookID: String?
     let title: String
     let isFavorite: Bool
+    let updatedAt: String?
 
     init(
         id: String,
         workspaceID: String,
         notebookID: String? = nil,
         title: String,
-        isFavorite: Bool = false
+        isFavorite: Bool = false,
+        updatedAt: String? = nil
     ) {
         self.id = id
         self.workspaceID = workspaceID
         self.notebookID = notebookID
         self.title = title
         self.isFavorite = isFavorite
+        self.updatedAt = updatedAt
     }
 }
 
@@ -609,7 +612,8 @@ extension WorkspaceSnapshot {
                         workspaceID: page.workspaceID,
                         notebookID: page.notebookID,
                         title: title,
-                        isFavorite: page.isFavorite
+                        isFavorite: page.isFavorite,
+                        updatedAt: page.updatedAt
                     )
                     : page
             },
@@ -638,7 +642,8 @@ extension WorkspaceSnapshot {
                         workspaceID: page.workspaceID,
                         notebookID: page.notebookID,
                         title: page.title,
-                        isFavorite: isFavorite
+                        isFavorite: isFavorite,
+                        updatedAt: page.updatedAt
                     )
                     : page
             },
@@ -649,7 +654,8 @@ extension WorkspaceSnapshot {
                         workspaceID: page.workspaceID,
                         notebookID: page.notebookID,
                         title: page.title,
-                        isFavorite: isFavorite
+                        isFavorite: isFavorite,
+                        updatedAt: page.updatedAt
                     )
                     : page
             },

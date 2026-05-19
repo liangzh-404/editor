@@ -353,6 +353,28 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testFocusEditorCanvasForUICreatesParagraphWhenPageHasNoEditableBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let initialBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.deleteBlock(blockID: initialBlockID)
+        XCTAssertEqual(viewModel.visibleBlocks, [])
+
+        let focusedBlockID = viewModel.focusEditorCanvasForUI()
+
+        XCTAssertEqual(viewModel.visibleBlocks.count, 1)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.type, .paragraph)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
+        XCTAssertEqual(viewModel.pendingFocusBlockID, focusedBlockID)
+    }
+
+    @MainActor
     func testFocusEditorCanvasCreatesParagraphAfterTrailingNonEditableBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }
