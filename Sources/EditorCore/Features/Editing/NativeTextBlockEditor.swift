@@ -682,6 +682,26 @@ enum NativeTextEditorLayout {
     }
 }
 
+enum NativeTextMeasurementWidthPolicy {
+    static let unwrappedWidth: CGFloat = 10_000
+    static let minimumWrappedWidth: CGFloat = 10
+
+    static func width(
+        boundsWidth: CGFloat,
+        viewportWidth: CGFloat,
+        horizontalMargin: CGFloat,
+        lineWrapping: Bool
+    ) -> CGFloat {
+        guard lineWrapping else {
+            return unwrappedWidth
+        }
+
+        let viewportWidth = max(minimumWrappedWidth, viewportWidth - horizontalMargin)
+        let proposedWidth = boundsWidth > 0 ? boundsWidth : viewportWidth
+        return min(max(proposedWidth, minimumWrappedWidth), viewportWidth)
+    }
+}
+
 enum CodeBlockSyntaxHighlightApplicator {
     static func attributedString(
         text: String,
@@ -866,6 +886,7 @@ struct NativeTextBlockEditor: View {
                     .accessibilityHidden(true)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: effectiveHeight)
     }
 
@@ -2207,6 +2228,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.isScrollEnabled = false
         textView.textContainerInset = NativeTextEditorLayout.uiTextContainerInset
         textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.showsHorizontalScrollIndicator = false
+        textView.alwaysBounceHorizontal = false
+        textView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         configureLineWrapping(textView: textView)
         textView.adjustsFontForContentSizeCategory = true
         context.coordinator.configureKeyboardAccessory(
@@ -2316,7 +2342,10 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     }
 
     private func configureLineWrapping(textView: UITextView) {
-        textView.textContainer.lineBreakMode = lineWrapping ? .byWordWrapping : .byClipping
+        textView.textContainer.lineBreakMode = lineWrapping ? .byCharWrapping : .byClipping
+        if lineWrapping {
+            textView.textContainer.widthTracksTextView = true
+        }
     }
 
     private var uiFont: UIFont {
@@ -2815,8 +2844,12 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             guard !textView.text.isEmpty else {
                 return parent.minimumHeight
             }
-            let fallbackWidth = UIScreen.main.bounds.width - 32
-            let width = parent.lineWrapping ? max(textView.bounds.width, fallbackWidth) : 10_000
+            let width = NativeTextMeasurementWidthPolicy.width(
+                boundsWidth: textView.bounds.width,
+                viewportWidth: UIScreen.main.bounds.width,
+                horizontalMargin: CGFloat(EditorCanvasChromeLayout.compactHorizontalPadding * 2),
+                lineWrapping: parent.lineWrapping
+            )
             let fittingSize = textView.sizeThatFits(
                 CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
             )
@@ -2855,6 +2888,19 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     var onPasteAttachmentURLs: (([URL]) -> Bool)?
     var onHorizontalSwipe: ((CGFloat) -> Bool)?
     private var didInstallHorizontalSwipeRecognizers = false
+
+    override var intrinsicContentSize: CGSize {
+        let size = super.intrinsicContentSize
+        return CGSize(width: UIView.noIntrinsicMetric, height: size.height)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        textContainer.size = CGSize(
+            width: max(1, bounds.width),
+            height: CGFloat.greatestFiniteMagnitude
+        )
+    }
 
     override func caretRect(for position: UITextPosition) -> CGRect {
         NativeTextInsertionPointRectResolver.rect(

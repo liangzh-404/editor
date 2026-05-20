@@ -108,9 +108,11 @@ enum EditorDesignTokens {
 }
 
 enum EditorCanvasChromeLayout {
+    static let compactHorizontalPadding: Double = 14
+
     static var horizontalPadding: Double {
 #if os(iOS)
-        20
+        compactHorizontalPadding
 #else
         40
 #endif
@@ -134,6 +136,37 @@ enum EditorCanvasChromeLayout {
 
     static var blockRowTitleAlignmentCompensation: Double {
         0
+    }
+}
+
+enum MobileNavigationTitleVisibilityResolver {
+    static func isNavigationTitleVisible(titleFrame: CGRect, topMaskHeight: CGFloat) -> Bool {
+        guard !titleFrame.isEmpty else {
+            return false
+        }
+        return titleFrame.maxY <= topMaskHeight
+    }
+}
+
+enum MobileNavigationTitleScrollVisibilityResolver {
+    static func isNavigationTitleVisible(
+        baselineMaxY: CGFloat?,
+        scrollOffsetY: CGFloat,
+        topMaskHeight: CGFloat
+    ) -> Bool {
+        guard let baselineMaxY else {
+            return false
+        }
+        let currentTitleFrame = CGRect(
+            x: 0,
+            y: baselineMaxY - max(0, scrollOffsetY) - 1,
+            width: 1,
+            height: 1
+        )
+        return MobileNavigationTitleVisibilityResolver.isNavigationTitleVisible(
+            titleFrame: currentTitleFrame,
+            topMaskHeight: topMaskHeight
+        )
     }
 }
 
@@ -4992,6 +5025,21 @@ private struct ArchivedPageRow: View {
 
 private enum EditorCanvasCoordinateSpace {
     static let blockSelection = "editor.canvas.block-selection"
+#if os(iOS)
+    static let mobileNavigationTitle = "editor.canvas.mobile-navigation-title"
+#endif
+}
+
+private enum MobileNavigationBarChrome {
+    static let topMaskHeight: CGFloat = 72
+}
+
+private struct MobilePageTitleFramePreferenceKey: PreferenceKey {
+    static let defaultValue = CGRect.zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
 }
 
 private struct BlockRowFramePreferenceKey: PreferenceKey {
@@ -5125,6 +5173,11 @@ private struct EditorCanvasView: View {
     @State private var blockRowFrames: [String: CGRect] = [:]
     @State private var blockSelectionMarqueeStart: CGPoint?
     @State private var blockSelectionMarqueeCurrent: CGPoint?
+#if os(iOS)
+    @State private var isMobileNavigationTitleVisible = false
+    @State private var mobilePageTitleBaselineMaxY: CGFloat?
+    @State private var mobileCanvasScrollOffsetY: CGFloat = 0
+#endif
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -5139,6 +5192,9 @@ private struct EditorCanvasView: View {
                         .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
                         .disabled(page == nil)
                         .accessibilityIdentifier("editor.page-title")
+#if os(iOS)
+                        .background(titleFrameReporter)
+#endif
                         .simultaneousGesture(
                             TapGesture().onEnded {
                                 clearTransientSelections()
@@ -5146,10 +5202,6 @@ private struct EditorCanvasView: View {
                         )
 
                     Spacer(minLength: 12)
-
-#if os(iOS)
-                    pageActionsMenu
-#endif
                 }
 
                 if PageTagEditorVisibilityPolicy.isVisible(
@@ -5443,6 +5495,16 @@ private struct EditorCanvasView: View {
             .onPreferenceChange(BlockRowFramePreferenceKey.self) { frames in
                 blockRowFrames = frames
             }
+#if os(iOS)
+            .onPreferenceChange(MobilePageTitleFramePreferenceKey.self) { frame in
+                updateMobileNavigationTitleVisibility(titleFrame: frame)
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y
+            } action: { _, offsetY in
+                updateMobileNavigationTitleVisibility(scrollOffsetY: offsetY)
+            }
+#endif
             .overlay(alignment: .topLeading) {
                 if let blockSelectionMarqueeRect {
                     BlockSelectionMarqueeOverlay(rect: blockSelectionMarqueeRect)
@@ -5487,6 +5549,9 @@ private struct EditorCanvasView: View {
 #endif
         }
         .background(EditorDesignTokens.Colors.editorBackground.color)
+#if os(iOS)
+        .coordinateSpace(name: EditorCanvasCoordinateSpace.mobileNavigationTitle)
+#endif
 #if os(iOS)
         .safeAreaInset(edge: .bottom) {
             if !editorSession.selectedBlockIDs.isEmpty {
@@ -5648,6 +5713,17 @@ private struct EditorCanvasView: View {
 #if os(iOS)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                mobileNavigationTitleView
+            }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                pageActionsMenu
+            }
+        }
+        .toolbarBackground(.regularMaterial, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
 #else
         .navigationTitle("")
 #endif
@@ -5658,6 +5734,11 @@ private struct EditorCanvasView: View {
             scheduleScrollMetricsReset()
             schedulePendingFocusIfNeeded(pendingFocusBlockID)
             logRenderMetrics(reason: "appear")
+        }
+        .onChange(of: page?.id) { _, _ in
+#if os(iOS)
+            resetMobileNavigationTitleVisibility()
+#endif
         }
         .onChange(of: pendingFocusBlockID) { _, blockID in
             schedulePendingFocusIfNeeded(blockID)
@@ -5720,6 +5801,67 @@ private struct EditorCanvasView: View {
             onPageTitleChange(title)
         }
     }
+
+#if os(iOS)
+    private var mobileNavigationTitleView: some View {
+        Group {
+            if isMobileNavigationTitleVisible {
+                Text(page?.title ?? "")
+                    .font(.headline)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("editor.mobile-navigation-title")
+            }
+        }
+    }
+
+    private func resetMobileNavigationTitleVisibility() {
+        mobilePageTitleBaselineMaxY = nil
+        mobileCanvasScrollOffsetY = 0
+        isMobileNavigationTitleVisible = false
+    }
+
+    private func updateMobileNavigationTitleVisibility(
+        titleFrame: CGRect? = nil,
+        scrollOffsetY: CGFloat? = nil
+    ) {
+        if let scrollOffsetY {
+            mobileCanvasScrollOffsetY = max(0, scrollOffsetY)
+        }
+
+        if let titleFrame, !titleFrame.isEmpty {
+            let reportedBaselineMaxY = titleFrame.maxY + mobileCanvasScrollOffsetY
+            if mobilePageTitleBaselineMaxY == nil || mobileCanvasScrollOffsetY == 0 {
+                mobilePageTitleBaselineMaxY = reportedBaselineMaxY
+            }
+        }
+
+        guard let mobilePageTitleBaselineMaxY else {
+            if isMobileNavigationTitleVisible {
+                isMobileNavigationTitleVisible = false
+            }
+            return
+        }
+
+        let shouldShowTitle = MobileNavigationTitleScrollVisibilityResolver
+            .isNavigationTitleVisible(
+                baselineMaxY: mobilePageTitleBaselineMaxY,
+                scrollOffsetY: mobileCanvasScrollOffsetY,
+                topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+            )
+        if isMobileNavigationTitleVisible != shouldShowTitle {
+            isMobileNavigationTitleVisible = shouldShowTitle
+        }
+    }
+
+    private var titleFrameReporter: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: MobilePageTitleFramePreferenceKey.self,
+                value: proxy.frame(in: .named(EditorCanvasCoordinateSpace.mobileNavigationTitle))
+            )
+        }
+    }
+#endif
 
     private var pageReferenceTargets: [PageSummary] {
         pages.filter { targetPage in

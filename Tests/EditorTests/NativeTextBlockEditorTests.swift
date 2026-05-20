@@ -184,6 +184,45 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testNativeTextMeasurementWidthClampsLongContentToViewport() {
+        XCTAssertEqual(
+            NativeTextMeasurementWidthPolicy.width(
+                boundsWidth: 900,
+                viewportWidth: 393,
+                horizontalMargin: 28,
+                lineWrapping: true
+            ),
+            365
+        )
+        XCTAssertEqual(
+            NativeTextMeasurementWidthPolicy.width(
+                boundsWidth: 0,
+                viewportWidth: 393,
+                horizontalMargin: 28,
+                lineWrapping: true
+            ),
+            365
+        )
+        XCTAssertEqual(
+            NativeTextMeasurementWidthPolicy.width(
+                boundsWidth: 220,
+                viewportWidth: 393,
+                horizontalMargin: 28,
+                lineWrapping: true
+            ),
+            220
+        )
+        XCTAssertEqual(
+            NativeTextMeasurementWidthPolicy.width(
+                boundsWidth: 220,
+                viewportWidth: 393,
+                horizontalMargin: 28,
+                lineWrapping: false
+            ),
+            10_000
+        )
+    }
+
     #if os(macOS)
     func testCodeBlockSyntaxHighlightApplicatorPreservesTextAndBaseFont() {
         let code = "let value = 1\nprint(value)"
