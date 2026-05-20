@@ -259,6 +259,14 @@ final class EditorIOSEditingUITests: XCTestCase {
             "The compact keyboard toolbar should expose undo"
         )
         XCTAssertTrue(
+            app.descendants(matching: .any)["editor.mobile-keyboard.unordered-list"].waitForExistence(timeout: 5),
+            "The compact keyboard toolbar should expose unordered list"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["editor.mobile-keyboard.ordered-list"].waitForExistence(timeout: 5),
+            "The compact keyboard toolbar should expose ordered list"
+        )
+        XCTAssertTrue(
             app.descendants(matching: .any)["editor.mobile-keyboard.heading"].waitForExistence(timeout: 5),
             "The compact keyboard toolbar should expose the heading picker"
         )
@@ -282,9 +290,16 @@ final class EditorIOSEditingUITests: XCTestCase {
         XCTAssertTrue(headingButton.waitForExistence(timeout: 5), "The compact keyboard toolbar should expose 标题")
         headingButton.tap()
 
-        XCTAssertTrue(app.descendants(matching: .any)["editor.mobile-format.H1"].waitForExistence(timeout: 5))
+        let palette = app.otherElements["editor.mobile-format-palette"]
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        let h1Button = app.descendants(matching: .any)["editor.mobile-format.H1"]
+        XCTAssertTrue(h1Button.waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["editor.mobile-format.H2"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["editor.mobile-format.H3"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["editor.mobile-format.正文"].waitForExistence(timeout: 5))
+        h1Button.tap()
+        XCTAssertTrue(app.otherElements["editor.mobile-keyboard-toolbar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForNonExistence(palette, timeout: 5))
     }
 
     @MainActor
@@ -310,33 +325,15 @@ final class EditorIOSEditingUITests: XCTestCase {
             "Focusing a block should not flash or persist the expanded format palette before tapping 格式"
         )
 
-        let moreButton = app.descendants(matching: .any)["editor.mobile-keyboard.more-format"]
-        XCTAssertTrue(moreButton.waitForExistence(timeout: 5), "The compact keyboard toolbar should expose 更多")
-        moreButton.tap()
-
-        let palette = app.otherElements["editor.mobile-format-palette"]
-        XCTAssertTrue(
-            palette.waitForExistence(timeout: 5),
-            "The Craft-style format palette should appear in the lower half after tapping 格式"
-        )
-        XCTAssertFalse(
-            app.descendants(matching: .any)["editor.mobile-format.Focus"].exists,
-            "Chinese iPhone formatting should not expose the extra Focus concept"
-        )
-
-        let bullets = app.descendants(matching: .any)["editor.mobile-format.项目符号"]
-        XCTAssertTrue(bullets.waitForExistence(timeout: 5), "The 正文 tab should expose a bulleted-list command")
+        let bullets = app.descendants(matching: .any)["editor.mobile-keyboard.unordered-list"]
+        XCTAssertTrue(bullets.waitForExistence(timeout: 5), "The compact toolbar should expose a direct bulleted-list command")
         bullets.tap()
 
         let bulletRow = app.descendants(matching: .any)["editor.unordered-list.\(blockID)"]
         XCTAssertTrue(bulletRow.waitForExistence(timeout: 5), "Tapping Bullets should convert the focused block to a list item")
         XCTAssertTrue(
             app.otherElements["editor.mobile-keyboard-toolbar"].waitForExistence(timeout: 5),
-            "Changing block type from the format palette should automatically return to the compact keyboard toolbar"
-        )
-        XCTAssertTrue(
-            waitForNonExistence(palette, timeout: 5),
-            "Changing block type should dismiss the expanded format palette without a second tap"
+            "Changing block type from the direct toolbar action should keep the compact keyboard toolbar"
         )
     }
 

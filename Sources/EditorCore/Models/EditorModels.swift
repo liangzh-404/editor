@@ -374,11 +374,32 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
     }
 
     func previewPath(for block: BlockSnapshot) -> String? {
-        guard case .thumbnail(let path) = previewState(for: block) else {
-            return nil
+        previewCandidatePaths(for: block).first
+    }
+
+    func previewCandidatePaths(for block: BlockSnapshot) -> [String] {
+        guard matches(block: block) else {
+            return []
         }
 
-        return path
+        switch kind {
+        case .image:
+            var paths: [String] = []
+            if let thumbnailPath {
+                paths.append(thumbnailPath)
+            }
+            if !localPath.isEmpty, !paths.contains(localPath) {
+                paths.append(localPath)
+            }
+            return paths
+        case .video:
+            if let thumbnailPath {
+                return [thumbnailPath]
+            }
+            return []
+        case .file:
+            return []
+        }
     }
 
     func previewState(for block: BlockSnapshot) -> AttachmentPreviewState {

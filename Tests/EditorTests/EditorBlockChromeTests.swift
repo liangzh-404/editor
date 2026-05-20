@@ -95,18 +95,18 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertFalse(
             MobileNavigationTitleScrollVisibilityResolver.isNavigationTitleVisible(
                 baselineMaxY: 169,
-                scrollOffsetY: 96,
+                scrollOffsetY: 16,
                 topMaskHeight: 72
             ),
-            "The top title should stay hidden while the body title has not fully entered the top mask"
+            "The top title should stay hidden before the user has clearly scrolled the page"
         )
         XCTAssertTrue(
             MobileNavigationTitleScrollVisibilityResolver.isNavigationTitleVisible(
                 baselineMaxY: 169,
-                scrollOffsetY: 97,
+                scrollOffsetY: 32,
                 topMaskHeight: 72
             ),
-            "The top title should appear as soon as scrolling moves the body title fully into the top mask"
+            "The top title should appear once scrolling has clearly moved content under the top bar"
         )
         XCTAssertTrue(
             MobileNavigationTitleScrollVisibilityResolver.isNavigationTitleVisible(
@@ -115,6 +115,14 @@ final class EditorBlockChromeTests: XCTestCase {
                 topMaskHeight: 72
             ),
             "The top title should remain visible after the body title has fully scrolled away"
+        )
+        XCTAssertTrue(
+            MobileNavigationTitleScrollVisibilityResolver.isNavigationTitleVisible(
+                baselineMaxY: nil,
+                scrollOffsetY: 32,
+                topMaskHeight: 72
+            ),
+            "The top title should still appear after a real scroll even if the title frame preference is delayed"
         )
     }
 
@@ -423,11 +431,12 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(CompactChrome.backgroundBlue, EditorDesignTokens.Colors.appBackground.blue)
     }
 
-    func testCompactLibraryChromeUsesBearLikeDarkSidebar() {
-        assertColor(CompactLibraryChrome.backgroundToken, red: 0x30, green: 0x34, blue: 0x37)
+    func testCompactLibraryChromeUsesLightAppSurface() {
+        assertColor(CompactLibraryChrome.backgroundToken, red: 0xF7, green: 0xF5, blue: 0xF1)
+        assertColor(CompactLibraryChrome.primaryForegroundToken, red: 0x22, green: 0x21, blue: 0x1F)
+        assertColor(CompactLibraryChrome.mutedForegroundToken, red: 0x62, green: 0x5F, blue: 0x59)
         XCTAssertEqual(CompactLibraryChrome.rowCornerRadius, 13)
-        XCTAssertEqual(CompactLibraryChrome.selectedRowOpacity, 0.13)
-        XCTAssertEqual(CompactLibraryChrome.mutedForegroundOpacity, 0.58)
+        XCTAssertEqual(CompactLibraryChrome.selectedRowOpacity, 0.08)
     }
 
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {
@@ -554,7 +563,7 @@ final class EditorBlockChromeTests: XCTestCase {
                 isEditingBlock: false,
                 nestingLevel: 0
             ),
-            .revealOutline
+            .selectBlock
         )
         XCTAssertEqual(
             MobileBlockSwipeActionResolver.action(
@@ -571,7 +580,7 @@ final class EditorBlockChromeTests: XCTestCase {
                 isEditingBlock: false,
                 nestingLevel: 0
             ),
-            .revealPageList
+            .selectBlock
         )
         XCTAssertEqual(
             MobileBlockSwipeActionResolver.action(
@@ -854,6 +863,13 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(MobileKeyboardToolbarChrome.iconSize, 19)
         XCTAssertEqual(MobileKeyboardToolbarChrome.primaryIconWeight, .regular)
         XCTAssertEqual(MobileKeyboardToolbarChrome.secondaryIconWeight, .medium)
+    }
+
+    func testMobileKeyboardToolbarPrioritizesListAndHeadingFormatActions() {
+        XCTAssertEqual(
+            MobileKeyboardToolbarFormatActionResolver.visibleActions,
+            [.unorderedList, .orderedList, .heading]
+        )
     }
 
     func testDesktopAuxiliaryRailButtonIsOfferedEvenBeforeRailHasContent() {
@@ -1287,6 +1303,34 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(preview.excerpt, "这里是正文摘要 #tag")
         XCTAssertEqual(preview.imageAttachment?.id, image.id)
         XCTAssertEqual(preview.fileAttachment?.id, file.id)
+    }
+
+    func testImageAttachmentPreviewCandidatesFallBackFromMissingThumbnailToOriginalFile() {
+        let block = BlockSnapshot(
+            id: "image-block",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "1",
+            type: .attachmentImage,
+            textPlain: "photo.png",
+            attachmentID: "attachment-photo"
+        )
+        let attachment = AttachmentSnapshot(
+            id: "attachment-photo",
+            workspaceID: "workspace",
+            originalFilename: "photo.png",
+            utiType: "public.png",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/photo.png",
+            thumbnailPath: "/tmp/missing-thumbnail.jpg",
+            kind: .image
+        )
+
+        XCTAssertEqual(
+            attachment.previewCandidatePaths(for: block),
+            ["/tmp/missing-thumbnail.jpg", "/tmp/photo.png"]
+        )
     }
 
     func testPageListDateSectionsGroupRecentPagesByLocalDay() {

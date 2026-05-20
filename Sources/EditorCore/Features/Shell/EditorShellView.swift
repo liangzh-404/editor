@@ -149,17 +149,23 @@ enum MobileNavigationTitleVisibilityResolver {
 }
 
 enum MobileNavigationTitleScrollVisibilityResolver {
+    static let fallbackScrollOffsetThreshold: CGFloat = 24
+
     static func isNavigationTitleVisible(
         baselineMaxY: CGFloat?,
         scrollOffsetY: CGFloat,
         topMaskHeight: CGFloat
     ) -> Bool {
+        let scrollOffsetY = max(0, scrollOffsetY)
+        if scrollOffsetY >= fallbackScrollOffsetThreshold {
+            return true
+        }
         guard let baselineMaxY else {
             return false
         }
         let currentTitleFrame = CGRect(
             x: 0,
-            y: baselineMaxY - max(0, scrollOffsetY) - 1,
+            y: baselineMaxY - scrollOffsetY - 1,
             width: 1,
             height: 1
         )
@@ -1136,7 +1142,7 @@ private struct CompactHomeView: View {
         .highPriorityGesture(compactForwardSwipeGesture)
         .toolbarBackground(CompactLibraryChrome.backgroundColor, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
-        .toolbarColorScheme(.dark, for: .navigationBar)
+        .toolbarColorScheme(.light, for: .navigationBar)
 #endif
     }
 
@@ -1157,11 +1163,11 @@ private struct CompactHomeView: View {
         HStack(spacing: 10) {
             Image(systemName: "sidebar.left")
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(Color.white.opacity(0.72))
+                .foregroundStyle(CompactLibraryChrome.mutedForegroundColor)
 
             Text("资料库")
                 .font(.title2.weight(.bold))
-                .foregroundStyle(Color.white.opacity(0.92))
+                .foregroundStyle(CompactLibraryChrome.primaryForegroundColor)
 
             Spacer()
 
@@ -1170,7 +1176,7 @@ private struct CompactHomeView: View {
             } label: {
                 Image(systemName: "square.and.pencil")
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(0.86))
+                    .foregroundStyle(CompactLibraryChrome.primaryForegroundColor)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("新建文档")
@@ -1190,27 +1196,27 @@ private struct CompactHomeView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("标签")
                 .font(.headline.weight(.semibold))
-                .foregroundStyle(Color.white.opacity(0.72))
+                .foregroundStyle(CompactLibraryChrome.mutedForegroundColor)
                 .padding(.horizontal, 4)
 
             ForEach(viewModel.snapshot.tags.prefix(8)) { tag in
                 HStack(spacing: 10) {
                     Image(systemName: "tag")
-                        .foregroundStyle(Color.white.opacity(CompactLibraryChrome.mutedForegroundOpacity))
+                        .foregroundStyle(CompactLibraryChrome.mutedForegroundColor)
                         .frame(width: 22)
                     Text(tag.path)
                         .lineLimit(1)
                     Spacer()
                     Text("\(tagCount(tag.id))")
-                        .foregroundStyle(Color.white.opacity(CompactLibraryChrome.mutedForegroundOpacity))
+                        .foregroundStyle(CompactLibraryChrome.mutedForegroundColor)
                 }
                 .font(.body.weight(.medium))
-                .foregroundStyle(Color.white.opacity(0.76))
+                .foregroundStyle(CompactLibraryChrome.primaryForegroundColor)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .background(
                     RoundedRectangle(cornerRadius: CGFloat(CompactLibraryChrome.rowCornerRadius), style: .continuous)
-                        .fill(Color.white.opacity(0.06))
+                        .fill(CompactLibraryChrome.unselectedRowColor)
                 )
             }
         }
@@ -1222,20 +1228,20 @@ private struct CompactHomeView: View {
             HStack(spacing: 10) {
                 Image(systemName: item.systemImage)
                     .frame(width: 22)
-                    .foregroundStyle(Color.white.opacity(isSelected ? 0.92 : CompactLibraryChrome.mutedForegroundOpacity))
+                    .foregroundStyle(isSelected ? CompactLibraryChrome.primaryForegroundColor : CompactLibraryChrome.mutedForegroundColor)
                 Text(item.title)
                     .font(.body.weight(.semibold))
                 Spacer()
                 Text("\(item.count)")
                     .font(.callout.weight(.medium))
-                    .foregroundStyle(Color.white.opacity(CompactLibraryChrome.mutedForegroundOpacity))
+                    .foregroundStyle(CompactLibraryChrome.mutedForegroundColor)
             }
-            .foregroundStyle(Color.white.opacity(isSelected ? 0.92 : 0.70))
+            .foregroundStyle(isSelected ? CompactLibraryChrome.primaryForegroundColor : CompactLibraryChrome.mutedForegroundColor)
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
             .background(
                 RoundedRectangle(cornerRadius: CGFloat(CompactLibraryChrome.rowCornerRadius), style: .continuous)
-                    .fill(Color.white.opacity(isSelected ? CompactLibraryChrome.selectedRowOpacity : 0))
+                    .fill(isSelected ? CompactLibraryChrome.selectedRowColor : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -1534,6 +1540,20 @@ enum MobileKeyboardToolbarChrome {
     static let secondaryIconWeight: Font.Weight = .medium
 }
 
+enum MobileKeyboardToolbarFormatAction: Equatable, Sendable {
+    case unorderedList
+    case orderedList
+    case heading
+}
+
+enum MobileKeyboardToolbarFormatActionResolver {
+    static let visibleActions: [MobileKeyboardToolbarFormatAction] = [
+        .unorderedList,
+        .orderedList,
+        .heading
+    ]
+}
+
 enum CompactChrome {
     static let backgroundRed: Double = EditorDesignTokens.Colors.appBackground.red
     static let backgroundGreen: Double = EditorDesignTokens.Colors.appBackground.green
@@ -1549,13 +1569,31 @@ enum CompactChrome {
 }
 
 enum CompactLibraryChrome {
-    static let backgroundToken = EditorColorToken.hex(0x30, 0x34, 0x37)
+    static let backgroundToken = EditorDesignTokens.Colors.appBackground
+    static let primaryForegroundToken = EditorDesignTokens.Colors.primaryText
+    static let mutedForegroundToken = EditorDesignTokens.Colors.secondaryText
     static let rowCornerRadius: Double = 13
-    static let selectedRowOpacity: Double = 0.13
-    static let mutedForegroundOpacity: Double = 0.58
+    static let selectedRowOpacity: Double = 0.08
+    static let unselectedRowOpacity: Double = 0.035
 
     static var backgroundColor: Color {
         backgroundToken.color
+    }
+
+    static var primaryForegroundColor: Color {
+        primaryForegroundToken.color
+    }
+
+    static var mutedForegroundColor: Color {
+        mutedForegroundToken.color
+    }
+
+    static var selectedRowColor: Color {
+        primaryForegroundToken.color.opacity(selectedRowOpacity)
+    }
+
+    static var unselectedRowColor: Color {
+        primaryForegroundToken.color.opacity(unselectedRowOpacity)
     }
 }
 
@@ -1864,8 +1902,7 @@ enum BlockSelectionMarqueeSelectionResolver {
 enum MobileBlockSwipeAction: Equatable, Sendable {
     case indent
     case outdent
-    case revealPageList
-    case revealOutline
+    case selectBlock
     case closeOutline
 }
 
@@ -1898,7 +1935,7 @@ enum MobileBlockSwipeActionResolver {
             return nestingLevel > 0 ? .outdent : nil
         }
 
-        return translation.width > 0 ? .revealPageList : .revealOutline
+        return .selectBlock
     }
 }
 
@@ -1987,11 +2024,14 @@ private enum MobileFormatPaletteTab: Equatable, Sendable {
 
 private struct MobileKeyboardInputBar: View {
     let isOutlinePresented: Bool
+    let selectedBlockType: BlockType
     let canCopy: Bool
     let canUndo: Bool
     let onCopy: () -> Void
     let onPaste: () -> Void
     let onUndo: () -> Void
+    let onApplyUnorderedList: () -> Void
+    let onApplyOrderedList: () -> Void
     let onShowHeadingPanel: () -> Void
     let onToggleOutline: () -> Void
     let onShowMoreFormatPanel: () -> Void
@@ -2021,12 +2061,9 @@ private struct MobileKeyboardInputBar: View {
                 action: onUndo
             )
 
-            toolbarButton(
-                systemImage: "textformat.size",
-                accessibilityLabel: "标题",
-                identifier: "editor.mobile-keyboard.heading",
-                action: onShowHeadingPanel
-            )
+            ForEach(MobileKeyboardToolbarFormatActionResolver.visibleActions, id: \.self) { action in
+                formatToolbarButton(action)
+            }
 
             Spacer(minLength: 0)
 
@@ -2103,6 +2140,80 @@ private struct MobileKeyboardInputBar: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier(identifier)
     }
+
+    @ViewBuilder
+    private func formatToolbarButton(_ action: MobileKeyboardToolbarFormatAction) -> some View {
+        switch action {
+        case .unorderedList:
+            toolbarButton(
+                systemImage: "list.bullet",
+                accessibilityLabel: "无序列表",
+                identifier: "editor.mobile-keyboard.unordered-list",
+                isSelected: selectedBlockType == .unorderedListItem,
+                action: onApplyUnorderedList
+            )
+        case .orderedList:
+            toolbarButton(
+                systemImage: "list.number",
+                accessibilityLabel: "有序列表",
+                identifier: "editor.mobile-keyboard.ordered-list",
+                isSelected: selectedBlockType == .orderedListItem,
+                action: onApplyOrderedList
+            )
+        case .heading:
+            textToolbarButton(
+                title: "H",
+                accessibilityLabel: "标题",
+                identifier: "editor.mobile-keyboard.heading",
+                isSelected: selectedBlockType == .heading1 || selectedBlockType == .heading2 || selectedBlockType == .heading3,
+                action: onShowHeadingPanel
+            )
+        }
+    }
+
+    private func toolbarButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        identifier: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        toolbarButton(
+            systemImage: systemImage,
+            accessibilityLabel: accessibilityLabel,
+            identifier: identifier,
+            action: action
+        )
+        .background(toolbarSelectionBackground(isSelected: isSelected))
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func textToolbarButton(
+        title: String,
+        accessibilityLabel: String,
+        identifier: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 18, weight: .semibold))
+                .frame(
+                    width: MobileKeyboardToolbarChrome.buttonSize,
+                    height: MobileKeyboardToolbarChrome.buttonSize
+                )
+        }
+        .buttonStyle(.plain)
+        .background(toolbarSelectionBackground(isSelected: isSelected))
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private func toolbarSelectionBackground(isSelected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(isSelected ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectedButtonFillOpacity) : Color.clear)
+    }
 }
 
 private struct MobileFormatPalette: View {
@@ -2177,6 +2288,9 @@ private struct MobileFormatPalette: View {
         LazyVGrid(columns: formatGridColumns, spacing: 10) {
             switch selectedTab {
             case .heading:
+                squareFormatButton("正文", systemImage: "textformat", isSelected: selectedBlockType == .paragraph) {
+                    onChangeType(.paragraph)
+                }
                 squareFormatButton("H1", systemImage: "textformat.size", isSelected: selectedBlockType == .heading1) {
                     onChangeType(.heading1)
                 }
@@ -2185,15 +2299,6 @@ private struct MobileFormatPalette: View {
                 }
                 squareFormatButton("H3", systemImage: "textformat.size", isSelected: selectedBlockType == .heading3) {
                     onChangeType(.heading3)
-                }
-                squareFormatButton("引用", systemImage: "quote.opening", isSelected: selectedBlockType == .quote) {
-                    onChangeType(.quote)
-                }
-                squareFormatButton("代码块", systemImage: "chevron.left.forwardslash.chevron.right", isSelected: selectedBlockType == .codeBlock) {
-                    onChangeType(.codeBlock)
-                }
-                squareFormatButton("提示", systemImage: "text.bubble", isSelected: selectedBlockType == .callout) {
-                    onChangeType(.callout)
                 }
             case .body:
                 squareFormatButton("任务", systemImage: "checklist", isSelected: selectedBlockType == .taskItem) {
@@ -2234,6 +2339,27 @@ private struct MobileFormatPalette: View {
                     onSelectTab(.more)
                 }
             case .more:
+                squareFormatButton("任务", systemImage: "checklist", isSelected: selectedBlockType == .taskItem) {
+                    onChangeType(.taskItem)
+                }
+                squareFormatButton("折叠", systemImage: "play.fill", isSelected: selectedBlockType == .toggle) {
+                    onChangeType(.toggle)
+                }
+                squareFormatButton("引用", systemImage: "quote.opening", isSelected: selectedBlockType == .quote) {
+                    onChangeType(.quote)
+                }
+                squareFormatButton("代码块", systemImage: "chevron.left.forwardslash.chevron.right", isSelected: selectedBlockType == .codeBlock) {
+                    onChangeType(.codeBlock)
+                }
+                squareFormatButton("提示", systemImage: "text.bubble", isSelected: selectedBlockType == .callout) {
+                    onChangeType(.callout)
+                }
+                squareFormatButton("减少缩进", systemImage: "decrease.indent", isEnabled: canOutdent) {
+                    onOutdent()
+                }
+                squareFormatButton("增加缩进", systemImage: "increase.indent", isEnabled: canIndent) {
+                    onIndent()
+                }
                 squareFormatButton("加粗", systemImage: "bold", isEnabled: canApplyInlineFormat) {
                     onApplyInlineFormat(.bold)
                 }
@@ -6130,6 +6256,7 @@ private struct EditorCanvasView: View {
     private var mobileNavigationTitleView: some View {
         Text(page?.title ?? "")
             .font(.headline)
+            .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
             .lineLimit(1)
             .opacity(isMobileNavigationTitleVisible ? 1 : 0)
             .accessibilityHidden(!isMobileNavigationTitleVisible)
@@ -9484,6 +9611,7 @@ private struct BlockRowView: View {
         } else {
             MobileKeyboardInputBar(
                 isOutlinePresented: isMobileOutlinePresented,
+                selectedBlockType: block.type,
                 canCopy: mobileKeyboardCopyText != nil,
                 canUndo: canUndoTextEdit,
                 onCopy: {
@@ -9496,6 +9624,12 @@ private struct BlockRowView: View {
                     let refocusSelection = mobileInlineFormatSelection
                     onUndoTextEdit()
                     requestMobileRefocusAfterFormatMutation(selection: refocusSelection)
+                },
+                onApplyUnorderedList: {
+                    applyMobileKeyboardBlockType(.unorderedListItem)
+                },
+                onApplyOrderedList: {
+                    applyMobileKeyboardBlockType(.orderedListItem)
                 },
                 onShowHeadingPanel: {
                     withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
@@ -9512,7 +9646,7 @@ private struct BlockRowView: View {
                 },
                 onShowMoreFormatPanel: {
                     withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
-                        mobileFormatPaletteTab = .body
+                        mobileFormatPaletteTab = .more
                         isMobileFormatPanelPresented = true
                     }
                 }
@@ -9664,6 +9798,15 @@ private struct BlockRowView: View {
         return true
     }
 
+    private func applyMobileKeyboardBlockType(_ type: BlockType) {
+        let refocusSelection = mobileInlineFormatSelection
+        let nextType: BlockType = block.type == type ? .paragraph : type
+        onChangeType(nextType)
+        if nextType.isTextEditable && nextType != .table {
+            requestMobileRefocusAfterFormatMutation(selection: refocusSelection)
+        }
+    }
+
     private func collapseMobileFormatPanelToKeyboard() {
         withAnimation(.spring(response: 0.22, dampingFraction: 0.92)) {
             isMobileFormatPanelPresented = false
@@ -9730,10 +9873,8 @@ private struct BlockRowView: View {
             if onOutdent() {
                 rowFocusRequest = BlockFocusRequest(blockID: block.id)
             }
-        case .revealPageList:
-            onRevealPageList()
-        case .revealOutline:
-            onRevealOutline()
+        case .selectBlock:
+            onSelectCurrentBlock()
         case .closeOutline:
             onCloseOutline()
         }
@@ -11457,23 +11598,24 @@ private struct AttachmentBlockRow: View {
     }
 
     private var thumbnailImage: Image? {
-        guard case .thumbnail(let path) = previewState else {
+        guard let attachment else {
             return nil
         }
-
+        let candidatePaths = attachment.previewCandidatePaths(for: block)
+        for path in candidatePaths {
 #if os(macOS)
-        guard let image = NSImage(contentsOfFile: path) else {
-            return nil
-        }
-        return Image(nsImage: image)
+            if let image = NSImage(contentsOfFile: path) {
+                return Image(nsImage: image)
+            }
 #elseif os(iOS)
-        guard let image = UIImage(contentsOfFile: path) else {
-            return nil
-        }
-        return Image(uiImage: image)
+            if let image = UIImage(contentsOfFile: path) {
+                return Image(uiImage: image)
+            }
 #else
-        return nil
+            return nil
 #endif
+        }
+        return nil
     }
 
     private var previewState: AttachmentPreviewState {
