@@ -1391,6 +1391,22 @@ enum AttachmentImageDisplayWidthPolicy {
     }
 }
 
+enum AttachmentImageResizeGestureCoordinateSpace: Equatable, Sendable {
+    case stableGlobal
+}
+
+enum AttachmentImageResizeGesturePolicy {
+    static let minimumDistance: CGFloat = 2
+    static let coordinateSpace: AttachmentImageResizeGestureCoordinateSpace = .stableGlobal
+
+    static var swiftUICoordinateSpace: CoordinateSpace {
+        switch coordinateSpace {
+        case .stableGlobal:
+            return .global
+        }
+    }
+}
+
 enum ListMarkerHorizontalAlignment: Equatable, Sendable {
     case leading
 
@@ -1962,6 +1978,29 @@ enum BlockSelectionMarqueeSelectionResolver {
                 return false
             }
             return selectionRect.intersects(frame)
+        }
+    }
+}
+
+enum BlockSelectionMarqueeStartPolicy {
+    static func isAllowed(
+        location: CGPoint,
+        blockFrames: [String: CGRect],
+        blockedInteractionFrames: [CGRect],
+        actionColumnWidth: CGFloat = CGFloat(EditorBlockChrome.actionColumnWidth)
+    ) -> Bool {
+        guard !blockedInteractionFrames.contains(where: { $0.contains(location) }) else {
+            return false
+        }
+
+        return !blockFrames.contains { _, frame in
+            let handleFrame = CGRect(
+                x: frame.minX,
+                y: frame.minY,
+                width: actionColumnWidth,
+                height: frame.height
+            )
+            return handleFrame.contains(location)
         }
     }
 }
@@ -5619,6 +5658,14 @@ private struct BlockRowFramePreferenceKey: PreferenceKey {
     }
 }
 
+private struct AttachmentResizeHandleFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newValue in newValue })
+    }
+}
+
 private struct BlockSelectionMarqueeOverlay: View {
     let rect: CGRect
 
@@ -5742,6 +5789,7 @@ private struct EditorCanvasView: View {
     @State private var isAuxiliaryRailCollapsed = false
     @State private var isMobileOutlinePresented = false
     @State private var blockRowFrames: [String: CGRect] = [:]
+    @State private var attachmentResizeHandleFrames: [String: CGRect] = [:]
     @State private var blockSelectionMarqueeStart: CGPoint?
     @State private var blockSelectionMarqueeCurrent: CGPoint?
 #if os(iOS)
@@ -6088,6 +6136,9 @@ private struct EditorCanvasView: View {
             .coordinateSpace(name: EditorCanvasCoordinateSpace.blockSelection)
             .onPreferenceChange(BlockRowFramePreferenceKey.self) { frames in
                 blockRowFrames = frames
+            }
+            .onPreferenceChange(AttachmentResizeHandleFramePreferenceKey.self) { frames in
+                attachmentResizeHandleFrames = frames
             }
 #if os(iOS)
             .onPreferenceChange(MobilePageTitleFramePreferenceKey.self) { frame in
@@ -7323,15 +7374,11 @@ private struct EditorCanvasView: View {
     }
 
     private func isBlockSelectionMarqueeDragStart(_ location: CGPoint) -> Bool {
-        !blockRowFrames.contains { _, frame in
-            let handleFrame = CGRect(
-                x: frame.minX,
-                y: frame.minY,
-                width: CGFloat(EditorBlockChrome.actionColumnWidth),
-                height: frame.height
-            )
-            return handleFrame.contains(location)
-        }
+        BlockSelectionMarqueeStartPolicy.isAllowed(
+            location: location,
+            blockFrames: blockRowFrames,
+            blockedInteractionFrames: Array(attachmentResizeHandleFrames.values)
+        )
     }
 
     private func importPastedAttachments(_ attachmentURLs: [URL]) -> Bool {
@@ -11803,17 +11850,23 @@ private struct AttachmentBlockRow: View {
                     .foregroundStyle(.white)
                     .accessibilityHidden(true)
             )
-            .contentShape(Rectangle())
             .padding(6)
+            .contentShape(Rectangle())
+            .background(imageResizeHandleFrameReporter)
             .gesture(
-                DragGesture(minimumDistance: 2, coordinateSpace: .local)
+                DragGesture(
+                    minimumDistance: AttachmentImageResizeGesturePolicy.minimumDistance,
+                    coordinateSpace: AttachmentImageResizeGesturePolicy.swiftUICoordinateSpace
+                )
                     .onChanged { value in
                         let startWidth = resizeDragStartWidth ?? currentWidth
                         resizeDragStartWidth = startWidth
-                        transientImageWidth = AttachmentImageDisplayWidthPolicy.widthAfterDrag(
-                            startWidth: startWidth,
-                            translation: value.translation,
-                            availableWidth: availableWidth
+                        setTransientImageWidthDuringResize(
+                            AttachmentImageDisplayWidthPolicy.widthAfterDrag(
+                                startWidth: startWidth,
+                                translation: value.translation,
+                                availableWidth: availableWidth
+                            )
                         )
                     }
                     .onEnded { value in
@@ -11823,13 +11876,32 @@ private struct AttachmentBlockRow: View {
                             translation: value.translation,
                             availableWidth: availableWidth
                         )
-                        transientImageWidth = nil
-                        resizeDragStartWidth = nil
+                        setTransientImageWidthDuringResize(nil)
                         onImageDisplayWidthChange(AttachmentImageDisplayWidthPolicy.storedWidth(finalWidth))
                     }
             )
             .accessibilityLabel("调整图片大小")
             .accessibilityIdentifier("editor.attachment.\(block.id).resize-handle")
+    }
+
+    private var imageResizeHandleFrameReporter: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: AttachmentResizeHandleFramePreferenceKey.self,
+                value: [block.id: proxy.frame(in: .named(EditorCanvasCoordinateSpace.blockSelection))]
+            )
+        }
+    }
+
+    private func setTransientImageWidthDuringResize(_ width: CGFloat?) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            transientImageWidth = width
+            if width == nil {
+                resizeDragStartWidth = nil
+            }
+        }
     }
 
     private func compactAttachmentBody(descriptor: AttachmentBlockChromeDescriptor) -> some View {

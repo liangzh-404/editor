@@ -377,6 +377,15 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testAttachmentImageResizeGestureUsesStableCoordinates() {
+        XCTAssertEqual(AttachmentImageResizeGesturePolicy.minimumDistance, 2)
+        XCTAssertEqual(
+            AttachmentImageResizeGesturePolicy.coordinateSpace,
+            .stableGlobal,
+            "The resize handle moves as the image width changes, so the drag delta must be measured in a stable coordinate space."
+        )
+    }
+
     func testInlineLeadingControlsKeepTaskAndToggleTextBaselineCompensation() {
         let descriptor = InlineLeadingControlFrameDescriptor()
         let compactControlDescriptor = InlineLeadingControlFrameDescriptor(
@@ -899,6 +908,37 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(BlockSelectionMarqueeChrome.strokeWidth, 1)
         XCTAssertEqual(BlockSelectionMarqueeChrome.cornerRadius, 4)
         XCTAssertEqual(BlockSelectionMarqueeChrome.minimumVisibleDimension, 2)
+    }
+
+    func testBlockSelectionMarqueeStartIgnoresHandles() {
+        let blockFrames = [
+            "image": CGRect(x: 40, y: 80, width: 520, height: 260)
+        ]
+        let resizeHandleFrame = CGRect(x: 522, y: 300, width: 30, height: 30)
+
+        XCTAssertFalse(
+            BlockSelectionMarqueeStartPolicy.isAllowed(
+                location: CGPoint(x: 48, y: 120),
+                blockFrames: blockFrames,
+                blockedInteractionFrames: [resizeHandleFrame]
+            ),
+            "Dragging the block action column should keep using block drag/reorder, not marquee selection."
+        )
+        XCTAssertFalse(
+            BlockSelectionMarqueeStartPolicy.isAllowed(
+                location: CGPoint(x: 536, y: 314),
+                blockFrames: blockFrames,
+                blockedInteractionFrames: [resizeHandleFrame]
+            ),
+            "Dragging the image resize handle must not also start canvas marquee selection."
+        )
+        XCTAssertTrue(
+            BlockSelectionMarqueeStartPolicy.isAllowed(
+                location: CGPoint(x: 420, y: 314),
+                blockFrames: blockFrames,
+                blockedInteractionFrames: [resizeHandleFrame]
+            )
+        )
     }
 
     func testMobileActionChromeUsesThemeAccentInsteadOfSystemBlue() {
