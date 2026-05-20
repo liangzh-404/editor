@@ -2306,7 +2306,7 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
-    func testConflictDraftButtonsSeedManualMergeEditor() {
+    func testSeededConflictAutoResolvesWithoutManualMergeEditor() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launchEnvironment["EDITOR_UI_TEST_CONFLICT"] = "1"
@@ -2315,94 +2315,33 @@ final class EditorMacEditingUITests: XCTestCase {
         let mergeText = app.textViews
             .matching(NSPredicate(format: "identifier ENDSWITH %@", ".merge-text"))
             .firstMatch
-        XCTAssertTrue(mergeText.waitForExistence(timeout: 5), "Seeded conflict should expose a manual merge editor")
-        XCTAssertTrue(
-            mergeText.waitForValue(containing: "Local conflict draft", timeout: 5),
-            "Conflict merge editor should start from the local text"
-        )
+        XCTAssertFalse(mergeText.waitForExistence(timeout: 2), "Seeded conflict should be auto-resolved without exposing the manual merge editor")
 
-        let remoteDraftButton = app.buttons
-            .matching(NSPredicate(format: "identifier ENDSWITH %@", ".draft-remote"))
-            .firstMatch
-        XCTAssertTrue(remoteDraftButton.waitForExistence(timeout: 5), "Conflict row should expose a remote draft button")
-        remoteDraftButton.click()
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Auto-resolved conflict should keep the original block visible")
         XCTAssertTrue(
-            mergeText.waitForValue(containing: "Remote conflict draft", timeout: 5),
-            "Remote draft button should copy the remote text into the manual merge editor"
-        )
-
-        let applyMergeButton = app.buttons
-            .matching(NSPredicate(format: "identifier ENDSWITH %@", ".apply-merge"))
-            .firstMatch
-        XCTAssertTrue(
-            applyMergeButton.waitForExistence(timeout: 5),
-            "Copying a conflict draft should not resolve or remove the conflict row"
-        )
-
-        let localDraftButton = app.buttons
-            .matching(NSPredicate(format: "identifier ENDSWITH %@", ".draft-local"))
-            .firstMatch
-        XCTAssertTrue(localDraftButton.waitForExistence(timeout: 5), "Conflict row should expose a local draft button")
-        localDraftButton.click()
-        XCTAssertTrue(
-            mergeText.waitForValue(containing: "Local conflict draft", timeout: 5),
-            "Local draft button should copy the local text back into the manual merge editor"
+            textView.waitForValue(containing: "Local conflict draft\nRemote conflict draft", timeout: 5),
+            "Auto-resolved conflict should preserve both local and remote text in the block"
         )
     }
 
     @MainActor
-    func testConflictDraftAllButtonsSeedEveryManualMergeEditor() {
+    func testMultipleSeededConflictsAutoResolveWithoutBatchControls() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launchEnvironment["EDITOR_UI_TEST_CONFLICT"] = "1"
         app.launchEnvironment["EDITOR_UI_TEST_CONFLICT_COUNT"] = "2"
         app.launch()
 
-        let mergeTexts = app.textViews
-            .matching(NSPredicate(format: "identifier ENDSWITH %@", ".merge-text"))
-        let firstMergeText = mergeTexts.element(boundBy: 0)
-        let secondMergeText = mergeTexts.element(boundBy: 1)
-        XCTAssertTrue(firstMergeText.waitForExistence(timeout: 5), "First seeded conflict should expose a merge editor")
-        XCTAssertTrue(secondMergeText.waitForExistence(timeout: 5), "Second seeded conflict should expose a merge editor")
-        XCTAssertTrue(
-            firstMergeText.waitForValue(containing: "Local conflict draft", timeout: 5),
-            "The first merge editor should start from its local text"
-        )
-        XCTAssertTrue(
-            secondMergeText.waitForValue(containing: "Local conflict draft 2", timeout: 5),
-            "The second merge editor should start from its local text"
-        )
-
         let draftAllRemoteButton = app.buttons["editor.conflict.draft-all-remote"]
-        XCTAssertTrue(draftAllRemoteButton.waitForExistence(timeout: 5), "Conflict panel should expose a remote batch draft button")
-        draftAllRemoteButton.click()
-        XCTAssertTrue(
-            firstMergeText.waitForValue(containing: "Remote conflict draft", timeout: 5),
-            "Batch remote draft should copy the first remote text into its merge editor"
-        )
-        XCTAssertTrue(
-            secondMergeText.waitForValue(containing: "Remote conflict draft 2", timeout: 5),
-            "Batch remote draft should copy the second remote text into its merge editor"
-        )
-
-        let secondApplyMergeButton = app.buttons
-            .matching(NSPredicate(format: "identifier ENDSWITH %@", ".apply-merge"))
-            .element(boundBy: 1)
-        XCTAssertTrue(
-            secondApplyMergeButton.waitForExistence(timeout: 5),
-            "Batch draft seeding should keep both conflict rows unresolved"
-        )
-
         let draftAllLocalButton = app.buttons["editor.conflict.draft-all-local"]
-        XCTAssertTrue(draftAllLocalButton.waitForExistence(timeout: 5), "Conflict panel should expose a local batch draft button")
-        draftAllLocalButton.click()
+        XCTAssertFalse(draftAllRemoteButton.waitForExistence(timeout: 2), "Auto-resolved conflicts should not expose remote batch controls")
+        XCTAssertFalse(draftAllLocalButton.exists, "Auto-resolved conflicts should not expose local batch controls")
+
+        let textViews = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor.text."))
         XCTAssertTrue(
-            firstMergeText.waitForValue(containing: "Local conflict draft", timeout: 5),
-            "Batch local draft should copy the first local text back into its merge editor"
-        )
-        XCTAssertTrue(
-            secondMergeText.waitForValue(containing: "Local conflict draft 2", timeout: 5),
-            "Batch local draft should copy the second local text back into its merge editor"
+            textViews.firstMatch.waitForValue(containing: "Local conflict draft\nRemote conflict draft", timeout: 5),
+            "First auto-resolved conflict should preserve local and remote text"
         )
     }
 

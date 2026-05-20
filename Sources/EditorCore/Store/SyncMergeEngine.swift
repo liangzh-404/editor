@@ -215,17 +215,7 @@ final class SyncMergeEngine {
 
     func applyRemoteBlock(_ remote: RemoteBlockChange) throws {
         if try hasPendingLocalChange(entityType: "block", entityID: remote.blockID) {
-            try ConflictRepository(database: database).storeConflict(
-                ConflictVersion(
-                    blockID: remote.blockID,
-                    payloadJSON: remote.payloadJSON,
-                    textPlain: remote.textPlain,
-                    remoteRevision: remote.revision
-                )
-            )
-            EditorLog.sync.debug(
-                "sync_conflict_stored block_id=\(remote.blockID, privacy: .public) revision=\(remote.revision, privacy: .public)"
-            )
+            try autoMergeRemoteBlockWithPendingLocalChange(remote)
             return
         }
 
@@ -295,6 +285,89 @@ final class SyncMergeEngine {
                 orderKey: remote.orderKey
             )
         }
+    }
+
+    private func autoMergeRemoteBlockWithPendingLocalChange(_ remote: RemoteBlockChange) throws {
+        guard !remote.isDeleted else {
+            EditorLog.sync.debug(
+                "sync_remote_block_delete_kept_local block_id=\(remote.blockID, privacy: .public) revision=\(remote.revision, privacy: .public)"
+            )
+            return
+        }
+
+        guard let localRow = try database.query(
+            """
+            SELECT payload_json,
+                   text_plain,
+                   revision
+            FROM blocks
+            WHERE id = ? AND is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(remote.blockID)]
+        ).first else {
+            EditorLog.sync.debug(
+                "sync_remote_block_auto_merge_missing_local block_id=\(remote.blockID, privacy: .public)"
+            )
+            return
+        }
+
+        let localText = localRow["text_plain"] ?? ""
+        let mergedText = AutomaticTextMerge.merge(local: localText, remote: remote.textPlain)
+        let payloadJSON = try AutomaticTextMerge.payloadJSON(
+            updating: localRow["payload_json"] ?? "",
+            text: mergedText
+        )
+        let localRevision = Int(localRow["revision"] ?? "") ?? 0
+        let mergedRevision = max(localRevision, remote.revision) + 1
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        try database.withImmediateTransaction("auto_merge_remote_block") {
+            try database.execute(
+                """
+                UPDATE blocks
+                SET payload_json = ?,
+                    text_plain = ?,
+                    revision = ?,
+                    sync_state = ?,
+                    updated_at = ?
+                WHERE id = ? AND is_deleted = 0
+                """,
+                bindings: [
+                    .text(payloadJSON),
+                    .text(mergedText),
+                    .integer(mergedRevision),
+                    .text("local"),
+                    .text(now),
+                    .text(remote.blockID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM conflict_versions
+                WHERE block_id = ?
+                """,
+                bindings: [.text(remote.blockID)]
+            )
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: remote.blockID,
+                text: mergedText,
+                pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
+                blockReferenceTargetBlockID: remote.type == .blockReference
+                    ? Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
+                    : nil
+            )
+        }
+        try syncPageParentLink(
+            sourceBlockID: remote.blockID,
+            parentPageID: remote.pageID,
+            childPageID: Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
+            orderKey: remote.orderKey
+        )
+
+        EditorLog.sync.debug(
+            "sync_remote_block_auto_merged block_id=\(remote.blockID, privacy: .public) local_revision=\(localRevision, privacy: .public) remote_revision=\(remote.revision, privacy: .public)"
+        )
     }
 
     private func resolvableParentBlockID(_ parentBlockID: String?, childBlockID: String) throws -> String? {
