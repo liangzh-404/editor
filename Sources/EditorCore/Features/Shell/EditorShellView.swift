@@ -1985,6 +1985,99 @@ enum PageDragPayloadResolver {
     }
 }
 
+enum PageListSelectionRangeResolver {
+    static func selection(
+        anchorPageID: String,
+        targetPageID: String,
+        visiblePageIDs: [String]
+    ) -> [String] {
+        guard let anchorIndex = visiblePageIDs.firstIndex(of: anchorPageID),
+              let targetIndex = visiblePageIDs.firstIndex(of: targetPageID) else {
+            return []
+        }
+
+        let lowerBound = min(anchorIndex, targetIndex)
+        let upperBound = max(anchorIndex, targetIndex)
+        return Array(visiblePageIDs[lowerBound...upperBound])
+    }
+}
+
+enum PageListSelectAllResolver {
+    static func selection(visiblePageIDs: [String]) -> [String] {
+        visiblePageIDs
+    }
+}
+
+enum PageListMarqueeSelectionResolver {
+    static func selectedPageIDs(
+        selectionRect: CGRect,
+        pageFrames: [String: CGRect],
+        visiblePageIDs: [String]
+    ) -> [String] {
+        guard BlockSelectionMarqueeRectResolver.isVisible(selectionRect) else {
+            return []
+        }
+
+        return visiblePageIDs.filter { pageID in
+            guard let frame = pageFrames[pageID] else {
+                return false
+            }
+            return selectionRect.intersects(frame)
+        }
+    }
+}
+
+enum PageListMarqueeStartPolicy {
+    static func isAllowed(location: CGPoint, pageFrames: [String: CGRect]) -> Bool {
+        !pageFrames.contains { _, frame in
+            frame.contains(location)
+        }
+    }
+}
+
+enum PageListKeyboardShortcutAction: Equatable, Sendable {
+    case selectAllVisiblePages
+    case selectRangeToSelectedPage
+}
+
+enum PageListKeyboardShortcutActionResolver {
+    static func action(
+        keyCode: UInt16,
+        input: String?,
+        modifiers: Set<BlockKeyboardShortcutModifier>,
+        hasVisiblePages: Bool,
+        isTextEditing: Bool
+    ) -> PageListKeyboardShortcutAction? {
+        guard hasVisiblePages, !isTextEditing else {
+            return nil
+        }
+
+        if input?.lowercased() == "a",
+           modifiers == [.command] {
+            return .selectAllVisiblePages
+        }
+
+        if keyCode == BlockKeyboardShortcutResolver.returnKeyCode,
+           modifiers == [.shift] {
+            return .selectRangeToSelectedPage
+        }
+
+        return nil
+    }
+}
+
+#if os(macOS)
+enum PageListModifierKeyState {
+    static var isRangeSelectionActive: Bool {
+        NSEvent.modifierFlags.contains(.shift)
+    }
+
+    static var isToggleSelectionActive: Bool {
+        NSEvent.modifierFlags.contains(.command)
+    }
+}
+#endif
+
 enum PageRowIconResolver {
     static func systemName(isEncrypted: Bool) -> String {
         isEncrypted ? "lock.doc" : "doc.text"
@@ -4440,6 +4533,11 @@ private struct PageListView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     @Binding var activePageDragIDs: Set<String>
     @State private var selectedPageIDs: Set<String> = []
+    @State private var selectionAnchorPageID: String?
+    @State private var pageRowFrames: [String: CGRect] = [:]
+    @State private var pageSelectionMarqueeStart: CGPoint?
+    @State private var pageSelectionMarqueeCurrent: CGPoint?
+    @State private var keyboardActivationVersion = 0
 
     var body: some View {
 #if os(macOS)
@@ -4505,6 +4603,40 @@ private struct PageListView: View {
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 22)
+        }
+        .coordinateSpace(name: PageListCoordinateSpace.selection)
+        .onPreferenceChange(PageRowFramePreferenceKey.self) { frames in
+            pageRowFrames = frames
+        }
+        .overlay(alignment: .topLeading) {
+            if let pageSelectionMarqueeRect {
+                BlockSelectionMarqueeOverlay(rect: pageSelectionMarqueeRect)
+            }
+        }
+        .simultaneousGesture(pageSelectionMarqueeGesture())
+        .background {
+#if os(macOS)
+            PageListKeyboardShortcutBridge(
+                isEnabled: !viewModel.visibleDocumentPages.isEmpty,
+                activationVersion: keyboardActivationVersion,
+                onSelectAllVisiblePages: {
+                    selectAllVisiblePages()
+                },
+                onSelectRangeToSelectedPage: {
+                    selectPageRangeToSelectedPage()
+                }
+            )
+            .frame(width: 0, height: 0)
+#else
+            EmptyView()
+#endif
+        }
+        .onChange(of: viewModel.visibleDocumentPages.map(\.id)) { _, visiblePageIDs in
+            pruneSelectedPageIDs(visiblePageIDs: visiblePageIDs)
+        }
+        .onChange(of: viewModel.selectedCollection) { _, _ in
+            clearPageBatchSelection()
+            activatePageListKeyboardShortcuts()
         }
     }
 
@@ -4650,12 +4782,9 @@ private struct PageListView: View {
             isBeingDragged: isPageBeingDragged(page.id)
         )
         .contentShape(Rectangle())
+        .background(pageRowFrameReporter(page.id))
         .onTapGesture {
-            selectedPageIDs = []
-            activePageDragIDs = []
-            Task {
-                await viewModel.selectPageForUI(id: page.id)
-            }
+            handlePageTap(page.id)
         }
         .onDrag {
             let pageIDs = dragPageIDs(for: page.id)
@@ -4713,6 +4842,9 @@ private struct PageListView: View {
         } else {
             selectedPageIDs.insert(pageID)
         }
+        selectionAnchorPageID = pageID
+        activePageDragIDs = []
+        activatePageListKeyboardShortcuts()
     }
 
     private func dragPageIDs(for pageID: String) -> [String] {
@@ -4725,6 +4857,174 @@ private struct PageListView: View {
 
     private func isPageBeingDragged(_ pageID: String) -> Bool {
         activePageDragIDs.contains(pageID)
+    }
+
+    private func handlePageTap(_ pageID: String) {
+        activePageDragIDs = []
+
+#if os(macOS)
+        if PageListModifierKeyState.isRangeSelectionActive {
+            selectPageRange(to: pageID)
+            return
+        }
+
+        if PageListModifierKeyState.isToggleSelectionActive {
+            togglePageBatchSelection(pageID)
+            return
+        }
+#endif
+
+        selectedPageIDs = []
+        selectionAnchorPageID = pageID
+        Task {
+            await viewModel.selectPageForUI(id: pageID)
+        }
+    }
+
+    private func selectPageRange(to pageID: String) {
+        let visiblePageIDs = viewModel.visibleDocumentPages.map(\.id)
+        let anchorPageID = selectionAnchorPageID
+            ?? viewModel.selectedPageID
+            ?? visiblePageIDs.first { selectedPageIDs.contains($0) }
+            ?? pageID
+        let pageIDs = PageListSelectionRangeResolver.selection(
+            anchorPageID: anchorPageID,
+            targetPageID: pageID,
+            visiblePageIDs: visiblePageIDs
+        )
+        guard !pageIDs.isEmpty else {
+            return
+        }
+
+        selectedPageIDs = Set(pageIDs)
+        selectionAnchorPageID = anchorPageID
+        activatePageListKeyboardShortcuts()
+        Task {
+            await viewModel.selectPageForUI(id: pageID)
+        }
+    }
+
+    @discardableResult
+    private func selectAllVisiblePages() -> Bool {
+        let pageIDs = PageListSelectAllResolver.selection(
+            visiblePageIDs: viewModel.visibleDocumentPages.map(\.id)
+        )
+        guard !pageIDs.isEmpty else {
+            return false
+        }
+
+        selectedPageIDs = Set(pageIDs)
+        selectionAnchorPageID = pageIDs.first
+        activePageDragIDs = []
+        activatePageListKeyboardShortcuts()
+        return true
+    }
+
+    @discardableResult
+    private func selectPageRangeToSelectedPage() -> Bool {
+        guard let selectedPageID = viewModel.selectedPageID else {
+            return false
+        }
+
+        let previousSelection = selectedPageIDs
+        selectPageRange(to: selectedPageID)
+        return selectedPageIDs != previousSelection || !selectedPageIDs.isEmpty
+    }
+
+    private func clearPageBatchSelection() {
+        selectedPageIDs = []
+        selectionAnchorPageID = nil
+        activePageDragIDs = []
+        pageSelectionMarqueeStart = nil
+        pageSelectionMarqueeCurrent = nil
+    }
+
+    private func activatePageListKeyboardShortcuts() {
+        keyboardActivationVersion += 1
+    }
+
+    private func pruneSelectedPageIDs(visiblePageIDs: [String]) {
+        let visiblePageIDSet = Set(visiblePageIDs)
+        selectedPageIDs = selectedPageIDs.intersection(visiblePageIDSet)
+        if let selectionAnchorPageID,
+           !visiblePageIDSet.contains(selectionAnchorPageID) {
+            self.selectionAnchorPageID = selectedPageIDs.first
+        }
+        activePageDragIDs = activePageDragIDs.intersection(visiblePageIDSet)
+    }
+
+    private func pageRowFrameReporter(_ pageID: String) -> some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: PageRowFramePreferenceKey.self,
+                value: [pageID: proxy.frame(in: .named(PageListCoordinateSpace.selection))]
+            )
+        }
+    }
+
+    private var pageSelectionMarqueeRect: CGRect? {
+        guard let pageSelectionMarqueeStart,
+              let pageSelectionMarqueeCurrent else {
+            return nil
+        }
+
+        let rect = BlockSelectionMarqueeRectResolver.rect(
+            start: pageSelectionMarqueeStart,
+            current: pageSelectionMarqueeCurrent
+        )
+        guard BlockSelectionMarqueeRectResolver.isVisible(rect) else {
+            return nil
+        }
+        return rect
+    }
+
+    private func pageSelectionMarqueeGesture() -> some Gesture {
+        DragGesture(
+            minimumDistance: 2,
+            coordinateSpace: .named(PageListCoordinateSpace.selection)
+        )
+        .onChanged { value in
+            guard isPageSelectionMarqueeEnabled else {
+                return
+            }
+            guard PageListMarqueeStartPolicy.isAllowed(
+                location: value.startLocation,
+                pageFrames: pageRowFrames
+            ) else {
+                return
+            }
+
+            if pageSelectionMarqueeStart == nil {
+                pageSelectionMarqueeStart = value.startLocation
+                activatePageListKeyboardShortcuts()
+            }
+            pageSelectionMarqueeCurrent = value.location
+
+            let selectionRect = BlockSelectionMarqueeRectResolver.rect(
+                start: value.startLocation,
+                current: value.location
+            )
+            let pageIDs = PageListMarqueeSelectionResolver.selectedPageIDs(
+                selectionRect: selectionRect,
+                pageFrames: pageRowFrames,
+                visiblePageIDs: viewModel.visibleDocumentPages.map(\.id)
+            )
+            selectedPageIDs = Set(pageIDs)
+            selectionAnchorPageID = pageIDs.first ?? selectionAnchorPageID
+            activePageDragIDs = []
+        }
+        .onEnded { _ in
+            pageSelectionMarqueeStart = nil
+            pageSelectionMarqueeCurrent = nil
+        }
+    }
+
+    private var isPageSelectionMarqueeEnabled: Bool {
+#if os(macOS)
+        viewModel.selectedCollection != .search
+#else
+        false
+#endif
     }
 
     private var navigationTitle: String {
@@ -5420,7 +5720,11 @@ private struct PageRow: View {
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(isSelected ? Color.primary.opacity(0.09) : Color.clear)
+                .fill(compactBackgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(compactBorderColor, lineWidth: 1)
         )
     }
 
@@ -5492,13 +5796,38 @@ private struct PageRow: View {
         )
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? EditorDesignTokens.Colors.border.color.opacity(0.44) : Color.clear)
+                .fill(richBackgroundColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? Color.white.opacity(0.28) : Color.clear, lineWidth: 1)
+                .stroke(richBorderColor, lineWidth: 1)
         )
         .accessibilityElement(children: .contain)
+    }
+
+    private var compactBackgroundColor: Color {
+        if isMarkedForBatch {
+            return EditorDesignTokens.Colors.accent.color.opacity(0.10)
+        }
+        return isSelected ? Color.primary.opacity(0.09) : Color.clear
+    }
+
+    private var compactBorderColor: Color {
+        isMarkedForBatch ? EditorDesignTokens.Colors.accent.color.opacity(0.30) : Color.clear
+    }
+
+    private var richBackgroundColor: Color {
+        if isMarkedForBatch {
+            return EditorDesignTokens.Colors.accent.color.opacity(0.10)
+        }
+        return isSelected ? EditorDesignTokens.Colors.border.color.opacity(0.44) : Color.clear
+    }
+
+    private var richBorderColor: Color {
+        if isMarkedForBatch {
+            return EditorDesignTokens.Colors.accent.color.opacity(0.32)
+        }
+        return isSelected ? Color.white.opacity(0.28) : Color.clear
     }
 
     @ViewBuilder
@@ -5560,10 +5889,11 @@ private struct PageRow: View {
 
     private var pageRowAccessibilityValue: String {
         let selection = isSelected ? "已选中" : "未选中"
+        let batchSelection = isMarkedForBatch ? "已加入批量选择" : "未加入批量选择"
         let favorite = page.isFavorite ? "已收藏" : "未收藏"
         let encryption = page.isEncrypted ? "已加密" : "未加密"
         let tags = tagNames.isEmpty ? "无标签" : "标签：\(tagNames.joined(separator: ", "))"
-        return "\(selection), \(favorite), \(encryption), \(tags)"
+        return "\(selection), \(batchSelection), \(favorite), \(encryption), \(tags)"
     }
 }
 
@@ -5800,6 +6130,10 @@ private enum EditorCanvasCoordinateSpace {
 #endif
 }
 
+private enum PageListCoordinateSpace {
+    static let selection = "editor.page-list.selection"
+}
+
 private enum MobileNavigationBarChrome {
     static let topMaskHeight: CGFloat = 72
 }
@@ -5813,6 +6147,14 @@ private struct MobilePageTitleFramePreferenceKey: PreferenceKey {
 }
 
 private struct BlockRowFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newValue in newValue })
+    }
+}
+
+private struct PageRowFramePreferenceKey: PreferenceKey {
     static let defaultValue: [String: CGRect] = [:]
 
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
@@ -8116,6 +8458,117 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
 
         deinit {
             uninstall()
+        }
+    }
+}
+
+private struct PageListKeyboardShortcutBridge: NSViewRepresentable {
+    let isEnabled: Bool
+    let activationVersion: Int
+    let onSelectAllVisiblePages: () -> Bool
+    let onSelectRangeToSelectedPage: () -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.activationVersion = activationVersion
+        context.coordinator.onSelectAllVisiblePages = onSelectAllVisiblePages
+        context.coordinator.onSelectRangeToSelectedPage = onSelectRangeToSelectedPage
+        context.coordinator.install()
+        return ShortcutCaptureView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let shouldActivate = context.coordinator.activationVersion != activationVersion
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.activationVersion = activationVersion
+        context.coordinator.onSelectAllVisiblePages = onSelectAllVisiblePages
+        context.coordinator.onSelectRangeToSelectedPage = onSelectRangeToSelectedPage
+        if shouldActivate {
+            context.coordinator.activate(nsView)
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    final class Coordinator {
+        var isEnabled = false
+        var activationVersion = 0
+        var onSelectAllVisiblePages: (() -> Bool)?
+        var onSelectRangeToSelectedPage: (() -> Bool)?
+        private var eventMonitor: Any?
+
+        func install() {
+            guard eventMonitor == nil else {
+                return
+            }
+
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else {
+                    return event
+                }
+
+                let isTextEditing = MainActor.assumeIsolated {
+                    NSApp.keyWindow?.firstResponder is NSTextView
+                }
+                let action = PageListKeyboardShortcutActionResolver.action(
+                    keyCode: event.keyCode,
+                    input: event.charactersIgnoringModifiers,
+                    modifiers: event.blockKeyboardShortcutModifiers,
+                    hasVisiblePages: self.isEnabled,
+                    isTextEditing: isTextEditing
+                )
+
+                switch action {
+                case .selectAllVisiblePages:
+                    if self.onSelectAllVisiblePages?() == true {
+                        return nil
+                    }
+                case .selectRangeToSelectedPage:
+                    if self.onSelectRangeToSelectedPage?() == true {
+                        return nil
+                    }
+                case nil:
+                    break
+                }
+
+                return event
+            }
+        }
+
+        func uninstall() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+                self.eventMonitor = nil
+            }
+        }
+
+        func activate(_ view: NSView) {
+            guard isEnabled else {
+                return
+            }
+
+            DispatchQueue.main.async { [weak view] in
+                guard let view else {
+                    return
+                }
+                view.window?.makeFirstResponder(view)
+            }
+        }
+
+        deinit {
+            uninstall()
+        }
+    }
+
+    final class ShortcutCaptureView: NSView {
+        override var acceptsFirstResponder: Bool {
+            true
         }
     }
 }

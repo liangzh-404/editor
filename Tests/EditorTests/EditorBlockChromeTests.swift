@@ -931,6 +931,122 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testPageListSelectionRangeResolverSelectsContiguousVisiblePages() {
+        let visiblePageIDs = ["first", "second", "third", "fourth"]
+
+        XCTAssertEqual(
+            PageListSelectionRangeResolver.selection(
+                anchorPageID: "second",
+                targetPageID: "fourth",
+                visiblePageIDs: visiblePageIDs
+            ),
+            ["second", "third", "fourth"]
+        )
+        XCTAssertEqual(
+            PageListSelectionRangeResolver.selection(
+                anchorPageID: "third",
+                targetPageID: "first",
+                visiblePageIDs: visiblePageIDs
+            ),
+            ["first", "second", "third"]
+        )
+        XCTAssertTrue(
+            PageListSelectionRangeResolver.selection(
+                anchorPageID: "missing",
+                targetPageID: "first",
+                visiblePageIDs: visiblePageIDs
+            ).isEmpty
+        )
+    }
+
+    func testPageListSelectAllResolverStaysInsideVisibleScope() {
+        XCTAssertEqual(
+            PageListSelectAllResolver.selection(visiblePageIDs: ["tag-a", "tag-b"]),
+            ["tag-a", "tag-b"],
+            "Cmd+A in a tag collection should select only the pages visible in that tag scope."
+        )
+        XCTAssertEqual(PageListSelectAllResolver.selection(visiblePageIDs: []), [])
+    }
+
+    func testPageListMarqueeSelectsPagesIntersectingSelectionRectInVisibleOrder() {
+        let visiblePageIDs = ["first", "second", "third"]
+        let pageFrames: [String: CGRect] = [
+            "first": CGRect(x: 18, y: 40, width: 320, height: 72),
+            "second": CGRect(x: 18, y: 120, width: 320, height: 72),
+            "third": CGRect(x: 18, y: 200, width: 320, height: 72)
+        ]
+
+        XCTAssertEqual(
+            PageListMarqueeSelectionResolver.selectedPageIDs(
+                selectionRect: CGRect(x: 40, y: 110, width: 120, height: 100),
+                pageFrames: pageFrames,
+                visiblePageIDs: visiblePageIDs
+            ),
+            ["first", "second", "third"]
+        )
+        XCTAssertEqual(
+            PageListMarqueeSelectionResolver.selectedPageIDs(
+                selectionRect: CGRect(x: 360, y: 110, width: 80, height: 100),
+                pageFrames: pageFrames,
+                visiblePageIDs: visiblePageIDs
+            ),
+            []
+        )
+    }
+
+    func testPageListMarqueeStartUsesGapsInsteadOfRowsSoDragRowsStillDrag() {
+        let pageFrames = [
+            "first": CGRect(x: 18, y: 40, width: 320, height: 72)
+        ]
+
+        XCTAssertFalse(
+            PageListMarqueeStartPolicy.isAllowed(
+                location: CGPoint(x: 40, y: 60),
+                pageFrames: pageFrames
+            ),
+            "Starting on a page row must keep the existing row drag behavior."
+        )
+        XCTAssertTrue(
+            PageListMarqueeStartPolicy.isAllowed(
+                location: CGPoint(x: 40, y: 118),
+                pageFrames: pageFrames
+            )
+        )
+    }
+
+    func testPageListKeyboardShortcutResolverScopesSelectAllAndShiftReturn() {
+        XCTAssertEqual(
+            PageListKeyboardShortcutActionResolver.action(
+                keyCode: 0,
+                input: "a",
+                modifiers: [.command],
+                hasVisiblePages: true,
+                isTextEditing: false
+            ),
+            .selectAllVisiblePages
+        )
+        XCTAssertEqual(
+            PageListKeyboardShortcutActionResolver.action(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                input: "\r",
+                modifiers: [.shift],
+                hasVisiblePages: true,
+                isTextEditing: false
+            ),
+            .selectRangeToSelectedPage
+        )
+        XCTAssertNil(
+            PageListKeyboardShortcutActionResolver.action(
+                keyCode: 0,
+                input: "a",
+                modifiers: [.command],
+                hasVisiblePages: true,
+                isTextEditing: true
+            ),
+            "Text editing keeps Cmd+A for text/block selection instead of stealing it for the middle list."
+        )
+    }
+
     func testBlockSelectionMarqueeRectNormalizesAnyDragDirection() {
         XCTAssertEqual(
             BlockSelectionMarqueeRectResolver.rect(

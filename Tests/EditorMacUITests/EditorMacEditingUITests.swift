@@ -907,6 +907,31 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testMacPageListCommandASelectsVisibleMiddleColumnRows() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        let allDocuments = app.buttons["editor.collection.all-documents"]
+        XCTAssertTrue(allDocuments.waitForExistence(timeout: 5), "All Documents should be visible before selecting middle-column rows")
+        allDocuments.click()
+
+        let pageRow = app.element(identifier: "editor.page-row.page-welcome")
+        XCTAssertTrue(pageRow.waitForExistence(timeout: 5), "Welcome page row should be visible before Cmd+A")
+        XCTAssertTrue(
+            pageRow.waitForValue(containing: "未加入批量选择", timeout: 5),
+            "Page row should start outside the page-list batch selection"
+        )
+
+        app.typeKey("a", modifierFlags: [.command])
+
+        XCTAssertTrue(
+            pageRow.waitForValue(containing: "已加入批量选择", timeout: 5),
+            "Cmd+A in the middle column should select visible page rows in the current collection scope"
+        )
+    }
+
+    @MainActor
     func testItalicToolbarInsertsPlaceholderAndKeepsTypingInEditor() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
