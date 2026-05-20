@@ -372,6 +372,22 @@ final class SyncRepository {
         )
     }
 
+    func discard(change: SyncChange) throws {
+        try database.execute(
+            """
+            DELETE FROM sync_changes
+            WHERE entity_type = ?
+              AND entity_id = ?
+              AND change_type = ?
+            """,
+            bindings: [
+                .text(change.entityType),
+                .text(change.entityID),
+                .text(change.changeType)
+            ]
+        )
+    }
+
     func syncRecords() throws -> [SyncRecord] {
         try database.query(
             """

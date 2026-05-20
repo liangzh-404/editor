@@ -1270,9 +1270,11 @@ private struct CompactHomeView: View {
                 Text(item.title)
                     .font(.body.weight(.semibold))
                 Spacer()
-                Text("\(item.count)")
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(CompactLibraryChrome.mutedForegroundColor)
+                if item.showsCount {
+                    Text("\(item.count)")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(CompactLibraryChrome.mutedForegroundColor)
+                }
             }
             .foregroundStyle(isSelected ? CompactLibraryChrome.primaryForegroundColor : CompactLibraryChrome.mutedForegroundColor)
             .padding(.horizontal, 12)
@@ -2096,6 +2098,24 @@ enum PageListKeyboardShortcutActionResolver {
         }
 
         return nil
+    }
+}
+
+enum ArchiveUndoVisibilityPolicy {
+    static func isVisible(
+        canUndoPageArchive: Bool,
+        selectedCollection: WorkspaceCollection
+    ) -> Bool {
+        guard canUndoPageArchive else {
+            return false
+        }
+
+        switch selectedCollection {
+        case .search, .archive:
+            return false
+        case .recent, .diary, .allDocuments, .favorites, .encrypted, .tag:
+            return true
+        }
     }
 }
 
@@ -3422,6 +3442,7 @@ struct CompactLibraryNavigationItem: Identifiable, Equatable, Sendable {
     let title: String
     let systemImage: String
     let count: Int
+    let showsCount: Bool
     let collection: WorkspaceCollection
     let route: CompactRoute
     let identifier: String
@@ -3439,6 +3460,7 @@ enum CompactLibraryNavigationModel {
                 title: "全部文档",
                 systemImage: "doc.text",
                 count: allDocumentCount,
+                showsCount: true,
                 collection: .allDocuments,
                 route: .collection(.allDocuments),
                 identifier: "editor.compact.all-documents"
@@ -3448,6 +3470,7 @@ enum CompactLibraryNavigationModel {
                 title: "日记",
                 systemImage: "square.and.pencil",
                 count: diaryPageIDs.count,
+                showsCount: true,
                 collection: .diary,
                 route: .collection(.diary),
                 identifier: "editor.compact.diary"
@@ -3457,6 +3480,7 @@ enum CompactLibraryNavigationModel {
                 title: "收藏",
                 systemImage: "star",
                 count: snapshot.favoritePages.count,
+                showsCount: true,
                 collection: .favorites,
                 route: .collection(.favorites),
                 identifier: "editor.compact.favorites"
@@ -3466,9 +3490,30 @@ enum CompactLibraryNavigationModel {
                 title: "加密",
                 systemImage: "lock.doc",
                 count: encryptedCount,
+                showsCount: true,
                 collection: .encrypted,
                 route: .collection(.encrypted),
                 identifier: "editor.compact.encrypted"
+            ),
+            CompactLibraryNavigationItem(
+                id: "search",
+                title: "搜索",
+                systemImage: "magnifyingglass",
+                count: 0,
+                showsCount: false,
+                collection: .search,
+                route: .collection(.search),
+                identifier: "editor.compact.search"
+            ),
+            CompactLibraryNavigationItem(
+                id: "archive",
+                title: "归档",
+                systemImage: "archivebox",
+                count: snapshot.archivedPages.count,
+                showsCount: true,
+                collection: .archive,
+                route: .collection(.archive),
+                identifier: "editor.compact.archive"
             )
         ]
     }
@@ -3598,7 +3643,7 @@ enum CompactShellRoutePlanner {
 
     static func documentListCollection(selectedCollection: WorkspaceCollection) -> WorkspaceCollection {
         switch selectedCollection {
-        case .recent, .search:
+        case .recent:
             return .allDocuments
         default:
             return selectedCollection
@@ -3652,6 +3697,10 @@ enum CompactShellRoutePlanner {
         snapshot: WorkspaceSnapshot,
         selectedCollection: WorkspaceCollection
     ) -> WorkspaceCollection {
+        if selectedCollection == .search {
+            return .search
+        }
+
         let selectedCollectionPages = CompactCollectionPageListModel.pages(
             snapshot: snapshot,
             collection: selectedCollection
@@ -4569,7 +4618,10 @@ private struct PageListView: View {
                     archiveSection
                 }
 
-                if viewModel.canUndoPageArchive && viewModel.selectedCollection != .archive {
+                if ArchiveUndoVisibilityPolicy.isVisible(
+                    canUndoPageArchive: viewModel.canUndoPageArchive,
+                    selectedCollection: viewModel.selectedCollection
+                ) {
                     undoArchiveSection
                 }
             }
@@ -4692,7 +4744,10 @@ private struct PageListView: View {
 
     private var archiveSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if viewModel.canUndoPageArchive {
+            if ArchiveUndoVisibilityPolicy.isVisible(
+                canUndoPageArchive: viewModel.canUndoPageArchive,
+                selectedCollection: viewModel.selectedCollection
+            ) {
                 undoArchiveSection
             }
 
@@ -5156,7 +5211,10 @@ private struct CompactPageListView: View {
                 }
             }
 
-            if viewModel.canUndoPageArchive {
+            if ArchiveUndoVisibilityPolicy.isVisible(
+                canUndoPageArchive: viewModel.canUndoPageArchive,
+                selectedCollection: viewModel.selectedCollection
+            ) {
                 Section {
                     Button {
                         viewModel.undoLastPageArchiveForUI()
@@ -5242,17 +5300,7 @@ private struct CompactCollectionPageListView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 10) {
-                ForEach(items) { item in
-                    NavigationLink(value: CompactRoute.page(item.page.id)) {
-                        CompactRecentPageCard(
-                            page: item.page,
-                            tagNames: item.tagNames,
-                            preview: item.preview
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("editor.page.\(item.page.id)")
-                }
+                collectionContent
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 14)
@@ -5275,6 +5323,69 @@ private struct CompactCollectionPageListView: View {
                 }
         )
 #endif
+    }
+
+    @ViewBuilder
+    private var collectionContent: some View {
+        switch collection {
+        case .search:
+            SearchSectionView(viewModel: viewModel)
+        case .archive:
+            compactArchiveSection
+        default:
+            ForEach(items) { item in
+                NavigationLink(value: CompactRoute.page(item.page.id)) {
+                    CompactRecentPageCard(
+                        page: item.page,
+                        tagNames: item.tagNames,
+                        preview: item.preview
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("editor.page.\(item.page.id)")
+            }
+        }
+    }
+
+    private var compactArchiveSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if ArchiveUndoVisibilityPolicy.isVisible(
+                canUndoPageArchive: viewModel.canUndoPageArchive,
+                selectedCollection: viewModel.selectedCollection
+            ) {
+                Button {
+                    viewModel.undoLastPageArchiveForUI()
+                } label: {
+                    Label("撤销归档", systemImage: "arrow.uturn.backward")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("editor.undo-page-archive")
+            }
+
+            if viewModel.snapshot.archivedPages.isEmpty {
+                Text("没有归档文档")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(viewModel.snapshot.archivedPages) { page in
+                    ArchivedPageRow(
+                        page: page,
+                        onRestore: {
+                            viewModel.restoreArchivedPageForUI(id: page.id)
+                        },
+                        onDelete: {
+                            viewModel.permanentlyDeleteArchivedPageForUI(id: page.id)
+                        }
+                    )
+                }
+            }
+        }
     }
 
     private var items: [CompactCollectionPageListItem] {
@@ -5523,24 +5634,52 @@ private struct SearchSectionView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("搜索")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
 
-            TextField("搜索", text: searchBinding)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("editor.search-field")
+                TextField("标题、正文、附件", text: searchBinding)
+                    .textFieldStyle(.plain)
+                    .accessibilityIdentifier("editor.search-field")
 
-            ForEach(viewModel.searchResults) { result in
-                Button {
-                    viewModel.selectSearchResult(result)
-                } label: {
-                    SearchResultRow(result: result)
+                if !viewModel.searchQuery.isEmpty {
+                    Button {
+                        viewModel.updateSearchQuery("")
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清空搜索")
                 }
-                .buttonStyle(.plain)
-                .disabled(result.destinationPageID == nil)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(EditorDesignTokens.Colors.sidebarBackground.color, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(EditorDesignTokens.Colors.border.color, lineWidth: 1)
+            )
+
+            if !viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("\(viewModel.searchResults.count) 个结果")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                    .padding(.horizontal, 4)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(viewModel.searchResults) { result in
+                    Button {
+                        viewModel.selectSearchResult(result)
+                    } label: {
+                        SearchResultRow(result: result)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(result.destinationPageID == nil)
+                }
             }
         }
     }
@@ -5560,7 +5699,8 @@ private struct SearchResultRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: iconName)
-                .foregroundStyle(.secondary)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(EditorDesignTokens.Colors.accent.color)
                 .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -5569,11 +5709,15 @@ private struct SearchResultRow: View {
                     .lineLimit(1)
                 Text(result.snippet)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
                     .lineLimit(2)
             }
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(EditorDesignTokens.Colors.sidebarBackground.color.opacity(0.72), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityIdentifier("editor.search-result.\(result.id)")
     }
 

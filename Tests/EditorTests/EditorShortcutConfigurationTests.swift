@@ -12,7 +12,10 @@ final class EditorShortcutConfigurationTests: XCTestCase {
         XCTAssertEqual(shortcuts.shortcut(for: .convertBlockToPage)?.rawValue, "cmd+]")
         XCTAssertEqual(shortcuts.shortcut(for: .quickOpen)?.rawValue, "cmd+o")
         XCTAssertEqual(shortcuts.shortcut(for: .showAllDocuments)?.rawValue, "cmd+opt+1")
-        XCTAssertFalse(EditorShortcutCommand.visibleCommands.contains(.showFavorites))
+        XCTAssertEqual(
+            EditorShortcutCommand.visibleCommands,
+            [.newDocument, .openToday, .navigateBack, .navigateForward, .quickOpen, .insertMarkdownLink]
+        )
     }
 
     func testShortcutParserAcceptsCraftStyleDescriptors() throws {

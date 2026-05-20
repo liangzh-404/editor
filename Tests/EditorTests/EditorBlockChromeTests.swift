@@ -1047,6 +1047,22 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testArchiveUndoVisibilityStaysOutOfSearchAndArchiveSections() {
+        XCTAssertFalse(
+            ArchiveUndoVisibilityPolicy.isVisible(canUndoPageArchive: true, selectedCollection: .search),
+            "Search results should not keep showing an unrelated archive undo action."
+        )
+        XCTAssertFalse(
+            ArchiveUndoVisibilityPolicy.isVisible(canUndoPageArchive: true, selectedCollection: .archive)
+        )
+        XCTAssertTrue(
+            ArchiveUndoVisibilityPolicy.isVisible(canUndoPageArchive: true, selectedCollection: .recent)
+        )
+        XCTAssertFalse(
+            ArchiveUndoVisibilityPolicy.isVisible(canUndoPageArchive: false, selectedCollection: .recent)
+        )
+    }
+
     func testBlockSelectionMarqueeRectNormalizesAnyDragDirection() {
         XCTAssertEqual(
             BlockSelectionMarqueeRectResolver.rect(
@@ -1858,6 +1874,9 @@ final class EditorBlockChromeTests: XCTestCase {
                 PageSummary(id: "page-favorite", workspaceID: workspaceID, title: "收藏", isFavorite: true),
                 PageSummary(id: "page-encrypted", workspaceID: workspaceID, title: "密文", isEncrypted: true)
             ],
+            archivedPages: [
+                PageSummary(id: "page-archived", workspaceID: workspaceID, title: "归档文档")
+            ],
             blocks: [],
             attachments: [],
             diaryPages: [
@@ -1869,10 +1888,20 @@ final class EditorBlockChromeTests: XCTestCase {
 
         let items = CompactLibraryNavigationModel.items(snapshot: snapshot)
 
-        XCTAssertEqual(items.map(\.title), ["全部文档", "日记", "收藏", "加密"])
-        XCTAssertEqual(items.map(\.collection), [.allDocuments, .diary, .favorites, .encrypted])
-        XCTAssertEqual(items.map(\.count), [3, 1, 1, 1])
-        XCTAssertEqual(items.map(\.route), [.collection(.allDocuments), .collection(.diary), .collection(.favorites), .collection(.encrypted)])
+        XCTAssertEqual(items.map(\.title), ["全部文档", "日记", "收藏", "加密", "搜索", "归档"])
+        XCTAssertEqual(items.map(\.collection), [.allDocuments, .diary, .favorites, .encrypted, .search, .archive])
+        XCTAssertEqual(items.map(\.count), [3, 1, 1, 1, 0, 1])
+        XCTAssertEqual(
+            items.map(\.route),
+            [
+                .collection(.allDocuments),
+                .collection(.diary),
+                .collection(.favorites),
+                .collection(.encrypted),
+                .collection(.search),
+                .collection(.archive)
+            ]
+        )
 
         XCTAssertEqual(
             CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .allDocuments).map(\.id),
@@ -1889,6 +1918,18 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(
             CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .encrypted).map(\.id),
             ["page-encrypted"]
+        )
+        XCTAssertEqual(
+            CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .archive).map(\.id),
+            ["page-archived"]
+        )
+        XCTAssertEqual(
+            CompactShellRoutePlanner.pathForPage(
+                "page-a",
+                snapshot: snapshot,
+                selectedCollection: .search
+            ),
+            [.collection(.search), .page("page-a")]
         )
     }
 

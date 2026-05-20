@@ -81,12 +81,16 @@ final class PageRepository {
                    pages.title,
                    pages.is_favorite,
                    pages.is_encrypted,
-                   pages.updated_at
+                   CASE
+                       WHEN diary_pages.page_id IS NOT NULL THEN pages.created_at
+                       ELSE pages.updated_at
+                   END AS effective_updated_at
             FROM pages
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
+            LEFT JOIN diary_pages ON diary_pages.page_id = pages.id
             WHERE pages.workspace_id = ?
               AND pages.is_archived = 0
-            ORDER BY pages.updated_at DESC, pages.created_at DESC
+            ORDER BY effective_updated_at DESC, pages.created_at DESC
             """,
             bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
         ).map { row in
@@ -97,7 +101,7 @@ final class PageRepository {
                 title: decryptPageTitleForSnapshot(row),
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
                 isEncrypted: Self.sqliteBool(row["is_encrypted"]),
-                updatedAt: row["updated_at"]
+                updatedAt: row["effective_updated_at"]
             )
         }
 

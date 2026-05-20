@@ -2292,8 +2292,8 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedPageID, secondPageID)
         XCTAssertEqual(viewModel.selectedPage?.title, "Second")
         XCTAssertEqual(viewModel.selectedCollection, .search)
-        XCTAssertNil(viewModel.pendingCompactPageNavigationID)
-        XCTAssertNil(viewModel.consumePendingCompactPageNavigationID())
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, secondPageID)
+        XCTAssertEqual(viewModel.consumePendingCompactPageNavigationID(), secondPageID)
         XCTAssertNil(viewModel.pendingCompactPageNavigationID)
     }
 
@@ -3371,7 +3371,7 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHashTagTextStaysInBodyTextAndDoesNotAutoCreateTags() throws {
+    func testHashTagTextWithTrailingSpaceCreatesAndAssignsPageTag() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -3386,8 +3386,28 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.updateBlockText(blockID: blockID, text: "开饭了 #生活 #abc")
 
         XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开饭了 #生活 #abc")
+        XCTAssertEqual(viewModel.snapshot.tags.map(\.name), ["生活"])
+        XCTAssertEqual(viewModel.selectedPageTagNames, ["生活"])
+        XCTAssertEqual(viewModel.snapshot.pageTags.filter { $0.pageID == pageID }.count, 1)
+    }
+
+    @MainActor
+    func testHashTagTextDoesNotCreateTagUntilTrailingSpaceCommitsToken() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let tagRepository = TagRepository(database: database)
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        try viewModel.updateBlockText(blockID: blockID, text: "开饭了 #生活")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开饭了 #生活")
         XCTAssertTrue(viewModel.snapshot.tags.isEmpty)
-        XCTAssertTrue(viewModel.snapshot.pageTags.filter { $0.pageID == pageID }.isEmpty)
+        XCTAssertTrue(viewModel.selectedPageTagNames.isEmpty)
     }
 
     @MainActor
@@ -3761,6 +3781,78 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLocalSyncChangeDuringRunningSyncSchedulesFollowUpAfterCurrentRunCompletes() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: SyncRepository(database: database),
+                adapter: RecordingCloudKitSyncAdapter()
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        try viewModel.updateBlockText(blockID: blockID, text: "Follow-up sync after in-flight edit")
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
+    }
+
+    @MainActor
+    func testForegroundSyncUploadsPendingLocalChangesBeforeFetchingRemoteChanges() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Upload before fetch")
+        let recorder = ForegroundSyncCallRecorder()
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: SyncRepository(database: database),
+                adapter: OrderedForegroundSyncAdapter(recorder: recorder),
+                remoteChangeFetcher: OrderedForegroundSyncFetcher(recorder: recorder),
+                mergeEngine: SyncMergeEngine(database: database),
+                subscriptionEnsurer: OrderedForegroundSyncSubscriptionEnsurer(recorder: recorder)
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        try scheduler.runNextScheduledOperation()
+
+        let firstUploadIndex = try XCTUnwrap(recorder.calls.firstIndex {
+            if case .upload = $0 {
+                return true
+            }
+            return false
+        })
+        let fetchIndex = try XCTUnwrap(recorder.calls.firstIndex(of: .fetch))
+        XCTAssertLessThan(firstUploadIndex, fetchIndex)
+        XCTAssertEqual(recorder.calls.first, .ensureSubscription)
+    }
+
+    @MainActor
     func testSyncAfterActivationSkipsDuringFailureCooldownAndRetriesAfterward() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -4046,6 +4138,73 @@ private final class DeferredWorkspaceSyncScheduler: WorkspaceSyncScheduling {
 
         let scheduledForegroundSync = scheduledForegroundSyncs.removeFirst()
         scheduledForegroundSync.completion(scheduledForegroundSync.operation())
+    }
+}
+
+private enum ForegroundSyncCall: Equatable {
+    case ensureSubscription
+    case upload(SyncChange)
+    case fetch
+}
+
+private final class ForegroundSyncCallRecorder: @unchecked Sendable {
+    private(set) var calls: [ForegroundSyncCall] = []
+
+    func record(_ call: ForegroundSyncCall) {
+        calls.append(call)
+    }
+}
+
+private final class OrderedForegroundSyncAdapter: CloudKitSyncAdapter {
+    private let recorder: ForegroundSyncCallRecorder
+
+    init(recorder: ForegroundSyncCallRecorder) {
+        self.recorder = recorder
+    }
+
+    func upload(change: SyncChange) throws -> CloudKitUploadResult {
+        recorder.record(.upload(change))
+        return CloudKitUploadResult(
+            recordName: "\(change.entityType)-\(change.entityID)",
+            changeTag: "tag-\(change.entityID)"
+        )
+    }
+}
+
+private final class OrderedForegroundSyncFetcher: CloudKitRemoteChangeFetching {
+    private let recorder: ForegroundSyncCallRecorder
+
+    init(recorder: ForegroundSyncCallRecorder) {
+        self.recorder = recorder
+    }
+
+    func fetchRemoteChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitRemoteChangeSet {
+        recorder.record(.fetch)
+        return CloudKitRemoteChangeSet(
+            workspaceChanges: [],
+            notebookChanges: [],
+            pageChanges: [],
+            diaryPageChanges: [],
+            attachmentChanges: [],
+            blockChanges: [],
+            fullSnapshotPageIDs: [],
+            deletedRecords: [],
+            serverChangeTokenData: nil
+        )
+    }
+}
+
+private final class OrderedForegroundSyncSubscriptionEnsurer: CloudKitSubscriptionEnsuring {
+    private let recorder: ForegroundSyncCallRecorder
+
+    init(recorder: ForegroundSyncCallRecorder) {
+        self.recorder = recorder
+    }
+
+    func ensureRemoteChangeSubscription() throws {
+        recorder.record(.ensureSubscription)
     }
 }
 

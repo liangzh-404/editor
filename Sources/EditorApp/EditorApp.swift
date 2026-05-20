@@ -126,20 +126,36 @@ private extension View {
 #if os(macOS)
 private struct EditorShortcutSettingsView: View {
     var body: some View {
-        Form {
-            Section("快捷键") {
-                ForEach(EditorShortcutCommand.visibleCommands) { command in
-                    ShortcutSettingRow(command: command)
-                }
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("快捷键")
+                    .font(.title3.weight(.semibold))
             }
 
-            Button("恢复 Craft 默认快捷键") {
-                restoreDefaults()
+            VStack(spacing: 0) {
+                ForEach(Array(EditorShortcutCommand.visibleCommands.enumerated()), id: \.element.id) { index, command in
+                    ShortcutSettingRow(command: command)
+                    if index < EditorShortcutCommand.visibleCommands.count - 1 {
+                        Divider()
+                            .padding(.leading, 144)
+                    }
+                }
+            }
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
+            )
+
+            HStack {
+                Spacer()
+                Button("恢复默认") {
+                    restoreDefaults()
+                }
             }
         }
-        .formStyle(.grouped)
-        .padding(20)
-        .frame(width: 420)
+        .padding(28)
+        .frame(width: 520)
     }
 
     private func restoreDefaults() {
@@ -162,14 +178,45 @@ private struct ShortcutSettingRow: View {
     }
 
     var body: some View {
-        HStack {
+        HStack(spacing: 16) {
             Text(command.title)
+                .font(.body.weight(.medium))
+                .frame(width: 112, alignment: .leading)
+
             Spacer(minLength: 16)
+
+            validationView
+
             TextField(command.defaultShortcutRawValue, text: $rawValue)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 140)
+                .textFieldStyle(.plain)
                 .monospaced()
+                .multilineTextAlignment(.trailing)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(width: 154)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(shortcutIsValid ? Color(nsColor: .separatorColor).opacity(0.4) : .red.opacity(0.65), lineWidth: 1)
+                )
                 .accessibilityIdentifier("editor.shortcut.\(command.rawValue)")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var shortcutIsValid: Bool {
+        EditorKeyboardShortcut(rawValue: rawValue) != nil
+    }
+
+    @ViewBuilder
+    private var validationView: some View {
+        if shortcutIsValid {
+            EmptyView()
+        } else {
+            Text("不可用")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.red)
         }
     }
 }

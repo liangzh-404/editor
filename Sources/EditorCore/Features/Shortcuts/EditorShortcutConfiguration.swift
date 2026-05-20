@@ -17,7 +17,14 @@ enum EditorShortcutCommand: String, CaseIterable, Identifiable {
     }
 
     static var visibleCommands: [EditorShortcutCommand] {
-        allCases.filter { $0 != .showFavorites }
+        [
+            .newDocument,
+            .openToday,
+            .navigateBack,
+            .navigateForward,
+            .quickOpen,
+            .insertMarkdownLink
+        ]
     }
 
     var userDefaultsKey: String {

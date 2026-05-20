@@ -2073,6 +2073,11 @@ final class SyncEngine {
                 EditorLog.sync.debug(
                     "sync_change_uploaded entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
                 )
+            } catch CloudKitPrivateDatabaseAdapterError.entityNotFound {
+                try syncRepository.discard(change: change)
+                EditorLog.sync.error(
+                    "sync_change_discarded_missing_local_entity entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public) change_type=\(change.changeType, privacy: .public)"
+                )
             } catch {
                 if change.entityType == "block",
                    let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {

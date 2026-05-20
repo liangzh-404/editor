@@ -308,6 +308,33 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try syncRepository.pendingChanges(), [change])
     }
 
+    func testUploadDiscardsStaleMutationWhenLocalEntityWasDeleted() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        let staleArchiveChange = SyncChange(entityType: "page", entityID: "page-deleted", changeType: "archive")
+        try syncRepository.enqueue(
+            entityType: staleArchiveChange.entityType,
+            entityID: staleArchiveChange.entityID,
+            changeType: staleArchiveChange.changeType
+        )
+        let adapter = MissingLocalEntityCloudKitSyncAdapter()
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: adapter,
+            retryPolicy: SyncRetryPolicy(baseDelay: 60, maximumDelay: 300),
+            now: { Date(timeIntervalSince1970: 1_000) }
+        ).uploadPendingChanges()
+
+        XCTAssertEqual(result.uploadedCount, 0)
+        XCTAssertEqual(result.failedCount, 0)
+        XCTAssertEqual(adapter.uploadedChanges, [staleArchiveChange])
+        XCTAssertEqual(try syncRepository.pendingChanges(), [])
+        XCTAssertEqual(try syncRepository.syncRecords(), [])
+    }
+
     func testRetryAfterBackoffUploadsAndClearsQueuedChange() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -1875,6 +1902,15 @@ final class FailingOnceCloudKitSyncAdapter: CloudKitSyncAdapter {
             recordName: "\(change.entityType)-\(change.entityID)",
             changeTag: "tag-\(change.entityID)"
         )
+    }
+}
+
+final class MissingLocalEntityCloudKitSyncAdapter: CloudKitSyncAdapter {
+    private(set) var uploadedChanges: [SyncChange] = []
+
+    func upload(change: SyncChange) throws -> CloudKitUploadResult {
+        uploadedChanges.append(change)
+        throw CloudKitPrivateDatabaseAdapterError.entityNotFound(change.entityID)
     }
 }
 

@@ -420,6 +420,44 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloaded.pages.map(\.title).prefix(2), ["Older updated last", "Newer"])
     }
 
+    func testDailyPagesExposeCreationTimestampForOrderingInsteadOfModifiedTimestamp() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let diaryRepository = DiaryRepository(database: database)
+        let olderDay = try diaryRepository.openDailyPage(
+            workspaceID: workspaceID,
+            date: Self.date(year: 2026, month: 5, day: 16),
+            calendar: Self.gregorianCalendar
+        )
+        Thread.sleep(forTimeInterval: 0.01)
+        let newerDay = try diaryRepository.openDailyPage(
+            workspaceID: workspaceID,
+            date: Self.date(year: 2026, month: 5, day: 17),
+            calendar: Self.gregorianCalendar
+        )
+        let olderBlockID = try XCTUnwrap(
+            try repository.loadWorkspaceSnapshot()
+                .blocks
+                .first { $0.pageID == olderDay.id }?
+                .id
+        )
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try repository.updateBlockText(blockID: olderBlockID, text: "修改旧日记不应该改变日记排序")
+
+        let reloaded = try repository.loadWorkspaceSnapshot()
+        let diaryPages = reloaded.pages.filter { [olderDay.id, newerDay.id].contains($0.id) }
+
+        XCTAssertEqual(diaryPages.map(\.id), [newerDay.id, olderDay.id])
+        XCTAssertLessThan(
+            try XCTUnwrap(diaryPages.last?.updatedAt),
+            try XCTUnwrap(diaryPages.first?.updatedAt)
+        )
+    }
+
     func testLoadWorkspaceSnapshotLoadsTagsAndAssignments() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -1483,6 +1521,17 @@ final class PageRepositoryTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory.appendingPathComponent("editor.sqlite").path
+    }
+
+    private static var gregorianCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "zh_Hans_CN")
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private static func date(year: Int, month: Int, day: Int) -> Date {
+        gregorianCalendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
 
     private struct TestEncryptedNoteCipher: EncryptedNoteCiphering {

@@ -145,6 +145,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var pageNavigationBackStack: [PageNavigationHistoryEntry] = []
     private var pageNavigationForwardStack: [PageNavigationHistoryEntry] = []
     private var isForegroundSyncRunning = false
+    private var isForegroundSyncRerunPending = false
     private var nextForegroundSyncAttemptAt: Date?
     private var syncChangeObservation: SyncChangeObservation?
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
@@ -430,8 +431,7 @@ final class WorkspaceViewModel: ObservableObject {
                 Self.runForegroundSync(syncEngine: syncEngine)
             },
             completion: { [weak self] result in
-                self?.isForegroundSyncRunning = false
-                self?.completeForegroundSync(result)
+                self?.finishForegroundSync(result)
             }
         )
     }
@@ -465,8 +465,11 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
         guard !isForegroundSyncRunning else {
+            if reason == "local_change" {
+                isForegroundSyncRerunPending = true
+            }
             EditorLog.sync.debug(
-                "foreground_sync_skipped reason=already_running trigger=\(reason, privacy: .public)"
+                "foreground_sync_skipped reason=already_running trigger=\(reason, privacy: .public) rerun_pending=\(self.isForegroundSyncRerunPending, privacy: .public)"
             )
             return
         }
@@ -482,8 +485,7 @@ final class WorkspaceViewModel: ObservableObject {
                 Self.runForegroundSync(syncEngine: syncEngine)
             },
             completion: { [weak self] result in
-                self?.isForegroundSyncRunning = false
-                self?.completeForegroundSync(result)
+                self?.finishForegroundSync(result)
             }
         )
     }
@@ -850,11 +852,7 @@ final class WorkspaceViewModel: ObservableObject {
         selectedPageID = destinationPageID
         selectedNotebookID = snapshot.pages.first { $0.id == destinationPageID }?.notebookID ?? selectedNotebookID
         selectedCollection = previousCollection == .search ? .search : defaultCollectionForOpeningPage(id: destinationPageID)
-        if previousCollection == .search {
-            pendingCompactPageNavigationID = nil
-        } else {
-            pendingCompactPageNavigationID = destinationPageID
-        }
+        pendingCompactPageNavigationID = destinationPageID
         refreshBacklinksForSelectedPage()
         refreshExternalLinksForSelectedPage()
         refreshConflictsForSelectedPage()
@@ -1344,6 +1342,7 @@ final class WorkspaceViewModel: ObservableObject {
                     "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=markdown_shortcut"
                 )
             }
+            try syncInlineHashTagsIfNeeded(pageID: currentBlock?.pageID, text: nextBlock.text)
             try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
         }
     }
@@ -3531,17 +3530,32 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     nonisolated private static func runForegroundSync(syncEngine: SyncEngine) -> WorkspaceForegroundSyncResult {
+        let syncStartedAt = Date()
+        var subscriptionDurationMilliseconds = 0
+        var uploadDurationMilliseconds = 0
+        var fetchDurationMilliseconds = 0
         do {
             do {
+                let subscriptionStartedAt = Date()
                 try syncEngine.ensureRemoteChangeSubscription()
+                subscriptionDurationMilliseconds = millisecondsElapsed(since: subscriptionStartedAt)
             } catch {
+                subscriptionDurationMilliseconds = millisecondsElapsed(since: syncStartedAt)
                 EditorLog.sync.error(
                     "cloudkit_subscription_ensure_failed error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
                 )
             }
 
-            let fetchSummary = try syncEngine.fetchRemoteChanges()
+            let uploadStartedAt = Date()
             let uploadSummary = try syncEngine.uploadPendingChanges()
+            uploadDurationMilliseconds = millisecondsElapsed(since: uploadStartedAt)
+
+            let fetchStartedAt = Date()
+            let fetchSummary = try syncEngine.fetchRemoteChanges()
+            fetchDurationMilliseconds = millisecondsElapsed(since: fetchStartedAt)
+            EditorLog.sync.debug(
+                "foreground_sync_completed subscription_ms=\(subscriptionDurationMilliseconds, privacy: .public) upload_ms=\(uploadDurationMilliseconds, privacy: .public) fetch_ms=\(fetchDurationMilliseconds, privacy: .public) total_ms=\(millisecondsElapsed(since: syncStartedAt), privacy: .public) uploaded=\(uploadSummary.uploadedCount, privacy: .public) failed_uploads=\(uploadSummary.failedCount, privacy: .public) fetched=\(fetchSummary.appliedCount, privacy: .public)"
+            )
             return .success(
                 WorkspaceForegroundSyncSummary(
                     uploadSummary: uploadSummary,
@@ -3550,6 +3564,35 @@ final class WorkspaceViewModel: ObservableObject {
             )
         } catch {
             return .failure(CloudKitErrorDiagnostic.describe(error))
+        }
+    }
+
+    nonisolated private static func millisecondsElapsed(since startDate: Date) -> Int {
+        Int(Date().timeIntervalSince(startDate) * 1_000)
+    }
+
+    private func finishForegroundSync(_ result: WorkspaceForegroundSyncResult) {
+        isForegroundSyncRunning = false
+        let shouldRunPendingSync = shouldRunPendingForegroundSync(after: result)
+        completeForegroundSync(result)
+        guard isForegroundSyncRerunPending else {
+            return
+        }
+
+        isForegroundSyncRerunPending = false
+        guard shouldRunPendingSync else {
+            return
+        }
+
+        scheduleForegroundSyncIfNeeded(reason: "pending_local_change")
+    }
+
+    private func shouldRunPendingForegroundSync(after result: WorkspaceForegroundSyncResult) -> Bool {
+        switch result {
+        case .success(let summary):
+            summary.uploadSummary.failedCount == 0
+        case .failure:
+            false
         }
     }
 
@@ -3799,6 +3842,89 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingSelection
         }
         return currentTag
+    }
+
+    @discardableResult
+    private func syncInlineHashTagsIfNeeded(pageID: String?, text: String) throws -> Bool {
+        guard let pageID,
+              let repository,
+              let tagRepository else {
+            return false
+        }
+        let tagNames = Self.inlineHashTagNames(in: text)
+        guard !tagNames.isEmpty else {
+            return false
+        }
+        guard let workspaceID = snapshot.pages.first(where: { $0.id == pageID })?.workspaceID ?? selectedWorkspaceID else {
+            return false
+        }
+
+        var assignedTagIDs = Set(
+            try tagRepository.tagAssignments()
+                .filter { $0.pageID == pageID }
+                .map(\.tagID)
+        )
+        var didChange = false
+        for tagName in tagNames {
+            let tag = try findOrCreateTagPath(tagName, workspaceID: workspaceID, tagRepository: tagRepository)
+            didChange = assignedTagIDs.insert(tag.id).inserted || didChange
+        }
+        guard didChange else {
+            return false
+        }
+
+        let previousSelectedPageID = selectedPageID
+        let previousSelectedCollection = selectedCollection
+        try tagRepository.assignTags(pageID: pageID, tagIDs: sortedTagIDs(assignedTagIDs))
+        let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+        apply(snapshot: loadedSnapshot)
+        restoreSelectionAfterReload(collection: previousSelectedCollection, pageID: previousSelectedPageID)
+        EditorLog.input.debug(
+            "inline_hash_tags_synced page_id=\(pageID, privacy: .public) count=\(tagNames.count, privacy: .public)"
+        )
+        return true
+    }
+
+    private static func inlineHashTagNames(in text: String) -> [String] {
+        var names: [String] = []
+        var seen: Set<String> = []
+        var scanIndex = text.startIndex
+        while scanIndex < text.endIndex,
+              let hashIndex = text[scanIndex...].firstIndex(of: "#") {
+            defer {
+                scanIndex = text.index(after: hashIndex)
+            }
+
+            if hashIndex > text.startIndex {
+                let previousIndex = text.index(before: hashIndex)
+                guard text[previousIndex].isWhitespace else {
+                    continue
+                }
+            }
+
+            var endIndex = text.index(after: hashIndex)
+            while endIndex < text.endIndex, !text[endIndex].isWhitespace {
+                endIndex = text.index(after: endIndex)
+            }
+            guard endIndex < text.endIndex, text[endIndex].isWhitespace else {
+                continue
+            }
+
+            let rawName = String(text[text.index(after: hashIndex)..<endIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !rawName.isEmpty,
+                  rawName != "^",
+                  !rawName.hasPrefix("#"),
+                  !rawName.hasPrefix("[") else {
+                continue
+            }
+            let key = rawName.lowercased()
+            guard seen.insert(key).inserted else {
+                continue
+            }
+            names.append(rawName)
+        }
+        return names
     }
 
     private func assignTagsForUI(

@@ -115,6 +115,48 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertEqual(results.first?.destinationPageID, page.id)
     }
 
+    func testSearchFindsChineseSubstringInsideBlockText() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "今天要赶紧处理搜索匹配")
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        let results = try repository.search("赶紧")
+
+        XCTAssertEqual(results.first?.entityType, "block")
+        XCTAssertEqual(results.first?.entityID, blockID)
+        XCTAssertEqual(results.first?.destinationPageID, pageID)
+        XCTAssertTrue(results.first?.snippet.contains("赶紧") == true)
+    }
+
+    func testSearchDoesNotReturnArchivedPageBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let archivedPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Archived Search")
+        let blockID = try XCTUnwrap(
+            try pageRepository.loadWorkspaceSnapshot()
+                .blocks
+                .first { $0.pageID == archivedPage.id }?
+                .id
+        )
+        try pageRepository.updateBlockText(blockID: blockID, text: "Archived hidden needle")
+        try pageRepository.archivePage(pageID: archivedPage.id)
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        XCTAssertFalse(try repository.search("needle").contains { $0.destinationPageID == archivedPage.id })
+    }
+
     func testRebuildIndexDoesNotExposeLegacyDiaryEntriesAfterDailyPageMigration() throws {
         let database = try migratedDatabase()
         defer { database.close() }

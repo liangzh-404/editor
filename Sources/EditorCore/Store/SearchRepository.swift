@@ -54,6 +54,7 @@ final class SearchRepository {
                 WHERE blocks.id = ?
                   AND blocks.is_deleted = 0
                   AND blocks.text_plain != ''
+                  AND pages.is_archived = 0
                   AND pages.is_encrypted = 0
                 LIMIT 1
                 """,
@@ -109,8 +110,14 @@ final class SearchRepository {
             ]
         )
 
+        let substringRows = try substringSearchRows(
+            query: query,
+            excluding: Set(rows.map { "\($0["entity_type"] ?? ""):\($0["entity_id"] ?? "")" }),
+            limit: max(0, limit - rows.count)
+        )
+
         var results: [SearchResult] = []
-        for row in rows {
+        for row in rows + substringRows {
             let entityType = row["entity_type"] ?? ""
             let entityID = row["entity_id"] ?? ""
             results.append(
@@ -118,7 +125,7 @@ final class SearchRepository {
                     entityType: entityType,
                     entityID: entityID,
                     title: row["title"] ?? "",
-                    snippet: row["snippet"] ?? "",
+                    snippet: row["snippet"] ?? row["body"] ?? "",
                     destinationPageID: try destinationPageID(entityType: entityType, entityID: entityID)
                 )
             )
@@ -188,6 +195,7 @@ final class SearchRepository {
             INNER JOIN pages ON pages.id = blocks.page_id
             WHERE blocks.is_deleted = 0
               AND blocks.text_plain != ''
+              AND pages.is_archived = 0
               AND pages.is_encrypted = 0
             """
         )
@@ -262,6 +270,69 @@ final class SearchRepository {
                 .text(entityID)
             ]
         )
+    }
+
+    private func substringSearchRows(
+        query: String,
+        excluding existingIDs: Set<String>,
+        limit: Int
+    ) throws -> [SQLiteRow] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty, limit > 0 else {
+            return []
+        }
+
+        let pattern = likePattern(for: trimmedQuery)
+        let rows = try database.query(
+            """
+            SELECT entity_type,
+                   entity_id,
+                   title,
+                   CASE
+                       WHEN lower(body) LIKE ? ESCAPE '\\' THEN body
+                       ELSE title
+                   END AS snippet
+            FROM search_index
+            WHERE lower(title) LIKE ? ESCAPE '\\'
+               OR lower(body) LIKE ? ESCAPE '\\'
+            ORDER BY CASE
+                         WHEN lower(title) LIKE ? ESCAPE '\\' THEN 0
+                         ELSE 1
+                     END ASC,
+                     title ASC
+            LIMIT ?
+            """,
+            bindings: [
+                .text(pattern),
+                .text(pattern),
+                .text(pattern),
+                .text(pattern),
+                .integer(limit + existingIDs.count)
+            ]
+        )
+
+        var filteredRows: [SQLiteRow] = []
+        for row in rows {
+            let id = "\(row["entity_type"] ?? ""):\(row["entity_id"] ?? "")"
+            guard !existingIDs.contains(id) else {
+                continue
+            }
+
+            filteredRows.append(row)
+            if filteredRows.count == limit {
+                break
+            }
+        }
+        return filteredRows
+    }
+
+    private func likePattern(for query: String) -> String {
+        let escaped = query
+            .lowercased()
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+        return "%\(escaped)%"
     }
 
     private func searchTokens(for query: String) -> [String] {
