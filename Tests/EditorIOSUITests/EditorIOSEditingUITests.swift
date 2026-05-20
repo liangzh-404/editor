@@ -226,7 +226,7 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
-    func testIPhoneKeyboardToolbarKeepsRightSidebarAndMoreActionsOnly() {
+    func testIPhoneKeyboardToolbarKeepsUsefulActionsAndDismissKeyboard() {
         let app = makeApp()
         app.launch()
 
@@ -245,10 +245,6 @@ final class EditorIOSEditingUITests: XCTestCase {
         XCTAssertTrue(
             app.descendants(matching: .any)["editor.mobile-keyboard.more-format"].waitForExistence(timeout: 5),
             "The compact keyboard toolbar should keep the more-format action"
-        )
-        XCTAssertTrue(
-            app.descendants(matching: .any)["editor.mobile-keyboard.copy"].waitForExistence(timeout: 5),
-            "The compact keyboard toolbar should expose copy"
         )
         XCTAssertTrue(
             app.descendants(matching: .any)["editor.mobile-keyboard.paste"].waitForExistence(timeout: 5),
@@ -270,9 +266,20 @@ final class EditorIOSEditingUITests: XCTestCase {
             app.descendants(matching: .any)["editor.mobile-keyboard.heading"].waitForExistence(timeout: 5),
             "The compact keyboard toolbar should expose the heading picker"
         )
+        let dismissButton = app.descendants(matching: .any)["editor.mobile-keyboard.dismiss"]
+        XCTAssertTrue(
+            dismissButton.waitForExistence(timeout: 5),
+            "The compact keyboard toolbar should expose a direct keyboard dismiss action"
+        )
+        XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.copy"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.format"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.add-block"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.dismiss"].exists)
+
+        dismissButton.tap()
+        XCTAssertTrue(
+            waitForNonExistence(toolbar, timeout: 5),
+            "Tapping 关闭键盘 should dismiss the focused editor keyboard toolbar"
+        )
     }
 
     @MainActor
@@ -393,6 +400,44 @@ final class EditorIOSEditingUITests: XCTestCase {
         XCTAssertTrue(
             waitForNonExistence(palette, timeout: 5),
             "The expanded format palette should not remain mounted after collapsing"
+        )
+    }
+
+    @MainActor
+    func testIPhoneMoreFormatPaletteCanDismissKeyboardWithoutChoosingFormatAndOmitsRedundantCraftTabs() {
+        let app = makeApp()
+        app.launch()
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should be editable before opening formatting")
+        firstTextView.tap()
+
+        let moreButton = app.descendants(matching: .any)["editor.mobile-keyboard.more-format"]
+        XCTAssertTrue(moreButton.waitForExistence(timeout: 5), "The compact keyboard toolbar should expose 更多")
+        moreButton.tap()
+
+        let palette = app.otherElements["editor.mobile-format-palette"]
+        XCTAssertTrue(palette.waitForExistence(timeout: 5), "The expanded format palette should appear after tapping 更多")
+        XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-format.tab.正文"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-format.tab.页面"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-format.颜色"].exists)
+
+        let dismissButton = app.descendants(matching: .any)["editor.mobile-format.dismiss-keyboard"]
+        XCTAssertTrue(
+            dismissButton.waitForExistence(timeout: 5),
+            "The expanded format palette should expose 关闭键盘 even when no format is chosen"
+        )
+        dismissButton.tap()
+
+        XCTAssertTrue(
+            waitForNonExistence(palette, timeout: 5),
+            "Tapping 关闭键盘 from 更多 should close the expanded format palette"
+        )
+        XCTAssertTrue(
+            waitForNonExistence(app.otherElements["editor.mobile-keyboard-toolbar"], timeout: 5),
+            "Tapping 关闭键盘 from 更多 should dismiss the keyboard instead of returning to the toolbar"
         )
     }
 

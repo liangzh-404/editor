@@ -1201,6 +1201,18 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testMobileKeyboardToolbarReplacesCopyWithDismissKeyboard() {
+        XCTAssertEqual(
+            MobileKeyboardToolbarUtilityActionResolver.visibleActions,
+            [.paste, .undo, .dismissKeyboard]
+        )
+        XCTAssertFalse(MobileKeyboardToolbarUtilityActionResolver.visibleActions.contains(.copy))
+    }
+
+    func testMobileFormatPaletteOmitsRedundantCraftTabs() {
+        XCTAssertEqual(MobileFormatPaletteTabResolver.visibleTabs, [.heading, .more])
+    }
+
     func testDesktopAuxiliaryRailButtonIsOfferedEvenBeforeRailHasContent() {
         XCTAssertTrue(
             DesktopAuxiliaryRailButtonPolicy.isOffered(

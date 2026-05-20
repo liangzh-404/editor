@@ -1750,6 +1750,39 @@ enum MobileKeyboardToolbarFormatActionResolver {
     ]
 }
 
+enum MobileKeyboardToolbarUtilityAction: Equatable, Sendable {
+    case copy
+    case paste
+    case undo
+    case dismissKeyboard
+}
+
+enum MobileKeyboardToolbarUtilityActionResolver {
+    static let visibleActions: [MobileKeyboardToolbarUtilityAction] = [
+        .paste,
+        .undo,
+        .dismissKeyboard
+    ]
+}
+
+enum MobileFormatPaletteTab: Equatable, Sendable {
+    case heading
+    case more
+
+    var title: String {
+        switch self {
+        case .heading:
+            return "标题"
+        case .more:
+            return "更多"
+        }
+    }
+}
+
+enum MobileFormatPaletteTabResolver {
+    static let visibleTabs: [MobileFormatPaletteTab] = [.heading, .more]
+}
+
 enum CompactChrome {
     static let backgroundRed: Double = EditorDesignTokens.Colors.appBackground.red
     static let backgroundGreen: Double = EditorDesignTokens.Colors.appBackground.green
@@ -2334,34 +2367,13 @@ enum MobileBlockSelectionChromeResolver {
 }
 
 #if os(iOS)
-private enum MobileFormatPaletteTab: Equatable, Sendable {
-    case heading
-    case body
-    case page
-    case more
-
-    var title: String {
-        switch self {
-        case .heading:
-            return "标题"
-        case .body:
-            return "正文"
-        case .page:
-            return "页面"
-        case .more:
-            return "更多..."
-        }
-    }
-}
-
 private struct MobileKeyboardInputBar: View {
     let isOutlinePresented: Bool
     let selectedBlockType: BlockType
-    let canCopy: Bool
     let canUndo: Bool
-    let onCopy: () -> Void
     let onPaste: () -> Void
     let onUndo: () -> Void
+    let onDismissKeyboard: () -> Void
     let onApplyUnorderedList: () -> Void
     let onApplyOrderedList: () -> Void
     let onShowHeadingPanel: () -> Void
@@ -2370,28 +2382,9 @@ private struct MobileKeyboardInputBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            toolbarButton(
-                systemImage: "doc.on.doc",
-                accessibilityLabel: "复制",
-                identifier: "editor.mobile-keyboard.copy",
-                isEnabled: canCopy,
-                action: onCopy
-            )
-
-            toolbarButton(
-                systemImage: "clipboard",
-                accessibilityLabel: "粘贴",
-                identifier: "editor.mobile-keyboard.paste",
-                action: onPaste
-            )
-
-            toolbarButton(
-                systemImage: "arrow.uturn.backward",
-                accessibilityLabel: "撤销",
-                identifier: "editor.mobile-keyboard.undo",
-                isEnabled: canUndo,
-                action: onUndo
-            )
+            ForEach(MobileKeyboardToolbarUtilityActionResolver.visibleActions, id: \.self) { action in
+                utilityToolbarButton(action)
+            }
 
             ForEach(MobileKeyboardToolbarFormatActionResolver.visibleActions, id: \.self) { action in
                 formatToolbarButton(action)
@@ -2471,6 +2464,36 @@ private struct MobileKeyboardInputBar: View {
         .opacity(isEnabled ? 1 : 0.34)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier(identifier)
+    }
+
+    @ViewBuilder
+    private func utilityToolbarButton(_ action: MobileKeyboardToolbarUtilityAction) -> some View {
+        switch action {
+        case .copy:
+            EmptyView()
+        case .paste:
+            toolbarButton(
+                systemImage: "clipboard",
+                accessibilityLabel: "粘贴",
+                identifier: "editor.mobile-keyboard.paste",
+                action: onPaste
+            )
+        case .undo:
+            toolbarButton(
+                systemImage: "arrow.uturn.backward",
+                accessibilityLabel: "撤销",
+                identifier: "editor.mobile-keyboard.undo",
+                isEnabled: canUndo,
+                action: onUndo
+            )
+        case .dismissKeyboard:
+            toolbarButton(
+                systemImage: "keyboard.chevron.compact.down",
+                accessibilityLabel: "关闭键盘",
+                identifier: "editor.mobile-keyboard.dismiss",
+                action: onDismissKeyboard
+            )
+        }
     }
 
     @ViewBuilder
@@ -2556,12 +2579,12 @@ private struct MobileFormatPalette: View {
     let canApplyInlineFormat: Bool
     let onSelectTab: (MobileFormatPaletteTab) -> Void
     let onChangeType: (BlockType) -> Void
-    let onConvertToPage: () -> Void
     let onIndent: () -> Void
     let onOutdent: () -> Void
     let onApplyInlineFormat: (MarkdownInlineFormat) -> Void
     let onInsertLink: () -> Void
     let onReturnToKeyboard: () -> Void
+    let onDismissKeyboard: () -> Void
     @GestureState private var pullDownOffset: CGFloat = 0
 
     var body: some View {
@@ -2575,6 +2598,7 @@ private struct MobileFormatPalette: View {
                     .accessibilityHidden(true)
 
                 HStack {
+                    dismissKeyboardButton
                     Spacer()
                     collapseButton
                 }
@@ -2582,10 +2606,9 @@ private struct MobileFormatPalette: View {
             .frame(height: 30)
 
             HStack(spacing: 8) {
-                tabButton(.heading)
-                tabButton(.body)
-                tabButton(.page, systemImage: "doc.text")
-                tabButton(.more)
+                ForEach(MobileFormatPaletteTabResolver.visibleTabs, id: \.self) { tab in
+                    tabButton(tab)
+                }
             }
             .padding(4)
             .background(Color.black.opacity(0.035))
@@ -2632,44 +2655,6 @@ private struct MobileFormatPalette: View {
                 squareFormatButton("H3", systemImage: "textformat.size", isSelected: selectedBlockType == .heading3) {
                     onChangeType(.heading3)
                 }
-            case .body:
-                squareFormatButton("任务", systemImage: "checklist", isSelected: selectedBlockType == .taskItem) {
-                    onChangeType(.taskItem)
-                }
-                squareFormatButton("折叠", systemImage: "play.fill", isSelected: selectedBlockType == .toggle) {
-                    onChangeType(.toggle)
-                }
-                squareFormatButton("项目符号", systemImage: "list.bullet", isSelected: selectedBlockType == .unorderedListItem) {
-                    onChangeType(.unorderedListItem)
-                }
-                squareFormatButton("编号", systemImage: "list.number", isSelected: selectedBlockType == .orderedListItem) {
-                    onChangeType(.orderedListItem)
-                }
-                squareFormatButton("减少缩进", systemImage: "decrease.indent", isEnabled: canOutdent) {
-                    onOutdent()
-                }
-                squareFormatButton("增加缩进", systemImage: "increase.indent", isEnabled: canIndent) {
-                    onIndent()
-                }
-            case .page:
-                squareFormatButton("页面", systemImage: "doc.text") {
-                    onConvertToPage()
-                }
-                squareFormatButton("文本", systemImage: "text.alignleft", isSelected: selectedBlockType == .paragraph) {
-                    onChangeType(.paragraph)
-                }
-                squareFormatButton("H1", systemImage: "textformat.size", isSelected: selectedBlockType == .heading1) {
-                    onChangeType(.heading1)
-                }
-                squareFormatButton("项目符号", systemImage: "list.bullet", isSelected: selectedBlockType == .unorderedListItem) {
-                    onChangeType(.unorderedListItem)
-                }
-                squareFormatButton("任务", systemImage: "checklist", isSelected: selectedBlockType == .taskItem) {
-                    onChangeType(.taskItem)
-                }
-                squareFormatButton("更多", systemImage: "ellipsis") {
-                    onSelectTab(.more)
-                }
             case .more:
                 squareFormatButton("任务", systemImage: "checklist", isSelected: selectedBlockType == .taskItem) {
                     onChangeType(.taskItem)
@@ -2707,7 +2692,6 @@ private struct MobileFormatPalette: View {
                 squareFormatButton("链接", systemImage: "link", isEnabled: canApplyInlineFormat) {
                     onInsertLink()
                 }
-                colorButton
             }
         }
     }
@@ -2751,6 +2735,22 @@ private struct MobileFormatPalette: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tab.title)
         .accessibilityIdentifier("editor.mobile-format.tab.\(tab.title)")
+    }
+
+    private var dismissKeyboardButton: some View {
+        Button {
+            onDismissKeyboard()
+        } label: {
+            Image(systemName: "keyboard.chevron.compact.down")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 34, height: 30)
+                .background(Color.black.opacity(0.045))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("关闭键盘")
+        .accessibilityIdentifier("editor.mobile-format.dismiss-keyboard")
     }
 
     private var collapseButton: some View {
@@ -2837,34 +2837,6 @@ private struct MobileFormatPalette: View {
         .accessibilityIdentifier("editor.mobile-format.\(title)")
     }
 
-    private var colorButton: some View {
-        Button {} label: {
-            ZStack {
-                Circle()
-                    .strokeBorder(
-                        AngularGradient(
-                            colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red],
-                            center: .center
-                        ),
-                        lineWidth: 4
-                    )
-                Circle()
-                    .fill(Color.primary)
-                    .padding(7)
-            }
-            .frame(width: 30, height: 30)
-            .foregroundStyle(Color.primary.opacity(0.28))
-            .frame(maxWidth: .infinity)
-            .frame(height: 56)
-            .background(Color.black.opacity(0.035))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(true)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("颜色")
-        .accessibilityIdentifier("editor.mobile-format.颜色")
-    }
 }
 
 private struct MobileBlockSelectionToolbar: View {
@@ -9718,7 +9690,7 @@ private struct BlockRowView: View {
     @State private var isAttachmentRenameAlertPresented = false
     @State private var attachmentRenameText = ""
 #if os(iOS)
-    @State private var mobileFormatPaletteTab: MobileFormatPaletteTab = .body
+    @State private var mobileFormatPaletteTab: MobileFormatPaletteTab = .more
     @State private var isMobileFormatPanelPresented = false
 #endif
 
@@ -10561,11 +10533,7 @@ private struct BlockRowView: View {
             MobileKeyboardInputBar(
                 isOutlinePresented: isMobileOutlinePresented,
                 selectedBlockType: block.type,
-                canCopy: mobileKeyboardCopyText != nil,
                 canUndo: canUndoTextEdit,
-                onCopy: {
-                    copyMobileKeyboardText()
-                },
                 onPaste: {
                     pasteMobileKeyboardContents()
                 },
@@ -10573,6 +10541,9 @@ private struct BlockRowView: View {
                     let refocusSelection = mobileInlineFormatSelection
                     onUndoTextEdit()
                     requestMobileRefocusAfterFormatMutation(selection: refocusSelection)
+                },
+                onDismissKeyboard: {
+                    dismissMobileKeyboard()
                 },
                 onApplyUnorderedList: {
                     applyMobileKeyboardBlockType(.unorderedListItem)
@@ -10625,9 +10596,6 @@ private struct BlockRowView: View {
                 }
                 collapseMobileFormatPanelToKeyboard()
             },
-            onConvertToPage: {
-                onConvertToPage()
-            },
             onIndent: {
                 let refocusSelection = mobileInlineFormatSelection
                 if onIndent() {
@@ -10658,6 +10626,9 @@ private struct BlockRowView: View {
             },
             onReturnToKeyboard: {
                 collapseMobileFormatPanelToKeyboard()
+            },
+            onDismissKeyboard: {
+                dismissMobileKeyboard()
             }
         )
     }
@@ -10682,27 +10653,6 @@ private struct BlockRowView: View {
             selection.length >= 0 &&
             selection.location <= textLength &&
             selection.length <= textLength - selection.location
-    }
-
-    private var mobileKeyboardCopyText: String? {
-        let blockText = block.textPlain as NSString
-        if let selection = editorSession.textSelection,
-           selection.blockID == block.id,
-           selection.length > 0,
-           isValidMobileSelection(selection) {
-            return blockText.substring(
-                with: NSRange(location: selection.location, length: selection.length)
-            )
-        }
-
-        return block.textPlain.isEmpty ? nil : block.textPlain
-    }
-
-    private func copyMobileKeyboardText() {
-        guard let text = mobileKeyboardCopyText else {
-            return
-        }
-        UIPasteboard.general.string = text
     }
 
     @discardableResult
@@ -10762,6 +10712,31 @@ private struct BlockRowView: View {
         }
     }
 
+    private func dismissMobileKeyboard() {
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.92)) {
+            isMobileFormatPanelPresented = false
+            mobileFormatPaletteTab = .more
+        }
+        rowFocusRequest = nil
+        dismissActiveIOSKeyboard()
+        editorSession.endEditing(blockID: block.id)
+    }
+
+    private func dismissActiveIOSKeyboard() {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .forEach { window in
+                window.endEditing(true)
+            }
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+    }
+
     private func requestMobileRefocusAfterFormatMutation(selection: EditorTextSelection?) {
         let focusSelection = selection ?? blockEndSelection
         DispatchQueue.main.async {
@@ -10773,12 +10748,12 @@ private struct BlockRowView: View {
     }
 
     private func resetMobileFormatPanelForInactiveRow() {
-        guard isMobileFormatPanelPresented || mobileFormatPaletteTab != .body else {
+        guard isMobileFormatPanelPresented || mobileFormatPaletteTab != .more else {
             return
         }
 
         isMobileFormatPanelPresented = false
-        mobileFormatPaletteTab = .body
+        mobileFormatPaletteTab = .more
     }
 #endif
 
