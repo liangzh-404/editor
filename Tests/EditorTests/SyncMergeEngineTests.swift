@@ -172,7 +172,7 @@ final class SyncMergeEngineTests: XCTestCase {
         )
     }
 
-    func testLocalNewerPageSnapshotKeepsWholePendingLocalPageContent() throws {
+    func testLocalNewerPageSnapshotKeepsPendingLocalContentAndAppliesRemoteOnlyBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -187,6 +187,7 @@ final class SyncMergeEngineTests: XCTestCase {
             text: "Local only"
         )
         try pageRepository.updateBlockText(blockID: firstBlockID, text: "Local latest first")
+        try setBlockUpdatedAt(database: database, blockID: firstBlockID, updatedAt: "2026-05-21T00:00:02Z")
         try setPageUpdatedAt(database: database, pageID: pageID, updatedAt: "2026-05-21T00:00:02Z")
 
         try SyncMergeEngine(database: database).applyRemoteBlockPageSnapshot(
@@ -219,13 +220,20 @@ final class SyncMergeEngineTests: XCTestCase {
         let activeBlocks = try pageRepository.loadWorkspaceSnapshot().blocks
             .filter { $0.pageID == pageID }
             .sorted { $0.orderKey < $1.orderKey }
-        XCTAssertEqual(activeBlocks.map(\.id), [firstBlockID, localOnlyBlock.id])
-        XCTAssertEqual(activeBlocks.map(\.textPlain), ["Local latest first", "Local only"])
+        let activeBlocksByID = Dictionary(uniqueKeysWithValues: activeBlocks.map { ($0.id, $0) })
+        XCTAssertEqual(activeBlocksByID[firstBlockID]?.textPlain, "Local latest first")
+        XCTAssertEqual(activeBlocksByID[localOnlyBlock.id]?.textPlain, "Local only")
+        XCTAssertEqual(activeBlocksByID["block-remote-second"]?.textPlain, "Remote second")
+        XCTAssertEqual(try isBlockDeleted(database: database, blockID: localOnlyBlock.id), false)
         XCTAssertEqual(
             try SyncRepository(database: database).pendingChanges().filter { change in
                 change.entityID == pageID || change.entityID == firstBlockID || change.entityID == localOnlyBlock.id
-            }.isEmpty,
-            false
+            },
+            [
+                SyncChange(entityType: "block", entityID: localOnlyBlock.id, changeType: "create"),
+                SyncChange(entityType: "block", entityID: firstBlockID, changeType: "update"),
+                SyncChange(entityType: "page", entityID: pageID, changeType: "update")
+            ]
         )
     }
 

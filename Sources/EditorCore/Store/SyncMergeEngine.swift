@@ -370,7 +370,11 @@ final class SyncMergeEngine {
 
             guard decision == .applyRemote else {
                 EditorLog.sync.debug(
-                    "sync_remote_page_snapshot_lww_kept_local page_id=\(pageID, privacy: .public)"
+                    "sync_remote_page_snapshot_lww_kept_local_merging_remote_blocks page_id=\(pageID, privacy: .public)"
+                )
+                try mergeRemoteBlockPageSnapshotWithPendingLocal(
+                    pageID: pageID,
+                    changes: changes
                 )
                 return
             }
@@ -380,6 +384,20 @@ final class SyncMergeEngine {
             pageID: pageID,
             changes: changes,
             remoteUpdatedAt: remoteUpdatedAt
+        )
+    }
+
+    private func mergeRemoteBlockPageSnapshotWithPendingLocal(
+        pageID: String,
+        changes: [RemoteBlockChange]
+    ) throws {
+        let sortedChanges = RemoteBlockChangeDependencySorter.sorted(changes)
+        for remote in sortedChanges {
+            try applyRemoteBlock(remote)
+        }
+
+        EditorLog.sync.debug(
+            "sync_remote_page_snapshot_merged_with_pending_local page_id=\(pageID, privacy: .public) remote_blocks=\(sortedChanges.count, privacy: .public)"
         )
     }
 
