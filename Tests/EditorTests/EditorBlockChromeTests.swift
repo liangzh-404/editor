@@ -518,6 +518,10 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testPageTagEditorChromeKeepsExplicitCreation() {
+        XCTAssertTrue(PageTagEditorChromePolicy.showsCreateField)
+    }
+
     func testPageRowDragVisualPolicyMakesDraggedSourceFeelLifted() {
         XCTAssertEqual(PageRowDragVisualPolicy.opacity(isBeingDragged: false), 1)
         XCTAssertEqual(PageRowDragVisualPolicy.scale(isBeingDragged: false), 1)
@@ -1768,12 +1772,19 @@ final class EditorBlockChromeTests: XCTestCase {
             title: "带预览的文档",
             isFavorite: true
         )
-        let tag = TagSummary(
+        let tagParent = TagSummary(
             id: "tag-life",
             workspaceID: workspaceID,
             parentTagID: nil,
             name: "生活",
             path: "生活"
+        )
+        let tagChild = TagSummary(
+            id: "tag-garden",
+            workspaceID: workspaceID,
+            parentTagID: tagParent.id,
+            name: "园艺",
+            path: "生活/园艺"
         )
         let snapshot = WorkspaceSnapshot(
             workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
@@ -1789,8 +1800,8 @@ final class EditorBlockChromeTests: XCTestCase {
                 )
             ],
             attachments: [],
-            tags: [tag],
-            pageTags: [PageTagAssignment(pageID: page.id, tagID: tag.id)],
+            tags: [tagParent, tagChild],
+            pageTags: [PageTagAssignment(pageID: page.id, tagID: tagChild.id)],
             selectedWorkspaceID: workspaceID,
             selectedPageID: page.id
         )
@@ -1801,7 +1812,7 @@ final class EditorBlockChromeTests: XCTestCase {
         )
 
         XCTAssertEqual(items.map(\.page.id), [page.id])
-        XCTAssertEqual(items.first?.tagNames, ["生活"])
+        XCTAssertEqual(items.first?.tagNames, ["生活/园艺"])
         XCTAssertEqual(items.first?.preview.excerpt, "这是一段用于列表预览的正文")
     }
 

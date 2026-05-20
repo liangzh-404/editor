@@ -627,9 +627,6 @@ private struct ThreeColumnEditorShell: View {
                     onPendingBlockFocusHandled: {
                         _ = viewModel.consumePendingFocusBlockID()
                     },
-                    onAddTagToSelectedPage: { tagID in
-                        viewModel.addTagToSelectedPageForUI(tagID: tagID)
-                    },
                     onRemoveTagFromSelectedPage: { tagID in
                         viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
                     },
@@ -927,9 +924,6 @@ private struct ThreeColumnEditorShell: View {
                 onMobileRevealPageList: nil,
                 onPendingBlockFocusHandled: {
                     _ = viewModel.consumePendingFocusBlockID()
-                },
-                onAddTagToSelectedPage: { tagID in
-                    viewModel.addTagToSelectedPageForUI(tagID: tagID)
                 },
                 onRemoveTagFromSelectedPage: { tagID in
                     viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
@@ -3479,7 +3473,7 @@ enum CompactCollectionPageListModel {
 
         return snapshot.tags
             .filter { tagIDs.contains($0.id) }
-            .map(\.name)
+            .map(\.path)
     }
 }
 
@@ -3837,9 +3831,6 @@ private struct CompactPageDestination: View {
                 onMobileRevealPageList: onRevealPageList,
                 onPendingBlockFocusHandled: {
                     _ = viewModel.consumePendingFocusBlockID()
-                },
-                onAddTagToSelectedPage: { tagID in
-                    viewModel.addTagToSelectedPageForUI(tagID: tagID)
                 },
                 onRemoveTagFromSelectedPage: { tagID in
                     viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
@@ -4769,7 +4760,7 @@ private struct PageListView: View {
         )
         return viewModel.snapshot.tags
             .filter { tagIDs.contains($0.id) }
-            .map(\.name)
+            .map(\.path)
     }
 
     private var selectedPageBinding: Binding<String?> {
@@ -5450,6 +5441,10 @@ private struct PageRow: View {
                     .accessibilityValue(pageRowAccessibilityValue)
                     .accessibilityIdentifier("editor.page-row.\(page.id)")
 
+                if !tagNames.isEmpty {
+                    tagChips
+                }
+
                 if let excerpt = preview?.excerpt, !excerpt.isEmpty {
                     Text(excerpt)
                         .font(.callout)
@@ -5474,9 +5469,6 @@ private struct PageRow: View {
                     }
                 }
 
-                if !tagNames.isEmpty {
-                    tagChips
-                }
             }
 
             Spacer(minLength: 8)
@@ -5581,11 +5573,14 @@ enum PageTagEditorVisibilityPolicy {
     }
 }
 
+enum PageTagEditorChromePolicy {
+    static let showsCreateField = true
+}
+
 private struct PageTagEditor: View {
     let availableTags: [TagSummary]
     let selectedTagIDs: [String]
     let selectedTagNames: [String]
-    let onAddTag: (String) -> Bool
     let onRemoveTag: (String) -> Bool
     let onCreateTag: (String) -> Bool
     @State private var draftName = ""
@@ -5597,7 +5592,7 @@ private struct PageTagEditor: View {
                     _ = onRemoveTag(tag.id)
                 } label: {
                     HStack(spacing: 4) {
-                        Text(tag.name)
+                        Text(tag.path)
                             .lineLimit(1)
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .bold))
@@ -5610,32 +5605,18 @@ private struct PageTagEditor: View {
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("移除标签 \(tag.name)")
+                .accessibilityLabel("移除标签 \(tag.path)")
                 .accessibilityIdentifier("editor.page-tag.\(tag.id).remove")
             }
 
-            if !unassignedTags.isEmpty {
-                Menu {
-                    ForEach(unassignedTags) { tag in
-                        Button(tag.path) {
-                            _ = onAddTag(tag.id)
-                        }
-                    }
-                } label: {
-                    Image(systemName: "tag.badge.plus")
-                        .font(.caption.weight(.semibold))
-                        .frame(width: 24, height: 24)
-                }
-                .accessibilityLabel("添加已有标签")
-                .accessibilityIdentifier("editor.page-tag.add-existing")
+            if PageTagEditorChromePolicy.showsCreateField {
+                TextField("添加标签", text: $draftName)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                    .frame(width: 86)
+                    .onSubmit(commitDraft)
+                    .accessibilityIdentifier("editor.page-tag.add-field")
             }
-
-            TextField("添加标签", text: $draftName)
-                .textFieldStyle(.plain)
-                .font(.caption)
-                .frame(width: 86)
-                .onSubmit(commitDraft)
-                .accessibilityIdentifier("editor.page-tag.add-field")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
@@ -5652,11 +5633,6 @@ private struct PageTagEditor: View {
         return selectedTagNames.map { name in
             TagSummary(id: name, workspaceID: "", parentTagID: nil, name: name, path: name)
         }
-    }
-
-    private var unassignedTags: [TagSummary] {
-        let selectedTagIDSet = Set(selectedTagIDs)
-        return availableTags.filter { !selectedTagIDSet.contains($0.id) }
     }
 
     private func commitDraft() {
@@ -5986,7 +5962,6 @@ private struct EditorCanvasView: View {
     let onAttachmentImageDisplayWidthChange: (String, Double) -> Void
     let onMobileRevealPageList: (() -> Void)?
     let onPendingBlockFocusHandled: () -> Void
-    var onAddTagToSelectedPage: (String) -> Bool = { _ in false }
     var onRemoveTagFromSelectedPage: (String) -> Bool = { _ in false }
     var onCreateAndAssignTagToSelectedPage: (String) -> Bool = { _ in false }
     @State private var isAttachmentImporterPresented = false
@@ -6063,7 +6038,6 @@ private struct EditorCanvasView: View {
                         availableTags: availableTags,
                         selectedTagIDs: selectedPageTagIDs,
                         selectedTagNames: pageTagNames,
-                        onAddTag: onAddTagToSelectedPage,
                         onRemoveTag: onRemoveTagFromSelectedPage,
                         onCreateTag: onCreateAndAssignTagToSelectedPage
                     )

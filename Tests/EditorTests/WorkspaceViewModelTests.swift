@@ -452,7 +452,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.createAndAssignTagToSelectedPageForUI(name: " Work / PL "))
 
         XCTAssertEqual(viewModel.snapshot.tags.map(\.path), ["Work", "Work/PL"])
-        XCTAssertEqual(viewModel.selectedPageTagNames, ["PL"])
+        XCTAssertEqual(viewModel.selectedPageTagNames, ["Work/PL"])
         XCTAssertEqual(viewModel.selectedPageTagIDs, [try XCTUnwrap(viewModel.snapshot.tags.last?.id)])
     }
 
@@ -3371,7 +3371,7 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHashTagTextIsExtractedIntoSelectedPageTagMetadata() throws {
+    func testHashTagTextStaysInBodyTextAndDoesNotAutoCreateTags() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -3385,14 +3385,13 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         try viewModel.updateBlockText(blockID: blockID, text: "开饭了 #生活 #abc")
 
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开饭了")
-        XCTAssertEqual(viewModel.snapshot.tags.map(\.name).sorted(), ["abc", "生活"])
-        let assignedTagIDs = Set(viewModel.snapshot.pageTags.filter { $0.pageID == pageID }.map(\.tagID))
-        XCTAssertEqual(assignedTagIDs, Set(viewModel.snapshot.tags.map(\.id)))
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开饭了 #生活 #abc")
+        XCTAssertTrue(viewModel.snapshot.tags.isEmpty)
+        XCTAssertTrue(viewModel.snapshot.pageTags.filter { $0.pageID == pageID }.isEmpty)
     }
 
     @MainActor
-    func testLoadExtractsExistingHashTagBlocksIntoPageMetadata() throws {
+    func testLoadKeepsExistingHashTagBlocksAsBodyText() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -3405,9 +3404,8 @@ final class WorkspaceViewModelTests: XCTestCase {
         let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
         try viewModel.load()
 
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "")
-        XCTAssertEqual(viewModel.snapshot.tags.map(\.name), ["abc"])
-        XCTAssertEqual(viewModel.selectedPageTagNames, ["abc"])
+        XCTAssertEqual(viewModel.snapshot.tags, [])
+        XCTAssertEqual(viewModel.selectedPageTagNames, [])
     }
 
     @MainActor

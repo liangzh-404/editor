@@ -490,6 +490,7 @@ enum AppEnvironment {
             return
         }
 
+        _ = try tagRepository.createTag(workspaceID: workspaceID, name: "Research")
         let tag = try tagRepository.createTag(workspaceID: workspaceID, name: "Writing")
         try tagRepository.assignTags(pageID: pageID, tagIDs: [tag.id])
 #else

@@ -183,7 +183,7 @@ final class WorkspaceViewModel: ObservableObject {
         )
         return snapshot.tags
             .filter { tagIDs.contains($0.id) }
-            .map(\.name)
+            .map(\.path)
     }
 
     var selectedPageTagIDs: [String] {
@@ -388,13 +388,6 @@ final class WorkspaceViewModel: ObservableObject {
             )
         }
         hasLoadedSnapshot = true
-        if try extractInlineHashTagsFromSnapshotIfNeeded() {
-            let currentCollection = selectedCollection
-            let currentPageID = selectedPageID
-            let loadedSnapshot = try repository.loadWorkspaceSnapshot()
-            apply(snapshot: loadedSnapshot)
-            restoreSelectionAfterReload(collection: currentCollection, pageID: currentPageID)
-        }
         try refreshDerivedState(rebuildSearchIndex: true)
         requestInitialEditorFocusIfNeeded(source: "load")
         requestInitialCompactPageNavigationIfNeeded(source: "load")
@@ -1312,9 +1305,7 @@ final class WorkspaceViewModel: ObservableObject {
     private func updateBlockText(blockID: String, text: String, registerUndo: Bool) throws {
         let currentBlock = snapshot.blocks.first { $0.id == blockID }
         let currentType = currentBlock?.type ?? .paragraph
-        let tagExtraction = InlineHashTagExtractor.extract(from: text)
-        let nextText = tagExtraction.tagNames.isEmpty ? text : tagExtraction.text
-        let nextBlock = nextBlockState(currentType: currentType, text: nextText)
+        let nextBlock = nextBlockState(currentType: currentType, text: text)
         let coalescingKey = makeTextEditUndoCoalescingKey(
             blockID: blockID,
             currentBlock: currentBlock,
@@ -1345,24 +1336,6 @@ final class WorkspaceViewModel: ObservableObject {
                 snapshot = snapshot.replacingTaskItemCompletion(
                     blockID: blockID,
                     isCompleted: taskItemIsCompleted
-                )
-            }
-            if !tagExtraction.tagNames.isEmpty,
-               let pageID = currentBlock?.pageID ?? selectedPageID {
-                try assignInlineTags(tagExtraction.tagNames, to: pageID)
-                if let repository {
-                    let previousSelectedCollection = selectedCollection
-                    let previousSelectedPageID = selectedPageID
-                    let loadedSnapshot = try repository.loadWorkspaceSnapshot()
-                    apply(snapshot: loadedSnapshot)
-                    restoreSelectionAfterReload(
-                        collection: previousSelectedCollection,
-                        pageID: previousSelectedPageID
-                    )
-                }
-                pendingFocusBlockID = blockID
-                EditorLog.focus.debug(
-                    "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=inline_tag_extract"
                 )
             }
             if currentType != nextBlock.type {
@@ -3783,33 +3756,6 @@ final class WorkspaceViewModel: ObservableObject {
         refreshConflictsForSelectedPage()
     }
 
-    private func assignInlineTags(_ tagNames: [String], to pageID: String) throws {
-        guard !tagNames.isEmpty,
-              let tagRepository,
-              let selectedWorkspaceID else {
-            return
-        }
-
-        var existingTags = try tagRepository.tags(workspaceID: selectedWorkspaceID)
-        var assignedTagIDs = Set(
-            try tagRepository.tagAssignments()
-                .filter { $0.pageID == pageID }
-                .map(\.tagID)
-        )
-
-        for tagName in tagNames {
-            if let existingTag = existingTags.first(where: { $0.name.caseInsensitiveCompare(tagName) == .orderedSame }) {
-                assignedTagIDs.insert(existingTag.id)
-            } else {
-                let createdTag = try tagRepository.createTag(workspaceID: selectedWorkspaceID, name: tagName)
-                existingTags.append(createdTag)
-                assignedTagIDs.insert(createdTag.id)
-            }
-        }
-
-        try tagRepository.assignTags(pageID: pageID, tagIDs: Array(assignedTagIDs).sorted())
-    }
-
     private func findOrCreateTagPath(
         _ rawPath: String,
         workspaceID: String,
@@ -3932,33 +3878,6 @@ final class WorkspaceViewModel: ObservableObject {
             ordered.append(pageID)
         }
         return ordered
-    }
-
-    private func extractInlineHashTagsFromSnapshotIfNeeded() throws -> Bool {
-        guard let repository, tagRepository != nil else {
-            return false
-        }
-
-        var didExtractTags = false
-        for block in snapshot.blocks where block.type.isTextEditable {
-            let extraction = InlineHashTagExtractor.extract(from: block.textPlain)
-            guard !extraction.tagNames.isEmpty else {
-                continue
-            }
-
-            try repository.updateBlock(
-                blockID: block.id,
-                type: block.type,
-                text: extraction.text,
-                taskItemIsCompleted: block.taskItemIsCompleted,
-                toggleIsExpanded: block.toggleIsExpanded,
-                codeBlockLineWrapping: block.codeBlockLineWrapping
-            )
-            try assignInlineTags(extraction.tagNames, to: block.pageID)
-            didExtractTags = true
-        }
-
-        return didExtractTags
     }
 
     private func performPageEdit(

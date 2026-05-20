@@ -389,6 +389,36 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testHashPrefixedBodyTextDoesNotAutoCreatePageTag() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launchEnvironment["EDITOR_UI_TEST_TAGGED_PAGE"] = "1"
+        app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
+
+        XCTAssertTrue(
+            app.textFields["editor.page-tag.add-field"].waitForExistence(timeout: 5),
+            "The explicit page tag field should remain the only add-tag entry point"
+        )
+        XCTAssertFalse(
+            app.element(identifier: "editor.page-tag.add-existing").exists,
+            "The old add-existing tag picker should not be exposed above the editor"
+        )
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible")
+
+        textView.click()
+        textView.typeText(" #f")
+
+        XCTAssertTrue(
+            textView.waitForValue(containing: "#f", timeout: 5),
+            "Typing #f in the note body should stay in the body instead of becoming a page tag"
+        )
+    }
+
+    @MainActor
     func testTypingAfterClickingTextBeginningKeepsCaretLocation() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
