@@ -2011,6 +2011,20 @@ enum BlockSelectionMarqueeStartPolicy {
     }
 }
 
+enum BlockSelectionMarqueeInteractionFrameResolver {
+    static func blockedFrames(
+        blocks: [BlockSnapshot],
+        blockFrames: [String: CGRect]
+    ) -> [CGRect] {
+        blocks.compactMap { block in
+            guard block.type == .attachmentImage || block.type == .attachmentVideo else {
+                return nil
+            }
+            return blockFrames[block.id]
+        }
+    }
+}
+
 enum MobileBlockSwipeAction: Equatable, Sendable {
     case indent
     case outdent
@@ -2995,7 +3009,7 @@ enum PageListPreviewResolver {
         return PageListPreview(
             excerpt: excerpt,
             imageAttachment: imageAttachment,
-            fileAttachment: fileAttachment
+            fileAttachment: imageAttachment == nil ? fileAttachment : nil
         )
     }
 
@@ -5197,6 +5211,11 @@ enum PageRowDragVisualPolicy {
     }
 }
 
+enum PageRowLayoutPolicy {
+    static let maxWidth: CGFloat = .infinity
+    static let favoriteButtonSize: CGFloat = 22
+}
+
 private struct PageRow: View {
     let page: PageSummary
     var isSelected = false
@@ -5268,6 +5287,7 @@ private struct PageRow: View {
                     .accessibilityHidden(true)
             }
         }
+        .frame(maxWidth: PageRowLayoutPolicy.maxWidth, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
@@ -5336,7 +5356,11 @@ private struct PageRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
-        .frame(minHeight: CGFloat(EditorDesignTokens.Layout.documentListRowMinHeight), alignment: .topLeading)
+        .frame(
+            maxWidth: PageRowLayoutPolicy.maxWidth,
+            minHeight: CGFloat(EditorDesignTokens.Layout.documentListRowMinHeight),
+            alignment: .topLeading
+        )
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isSelected ? EditorDesignTokens.Colors.border.color.opacity(0.44) : Color.clear)
@@ -5393,7 +5417,10 @@ private struct PageRow: View {
             Image(systemName: page.isFavorite ? "star.fill" : "star")
                 .font(.callout.weight(.medium))
                 .foregroundStyle(page.isFavorite ? .yellow : EditorDesignTokens.Colors.tertiaryText.color)
-                .frame(width: 22, height: 22)
+                .frame(
+                    width: PageRowLayoutPolicy.favoriteButtonSize,
+                    height: PageRowLayoutPolicy.favoriteButtonSize
+                )
         }
         .buttonStyle(.borderless)
         .help(page.isFavorite ? "取消收藏" : "加入收藏")
@@ -7415,8 +7442,16 @@ private struct EditorCanvasView: View {
         BlockSelectionMarqueeStartPolicy.isAllowed(
             location: location,
             blockFrames: blockRowFrames,
-            blockedInteractionFrames: Array(attachmentResizeHandleFrames.values)
+            blockedInteractionFrames: blockSelectionBlockedInteractionFrames
         )
+    }
+
+    private var blockSelectionBlockedInteractionFrames: [CGRect] {
+        Array(attachmentResizeHandleFrames.values)
+            + BlockSelectionMarqueeInteractionFrameResolver.blockedFrames(
+                blocks: blocks,
+                blockFrames: blockRowFrames
+            )
     }
 
     private func importPastedAttachments(_ attachmentURLs: [URL]) -> Bool {

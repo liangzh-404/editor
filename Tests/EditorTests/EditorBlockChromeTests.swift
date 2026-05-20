@@ -941,6 +941,38 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testBlockSelectionMarqueeBlockedFramesIncludeImageAttachmentRows() {
+        let imageBlock = BlockSnapshot(
+            id: "image",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "1",
+            type: .attachmentImage,
+            textPlain: "cover.png"
+        )
+        let fileBlock = BlockSnapshot(
+            id: "file",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "2",
+            type: .attachmentFile,
+            textPlain: "guide.pdf"
+        )
+        let imageFrame = CGRect(x: 40, y: 80, width: 520, height: 260)
+        let fileFrame = CGRect(x: 40, y: 360, width: 520, height: 64)
+
+        XCTAssertEqual(
+            BlockSelectionMarqueeInteractionFrameResolver.blockedFrames(
+                blocks: [imageBlock, fileBlock],
+                blockFrames: [
+                    imageBlock.id: imageFrame,
+                    fileBlock.id: fileFrame
+                ]
+            ),
+            [imageFrame]
+        )
+    }
+
     func testMobileActionChromeUsesThemeAccentInsteadOfSystemBlue() {
         assertColor(
             MobileActionChrome.accentToken,
@@ -1361,7 +1393,7 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
-    func testPageListPreviewResolverUsesFirstTextAndAttachmentBlocks() {
+    func testPageListPreviewResolverUsesFirstTextAndSingleAttachmentBlock() {
         let pageID = "page"
         let image = AttachmentSnapshot(
             id: "attachment-image",
@@ -1398,7 +1430,39 @@ final class EditorBlockChromeTests: XCTestCase {
 
         XCTAssertEqual(preview.excerpt, "这里是正文摘要 #tag")
         XCTAssertEqual(preview.imageAttachment?.id, image.id)
+        XCTAssertNil(preview.fileAttachment)
+    }
+
+    func testPageListPreviewResolverFallsBackToFileAttachmentWhenNoImageExists() {
+        let pageID = "page"
+        let file = AttachmentSnapshot(
+            id: "attachment-file",
+            workspaceID: "workspace",
+            originalFilename: "guide.pdf",
+            utiType: "com.adobe.pdf",
+            byteSize: 42,
+            contentHash: "hash2",
+            localPath: "/tmp/guide.pdf",
+            thumbnailPath: nil,
+            kind: .file
+        )
+        let preview = PageListPreviewResolver.preview(
+            pageID: pageID,
+            blocks: [
+                BlockSnapshot(id: "text", pageID: pageID, parentBlockID: nil, orderKey: "1", type: .paragraph, textPlain: "正文"),
+                BlockSnapshot(id: "file", pageID: pageID, parentBlockID: nil, orderKey: "2", type: .attachmentFile, textPlain: "guide.pdf", attachmentID: file.id)
+            ],
+            attachments: [file]
+        )
+
+        XCTAssertEqual(preview.excerpt, "正文")
+        XCTAssertNil(preview.imageAttachment)
         XCTAssertEqual(preview.fileAttachment?.id, file.id)
+    }
+
+    func testPageRowLayoutKeepsFavoriteControlsTrailingAligned() {
+        XCTAssertEqual(PageRowLayoutPolicy.maxWidth, .infinity)
+        XCTAssertEqual(PageRowLayoutPolicy.favoriteButtonSize, 22)
     }
 
     func testImageAttachmentPreviewCandidatesFallBackFromMissingThumbnailToOriginalFile() {
