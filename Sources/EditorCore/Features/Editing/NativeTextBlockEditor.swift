@@ -106,6 +106,49 @@ enum EmptyTextBlockReturnResolver {
     }
 }
 
+struct NativeTextNewlineReplacement: Equatable {
+    let updatedText: String
+    let newlineRange: NSRange
+}
+
+enum NativeTextNewlineReplacementResolver {
+    static func isSingleNewline(_ replacementText: String) -> Bool {
+        guard (replacementText as NSString).length == 1 else {
+            return false
+        }
+        return replacementText.rangeOfCharacter(from: .newlines) != nil
+    }
+
+    static func replacement(
+        currentText: String,
+        range: NSRange,
+        replacementText: String
+    ) -> NativeTextNewlineReplacement? {
+        guard replacementText.rangeOfCharacter(from: .newlines) != nil else {
+            return nil
+        }
+
+        let current = currentText as NSString
+        guard range.location >= 0,
+              range.length >= 0,
+              range.location <= current.length,
+              range.length <= current.length - range.location else {
+            return nil
+        }
+
+        let updatedText = current.replacingCharacters(in: range, with: replacementText)
+        let newlineRange = (updatedText as NSString).rangeOfCharacter(from: .newlines)
+        guard newlineRange.location != NSNotFound else {
+            return nil
+        }
+
+        return NativeTextNewlineReplacement(
+            updatedText: updatedText,
+            newlineRange: newlineRange
+        )
+    }
+}
+
 enum MarkdownInlineFormatKeyboardResolver {
     static func format(
         input: String?,
@@ -780,7 +823,8 @@ struct NativeTextBlockEditor: View {
     let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
-    let onInsertBlockAfter: (EditorTextSelection) -> Bool
+    let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
+    let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onSlashCommandNavigationByKeyboard: (BlockKeyboardMoveDirection) -> Bool
@@ -811,7 +855,8 @@ struct NativeTextBlockEditor: View {
         onExtendBlockSelectionByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
         onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
-        onInsertBlockAfter: @escaping (EditorTextSelection) -> Bool = { _ in false },
+        onInsertBlockAfter: @escaping (EditorTextSelection) -> EditorTextSelection? = { _ in nil },
+        onReplaceTextAtSelection: @escaping (EditorTextSelection, String) -> EditorTextSelection? = { _, _ in nil },
         onMergeBlockWithPrevious: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onMergeBlockWithNext: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onSlashCommandNavigationByKeyboard: @escaping (BlockKeyboardMoveDirection) -> Bool = { _ in false },
@@ -841,6 +886,7 @@ struct NativeTextBlockEditor: View {
         self.onApplyInlineFormatByKeyboard = onApplyInlineFormatByKeyboard
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
+        self.onReplaceTextAtSelection = onReplaceTextAtSelection
         self.onMergeBlockWithPrevious = onMergeBlockWithPrevious
         self.onMergeBlockWithNext = onMergeBlockWithNext
         self.onSlashCommandNavigationByKeyboard = onSlashCommandNavigationByKeyboard
@@ -874,6 +920,7 @@ struct NativeTextBlockEditor: View {
                 onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
                 onInsertLinkByKeyboard: onInsertLinkByKeyboard,
                 onInsertBlockAfter: onInsertBlockAfter,
+                onReplaceTextAtSelection: onReplaceTextAtSelection,
                 onMergeBlockWithPrevious: onMergeBlockWithPrevious,
                 onMergeBlockWithNext: onMergeBlockWithNext,
                 onSlashCommandNavigationByKeyboard: onSlashCommandNavigationByKeyboard,
@@ -1117,7 +1164,8 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
-    let onInsertBlockAfter: (EditorTextSelection) -> Bool
+    let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
+    let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onSlashCommandNavigationByKeyboard: (BlockKeyboardMoveDirection) -> Bool
@@ -1196,7 +1244,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                     location: selectedRange.location,
                     length: selectedRange.length
                 )
-            )
+            ) != nil
         }
         textView.onMergeBlockWithPrevious = { selectedRange in
             onMergeBlockWithPrevious(
@@ -1300,7 +1348,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                         location: selectedRange.location,
                         length: selectedRange.length
                     )
-                )
+                ) != nil
             }
             textView.onMergeBlockWithPrevious = { selectedRange in
                 onMergeBlockWithPrevious(
@@ -2145,7 +2193,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
-    let onInsertBlockAfter: (EditorTextSelection) -> Bool
+    let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
+    let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onSlashCommandNavigationByKeyboard: (BlockKeyboardMoveDirection) -> Bool
@@ -2201,7 +2250,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                     location: selectedRange.location,
                     length: selectedRange.length
                 )
-            )
+            ) != nil
         }
         textView.onMergeBlockWithPrevious = { selectedRange in
             onMergeBlockWithPrevious(
@@ -2302,7 +2351,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                         location: selectedRange.location,
                         length: selectedRange.length
                     )
-                )
+                ) != nil
             }
             textView.onMergeBlockWithPrevious = { selectedRange in
                 onMergeBlockWithPrevious(
@@ -2407,6 +2456,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         private var keyboardAccessoryContainer: EditorKeyboardAccessoryContainerView?
         private var configuredKeyboardAccessoryHeight: CGFloat?
         private var configuredKeyboardReplacesKeyboard = false
+        private var pendingPostSplitTextSelection: EditorTextSelection?
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
@@ -2715,16 +2765,27 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             guard NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: textView.markedTextRange != nil) else {
                 return true
             }
-            guard text == "\n" else {
-                if text.isEmpty, range.location == 0, range.length == 0 {
-                    return !parent.onMergeBlockWithPrevious(
-                        EditorTextSelection(
-                            blockID: parent.blockID,
-                            location: range.location,
-                            length: range.length
-                        )
-                    )
+            if let redirectSelection = pendingPostSplitTextSelection,
+               !text.isEmpty,
+               text.rangeOfCharacter(from: .newlines) == nil {
+                guard let nextSelection = parent.onReplaceTextAtSelection(redirectSelection, text) else {
+                    pendingPostSplitTextSelection = nil
+                    return true
                 }
+                pendingPostSplitTextSelection = nextSelection
+                return false
+            }
+            if text.isEmpty, range.location == 0, range.length == 0 {
+                return !parent.onMergeBlockWithPrevious(
+                    EditorTextSelection(
+                        blockID: parent.blockID,
+                        location: range.location,
+                        length: range.length
+                    )
+                )
+            }
+            guard NativeTextNewlineReplacementResolver.isSingleNewline(text)
+                    || text.rangeOfCharacter(from: .newlines) != nil else {
                 return true
             }
             guard BlockKeyboardShortcutResolver.insertsBlockAfter(
@@ -2744,16 +2805,42 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                 return false
             }
 
-            return !parent.onInsertBlockAfter(
+            if !NativeTextNewlineReplacementResolver.isSingleNewline(text),
+               let replacement = NativeTextNewlineReplacementResolver.replacement(
+                   currentText: textView.text,
+                   range: range,
+                   replacementText: text
+            ) {
+                parent.session.updateDraft(blockID: parent.blockID, text: replacement.updatedText)
+                parent.onTextChange(replacement.updatedText)
+                guard let nextSelection = parent.onInsertBlockAfter(
+                    EditorTextSelection(
+                        blockID: parent.blockID,
+                        location: replacement.newlineRange.location,
+                        length: replacement.newlineRange.length
+                    )
+                ) else {
+                    return false
+                }
+                pendingPostSplitTextSelection = nextSelection
+                return false
+            }
+
+            guard let nextSelection = parent.onInsertBlockAfter(
                 EditorTextSelection(
                     blockID: parent.blockID,
                     location: range.location,
                     length: range.length
                 )
-            )
+            ) else {
+                return true
+            }
+            pendingPostSplitTextSelection = nextSelection
+            return false
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            pendingPostSplitTextSelection = nil
             _ = parent.session.commitDraft(blockID: parent.blockID)
             parent.session.endEditing(blockID: parent.blockID)
         }

@@ -789,6 +789,34 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testReplaceTextAtSelectionUpdatesTargetBlockAndReturnsNextCaret() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        try viewModel.updateBlockText(blockID: blockID, text: "Alpha")
+
+        let nextSelection = try XCTUnwrap(
+            try viewModel.replaceTextAtSelection(
+                selection: EditorTextSelection(
+                    blockID: blockID,
+                    location: ("Alpha" as NSString).length,
+                    length: 0
+                ),
+                replacementText: "Beta"
+            )
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "AlphaBeta")
+        XCTAssertEqual(nextSelection, EditorTextSelection(blockID: blockID, location: ("AlphaBeta" as NSString).length, length: 0))
+    }
+
+    @MainActor
     func testPageEditUndoHistoryKeepsMostRecentOneHundredOperations() throws {
         let database = try migratedDatabase()
         defer { database.close() }

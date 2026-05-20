@@ -578,6 +578,56 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testNativeTextNewlineReplacementResolverDetectsSingleReturnSeparately() {
+        XCTAssertTrue(NativeTextNewlineReplacementResolver.isSingleNewline("\n"))
+        XCTAssertTrue(NativeTextNewlineReplacementResolver.isSingleNewline("\r"))
+        XCTAssertFalse(NativeTextNewlineReplacementResolver.isSingleNewline("Alpha\nBeta"))
+        XCTAssertFalse(NativeTextNewlineReplacementResolver.isSingleNewline("A"))
+    }
+
+    func testNativeTextNewlineReplacementResolverMapsBatchedReturnInputToSplitRange() throws {
+        let result = try XCTUnwrap(
+            NativeTextNewlineReplacementResolver.replacement(
+                currentText: "Hello",
+                range: NSRange(location: 5, length: 0),
+                replacementText: " Alpha\nBeta"
+            )
+        )
+
+        XCTAssertEqual(result.updatedText, "Hello Alpha\nBeta")
+        XCTAssertEqual(result.newlineRange, NSRange(location: ("Hello Alpha" as NSString).length, length: 1))
+    }
+
+    func testNativeTextNewlineReplacementResolverMapsSelectedReplacementToUpdatedText() throws {
+        let result = try XCTUnwrap(
+            NativeTextNewlineReplacementResolver.replacement(
+                currentText: "Hello old text",
+                range: NSRange(location: 6, length: 8),
+                replacementText: "new\ntext"
+            )
+        )
+
+        XCTAssertEqual(result.updatedText, "Hello new\ntext")
+        XCTAssertEqual(result.newlineRange, NSRange(location: ("Hello new" as NSString).length, length: 1))
+    }
+
+    func testNativeTextNewlineReplacementResolverIgnoresNonNewlineAndInvalidRanges() {
+        XCTAssertNil(
+            NativeTextNewlineReplacementResolver.replacement(
+                currentText: "Hello",
+                range: NSRange(location: 5, length: 0),
+                replacementText: " world"
+            )
+        )
+        XCTAssertNil(
+            NativeTextNewlineReplacementResolver.replacement(
+                currentText: "Hello",
+                range: NSRange(location: 8, length: 0),
+                replacementText: "\n"
+            )
+        )
+    }
+
     func testBlockKeyboardShortcutResolverHandlesTabIndentAndShiftTabOutdent() {
         XCTAssertEqual(
             BlockKeyboardShortcutResolver.indentationDirection(
