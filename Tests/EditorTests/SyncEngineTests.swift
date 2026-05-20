@@ -1203,6 +1203,44 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(fetcher.fetchRecordsCalls, ["BlockRecord"])
     }
 
+    func testCloudKitPrivateDatabaseAdapterFallsBackToChangedBlocksWhenSnapshotQueryIsNotIndexable() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let changedBlockRecord = makeRecord(type: "BlockRecord", entityType: "block", entityID: "block-remote") {
+            $0["pageID"] = "page-remote" as CKRecordValue
+            $0["orderKey"] = "000001" as CKRecordValue
+            $0["type"] = BlockType.paragraph.rawValue as CKRecordValue
+            $0["payloadJSON"] = "{\"text\":\"Remote\"}" as CKRecordValue
+            $0["textPlain"] = "Remote" as CKRecordValue
+            $0["revision"] = NSNumber(value: 1)
+        }
+        let fetcher = TokenAwareCloudKitRecordFetcher(
+            recordsByType: [:],
+            changedRecordsByType: [
+                "BlockRecord": [changedBlockRecord]
+            ],
+            nextServerChangeTokenData: Data("next-token".utf8),
+            fetchRecordsError: NSError(
+                domain: CKErrorDomain,
+                code: CKError.invalidArguments.rawValue,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Invalid Arguments",
+                    "CKErrorServerDescription": "Type is not marked indexable: BlockRecord"
+                ]
+            )
+        )
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+
+        XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
+        XCTAssertEqual(changeSet.fullSnapshotPageIDs, [])
+        XCTAssertEqual(fetcher.fetchRecordsCalls, ["BlockRecord"])
+    }
+
     func testFetchRemoteChangesAppliesDiaryPageMappingAfterPage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -2163,6 +2201,7 @@ final class TokenAwareCloudKitRecordFetcher: CloudKitRecordFetching {
     let changedRecordsByType: [String: [CKRecord]]
     let deletedRecordIDsByType: [String: [CKRecord.ID]]
     let nextServerChangeTokenData: Data
+    let fetchRecordsError: Error?
     private(set) var receivedServerChangeTokenData: Data?
     private(set) var fetchRecordsCalls: [String] = []
 
@@ -2170,16 +2209,21 @@ final class TokenAwareCloudKitRecordFetcher: CloudKitRecordFetching {
         recordsByType: [String: [CKRecord]],
         changedRecordsByType: [String: [CKRecord]]? = nil,
         deletedRecordIDsByType: [String: [CKRecord.ID]] = [:],
-        nextServerChangeTokenData: Data
+        nextServerChangeTokenData: Data,
+        fetchRecordsError: Error? = nil
     ) {
         self.recordsByType = recordsByType
         self.changedRecordsByType = changedRecordsByType ?? recordsByType
         self.deletedRecordIDsByType = deletedRecordIDsByType
         self.nextServerChangeTokenData = nextServerChangeTokenData
+        self.fetchRecordsError = fetchRecordsError
     }
 
     func fetchRecords(recordType: String) throws -> [CKRecord] {
         fetchRecordsCalls.append(recordType)
+        if let fetchRecordsError {
+            throw fetchRecordsError
+        }
         return recordsByType[recordType] ?? []
     }
 

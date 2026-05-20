@@ -1104,13 +1104,25 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         if fullSnapshotPageIDs.isEmpty {
             blockRecords = changedBlockRecords
         } else {
-            blockRecords = try currentGenerationRecords(
-                recordFetcher.fetchRecords(recordType: "BlockRecord")
-            ).filter { record in
-                guard let pageID = record["pageID"] as? String else {
-                    return false
+            do {
+                blockRecords = try currentGenerationRecords(
+                    recordFetcher.fetchRecords(recordType: "BlockRecord")
+                ).filter { record in
+                    guard let pageID = record["pageID"] as? String else {
+                        return false
+                    }
+                    return fullSnapshotPageIDs.contains(pageID)
                 }
-                return fullSnapshotPageIDs.contains(pageID)
+            } catch {
+                guard Self.isCloudKitQueryIndexUnavailableError(error) else {
+                    throw error
+                }
+
+                EditorLog.sync.error(
+                    "cloudkit_block_snapshot_query_unavailable action=use_changed_blocks_only error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
+                )
+                blockRecords = changedBlockRecords
+                fullSnapshotPageIDs.removeAll()
             }
         }
         let deletedRecords = Self.recordTypes.flatMap { recordType in
@@ -1570,6 +1582,19 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         let nsError = error as NSError
         return nsError.domain == CKErrorDomain
             && nsError.code == CKError.unknownItem.rawValue
+    }
+
+    private static func isCloudKitQueryIndexUnavailableError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == CKErrorDomain,
+              nsError.code == CKError.invalidArguments.rawValue
+                || nsError.code == CKError.serverRejectedRequest.rawValue else {
+            return false
+        }
+
+        let description = CloudKitErrorDiagnostic.describe(error).lowercased()
+        return description.contains("not marked indexable")
+            || description.contains("not queryable")
     }
 
     private func currentGenerationRecords(_ records: [CKRecord]) -> [CKRecord] {
