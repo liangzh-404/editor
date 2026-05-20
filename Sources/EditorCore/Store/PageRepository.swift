@@ -94,7 +94,7 @@ final class PageRepository {
                 id: row["id"] ?? "",
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
-                title: try decryptPageTitleIfNeeded(row),
+                title: decryptPageTitleForSnapshot(row),
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
                 isEncrypted: Self.sqliteBool(row["is_encrypted"]),
                 updatedAt: row["updated_at"]
@@ -122,7 +122,7 @@ final class PageRepository {
                 id: row["id"] ?? "",
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
-                title: try decryptPageTitleIfNeeded(row),
+                title: decryptPageTitleForSnapshot(row),
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
                 isEncrypted: Self.sqliteBool(row["is_encrypted"]),
                 updatedAt: row["updated_at"]
@@ -2610,8 +2610,18 @@ final class PageRepository {
         ).map { row in
             let type = BlockType(rawValue: row["type"] ?? "") ?? .paragraph
             let isEncrypted = Self.sqliteBool(row["is_encrypted"])
-            let payloadJSON = try decryptedStoredValue(row["payload_json"] ?? "", isEncrypted: isEncrypted)
-            let textPlain = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+            let payloadJSON = decryptedBlockValueForSnapshot(
+                row["payload_json"] ?? "",
+                isEncrypted: isEncrypted,
+                fallback: "{}",
+                blockID: row["id"] ?? ""
+            )
+            let textPlain = decryptedBlockValueForSnapshot(
+                row["text_plain"] ?? "",
+                isEncrypted: isEncrypted,
+                fallback: "",
+                blockID: row["id"] ?? ""
+            )
             return BlockSnapshot(
                 id: row["id"] ?? "",
                 pageID: row["page_id"] ?? "",
@@ -2663,6 +2673,24 @@ final class PageRepository {
         )
     }
 
+    private func decryptPageTitleForSnapshot(_ row: SQLiteRow) -> String {
+        let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+        do {
+            return try decryptedStoredValue(row["title"] ?? "", isEncrypted: isEncrypted)
+        } catch {
+            guard isEncrypted else {
+                EditorLog.security.error(
+                    "page_title_decrypt_failed page_id=\(row["id"] ?? "", privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
+                return "无法读取"
+            }
+            EditorLog.security.error(
+                "encrypted_page_title_decrypt_failed page_id=\(row["id"] ?? "", privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return "加密内容"
+        }
+    }
+
     private func storedValue(_ plaintext: String, isEncrypted: Bool) throws -> String {
         isEncrypted ? try encryptedNoteCipher.encrypt(plaintext) : plaintext
     }
@@ -2672,6 +2700,28 @@ final class PageRepository {
             return storedValue
         }
         return try encryptedNoteCipher.decrypt(storedValue)
+    }
+
+    private func decryptedBlockValueForSnapshot(
+        _ storedValue: String,
+        isEncrypted: Bool,
+        fallback: String,
+        blockID: String
+    ) -> String {
+        do {
+            return try decryptedStoredValue(storedValue, isEncrypted: isEncrypted)
+        } catch {
+            guard isEncrypted else {
+                EditorLog.security.error(
+                    "block_value_decrypt_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
+                return fallback
+            }
+            EditorLog.security.error(
+                "encrypted_block_value_decrypt_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return fallback
+        }
     }
 
     private func pageIsEncrypted(pageID: String) throws -> Bool {

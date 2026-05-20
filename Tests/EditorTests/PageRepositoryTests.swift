@@ -224,6 +224,41 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "secret launch detail")
     }
 
+    func testLoadWorkspaceSnapshotKeepsUsablePagesWhenEncryptedPageCannotDecrypt() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let writingCipher = TestEncryptedNoteCipher(decryptShouldFail: false)
+        let writingRepository = PageRepository(database: database, encryptedNoteCipher: writingCipher)
+        let initialSnapshot = try writingRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let encryptedPage = try writingRepository.createPage(
+            workspaceID: workspaceID,
+            title: "Private Plan",
+            isEncrypted: true
+        )
+        _ = try writingRepository.appendBlock(
+            pageID: encryptedPage.id,
+            type: .paragraph,
+            text: "secret launch detail"
+        )
+
+        let readingRepository = PageRepository(
+            database: database,
+            encryptedNoteCipher: TestEncryptedNoteCipher(decryptShouldFail: true)
+        )
+        let reloadedSnapshot = try readingRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.pages.map(\.id), [encryptedPage.id, initialSnapshot.selectedPageID])
+        XCTAssertEqual(reloadedSnapshot.pages.first?.title, "加密内容")
+        XCTAssertEqual(reloadedSnapshot.pages.first?.isEncrypted, true)
+        XCTAssertEqual(
+            reloadedSnapshot.blocks.filter { $0.pageID == encryptedPage.id }.map(\.textPlain),
+            ["", ""]
+        )
+        XCTAssertTrue(reloadedSnapshot.pages.contains { $0.title == "欢迎" })
+    }
+
     func testEncryptedPageUpdatesContinueWritingCiphertextAndCanBeDecrypted() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -1396,5 +1431,39 @@ final class PageRepositoryTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory.appendingPathComponent("editor.sqlite").path
+    }
+
+    private struct TestEncryptedNoteCipher: EncryptedNoteCiphering {
+        enum TestError: Error {
+            case decryptFailed
+        }
+
+        let decryptShouldFail: Bool
+
+        func encrypt(_ plaintext: String) throws -> String {
+            guard !isCiphertext(plaintext) else {
+                return plaintext
+            }
+            return EncryptedNoteCipher.ciphertextPrefix + Data(plaintext.utf8).base64EncodedString()
+        }
+
+        func decrypt(_ storedValue: String) throws -> String {
+            guard isCiphertext(storedValue) else {
+                return storedValue
+            }
+            if decryptShouldFail {
+                throw TestError.decryptFailed
+            }
+            let encoded = String(storedValue.dropFirst(EncryptedNoteCipher.ciphertextPrefix.count))
+            guard let data = Data(base64Encoded: encoded),
+                  let plaintext = String(data: data, encoding: .utf8) else {
+                throw TestError.decryptFailed
+            }
+            return plaintext
+        }
+
+        func isCiphertext(_ storedValue: String) -> Bool {
+            storedValue.hasPrefix(EncryptedNoteCipher.ciphertextPrefix)
+        }
     }
 }
