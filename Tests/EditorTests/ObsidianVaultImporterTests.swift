@@ -342,8 +342,7 @@ final class ObsidianVaultImporterTests: XCTestCase {
             ).first
         )
         XCTAssertEqual(encryptedRawPage["is_encrypted"], "1")
-        XCTAssertTrue(encryptedRawPage["title"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
-        XCTAssertNotEqual(encryptedRawPage["title"], "推特账号")
+        XCTAssertEqual(encryptedRawPage["title"], "推特账号")
 
         let encryptedRawBlockRows = try database.query(
             """
@@ -359,10 +358,10 @@ final class ObsidianVaultImporterTests: XCTestCase {
         )
         XCTAssertEqual(encryptedRawBlockRows.count, 5)
         XCTAssertTrue(encryptedRawBlockRows.allSatisfy { row in
-            row["text_plain"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true
-                && row["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true
+            row["text_plain"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == false
+                && row["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == false
         })
-        XCTAssertFalse(encryptedRawBlockRows.contains { $0["text_plain"] == "Secret body" })
+        XCTAssertTrue(encryptedRawBlockRows.contains { $0["text_plain"] == "Secret body" })
     }
 
     func testConfiguredVaultPathCanBeOverridden() throws {

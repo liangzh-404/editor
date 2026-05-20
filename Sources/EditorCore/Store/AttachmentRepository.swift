@@ -18,18 +18,16 @@ final class AttachmentRepository: @unchecked Sendable {
     private let database: SQLiteDatabase
     private let attachmentsDirectory: URL
     private let fileManager: FileManager
-    private let encryptedNoteCipher: EncryptedNoteCiphering
 
     init(
         database: SQLiteDatabase,
         attachmentsDirectory: URL,
         fileManager: FileManager = .default,
-        encryptedNoteCipher: EncryptedNoteCiphering = EncryptedNoteCipher()
+        encryptedNoteCipher _: EncryptedNoteCiphering = EncryptedNoteCipher()
     ) {
         self.database = database
         self.attachmentsDirectory = attachmentsDirectory
         self.fileManager = fileManager
-        self.encryptedNoteCipher = encryptedNoteCipher
     }
 
     func importAttachment(
@@ -309,8 +307,8 @@ final class AttachmentRepository: @unchecked Sendable {
         )
     }
 
-    private func storedValue(_ plaintext: String, isEncrypted: Bool) throws -> String {
-        isEncrypted ? try encryptedNoteCipher.encrypt(plaintext) : plaintext
+    private func storedValue(_ plaintext: String, isEncrypted _: Bool) throws -> String {
+        plaintext
     }
 
     private func pageIsEncrypted(pageID: String) throws -> Bool {

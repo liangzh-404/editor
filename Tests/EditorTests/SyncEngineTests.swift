@@ -1433,7 +1433,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual((record["isFavorite"] as? NSNumber)?.boolValue, true)
         XCTAssertEqual((record["isEncrypted"] as? NSNumber)?.boolValue, true)
         XCTAssertEqual((record["isArchived"] as? NSNumber)?.boolValue, false)
-        XCTAssertTrue((record["title"] as? String)?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
+        XCTAssertEqual(record["title"] as? String, "欢迎")
     }
 
     func testCloudKitPrivateDatabaseAdapterMapsAttachmentAssetsToRecord() throws {

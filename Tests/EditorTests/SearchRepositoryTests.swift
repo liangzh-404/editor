@@ -160,6 +160,59 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertTrue(try repository.search("Beta").contains { $0.entityType == "block" && $0.entityID == blockID })
     }
 
+    func testEncryptedPagePlaintextRowsStayOutOfSearchIndex() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let cipher = SearchTestCipher()
+        let pageRepository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let encryptedPage = try pageRepository.createPage(
+            workspaceID: workspaceID,
+            title: "Hidden Ledger",
+            isEncrypted: true
+        )
+        let encryptedBlockID = try XCTUnwrap(
+            try pageRepository.loadWorkspaceSnapshot()
+                .blocks
+                .first { $0.pageID == encryptedPage.id }?
+                .id
+        )
+        try pageRepository.updateBlockText(blockID: encryptedBlockID, text: "secret launch phrase")
+        let attachment = try AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory(),
+            encryptedNoteCipher: cipher
+        ).importAttachment(
+            sourceURL: try makeSourceFile(name: "private-invoice.pdf", contents: "pdf"),
+            workspaceID: workspaceID,
+            pageID: encryptedPage.id
+        ).attachment
+
+        let rawPageTitle = try XCTUnwrap(
+            try database.query("SELECT title FROM pages WHERE id = ? LIMIT 1", bindings: [.text(encryptedPage.id)]).first?["title"]
+        )
+        let rawBlockRows = try database.query(
+            "SELECT text_plain, payload_json FROM blocks WHERE page_id = ? AND is_deleted = 0 ORDER BY order_key ASC",
+            bindings: [.text(encryptedPage.id)]
+        )
+        XCTAssertEqual(rawPageTitle, "Hidden Ledger")
+        XCTAssertTrue(rawBlockRows.contains { $0["text_plain"] == "secret launch phrase" })
+        XCTAssertTrue(rawBlockRows.contains { $0["text_plain"] == "private-invoice.pdf" })
+        XCTAssertTrue(rawBlockRows.allSatisfy { row in
+            row["text_plain"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == false
+                && row["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == false
+        })
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        XCTAssertEqual(try repository.search("Hidden Ledger"), [])
+        XCTAssertEqual(try repository.search("secret launch"), [])
+        XCTAssertFalse(try repository.search("private-invoice").contains { $0.entityID == attachment.id })
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)
@@ -193,5 +246,30 @@ final class SearchRepositoryTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory
+    }
+
+    private struct SearchTestCipher: EncryptedNoteCiphering {
+        func encrypt(_ plaintext: String) throws -> String {
+            guard !isCiphertext(plaintext) else {
+                return plaintext
+            }
+            return EncryptedNoteCipher.ciphertextPrefix + Data(plaintext.utf8).base64EncodedString()
+        }
+
+        func decrypt(_ storedValue: String) throws -> String {
+            guard isCiphertext(storedValue) else {
+                return storedValue
+            }
+            let encoded = String(storedValue.dropFirst(EncryptedNoteCipher.ciphertextPrefix.count))
+            guard let data = Data(base64Encoded: encoded),
+                  let plaintext = String(data: data, encoding: .utf8) else {
+                return storedValue
+            }
+            return plaintext
+        }
+
+        func isCiphertext(_ storedValue: String) -> Bool {
+            storedValue.hasPrefix(EncryptedNoteCipher.ciphertextPrefix)
+        }
     }
 }

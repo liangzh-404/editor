@@ -188,7 +188,7 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(unfavoriteSnapshot.favoritePages, [])
     }
 
-    func testEncryptPageStoresCiphertextAndReloadsPlaintextFromKeychainBackedCipher() throws {
+    func testEncryptedPageStoresPlaintextAndReloadsWithEncryptionFlag() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -211,11 +211,9 @@ final class PageRepositoryTests: XCTestCase {
             try database.query("SELECT payload_json, text_plain FROM blocks WHERE id = ? LIMIT 1", bindings: [.text(blockID)]).first
         )
         XCTAssertEqual(rawPage["is_encrypted"], "1")
-        XCTAssertTrue(rawPage["title"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
-        XCTAssertTrue(rawBlock["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
-        XCTAssertTrue(rawBlock["text_plain"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
-        XCTAssertNotEqual(rawPage["title"], "Private Plan")
-        XCTAssertNotEqual(rawBlock["text_plain"], "secret launch detail")
+        XCTAssertEqual(rawPage["title"], "Private Plan")
+        XCTAssertEqual(rawBlock["text_plain"], "secret launch detail")
+        XCTAssertFalse(rawBlock["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
 
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
 
@@ -224,7 +222,7 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "secret launch detail")
     }
 
-    func testLoadWorkspaceSnapshotKeepsUsablePagesWhenEncryptedPageCannotDecrypt() throws {
+    func testLoadWorkspaceSnapshotKeepsPlaintextEncryptedPagesReadableWhenCipherCannotDecrypt() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -250,16 +248,59 @@ final class PageRepositoryTests: XCTestCase {
         let reloadedSnapshot = try readingRepository.loadWorkspaceSnapshot()
 
         XCTAssertEqual(reloadedSnapshot.pages.map(\.id), [encryptedPage.id, initialSnapshot.selectedPageID])
-        XCTAssertEqual(reloadedSnapshot.pages.first?.title, "加密内容")
+        XCTAssertEqual(reloadedSnapshot.pages.first?.title, "Private Plan")
         XCTAssertEqual(reloadedSnapshot.pages.first?.isEncrypted, true)
         XCTAssertEqual(
             reloadedSnapshot.blocks.filter { $0.pageID == encryptedPage.id }.map(\.textPlain),
-            ["", ""]
+            ["", "secret launch detail"]
         )
         XCTAssertTrue(reloadedSnapshot.pages.contains { $0.title == "欢迎" })
     }
 
-    func testEncryptedPageUpdatesContinueWritingCiphertextAndCanBeDecrypted() throws {
+    func testLoadWorkspaceSnapshotDecryptsLegacyCiphertextRows() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let cipher = TestEncryptedNoteCipher(decryptShouldFail: false)
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let encryptedPage = try repository.createPage(
+            workspaceID: workspaceID,
+            title: "Plain New Page",
+            isEncrypted: true
+        )
+        let blockID = try XCTUnwrap(
+            try repository.loadWorkspaceSnapshot()
+                .blocks
+                .first { $0.pageID == encryptedPage.id }?
+                .id
+        )
+        try database.execute(
+            "UPDATE pages SET title = ? WHERE id = ?",
+            bindings: [
+                .text(try cipher.encrypt("Legacy Secret Page")),
+                .text(encryptedPage.id)
+            ]
+        )
+        try database.execute(
+            "UPDATE blocks SET payload_json = ?, text_plain = ? WHERE id = ?",
+            bindings: [
+                .text(try cipher.encrypt("{}")),
+                .text(try cipher.encrypt("legacy secret body")),
+                .text(blockID)
+            ]
+        )
+
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let page = try XCTUnwrap(reloadedSnapshot.pages.first { $0.id == encryptedPage.id })
+        let block = try XCTUnwrap(reloadedSnapshot.blocks.first { $0.id == blockID })
+
+        XCTAssertEqual(page.title, "Legacy Secret Page")
+        XCTAssertEqual(block.textPlain, "legacy secret body")
+    }
+
+    func testEncryptedPageUpdatesContinueWritingPlaintextAndCanBeToggled() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -281,10 +322,8 @@ final class PageRepositoryTests: XCTestCase {
         let rawBlockText = try XCTUnwrap(
             try database.query("SELECT text_plain FROM blocks WHERE id = ? LIMIT 1", bindings: [.text(blockID)]).first?["text_plain"]
         )
-        XCTAssertTrue(rawPageTitle.hasPrefix(EncryptedNoteCipher.ciphertextPrefix))
-        XCTAssertTrue(rawBlockText.hasPrefix(EncryptedNoteCipher.ciphertextPrefix))
-        XCTAssertNotEqual(rawPageTitle, "Updated Secret")
-        XCTAssertNotEqual(rawBlockText, "rotated secret body")
+        XCTAssertEqual(rawPageTitle, "Updated Secret")
+        XCTAssertEqual(rawBlockText, "rotated secret body")
 
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
 
@@ -358,9 +397,9 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(sourceBlock.textPlain, "Secret Child")
         XCTAssertEqual(sourceBlock.pageReferenceTargetPageID, createdPage.id)
         XCTAssertEqual(rawCreatedPage["is_encrypted"], "1")
-        XCTAssertTrue(rawCreatedPage["title"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
-        XCTAssertTrue(rawSourceBlock["text_plain"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
-        XCTAssertTrue(rawSourceBlock["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
+        XCTAssertEqual(rawCreatedPage["title"], "Secret Child")
+        XCTAssertEqual(rawSourceBlock["text_plain"], "Secret Child")
+        XCTAssertFalse(rawSourceBlock["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
         XCTAssertEqual(reloadedSnapshot.pageParentLinks, [])
     }
 

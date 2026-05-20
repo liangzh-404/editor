@@ -2691,12 +2691,12 @@ final class PageRepository {
         }
     }
 
-    private func storedValue(_ plaintext: String, isEncrypted: Bool) throws -> String {
-        isEncrypted ? try encryptedNoteCipher.encrypt(plaintext) : plaintext
+    private func storedValue(_ plaintext: String, isEncrypted _: Bool) throws -> String {
+        plaintext
     }
 
-    private func decryptedStoredValue(_ storedValue: String, isEncrypted: Bool) throws -> String {
-        guard isEncrypted || encryptedNoteCipher.isCiphertext(storedValue) else {
+    private func decryptedStoredValue(_ storedValue: String, isEncrypted _: Bool) throws -> String {
+        guard encryptedNoteCipher.isCiphertext(storedValue) else {
             return storedValue
         }
         return try encryptedNoteCipher.decrypt(storedValue)
