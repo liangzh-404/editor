@@ -154,6 +154,116 @@ enum SchemaMigrator {
 
         try database.execute(
             """
+            CREATE TABLE IF NOT EXISTS page_import_metadata (
+                page_id TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                source_file_name TEXT NOT NULL,
+                source_created_at TEXT,
+                source_modified_at TEXT,
+                frontmatter_json TEXT NOT NULL,
+                custom_metadata_json TEXT NOT NULL,
+                is_encrypted INTEGER NOT NULL DEFAULT 0,
+                encryption_scheme TEXT,
+                encryption_password_hint TEXT,
+                encryption_envelope_json TEXT,
+                diary_date TEXT,
+                diary_kind TEXT,
+                diary_pattern TEXT,
+                imported_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (source_type, source_path),
+                FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE
+            );
+            """
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "source_file_name",
+            definition: "TEXT NOT NULL DEFAULT ''"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "source_created_at",
+            definition: "TEXT"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "source_modified_at",
+            definition: "TEXT"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "frontmatter_json",
+            definition: "TEXT NOT NULL DEFAULT '{}'"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "custom_metadata_json",
+            definition: "TEXT NOT NULL DEFAULT '{}'"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "is_encrypted",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "encryption_scheme",
+            definition: "TEXT"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "encryption_password_hint",
+            definition: "TEXT"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "encryption_envelope_json",
+            definition: "TEXT"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "diary_date",
+            definition: "TEXT"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "diary_kind",
+            definition: "TEXT"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "page_import_metadata",
+            column: "diary_pattern",
+            definition: "TEXT"
+        )
+        try database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_page_import_metadata_source
+            ON page_import_metadata (source_type, source_path);
+            """
+        )
+        try database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_page_import_metadata_diary_date
+            ON page_import_metadata (diary_date);
+            """
+        )
+
+        try database.execute(
+            """
             CREATE TABLE IF NOT EXISTS page_parent_links (
                 parent_page_id TEXT NOT NULL,
                 child_page_id TEXT NOT NULL,

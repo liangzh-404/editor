@@ -18,15 +18,18 @@ final class AttachmentRepository: @unchecked Sendable {
     private let database: SQLiteDatabase
     private let attachmentsDirectory: URL
     private let fileManager: FileManager
+    private let encryptedNoteCipher: EncryptedNoteCiphering
 
     init(
         database: SQLiteDatabase,
         attachmentsDirectory: URL,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        encryptedNoteCipher: EncryptedNoteCiphering = EncryptedNoteCipher()
     ) {
         self.database = database
         self.attachmentsDirectory = attachmentsDirectory
         self.fileManager = fileManager
+        self.encryptedNoteCipher = encryptedNoteCipher
     }
 
     func importAttachment(
@@ -265,6 +268,12 @@ final class AttachmentRepository: @unchecked Sendable {
         kind: AttachmentKind,
         createdAt: String
     ) throws {
+        let isEncrypted = try pageIsEncrypted(pageID: block.pageID)
+        let payloadJSON = try attachmentPayloadJSON(
+            attachmentID: attachmentID,
+            kind: kind,
+            filename: block.textPlain
+        )
         try database.execute(
             """
             INSERT INTO blocks (
@@ -289,8 +298,8 @@ final class AttachmentRepository: @unchecked Sendable {
                 .null,
                 .text(block.orderKey),
                 .text(block.type.rawValue),
-                .text(try attachmentPayloadJSON(attachmentID: attachmentID, kind: kind, filename: block.textPlain)),
-                .text(block.textPlain),
+                .text(try storedValue(payloadJSON, isEncrypted: isEncrypted)),
+                .text(try storedValue(block.textPlain, isEncrypted: isEncrypted)),
                 .integer(1),
                 .text("local"),
                 .integer(0),
@@ -298,6 +307,23 @@ final class AttachmentRepository: @unchecked Sendable {
                 .text(createdAt)
             ]
         )
+    }
+
+    private func storedValue(_ plaintext: String, isEncrypted: Bool) throws -> String {
+        isEncrypted ? try encryptedNoteCipher.encrypt(plaintext) : plaintext
+    }
+
+    private func pageIsEncrypted(pageID: String) throws -> Bool {
+        let row = try database.query(
+            """
+            SELECT is_encrypted
+            FROM pages
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        ).first
+        return (Int(row?["is_encrypted"] ?? "0") ?? 0) != 0
     }
 
     private func nextOrderKey(pageID: String) throws -> String {

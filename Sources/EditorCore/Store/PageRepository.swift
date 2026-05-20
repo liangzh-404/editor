@@ -1507,33 +1507,192 @@ final class PageRepository {
     }
 
     private func markdownPageReferenceTargetPageID(title: String) throws -> String? {
-        try database.query(
+        let rows = try database.query(
             """
-            SELECT id
+            SELECT id,
+                   title,
+                   is_encrypted
             FROM pages
-            WHERE title = ? AND is_archived = 0
+            WHERE is_archived = 0
             ORDER BY created_at ASC
-            LIMIT 1
-            """,
-            bindings: [.text(title)]
-        ).first?["id"] ?? nil
+            """
+        )
+        for row in rows {
+            let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+            let pageTitle = try decryptedStoredValue(row["title"] ?? "", isEncrypted: isEncrypted)
+            if pageTitle == title {
+                return row["id"] ?? nil
+            }
+        }
+        return nil
     }
 
-    private func markdownBlockReferenceTargets(text: String) throws -> (pageID: String?, blockID: String?) {
-        guard let targetRow = try database.query(
-            """
-            SELECT id, page_id
-            FROM blocks
-            WHERE text_plain = ? AND is_deleted = 0
-            ORDER BY created_at ASC
-            LIMIT 1
-            """,
-            bindings: [.text(text)]
-        ).first else {
-            return (nil, nil)
+    func markdownBlockReferenceTargets(text: String) throws -> (pageID: String?, blockID: String?) {
+        if let obsidianTargets = try obsidianBlockReferenceTargets(text: text),
+           obsidianTargets.pageID != nil,
+           obsidianTargets.blockID != nil {
+            return obsidianTargets
         }
 
-        return (targetRow["page_id"] ?? nil, targetRow["id"] ?? nil)
+        let rows = try database.query(
+            """
+            SELECT b.id,
+                   b.page_id,
+                   b.text_plain,
+                   p.is_encrypted
+            FROM blocks b
+            JOIN pages p ON p.id = b.page_id
+            WHERE b.is_deleted = 0
+              AND p.is_archived = 0
+            ORDER BY b.created_at ASC
+            """
+        )
+        for row in rows {
+            let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+            let candidateText = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+            if candidateText == text {
+                return (row["page_id"] ?? nil, row["id"] ?? nil)
+            }
+        }
+
+        return (nil, nil)
+    }
+
+    @discardableResult
+    func relinkBlockReferenceBlock(blockID: String, text: String) throws -> Bool {
+        guard let sourceRow = try database.query(
+            """
+            SELECT b.page_id,
+                   p.is_encrypted
+            FROM blocks b
+            JOIN pages p ON p.id = b.page_id
+            WHERE b.id = ?
+              AND b.type = ?
+              AND b.is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [
+                .text(blockID),
+                .text(BlockType.blockReference.rawValue)
+            ]
+        ).first else {
+            return false
+        }
+
+        let targets = try markdownBlockReferenceTargets(text: text)
+        guard targets.pageID != nil || targets.blockID != nil else {
+            return false
+        }
+        let isEncrypted = Self.sqliteBool(sourceRow["is_encrypted"])
+        let now = Self.timestamp()
+        try database.execute(
+            """
+            UPDATE blocks
+            SET payload_json = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND type = ?
+              AND is_deleted = 0
+            """,
+            bindings: [
+                .text(try storedValue(
+                    try blockPayloadJSON(
+                        type: .blockReference,
+                        text: text,
+                        pageReferenceTargetPageID: targets.pageID,
+                        blockReferenceTargetBlockID: targets.blockID
+                    ),
+                    isEncrypted: isEncrypted
+                )),
+                .text(now),
+                .text(blockID),
+                .text(BlockType.blockReference.rawValue)
+            ]
+        )
+        if isEncrypted {
+            try deleteSearchIndexForPage(pageID: sourceRow["page_id"] ?? "", blockIDs: [blockID])
+        } else {
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: blockID,
+                text: text,
+                pageReferenceTargetPageID: targets.pageID,
+                blockReferenceTargetBlockID: targets.blockID
+            )
+        }
+        return true
+    }
+
+    func relinkObsidianBlockReferenceBlocks() throws {
+        let rows = try database.query(
+            """
+            SELECT b.id,
+                   b.text_plain,
+                   p.is_encrypted
+            FROM blocks b
+            JOIN pages p ON p.id = b.page_id
+            WHERE b.type = ?
+              AND b.is_deleted = 0
+            ORDER BY b.created_at ASC
+            """,
+            bindings: [.text(BlockType.blockReference.rawValue)]
+        )
+
+        for row in rows {
+            guard let blockID = row["id"] ?? nil else {
+                continue
+            }
+            let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+            let text = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+            guard text.contains("#^") else {
+                continue
+            }
+            _ = try relinkBlockReferenceBlock(blockID: blockID, text: text)
+        }
+    }
+
+    private func obsidianBlockReferenceTargets(text: String) throws -> (pageID: String?, blockID: String?)? {
+        guard let anchorRange = text.range(of: "#^") else {
+            return nil
+        }
+
+        let rawPageTitle = String(text[..<anchorRange.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let anchor = String(text[anchorRange.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !anchor.isEmpty else {
+            return nil
+        }
+
+        let pageTitle = rawPageTitle.isEmpty ? nil : rawPageTitle
+        let anchorText = "^\(anchor)"
+        let rows = try database.query(
+            """
+            SELECT b.id,
+                   b.page_id,
+                   b.text_plain,
+                   p.title,
+                   p.is_encrypted
+            FROM blocks b
+            JOIN pages p ON p.id = b.page_id
+            WHERE p.is_archived = 0
+              AND b.is_deleted = 0
+            ORDER BY b.created_at ASC
+            """
+        )
+        for row in rows {
+            let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+            if let pageTitle {
+                let candidatePageTitle = try decryptedStoredValue(row["title"] ?? "", isEncrypted: isEncrypted)
+                guard candidatePageTitle == pageTitle else {
+                    continue
+                }
+            }
+            let candidateText = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+            if candidateText == anchorText || candidateText.hasSuffix(anchorText) {
+                return (row["page_id"] ?? nil, row["id"] ?? nil)
+            }
+        }
+        return nil
     }
 
 #if DEBUG

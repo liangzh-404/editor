@@ -125,6 +125,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let searchRepository: SearchRepository?
     private let backlinkRepository: BacklinkRepository?
     private let conflictRepository: ConflictRepository?
+    private let obsidianImporter: ObsidianVaultImporting?
     private let automaticallyResolveConflicts: Bool
     private let syncEngine: SyncEngine?
     private let syncScheduler: WorkspaceSyncScheduling
@@ -284,6 +285,7 @@ final class WorkspaceViewModel: ObservableObject {
         searchRepository: SearchRepository? = nil,
         backlinkRepository: BacklinkRepository? = nil,
         conflictRepository: ConflictRepository? = nil,
+        obsidianImporter: ObsidianVaultImporting? = nil,
         automaticallyResolveConflicts: Bool = true,
         syncEngine: SyncEngine? = nil,
         syncScheduler: WorkspaceSyncScheduling = BackgroundWorkspaceSyncScheduler(),
@@ -299,6 +301,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.searchRepository = searchRepository
         self.backlinkRepository = backlinkRepository
         self.conflictRepository = conflictRepository
+        self.obsidianImporter = obsidianImporter
         self.automaticallyResolveConflicts = automaticallyResolveConflicts
         self.syncEngine = syncEngine
         self.syncScheduler = syncScheduler
@@ -329,6 +332,7 @@ final class WorkspaceViewModel: ObservableObject {
         searchRepository = nil
         backlinkRepository = nil
         conflictRepository = nil
+        obsidianImporter = nil
         automaticallyResolveConflicts = true
         syncEngine = nil
         syncScheduler = BackgroundWorkspaceSyncScheduler()
@@ -2964,6 +2968,37 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     @discardableResult
+    func importObsidianVault(vaultURL: URL) throws -> ObsidianVaultImportSummary {
+        guard let obsidianImporter else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let selectedWorkspaceID else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        let summary = try obsidianImporter.importVault(
+            vaultURL: vaultURL,
+            workspaceID: selectedWorkspaceID
+        )
+        try load()
+        markdownImportStatusText = Self.obsidianImportStatusText(summary: summary)
+        return summary
+    }
+
+    func importObsidianVaultForCurrentWorkspace(sourceURL: URL) {
+        do {
+            let summary = try importObsidianVault(vaultURL: sourceURL)
+            EditorLog.markdown.debug(
+                "obsidian_vault_imported source=\(sourceURL.lastPathComponent, privacy: .public) imported=\(summary.importedPageCount, privacy: .public) encrypted=\(summary.encryptedPageCount, privacy: .public) diary=\(summary.diaryPageCount, privacy: .public)"
+            )
+        } catch {
+            EditorLog.markdown.error(
+                "obsidian_vault_import_failed source=\(sourceURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    @discardableResult
     func importAttachment(
         sourceURL: URL,
         thumbnailPolicy: AttachmentThumbnailPolicy = .immediate
@@ -3209,6 +3244,14 @@ final class WorkspaceViewModel: ObservableObject {
             return "Missing attachment: \(uniqueNames[0])"
         }
         return "Missing attachments: \(uniqueNames.joined(separator: ", "))"
+    }
+
+    private static func obsidianImportStatusText(summary: ObsidianVaultImportSummary) -> String {
+        let skippedSuffix = summary.skippedPageCount > 0 ? ", skipped \(summary.skippedPageCount)" : ""
+        let attachmentSuffix = summary.importedAttachmentCount > 0
+            ? ", \(summary.importedAttachmentCount) attachments"
+            : ""
+        return "Imported \(summary.importedPageCount) Obsidian notes\(attachmentSuffix)\(skippedSuffix)"
     }
 
     private func scheduleMissingAttachmentThumbnail(attachmentID: String) {

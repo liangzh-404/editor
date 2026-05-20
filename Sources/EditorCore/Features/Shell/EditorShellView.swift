@@ -556,6 +556,9 @@ private struct ThreeColumnEditorShell: View {
                     onImportMarkdown: { sourceURL in
                         viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
                     },
+                    onImportObsidianVault: { sourceURL in
+                        viewModel.importObsidianVaultForCurrentWorkspace(sourceURL: sourceURL)
+                    },
                     onExportMarkdown: {
                         viewModel.exportCurrentPageMarkdown()
                     },
@@ -843,6 +846,9 @@ private struct ThreeColumnEditorShell: View {
                 },
                 onImportMarkdown: { sourceURL in
                     viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
+                },
+                onImportObsidianVault: { sourceURL in
+                    viewModel.importObsidianVaultForCurrentWorkspace(sourceURL: sourceURL)
                 },
                 onExportMarkdown: {
                     viewModel.exportCurrentPageMarkdown()
@@ -3589,6 +3595,9 @@ private struct CompactPageDestination: View {
                 onImportMarkdown: { sourceURL in
                     viewModel.importMarkdownFileForCurrentPage(sourceURL: sourceURL)
                 },
+                onImportObsidianVault: { sourceURL in
+                    viewModel.importObsidianVaultForCurrentWorkspace(sourceURL: sourceURL)
+                },
                 onExportMarkdown: {
                     viewModel.exportCurrentPageMarkdown()
                 },
@@ -5702,6 +5711,7 @@ private struct EditorCanvasView: View {
     let onResolveAllConflictsManually: ([String: String]) -> Void
     let onPageTitleChange: (String) -> Void
     let onImportMarkdown: (URL) -> Void
+    let onImportObsidianVault: (URL) -> Void
     let onExportMarkdown: () -> String
     let onExportMarkdownPackage: (URL) -> Void
     let onBlockTextChange: (String, String) -> Void
@@ -5724,6 +5734,7 @@ private struct EditorCanvasView: View {
     var onCreateAndAssignTagToSelectedPage: (String) -> Bool = { _ in false }
     @State private var isAttachmentImporterPresented = false
     @State private var isMarkdownImporterPresented = false
+    @State private var isObsidianVaultImporterPresented = false
     @State private var isMarkdownExporterPresented = false
     @State private var isInlineLinkPopoverPresented = false
     @State private var activeInlineLinkTarget: (blockID: String, selection: EditorTextSelection?)?
@@ -6364,6 +6375,21 @@ private struct EditorCanvasView: View {
                 onImportMarkdown(sourceURL)
             }
         }
+        .fileImporter(
+            isPresented: $isObsidianVaultImporterPresented,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let sourceURL = urls.first {
+                let isScoped = sourceURL.startAccessingSecurityScopedResource()
+                defer {
+                    if isScoped {
+                        sourceURL.stopAccessingSecurityScopedResource()
+                    }
+                }
+                onImportObsidianVault(sourceURL)
+            }
+        }
         .fileExporter(
             isPresented: $isMarkdownExporterPresented,
             document: markdownExportDocument,
@@ -6701,6 +6727,14 @@ private struct EditorCanvasView: View {
                 .accessibilityIdentifier("editor.import-markdown")
 
                 Button {
+                    handleObsidianVaultImportButton()
+                } label: {
+                    Label("导入 Obsidian", systemImage: "folder.badge.plus")
+                }
+                .disabled(page == nil)
+                .accessibilityIdentifier("editor.import-obsidian")
+
+                Button {
                     handleMarkdownExportButton()
                 } label: {
                     Label("导出 Markdown", systemImage: "square.and.arrow.up")
@@ -6866,6 +6900,10 @@ private struct EditorCanvasView: View {
         }
 #endif
         isMarkdownImporterPresented = true
+    }
+
+    private func handleObsidianVaultImportButton() {
+        isObsidianVaultImporterPresented = true
     }
 
     private func handleMarkdownExportButton() {

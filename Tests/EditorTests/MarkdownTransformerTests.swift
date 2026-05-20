@@ -195,6 +195,21 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownSplitsInlineAttachmentLinksIntoOrderedBlocks() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown: "文字 ![photo](assets/a.png) 中间 [diagram](diagram.pdf) 结尾"
+            ),
+            [
+                MarkdownBlockDraft(type: .paragraph, textPlain: "文字"),
+                MarkdownBlockDraft(type: .attachmentImage, textPlain: "photo", attachmentRelativePath: "assets/a.png"),
+                MarkdownBlockDraft(type: .paragraph, textPlain: "中间"),
+                MarkdownBlockDraft(type: .attachmentFile, textPlain: "diagram", attachmentRelativePath: "diagram.pdf"),
+                MarkdownBlockDraft(type: .paragraph, textPlain: "结尾")
+            ]
+        )
+    }
+
     func testImportMarkdownSupportsCompletedTaskItems() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(
@@ -396,11 +411,14 @@ final class MarkdownTransformerTests: XCTestCase {
                     [[Specs]]
 
                     [[#API contract]]
+
+                    [[凤凰架构#^A8EDB8AE-2027-4982-8732-B0ABF95CB90D]]
                     """
             ),
             [
                 MarkdownBlockDraft(type: .pageReference, textPlain: "Specs"),
-                MarkdownBlockDraft(type: .blockReference, textPlain: "API contract")
+                MarkdownBlockDraft(type: .blockReference, textPlain: "API contract"),
+                MarkdownBlockDraft(type: .blockReference, textPlain: "凤凰架构#^A8EDB8AE-2027-4982-8732-B0ABF95CB90D")
             ]
         )
     }

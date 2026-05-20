@@ -1483,8 +1483,10 @@ enum MarkdownTransformer {
 
             flushTableLines(&tableLines, into: &drafts)
             flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
-            let draft = importBlockDraft(for: trimmedLine)
-            if draft.type == .paragraph {
+            let lineDrafts = importBlockDrafts(for: trimmedLine)
+            if lineDrafts.count == 1,
+               let draft = lineDrafts.first,
+               draft.type == .paragraph {
                 if shouldContinueParagraph(with: trimmedLine, existingLines: paragraphLines) {
                     paragraphLines.append(trimmedLine)
                 } else {
@@ -1493,7 +1495,7 @@ enum MarkdownTransformer {
                 }
             } else {
                 flushParagraphLines(&paragraphLines, into: &drafts)
-                drafts.append(draft)
+                drafts.append(contentsOf: lineDrafts)
             }
         }
 
@@ -1618,6 +1620,15 @@ enum MarkdownTransformer {
         }
 
         return MarkdownBlockDraft(type: .paragraph, textPlain: line)
+    }
+
+    private static func importBlockDrafts(for line: String) -> [MarkdownBlockDraft] {
+        let draft = importBlockDraft(for: line)
+        guard draft.type == .paragraph,
+              let inlineAttachmentDrafts = inlineAttachmentDrafts(for: line) else {
+            return [draft]
+        }
+        return inlineAttachmentDrafts
     }
 
     private static func taskItemDraft(for line: String) -> MarkdownBlockDraft? {
@@ -1856,6 +1867,81 @@ enum MarkdownTransformer {
         return nil
     }
 
+    private static func inlineAttachmentDrafts(for line: String) -> [MarkdownBlockDraft]? {
+        var drafts: [MarkdownBlockDraft] = []
+        var cursor = line.startIndex
+
+        while let link = nextInlineAttachmentLink(in: line, searchStart: cursor) {
+            let leadingText = String(line[cursor..<link.range.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !leadingText.isEmpty {
+                drafts.append(MarkdownBlockDraft(type: .paragraph, textPlain: leadingText))
+            }
+            drafts.append(
+                MarkdownBlockDraft(
+                    type: link.isImage ? .attachmentImage : .attachmentFile,
+                    textPlain: link.label,
+                    attachmentRelativePath: link.target
+                )
+            )
+            cursor = link.range.upperBound
+        }
+
+        guard !drafts.isEmpty else {
+            return nil
+        }
+        let trailingText = String(line[cursor...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trailingText.isEmpty {
+            drafts.append(MarkdownBlockDraft(type: .paragraph, textPlain: trailingText))
+        }
+        return drafts
+    }
+
+    private static func nextInlineAttachmentLink(
+        in line: String,
+        searchStart: String.Index
+    ) -> (range: Range<String.Index>, label: String, target: String, isImage: Bool)? {
+        var searchStart = searchStart
+        while searchStart < line.endIndex,
+              let labelStart = line[searchStart...].firstIndex(of: "[") {
+            let previousIndex = labelStart > line.startIndex ? line.index(before: labelStart) : nil
+            let isImage = previousIndex.map { line[$0] == "!" } ?? false
+            let linkStart = isImage ? previousIndex! : labelStart
+            let afterLabelStart = line.index(after: labelStart)
+            guard let labelEnd = line[afterLabelStart...].firstIndex(of: "]") else {
+                return nil
+            }
+            let targetOpen = line.index(after: labelEnd)
+            guard targetOpen < line.endIndex,
+                  line[targetOpen] == "(" else {
+                searchStart = afterLabelStart
+                continue
+            }
+            let targetStart = line.index(after: targetOpen)
+            guard let targetEnd = line[targetStart...].firstIndex(of: ")") else {
+                return nil
+            }
+
+            let label = String(line[afterLabelStart..<labelEnd])
+            let target = String(line[targetStart..<targetEnd])
+            guard !label.isEmpty,
+                  isLocalAttachmentTarget(target) else {
+                searchStart = afterLabelStart
+                continue
+            }
+
+            return (
+                linkStart..<line.index(after: targetEnd),
+                label,
+                target,
+                isImage
+            )
+        }
+
+        return nil
+    }
+
     private static func wholeLineMarkdownLink(
         in line: String,
         prefix: String
@@ -1873,11 +1959,24 @@ enum MarkdownTransformer {
         let label = String(content[..<separatorRange.lowerBound])
         let target = String(content[separatorRange.upperBound...])
         guard !label.isEmpty,
-              target.hasPrefix("Attachments/") else {
+              isLocalAttachmentTarget(target) else {
             return nil
         }
 
         return (label, target)
+    }
+
+    private static func isLocalAttachmentTarget(_ target: String) -> Bool {
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !trimmed.hasPrefix("#"),
+              !trimmed.hasPrefix("/"),
+              trimmed.range(of: #"^[A-Za-z][A-Za-z0-9+.-]*:"#, options: .regularExpression) == nil else {
+            return false
+        }
+
+        let pathComponents = trimmed.split(separator: "/", omittingEmptySubsequences: false)
+        return pathComponents.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
 
     private static func pageReferenceText(for line: String) -> String? {
@@ -1889,19 +1988,41 @@ enum MarkdownTransformer {
             return nil
         }
 
-        let text = String(line.dropFirst(prefix.count).dropLast(suffix.count))
+        let text = obsidianLinkTargetText(String(line.dropFirst(prefix.count).dropLast(suffix.count)))
+        guard !text.contains("#^") else {
+            return nil
+        }
         return text.isEmpty ? nil : text
     }
 
     private static func blockReferenceText(for line: String) -> String? {
-        let prefix = "[[#"
+        let directPrefix = "[[#"
+        let wikiPrefix = "[["
         let suffix = "]]"
-        guard line.hasPrefix(prefix),
-              line.hasSuffix(suffix) else {
+        guard line.hasSuffix(suffix) else {
             return nil
         }
 
-        let text = String(line.dropFirst(prefix.count).dropLast(suffix.count))
+        if line.hasPrefix(directPrefix) {
+            let text = obsidianLinkTargetText(String(line.dropFirst(directPrefix.count).dropLast(suffix.count)))
+            return text.isEmpty ? nil : text
+        }
+
+        guard line.hasPrefix(wikiPrefix) else {
+            return nil
+        }
+        let text = obsidianLinkTargetText(String(line.dropFirst(wikiPrefix.count).dropLast(suffix.count)))
+        guard text.contains("#^") else {
+            return nil
+        }
         return text.isEmpty ? nil : text
+    }
+
+    private static func obsidianLinkTargetText(_ text: String) -> String {
+        text
+            .split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }

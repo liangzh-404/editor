@@ -98,6 +98,10 @@ enum AppEnvironment {
             searchRepository: SearchRepository(database: database),
             backlinkRepository: BacklinkRepository(database: database),
             conflictRepository: ConflictRepository(database: database),
+            obsidianImporter: ObsidianVaultImporter(
+                database: database,
+                attachmentsDirectory: attachmentsDirectory
+            ),
             syncEngine: makeCloudKitSyncEngine(
                 database: database,
                 attachmentsDirectory: attachmentsDirectory
