@@ -224,6 +224,7 @@ final class SyncMergeEngine {
         }
 
         let now = ISO8601DateFormatter().string(from: Date())
+        let parentBlockID = try resolvableParentBlockID(remote.parentBlockID, childBlockID: remote.blockID)
         try database.execute(
             """
             INSERT INTO blocks (
@@ -256,7 +257,7 @@ final class SyncMergeEngine {
             bindings: [
                 .text(remote.blockID),
                 .text(remote.pageID),
-                remote.parentBlockID.map(SQLiteValue.text) ?? .null,
+                parentBlockID.map(SQLiteValue.text) ?? .null,
                 .text(remote.orderKey),
                 .text(remote.type.rawValue),
                 .text(remote.payloadJSON),
@@ -288,6 +289,27 @@ final class SyncMergeEngine {
                 orderKey: remote.orderKey
             )
         }
+    }
+
+    private func resolvableParentBlockID(_ parentBlockID: String?, childBlockID: String) throws -> String? {
+        guard let parentBlockID else {
+            return nil
+        }
+        let rows = try database.query(
+            """
+            SELECT COUNT(*)
+            FROM blocks
+            WHERE id = ?
+            """,
+            bindings: [.text(parentBlockID)]
+        )
+        guard Int(rows.first?["COUNT(*)"] ?? "") ?? 0 > 0 else {
+            EditorLog.sync.error(
+                "remote_block_parent_missing child_block_id=\(childBlockID, privacy: .public) parent_block_id=\(parentBlockID, privacy: .public) action=reparent_to_root"
+            )
+            return nil
+        }
+        return parentBlockID
     }
 
     func applyRemoteAttachment(_ remote: RemoteAttachmentChange) throws {

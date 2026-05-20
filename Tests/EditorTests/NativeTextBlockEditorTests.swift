@@ -494,6 +494,51 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testEmptyDecoratedTextBlocksDemoteToParagraphOnReturnInsteadOfInsertingNewBlock() {
+        XCTAssertTrue(
+            EmptyTextBlockReturnResolver.shouldDemoteToParagraph(
+                blockType: .unorderedListItem,
+                text: ""
+            )
+        )
+        XCTAssertTrue(
+            EmptyTextBlockReturnResolver.shouldDemoteToParagraph(
+                blockType: .orderedListItem,
+                text: "   "
+            )
+        )
+        XCTAssertTrue(
+            EmptyTextBlockReturnResolver.shouldDemoteToParagraph(
+                blockType: .taskItem,
+                text: ""
+            )
+        )
+        XCTAssertTrue(
+            EmptyTextBlockReturnResolver.shouldDemoteToParagraph(
+                blockType: .toggle,
+                text: ""
+            )
+        )
+        XCTAssertFalse(
+            EmptyTextBlockReturnResolver.shouldDemoteToParagraph(
+                blockType: .unorderedListItem,
+                text: "item"
+            )
+        )
+        XCTAssertFalse(
+            EmptyTextBlockReturnResolver.shouldDemoteToParagraph(
+                blockType: .paragraph,
+                text: ""
+            )
+        )
+        XCTAssertFalse(
+            EmptyTextBlockReturnResolver.shouldDemoteToParagraph(
+                blockType: .codeBlock,
+                text: ""
+            )
+        )
+    }
+
     func testBlockKeyboardShortcutResolverHandlesTabIndentAndShiftTabOutdent() {
         XCTAssertEqual(
             BlockKeyboardShortcutResolver.indentationDirection(

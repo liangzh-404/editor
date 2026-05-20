@@ -756,6 +756,47 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(BlockSelectionMarqueeChrome.minimumVisibleDimension, 2)
     }
 
+    func testMobileActionChromeUsesThemeAccentInsteadOfSystemBlue() {
+        assertColor(
+            MobileActionChrome.accentToken,
+            red: 0xE5,
+            green: 0x45,
+            blue: 0x4F
+        )
+        XCTAssertEqual(MobileActionChrome.selectedFillOpacity, 0.12)
+        XCTAssertEqual(MobileActionChrome.selectedButtonFillOpacity, 0.13)
+        XCTAssertEqual(MobileActionChrome.selectionBorderOpacity, 0.24)
+    }
+
+    func testMobileKeyboardToolbarChromeIsLowerAndLighterWeight() {
+        XCTAssertEqual(MobileKeyboardToolbarChrome.height, 44)
+        XCTAssertEqual(MobileKeyboardToolbarChrome.buttonSize, 34)
+        XCTAssertEqual(MobileKeyboardToolbarChrome.iconSize, 19)
+        XCTAssertEqual(MobileKeyboardToolbarChrome.primaryIconWeight, .regular)
+        XCTAssertEqual(MobileKeyboardToolbarChrome.secondaryIconWeight, .medium)
+    }
+
+    func testDesktopAuxiliaryRailButtonIsOfferedEvenBeforeRailHasContent() {
+        XCTAssertTrue(
+            DesktopAuxiliaryRailButtonPolicy.isOffered(
+                showsAuxiliaryRail: true,
+                displayMode: .standard
+            )
+        )
+        XCTAssertFalse(
+            DesktopAuxiliaryRailButtonPolicy.isOffered(
+                showsAuxiliaryRail: false,
+                displayMode: .standard
+            )
+        )
+        XCTAssertFalse(
+            DesktopAuxiliaryRailButtonPolicy.isOffered(
+                showsAuxiliaryRail: true,
+                displayMode: .focus
+            )
+        )
+    }
+
     func testCompactInitialNavigationResolverStartsOnSelectedPageWhenAvailable() {
         XCTAssertEqual(
             CompactInitialNavigationResolver.initialPageID(
@@ -818,6 +859,25 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(
             CompactShellRoutePlanner.documentListRoute(selectedCollection: .recent),
             .collection(.allDocuments)
+        )
+    }
+
+    func testCompactShellPathCanStepBackOneColumnAtATimeForSwipeNavigation() {
+        XCTAssertEqual(
+            CompactShellRoutePlanner.previousScreenPath(
+                currentPath: [.collection(.allDocuments), .page("page-a")]
+            ),
+            [.collection(.allDocuments)]
+        )
+        XCTAssertEqual(
+            CompactShellRoutePlanner.previousScreenPath(
+                currentPath: [.collection(.allDocuments)]
+            ),
+            []
+        )
+        XCTAssertEqual(
+            CompactShellRoutePlanner.previousScreenPath(currentPath: []),
+            []
         )
     }
 

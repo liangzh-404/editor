@@ -1544,6 +1544,81 @@ struct SyncFetchSummary: Equatable, Sendable {
     let appliedCount: Int
 }
 
+enum RemoteBlockChangeDependencySorter {
+    static func sorted(_ changes: [RemoteBlockChange]) -> [RemoteBlockChange] {
+        let changesByID = Dictionary(uniqueKeysWithValues: changes.map { ($0.blockID, $0) })
+        var ordered: [RemoteBlockChange] = []
+        var visiting = Set<String>()
+        var visited = Set<String>()
+
+        for change in changes {
+            visit(
+                change,
+                changesByID: changesByID,
+                visiting: &visiting,
+                visited: &visited,
+                ordered: &ordered
+            )
+        }
+        return ordered
+    }
+
+    private static func visit(
+        _ change: RemoteBlockChange,
+        changesByID: [String: RemoteBlockChange],
+        visiting: inout Set<String>,
+        visited: inout Set<String>,
+        ordered: inout [RemoteBlockChange]
+    ) {
+        guard !visited.contains(change.blockID) else {
+            return
+        }
+        guard !visiting.contains(change.blockID) else {
+            ordered.append(change)
+            visited.insert(change.blockID)
+            return
+        }
+
+        visiting.insert(change.blockID)
+        if let parentBlockID = change.parentBlockID,
+           let parent = changesByID[parentBlockID] {
+            visit(
+                parent,
+                changesByID: changesByID,
+                visiting: &visiting,
+                visited: &visited,
+                ordered: &ordered
+            )
+        }
+        visiting.remove(change.blockID)
+
+        if !visited.contains(change.blockID) {
+            ordered.append(change)
+            visited.insert(change.blockID)
+        }
+    }
+}
+
+struct SyncRemoteApplyError: Error, Equatable, CustomStringConvertible {
+    let entityType: String
+    let entityID: String
+    let details: String?
+    let underlyingDescription: String
+
+    var description: String {
+        var components = [
+            "remote_apply_failed",
+            "entity_type=\(entityType)",
+            "entity_id=\(entityID)"
+        ]
+        if let details, !details.isEmpty {
+            components.append(details)
+        }
+        components.append("error=\(underlyingDescription)")
+        return components.joined(separator: " ")
+    }
+}
+
 @MainActor
 protocol RemoteNotificationRegistering: AnyObject {
     func registerForRemoteNotifications()
@@ -1723,22 +1798,38 @@ final class SyncEngine {
             changeSet = try remoteChangeFetcher.fetchRemoteChanges(sinceServerChangeTokenData: nil)
         }
         for change in changeSet.workspaceChanges {
-            try mergeEngine.applyRemoteWorkspace(change)
+            try applyRemoteChange(entityType: "workspace", entityID: change.workspaceID) {
+                try mergeEngine.applyRemoteWorkspace(change)
+            }
         }
         for change in changeSet.notebookChanges {
-            try mergeEngine.applyRemoteNotebook(change)
+            try applyRemoteChange(entityType: "notebook", entityID: change.notebookID) {
+                try mergeEngine.applyRemoteNotebook(change)
+            }
         }
         for change in changeSet.pageChanges {
-            try mergeEngine.applyRemotePage(change)
+            try applyRemoteChange(entityType: "page", entityID: change.pageID) {
+                try mergeEngine.applyRemotePage(change)
+            }
         }
         for change in changeSet.attachmentChanges {
-            try mergeEngine.applyRemoteAttachment(change)
+            try applyRemoteChange(entityType: "attachment", entityID: change.attachmentID) {
+                try mergeEngine.applyRemoteAttachment(change)
+            }
         }
-        for change in changeSet.blockChanges {
-            try mergeEngine.applyRemoteBlock(change)
+        for change in RemoteBlockChangeDependencySorter.sorted(changeSet.blockChanges) {
+            try applyRemoteChange(
+                entityType: "block",
+                entityID: change.blockID,
+                details: "page_id=\(change.pageID) parent_block_id=\(change.parentBlockID ?? "nil")"
+            ) {
+                try mergeEngine.applyRemoteBlock(change)
+            }
         }
         for deletion in changeSet.deletedRecords {
-            try mergeEngine.applyRemoteDeletion(deletion)
+            try applyRemoteChange(entityType: deletion.entityType, entityID: deletion.entityID) {
+                try mergeEngine.applyRemoteDeletion(deletion)
+            }
         }
         if let serverChangeTokenData = changeSet.serverChangeTokenData {
             try syncRepository.saveServerChangeTokenData(
@@ -1754,6 +1845,26 @@ final class SyncEngine {
                 + changeSet.blockChanges.count
                 + changeSet.deletedRecords.count
         )
+    }
+
+    private func applyRemoteChange(
+        entityType: String,
+        entityID: String,
+        details: String? = nil,
+        apply: () throws -> Void
+    ) throws {
+        do {
+            try apply()
+        } catch {
+            let applyError = SyncRemoteApplyError(
+                entityType: entityType,
+                entityID: entityID,
+                details: details,
+                underlyingDescription: String(describing: error)
+            )
+            EditorLog.sync.error("\(applyError.description, privacy: .public)")
+            throw applyError
+        }
     }
 
     private static func isServerChangeTokenExpiredError(_ error: Error) -> Bool {
