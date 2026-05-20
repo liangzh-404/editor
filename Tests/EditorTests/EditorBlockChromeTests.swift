@@ -941,7 +941,7 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
-    func testBlockSelectionMarqueeBlockedFramesIncludeImageAttachmentRows() {
+    func testBlockSelectionMarqueeBlockedFramesIncludeMediaAttachmentRows() {
         let imageBlock = BlockSnapshot(
             id: "image",
             pageID: "page",
@@ -950,26 +950,36 @@ final class EditorBlockChromeTests: XCTestCase {
             type: .attachmentImage,
             textPlain: "cover.png"
         )
+        let videoBlock = BlockSnapshot(
+            id: "video",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "2",
+            type: .attachmentVideo,
+            textPlain: "clip.mov"
+        )
         let fileBlock = BlockSnapshot(
             id: "file",
             pageID: "page",
             parentBlockID: nil,
-            orderKey: "2",
+            orderKey: "3",
             type: .attachmentFile,
             textPlain: "guide.pdf"
         )
         let imageFrame = CGRect(x: 40, y: 80, width: 520, height: 260)
+        let videoFrame = CGRect(x: 40, y: 360, width: 520, height: 220)
         let fileFrame = CGRect(x: 40, y: 360, width: 520, height: 64)
 
         XCTAssertEqual(
             BlockSelectionMarqueeInteractionFrameResolver.blockedFrames(
-                blocks: [imageBlock, fileBlock],
+                blocks: [imageBlock, videoBlock, fileBlock],
                 blockFrames: [
                     imageBlock.id: imageFrame,
+                    videoBlock.id: videoFrame,
                     fileBlock.id: fileFrame
                 ]
             ),
-            [imageFrame]
+            [imageFrame, videoFrame]
         )
     }
 
