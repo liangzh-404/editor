@@ -298,6 +298,89 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAddAndRemoveTagsOnSelectedPagePreservesOtherTags() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let keep = try tagRepository.createTag(workspaceID: workspaceID, name: "Keep")
+        let remove = try tagRepository.createTag(workspaceID: workspaceID, name: "Remove")
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+        viewModel.selectPage(id: pageID)
+
+        XCTAssertTrue(viewModel.addTagToSelectedPageForUI(tagID: keep.id))
+        XCTAssertTrue(viewModel.addTagToSelectedPageForUI(tagID: remove.id))
+        XCTAssertEqual(Set(viewModel.selectedPageTagIDs), [keep.id, remove.id])
+
+        XCTAssertTrue(viewModel.removeTagFromSelectedPageForUI(tagID: remove.id))
+
+        XCTAssertEqual(viewModel.selectedPageTagIDs, [keep.id])
+        XCTAssertEqual(viewModel.selectedPageTagNames, ["Keep"])
+    }
+
+    @MainActor
+    func testCreateAndAssignTagToSelectedPageTrimsNameAndReusesExistingTag() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let existing = try tagRepository.createTag(workspaceID: workspaceID, name: "Writing")
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+        viewModel.selectPage(id: pageID)
+
+        XCTAssertTrue(viewModel.createAndAssignTagToSelectedPageForUI(name: " writing "))
+
+        XCTAssertEqual(viewModel.selectedPageTagIDs, [existing.id])
+        XCTAssertEqual(viewModel.snapshot.tags.map(\.name), ["Writing"])
+    }
+
+    @MainActor
+    func testAssignTagToPagesForUIDragAddsTagToEveryDroppedPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let firstPageID = try XCTUnwrap(snapshot.selectedPageID)
+        let secondPage = try repository.createPage(workspaceID: workspaceID, title: "Second")
+        let tagRepository = TagRepository(database: database)
+        let tag = try tagRepository.createTag(workspaceID: workspaceID, name: "Batch")
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+
+        XCTAssertTrue(viewModel.assignTagToPagesForUI(pageIDs: [secondPage.id, firstPageID], tagID: tag.id))
+
+        let assignments = Set(viewModel.snapshot.pageTags.filter { $0.tagID == tag.id }.map(\.pageID))
+        XCTAssertEqual(assignments, [firstPageID, secondPage.id])
+    }
+
+    @MainActor
+    func testArchivePagesForUIDragArchivesEveryDroppedPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let firstPageID = try XCTUnwrap(snapshot.selectedPageID)
+        let secondPage = try repository.createPage(workspaceID: workspaceID, title: "Second")
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertTrue(viewModel.archivePagesForUI(pageIDs: [firstPageID, secondPage.id]))
+
+        XCTAssertEqual(Set(viewModel.snapshot.archivedPages.map(\.id)), [firstPageID, secondPage.id])
+        XCTAssertTrue(viewModel.snapshot.pages.isEmpty)
+    }
+
+    @MainActor
     func testLoadRequestsFocusForInitialEditableBlock() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -3344,6 +3427,38 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLocalSyncChangeSchedulesAutomaticForegroundSyncWithoutManualAction() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let syncRepository = SyncRepository(database: database)
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: RecordingCloudKitSyncAdapter()
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        try viewModel.updateBlockText(blockID: blockID, text: "Automatic sync from edit")
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+        XCTAssertEqual(try syncRepository.pendingChanges().count, 1)
+        XCTAssertEqual(viewModel.syncStatusText, "同步中...")
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(try syncRepository.pendingChanges(), [])
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
+    }
+
+    @MainActor
     func testSyncAfterActivationEnsuresRemoteChangeSubscriptionWhenEngineIsAvailable() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -3502,12 +3617,16 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     func testForegroundSyncActivationPolicySyncsOnInitialAndLaterActivePhasesOnly() {
-        var policy = ForegroundSyncActivationPolicy()
+        let policy = ForegroundSyncActivationPolicy()
 
         XCTAssertTrue(policy.shouldSync(for: .active))
         XCTAssertFalse(policy.shouldSync(for: .inactive))
         XCTAssertFalse(policy.shouldSync(for: .background))
         XCTAssertTrue(policy.shouldSync(for: .active))
+        XCTAssertEqual(
+            ForegroundSyncActivationPolicy.foregroundPollingIntervalNanoseconds,
+            30_000_000_000
+        )
     }
 
     @MainActor

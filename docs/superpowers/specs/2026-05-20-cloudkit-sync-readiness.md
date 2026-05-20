@@ -31,8 +31,10 @@ Enable offline-first CloudKit data sync between the macOS and iOS editor apps. H
 - Schema version 11 compacts duplicate queued changes, adds `idx_sync_changes_entity_change`, and creates `runtime_diagnostics`, so the sync queue has a database-level uniqueness guard and APNs/background-sync diagnostics can be read back from SQLite.
 - Delete tombstones are treated as synced when CloudKit reports `unknownItem`, so locally-created-then-deleted records do not stay stuck forever when the remote record never existed.
 - Foreground activation triggers account refresh and a background foreground-sync pass.
-- Failed foreground sync attempts put automatic foreground sync on a five-minute cooldown; manual sync remains available for immediate retry.
-- Manual sync is available from the macOS `同步 > 立即同步` command menu and the compact iOS library header button.
+- Active foreground sessions also poll CloudKit every 30 seconds, so remote changes can arrive while the app remains open without a manual action.
+- Local sync queue writes notify the active workspace view model and automatically schedule a background foreground-sync pass.
+- Failed foreground sync attempts put automatic foreground sync on a five-minute cooldown; the foreground poller retries after the cooldown expires.
+- Manual sync is intentionally not exposed in the macOS menu or compact iOS library header because cross-device sync is expected to be automatic.
 - A debug runtime probe can be enabled with `EDITOR_CLOUDKIT_PROBE=1`; it checks `accountStatus`, ensures the custom zone, fetches private database zones and subscriptions, saves a minimal record, fetches the same record, then deletes it.
 - A debug headless sync diagnostic can be enabled with `EDITOR_CLOUDKIT_SYNC_DIAGNOSTIC=1`; it bypasses the normal editor UI, optionally appends a block via `EDITOR_CLOUDKIT_SYNC_DIAGNOSTIC_APPEND_TEXT`, then ensures the subscription, uploads pending changes, fetches remote changes, and displays/logs the pending-change count.
 - Remote page-reference block merges rebuild `page_parent_links`, so a page created from a block can still navigate back to its parent after syncing in from another device.
@@ -296,7 +298,7 @@ can exit non-zero even when the app stayed running after the diagnostic
 completed.
 Set `EXPECT_TEXT` to require a specific block text to exist in the copied iOS
 SQLite database. This is the preferred gate for proving a macOS-origin block was
-fetched by the iOS app after foreground/manual sync.
+fetched by the iOS app after automatic foreground sync.
 
 The macOS equivalent is:
 
@@ -702,7 +704,7 @@ for a future retry instead of losing the edit.
 - `ALLOW_FAILED_RESULT=1 RUN_TIMEOUT_SECONDS=120 scripts/ios_simulator_remote_notification_sync.sh` was rerun as the direct handler-path control. It launched `com.liangzhang.editor.ios`, recorded `remote_notification_sync_completed|{"error":"<CKError ... \"Not Authenticated\" (9/1002); \"This request requires an authenticated account\">","failed_upload_count":0,"fetched_count":0,"result":"failed","uploaded_count":0}`, and left the local Simulator store at `schema_version=11`, `sync_changes=0`, `runtime_diagnostics=1`, `blocks=1`.
 - A final `scripts/cloudkit_sync_completion_audit.sh` pass after the Simulator control still passes explicit-container, source entitlements, signed macOS/iOS product entitlements, Development schema record types/fields, macOS `sync_changes=0`, and readiness-document gates. It warns that Production is missing all six app record types, and exits non-zero only because physical iOS sync and APNs readback databases are still absent.
 - `xcrun cktool validate-schema --team-id H52N5N7WQ7 --container-id iCloud.com.liangzhang.editor.sync --environment production --file docs/cloudkit/editor-cloudkit-schema.ckdb` was also rejected with `BadRequestException: endpoint not applicable in the environment 'production'`, matching the earlier import result and confirming that production promotion is a CloudKit Console/Dashboard step rather than a `cktool` production import/validate step.
-- Manual "Sync Now" now uses the same `WorkspaceSyncScheduling` path as foreground activation sync instead of running CloudKit upload/fetch inline on the MainActor. TDD evidence: `WorkspaceViewModelTests.testSyncNowSchedulesForegroundSyncWithoutRunningItInline` first failed because no scheduler operation was recorded, the pending change was cleared inline, and the status jumped straight to completed; after the change, that test and the existing manual upload/fetch UI tests pass after driving the deferred scheduler.
+- Internal `syncNow()` still uses the same `WorkspaceSyncScheduling` path as foreground activation sync instead of running CloudKit upload/fetch inline on the MainActor. TDD evidence: `WorkspaceViewModelTests.testSyncNowSchedulesForegroundSyncWithoutRunningItInline` first failed because no scheduler operation was recorded, the pending change was cleared inline, and the status jumped straight to completed; after the change, that test and the existing upload/fetch UI tests pass after driving the deferred scheduler.
 - After the manual-sync scheduling change, `xcodebuild build -scheme EditorMac ...` and `xcodebuild build -scheme EditorIOS ...` both passed; the iOS build still only reports the existing orientation warning. The rebuilt `EditorIOS.app` was installed to the physical device at `file:///private/var/containers/Bundle/Application/C021B214-8F9C-4A7A-A423-1B85F7E098BF/EditorIOS.app/`. A no-rebuild headless launch immediately afterward was still rejected with `RequestDenied / Locked`, so no fresh iOS SQLite readback exists yet for this build.
 - `EditorShellView` now runs the foreground sync gate on initial view appear as well as later `scenePhase` changes. TDD evidence: `PlatformSecurityTests.testEditorShellSyncsOnInitialActiveAppearAndLaterActivation` first failed because only `.onChange(of: scenePhase)` called `syncAfterActivation`; after adding the `.onAppear` hook, the new source-level test plus `WorkspaceViewModelTests.testSyncAfterActivationSchedulesForegroundSyncWithoutRunningItInline` and `testSyncAfterActivationIgnoresDuplicateRequestsWhileForegroundSyncIsRunning` pass.
 - After the initial-appear sync hook, `xcodebuild build -scheme EditorMac ...` passed, and a first parallel `EditorIOS` build attempt failed only because two `xcodebuild` processes were sharing the same DerivedData build database. Rerunning the iOS build sequentially passed with the existing orientation warning. The rebuilt `EditorIOS.app` was installed to the physical device at `file:///private/var/containers/Bundle/Application/2E48E698-C771-4ECB-B4CE-E16217B39C9F/EditorIOS.app/`; the subsequent headless launch remained blocked by `RequestDenied / Locked`, so the physical iOS readback gate is still waiting for an unlocked device.
@@ -719,7 +721,7 @@ for a future retry instead of losing the edit.
 The full CloudKit sync objective is not complete until all of these are proven:
 
 - The iOS app logs remote-notification registration success or a concrete APNs registration error on the paired physical device.
-- A macOS local edit uploads and is fetched by the iOS app after foreground activation or manual sync without leaving UI-generated local dirty state.
+- A macOS local edit uploads and is fetched by the iOS app automatically without leaving UI-generated local dirty state.
 - A new iOS headless diagnostic edit uploads and is fetched by the macOS app.
 - Silent CloudKit push wakes the iOS remote-notification handler and returns the expected background fetch result.
 - Pending local changes remain available when the network or CloudKit is unavailable.

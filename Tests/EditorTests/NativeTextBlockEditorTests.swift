@@ -162,6 +162,20 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(resolved.origin.y, 8)
     }
 
+    #if os(macOS)
+    func testNativeTextCursorChromeUsesEditorAccentColor() {
+        XCTAssertEqual(NativeTextCursorChrome.nsColor.redComponent, EditorDesignTokens.Colors.accent.red, accuracy: 0.0001)
+        XCTAssertEqual(NativeTextCursorChrome.nsColor.greenComponent, EditorDesignTokens.Colors.accent.green, accuracy: 0.0001)
+        XCTAssertEqual(NativeTextCursorChrome.nsColor.blueComponent, EditorDesignTokens.Colors.accent.blue, accuracy: 0.0001)
+    }
+    #elseif os(iOS)
+    func testNativeTextCursorChromeUsesEditorAccentColor() {
+        XCTAssertEqual(NativeTextCursorChrome.uiColor.cgColor.components?[0], EditorDesignTokens.Colors.accent.red, accuracy: 0.0001)
+        XCTAssertEqual(NativeTextCursorChrome.uiColor.cgColor.components?[1], EditorDesignTokens.Colors.accent.green, accuracy: 0.0001)
+        XCTAssertEqual(NativeTextCursorChrome.uiColor.cgColor.components?[2], EditorDesignTokens.Colors.accent.blue, accuracy: 0.0001)
+    }
+    #endif
+
     func testNativeTextEditorLayoutAddsVerticalInsetToAvoidSelectionClipping() {
         XCTAssertEqual(NativeTextEditorLayout.textContainerInset.height, 2)
         XCTAssertEqual(
@@ -699,6 +713,45 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testMacEditorKeyboardShortcutActionResolverCopiesSelectedBlocks() {
+        XCTAssertEqual(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: 8,
+                input: "c",
+                modifiers: [.command],
+                hasBlockSelection: true,
+                hasPasteableAttachments: false
+            ),
+            .copySelection
+        )
+        XCTAssertNil(
+            MacEditorKeyboardShortcutActionResolver.action(
+                keyCode: 8,
+                input: "c",
+                modifiers: [.command],
+                hasBlockSelection: false,
+                hasPasteableAttachments: false
+            )
+        )
+    }
+
+    func testSelectedBlockMarkdownCopyResolverExportsSelectedBlocksInVisibleOrder() {
+        let blocks = [
+            block(id: "first", type: .paragraph, text: "Alpha"),
+            block(id: "second", type: .taskItem, text: "Todo"),
+            block(id: "third", type: .heading2, text: "Section")
+        ]
+
+        XCTAssertEqual(
+            SelectedBlockMarkdownCopyResolver.markdown(
+                selectedBlockIDs: ["third", "missing", "second"],
+                visibleBlocks: blocks,
+                attachments: []
+            ),
+            "- [ ] Todo\n\n## Section"
+        )
+    }
+
     func testMacEditorKeyboardShortcutActionResolverOffersCodeTextSelectAllFallback() {
         XCTAssertEqual(
             MacEditorKeyboardShortcutActionResolver.action(
@@ -979,6 +1032,35 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 visibleBlockIDs: ["first", "second", "third"]
             )
         )
+    }
+
+    func testPageDragPayloadResolverUsesBatchSelectionWhenDraggingSelectedPage() {
+        XCTAssertEqual(
+            PageDragPayloadResolver.pageIDsForDrag(
+                pageID: "second",
+                selectedPageIDs: ["third", "second"],
+                visiblePageIDs: ["first", "second", "third"]
+            ),
+            ["second", "third"]
+        )
+        XCTAssertEqual(
+            PageDragPayloadResolver.pageIDsForDrag(
+                pageID: "first",
+                selectedPageIDs: ["third", "second"],
+                visiblePageIDs: ["first", "second", "third"]
+            ),
+            ["first"]
+        )
+    }
+
+    func testPageDragPayloadResolverEncodesAndDecodesPageIDs() {
+        let payload = PageDragPayloadResolver.payloadText(pageIDs: ["first", "second"])
+
+        XCTAssertEqual(
+            PageDragPayloadResolver.pageIDs(from: [payload, "ignored"]),
+            ["first", "second"]
+        )
+        XCTAssertEqual(PageDragPayloadResolver.pageIDs(from: ["plain text"]), [])
     }
 
     func testTableBlockKeyboardActionResolverMovesFocusWhenSelectionIsActive() {
@@ -1885,5 +1967,22 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(metrics.blockDisappearanceCount, 1)
         XCTAssertEqual(metrics.visibleBlockChurnCount, 3)
         XCTAssertTrue(metrics.runtimeSummary.contains("peak_last_visible_block_index=79"))
+    }
+
+    private func block(
+        id: String,
+        type: BlockType,
+        text: String,
+        taskItemIsCompleted: Bool = false
+    ) -> BlockSnapshot {
+        BlockSnapshot(
+            id: id,
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: id,
+            type: type,
+            textPlain: text,
+            taskItemIsCompleted: taskItemIsCompleted
+        )
     }
 }

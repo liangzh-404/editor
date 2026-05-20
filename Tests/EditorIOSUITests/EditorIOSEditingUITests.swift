@@ -124,6 +124,32 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneKeyboardToolbarKeepsRightSidebarAndMoreActionsOnly() {
+        let app = makeApp()
+        app.launch()
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should be editable before checking the toolbar")
+        firstTextView.tap()
+
+        let toolbar = app.otherElements["editor.mobile-keyboard-toolbar"]
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 5), "The focused iPhone editor should show the compact keyboard toolbar")
+        XCTAssertTrue(
+            app.descendants(matching: .any)["editor.mobile-keyboard.outline"].waitForExistence(timeout: 5),
+            "The compact keyboard toolbar should keep the right-sidebar outline action"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["editor.mobile-keyboard.more-format"].waitForExistence(timeout: 5),
+            "The compact keyboard toolbar should keep the more-format action"
+        )
+        XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.format"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.add-block"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.dismiss"].exists)
+    }
+
+    @MainActor
     func testIPhoneFormatPaletteConvertsFocusedBlockToBulletedList() {
         let app = makeApp()
         app.launch()
@@ -146,9 +172,9 @@ final class EditorIOSEditingUITests: XCTestCase {
             "Focusing a block should not flash or persist the expanded format palette before tapping 格式"
         )
 
-        let formatButton = app.descendants(matching: .any)["editor.mobile-keyboard.format"]
-        XCTAssertTrue(formatButton.waitForExistence(timeout: 5), "The compact keyboard toolbar should expose 格式")
-        formatButton.tap()
+        let moreButton = app.descendants(matching: .any)["editor.mobile-keyboard.more-format"]
+        XCTAssertTrue(moreButton.waitForExistence(timeout: 5), "The compact keyboard toolbar should expose 更多")
+        moreButton.tap()
 
         let palette = app.otherElements["editor.mobile-format-palette"]
         XCTAssertTrue(
@@ -191,9 +217,9 @@ final class EditorIOSEditingUITests: XCTestCase {
         XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should be editable before opening formatting")
         firstTextView.tap()
 
-        let formatButton = app.descendants(matching: .any)["editor.mobile-keyboard.format"]
-        XCTAssertTrue(formatButton.waitForExistence(timeout: 5), "The compact keyboard toolbar should expose 格式")
-        formatButton.tap()
+        let moreButton = app.descendants(matching: .any)["editor.mobile-keyboard.more-format"]
+        XCTAssertTrue(moreButton.waitForExistence(timeout: 5), "The compact keyboard toolbar should expose 更多")
+        moreButton.tap()
 
         let palette = app.otherElements["editor.mobile-format-palette"]
         XCTAssertTrue(palette.waitForExistence(timeout: 5), "The expanded format palette should appear after tapping 格式")

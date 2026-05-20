@@ -449,6 +449,31 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testCommandCWhileBlockSelectedCopiesBlockMarkdown() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        openWelcomePageForPageToolbarActions(in: app)
+        openWelcomeBlockContextMenu(in: app)
+        app.menuItems["任务"].click()
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5))
+        textView.click()
+        textView.typeKey("a", modifierFlags: [.command])
+
+        NSPasteboard.general.clearContents()
+        textView.typeKey("c", modifierFlags: [.command])
+
+        XCTAssertEqual(
+            NSPasteboard.general.string(forType: .string),
+            "- [ ] 开始用块写作。",
+            "Cmd+C with a selected task block should copy block Markdown, not just the text view contents"
+        )
+    }
+
+    @MainActor
     func testClickingBlockRowFocusesEditorForTyping() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

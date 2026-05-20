@@ -26,6 +26,10 @@ struct RuntimeDiagnosticEvent: Equatable, Sendable {
     let createdAt: Date
 }
 
+extension Notification.Name {
+    static let editorSyncChangeEnqueued = Notification.Name("editor.syncChangeEnqueued")
+}
+
 final class SyncRepository {
     private let database: SQLiteDatabase
     private let dateFormatter = ISO8601DateFormatter()
@@ -73,6 +77,15 @@ final class SyncRepository {
 
         EditorLog.sync.debug(
             "sync_change_enqueued entity_type=\(entityType, privacy: .public) entity_id=\(entityID, privacy: .public) change_type=\(changeType, privacy: .public)"
+        )
+        NotificationCenter.default.post(
+            name: .editorSyncChangeEnqueued,
+            object: database,
+            userInfo: [
+                "entityType": entityType,
+                "entityID": entityID,
+                "changeType": changeType
+            ]
         )
     }
 

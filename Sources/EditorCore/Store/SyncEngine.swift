@@ -1561,6 +1561,7 @@ enum RemoteNotificationRegistrationPolicy {
             return
         }
 
+#if DEBUG
         guard CloudKitSyncDiagnosticRequest(environment: environment) == nil else {
             EditorLog.sync.debug("remote_notification_registration_skipped reason=headless_sync_diagnostic")
             return
@@ -1570,6 +1571,7 @@ enum RemoteNotificationRegistrationPolicy {
             EditorLog.sync.debug("remote_notification_registration_skipped reason=remote_notification_sync_diagnostic")
             return
         }
+#endif
 
         registrar.registerForRemoteNotifications()
         EditorLog.sync.debug("remote_notification_registration_requested")

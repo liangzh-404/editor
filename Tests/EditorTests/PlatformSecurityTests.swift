@@ -190,7 +190,7 @@ final class PlatformSecurityTests: XCTestCase {
         ]))
     }
 
-    func testManualSyncEntryPointsAreWiredForMenuAndCompactUI() throws {
+    func testManualSyncEntryPointsAreNotExposedInMenuOrCompactUI() throws {
         let projectRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -204,10 +204,11 @@ final class PlatformSecurityTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(appSource.contains("@FocusedValue(\\.syncNowAction)"))
-        XCTAssertTrue(appSource.contains("CommandMenu(\"同步\")"))
-        XCTAssertTrue(shellSource.contains(".focusedValue(\\.syncNowAction"))
-        XCTAssertTrue(shellSource.contains("editor.compact.sync-now"))
+        XCTAssertFalse(appSource.contains("@FocusedValue(\\.syncNowAction)"))
+        XCTAssertFalse(appSource.contains("CommandMenu(\"同步\")"))
+        XCTAssertFalse(shellSource.contains(".focusedValue(\\.syncNowAction"))
+        XCTAssertFalse(shellSource.contains("editor.compact.sync-now"))
+        XCTAssertFalse(shellSource.contains("arrow.triangle.2.circlepath"))
     }
 
     func testEditorShellSyncsOnInitialActiveAppearAndLaterActivation() throws {

@@ -59,6 +59,18 @@ final class BackgroundWorkspaceSyncScheduler: WorkspaceSyncScheduling {
     }
 }
 
+private final class SyncChangeObservation: @unchecked Sendable {
+    private let observer: NSObjectProtocol
+
+    init(observer: NSObjectProtocol) {
+        self.observer = observer
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(observer)
+    }
+}
+
 private struct PageNavigationHistoryEntry: Equatable {
     let pageID: String
     let collection: WorkspaceCollection
@@ -128,6 +140,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var pageNavigationForwardStack: [PageNavigationHistoryEntry] = []
     private var isForegroundSyncRunning = false
     private var nextForegroundSyncAttemptAt: Date?
+    private var syncChangeObservation: SyncChangeObservation?
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
 
     var canNavigateBack: Bool {
@@ -165,6 +178,20 @@ final class WorkspaceViewModel: ObservableObject {
         return snapshot.tags
             .filter { tagIDs.contains($0.id) }
             .map(\.name)
+    }
+
+    var selectedPageTagIDs: [String] {
+        guard let selectedPageID else {
+            return []
+        }
+        let tagIDs = Set(
+            snapshot.pageTags
+                .filter { $0.pageID == selectedPageID }
+                .map(\.tagID)
+        )
+        return snapshot.tags
+            .filter { tagIDs.contains($0.id) }
+            .map(\.id)
     }
 
     var selectedNotebook: NotebookSummary? {
@@ -283,6 +310,7 @@ final class WorkspaceViewModel: ObservableObject {
         canRedoTextEdit = false
         canUndoPageArchive = false
         attachmentPreviewGenerationStatuses = [:]
+        startObservingSyncChangesIfNeeded()
     }
 
     init(snapshot: WorkspaceSnapshot) {
@@ -395,6 +423,18 @@ final class WorkspaceViewModel: ObservableObject {
             refreshCloudKitAccountStatusForUI()
         }
 
+        scheduleForegroundSyncIfNeeded(reason: "activation")
+    }
+
+    func syncAfterForegroundInterval() {
+        scheduleForegroundSyncIfNeeded(reason: "foreground_interval")
+    }
+
+    private func syncAfterLocalChange() {
+        scheduleForegroundSyncIfNeeded(reason: "local_change")
+    }
+
+    private func scheduleForegroundSyncIfNeeded(reason: String) {
         guard syncEngine != nil else {
             return
         }
@@ -402,18 +442,23 @@ final class WorkspaceViewModel: ObservableObject {
            nextForegroundSyncAttemptAt > currentDateProvider() {
             syncStatusText = "同步暂缓，稍后自动重试"
             EditorLog.sync.debug(
-                "foreground_sync_skipped reason=failure_cooldown next_attempt_at=\(nextForegroundSyncAttemptAt.timeIntervalSince1970, privacy: .public)"
+                "foreground_sync_skipped reason=failure_cooldown trigger=\(reason, privacy: .public) next_attempt_at=\(nextForegroundSyncAttemptAt.timeIntervalSince1970, privacy: .public)"
             )
             return
         }
         guard !isForegroundSyncRunning else {
-            EditorLog.sync.debug("foreground_sync_skipped reason=already_running")
+            EditorLog.sync.debug(
+                "foreground_sync_skipped reason=already_running trigger=\(reason, privacy: .public)"
+            )
             return
         }
 
         isForegroundSyncRunning = true
         syncStatusText = "同步中..."
         let syncEngine = syncEngine!
+        EditorLog.sync.debug(
+            "foreground_sync_scheduled reason=\(reason, privacy: .public)"
+        )
         syncScheduler.scheduleForegroundSync(
             operation: {
                 Self.runForegroundSync(syncEngine: syncEngine)
@@ -423,6 +468,29 @@ final class WorkspaceViewModel: ObservableObject {
                 self?.completeForegroundSync(result)
             }
         )
+    }
+
+    private func startObservingSyncChangesIfNeeded() {
+        guard let repository, syncEngine != nil else {
+            return
+        }
+
+        let observer = NotificationCenter.default.addObserver(
+            forName: .editorSyncChangeEnqueued,
+            object: repository.syncChangeNotificationObject,
+            queue: nil
+        ) { [weak self] _ in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated {
+                    self?.syncAfterLocalChange()
+                }
+            } else {
+                Task { @MainActor [weak self] in
+                    self?.syncAfterLocalChange()
+                }
+            }
+        }
+        syncChangeObservation = SyncChangeObservation(observer: observer)
     }
 
     func selectPage(id: String) {
@@ -555,6 +623,98 @@ final class WorkspaceViewModel: ObservableObject {
         refreshBacklinksForSelectedPage()
         refreshExternalLinksForSelectedPage()
         refreshConflictsForSelectedPage()
+    }
+
+    func addTagToSelectedPageForUI(tagID: String) -> Bool {
+        guard let selectedPageID else {
+            return false
+        }
+        return assignTagsForUI(
+            pageID: selectedPageID,
+            transform: { $0.union([tagID]) },
+            logAction: "page_tag_add"
+        )
+    }
+
+    func removeTagFromSelectedPageForUI(tagID: String) -> Bool {
+        guard let selectedPageID else {
+            return false
+        }
+        return assignTagsForUI(
+            pageID: selectedPageID,
+            transform: { $0.subtracting([tagID]) },
+            logAction: "page_tag_remove"
+        )
+    }
+
+    func createAndAssignTagToSelectedPageForUI(name: String) -> Bool {
+        guard let tagRepository,
+              let selectedWorkspaceID else {
+            return false
+        }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            return false
+        }
+
+        do {
+            let existingTags = try tagRepository.tags(workspaceID: selectedWorkspaceID)
+            let tag: TagSummary
+            if let existingTag = existingTags.first(where: {
+                $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame ||
+                    $0.path.caseInsensitiveCompare(trimmedName) == .orderedSame
+            }) {
+                tag = existingTag
+            } else {
+                tag = try tagRepository.createTag(workspaceID: selectedWorkspaceID, name: trimmedName)
+            }
+            return addTagToSelectedPageForUI(tagID: tag.id)
+        } catch {
+            EditorLog.input.error(
+                "page_tag_create_failed name=\(trimmedName, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    func assignTagToPagesForUI(pageIDs: [String], tagID: String) -> Bool {
+        guard let tagRepository,
+              !pageIDs.isEmpty else {
+            return false
+        }
+
+        let validPageIDs = orderedUniquePageIDs(pageIDs).filter { pageID in
+            snapshot.pages.contains { $0.id == pageID }
+        }
+        guard !validPageIDs.isEmpty else {
+            return false
+        }
+
+        let previousSelectedCollection = selectedCollection
+        let previousSelectedPageID = selectedPageID
+        do {
+            let assignments = try tagRepository.tagAssignments()
+            for pageID in validPageIDs {
+                var tagIDs = Set(assignments.filter { $0.pageID == pageID }.map(\.tagID))
+                tagIDs.insert(tagID)
+                try tagRepository.assignTags(pageID: pageID, tagIDs: sortedTagIDs(tagIDs))
+            }
+            if let repository {
+                let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+                apply(snapshot: loadedSnapshot)
+            }
+            restoreSelectionAfterReload(collection: previousSelectedCollection, pageID: previousSelectedPageID)
+            EditorLog.input.debug(
+                "page_tag_batch_assigned tag_id=\(tagID, privacy: .public) count=\(validPageIDs.count, privacy: .public)"
+            )
+            return true
+        } catch {
+            restoreSelectionAfterReload(collection: previousSelectedCollection, pageID: previousSelectedPageID)
+            EditorLog.input.error(
+                "page_tag_batch_assign_failed tag_id=\(tagID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
     }
 
     func selectSearchResult(_ result: SearchResult) {
@@ -1769,6 +1929,43 @@ final class WorkspaceViewModel: ObservableObject {
             EditorLog.input.error(
                 "page_favorite_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
+        }
+    }
+
+    func archivePagesForUI(pageIDs: [String]) -> Bool {
+        guard let repository,
+              !pageIDs.isEmpty else {
+            return false
+        }
+
+        let validPageIDs = orderedUniquePageIDs(pageIDs).filter { pageID in
+            snapshot.pages.contains { $0.id == pageID }
+        }
+        guard !validPageIDs.isEmpty else {
+            return false
+        }
+
+        let previousNotebookID = selectedNotebookID
+        let previousPageID = selectedPageID
+        do {
+            for pageID in validPageIDs {
+                try repository.archivePage(pageID: pageID)
+                recordPageArchiveUndoSnapshot(
+                    pageID: pageID,
+                    previousNotebookID: previousNotebookID,
+                    previousPageID: previousPageID
+                )
+            }
+            try load()
+            restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+            EditorLog.input.debug("page_archive_batch_visible count=\(validPageIDs.count, privacy: .public)")
+            return true
+        } catch {
+            restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
+            EditorLog.input.error(
+                "page_archive_batch_failed count=\(validPageIDs.count, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
         }
     }
 
@@ -3246,6 +3443,66 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         try tagRepository.assignTags(pageID: pageID, tagIDs: Array(assignedTagIDs).sorted())
+    }
+
+    private func assignTagsForUI(
+        pageID: String,
+        transform: (Set<String>) -> Set<String>,
+        logAction: String
+    ) -> Bool {
+        guard let repository,
+              let tagRepository else {
+            return false
+        }
+
+        let previousSelectedPageID = selectedPageID
+        let previousSelectedCollection = selectedCollection
+        do {
+            let currentTagIDs = Set(
+                try tagRepository.tagAssignments()
+                    .filter { $0.pageID == pageID }
+                    .map(\.tagID)
+            )
+            let nextTagIDs = transform(currentTagIDs)
+            guard nextTagIDs != currentTagIDs else {
+                return true
+            }
+
+            try tagRepository.assignTags(pageID: pageID, tagIDs: sortedTagIDs(nextTagIDs))
+            let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+            apply(snapshot: loadedSnapshot)
+            restoreSelectionAfterReload(collection: previousSelectedCollection, pageID: previousSelectedPageID)
+            EditorLog.input.debug(
+                "\(logAction, privacy: .public) page_id=\(pageID, privacy: .public) count=\(nextTagIDs.count, privacy: .public)"
+            )
+            return true
+        } catch {
+            restoreSelectionAfterReload(collection: previousSelectedCollection, pageID: previousSelectedPageID)
+            EditorLog.input.error(
+                "\(logAction, privacy: .public)_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    private func sortedTagIDs(_ tagIDs: Set<String>) -> [String] {
+        let knownTagIDs = snapshot.tags
+            .filter { tagIDs.contains($0.id) }
+            .map(\.id)
+        let knownTagIDSet = Set(knownTagIDs)
+        return knownTagIDs + tagIDs
+            .filter { !knownTagIDSet.contains($0) }
+            .sorted()
+    }
+
+    private func orderedUniquePageIDs(_ pageIDs: [String]) -> [String] {
+        var seen: Set<String> = []
+        var ordered: [String] = []
+        for pageID in pageIDs where !seen.contains(pageID) {
+            seen.insert(pageID)
+            ordered.append(pageID)
+        }
+        return ordered
     }
 
     private func extractInlineHashTagsFromSnapshotIfNeeded() throws -> Bool {

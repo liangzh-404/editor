@@ -9,7 +9,7 @@ final class EditorBlockChromeTests: XCTestCase {
         assertColor(EditorDesignTokens.Colors.secondaryText, red: 0x62, green: 0x5F, blue: 0x59)
         assertColor(EditorDesignTokens.Colors.tertiaryText, red: 0x8A, green: 0x86, blue: 0x7E)
         assertColor(EditorDesignTokens.Colors.border, red: 0xEB, green: 0xE7, blue: 0xDF)
-        assertColor(EditorDesignTokens.Colors.accent, red: 0x2F, green: 0x7D, blue: 0xFA)
+        assertColor(EditorDesignTokens.Colors.accent, red: 0xE5, green: 0x45, blue: 0x4F)
     }
 
     func testCraftThingsDesignTokensKeepDocumentTypographyInRange() {
@@ -139,18 +139,20 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorBlockChrome.listVerticalPadding, 0)
         XCTAssertEqual(EditorBlockChrome.listBackgroundOpacity, 0)
         XCTAssertEqual(EditorBlockChrome.listMarkerWidth, 18)
-        XCTAssertEqual(EditorBlockChrome.listTextSpacing, 6)
+        XCTAssertEqual(EditorBlockChrome.listTextSpacing, 4)
         XCTAssertEqual(
             EditorBlockChrome.listMarkerTopPadding,
             3,
             "List rows use explicit top alignment because NSTextView does not expose a reliable SwiftUI firstTextBaseline; do not reset this to 0."
         )
-        XCTAssertEqual(EditorBlockChrome.listMarkerLineHeight, 20)
+        XCTAssertEqual(EditorBlockChrome.listMarkerLineHeight, 18)
         XCTAssertEqual(EditorBlockChrome.canvasTrailingFocusHitHeight, 760)
-        XCTAssertEqual(EditorBlockChrome.listNestingIndentWidth, 48)
+        XCTAssertEqual(EditorBlockChrome.listNestingIndentWidth, 24)
         XCTAssertEqual(EditorBlockChrome.actionColumnWidth, 18)
         XCTAssertEqual(EditorBlockChrome.actionColumnSpacing, 5)
         XCTAssertEqual(EditorBlockChrome.inactiveHandleOpacity, 0)
+        XCTAssertEqual(EditorBlockChrome.inlineControlTopPadding, 1)
+        XCTAssertEqual(EditorBlockChrome.taskControlIconSize, 16)
         XCTAssertEqual(EditorBlockChrome.dropTargetHeight, 32)
         XCTAssertEqual(EditorBlockChrome.dropSlotHeight, 4)
         XCTAssertEqual(EditorBlockChrome.dropIndicatorAfterOffset, 0)
@@ -196,7 +198,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertTrue(ListMarkerBulletStyleResolver.isHollow(nestingLevel: 1))
         XCTAssertFalse(ListMarkerBulletStyleResolver.isHollow(nestingLevel: 2))
         XCTAssertTrue(ListMarkerBulletStyleResolver.isHollow(nestingLevel: 3))
-        XCTAssertEqual(BlockRowNestingIndentResolver.leadingPadding(nestingLevel: 2, blockType: .unorderedListItem), 96)
+        XCTAssertEqual(BlockRowNestingIndentResolver.leadingPadding(nestingLevel: 2, blockType: .unorderedListItem), 48)
         XCTAssertEqual(BlockRowNestingIndentResolver.leadingPadding(nestingLevel: 2, blockType: .paragraph), 48)
     }
 
@@ -253,6 +255,9 @@ final class EditorBlockChromeTests: XCTestCase {
 
     func testInlineLeadingControlsKeepTaskAndToggleTextBaselineCompensation() {
         let descriptor = InlineLeadingControlFrameDescriptor()
+        let compactControlDescriptor = InlineLeadingControlFrameDescriptor(
+            topPadding: EditorBlockChrome.inlineControlTopPadding
+        )
 
         XCTAssertEqual(descriptor.width, EditorBlockChrome.listMarkerWidth)
         XCTAssertEqual(descriptor.height, EditorBlockChrome.listMarkerLineHeight)
@@ -263,6 +268,8 @@ final class EditorBlockChromeTests: XCTestCase {
             -4,
             "Task/toggle body text must sit high enough to visually align with the control baseline; list rows share this explicit NSTextView compensation."
         )
+        XCTAssertEqual(compactControlDescriptor.topPadding, 1)
+        XCTAssertEqual(compactControlDescriptor.textVerticalOffset, -4)
         XCTAssertEqual(TextEditableBlockChromePolicy.backgroundOpacity(blockType: .taskItem), 0)
         XCTAssertEqual(TextEditableBlockChromePolicy.backgroundOpacity(blockType: .toggle), 0)
     }

@@ -3,6 +3,10 @@ import Foundation
 final class PageRepository {
     private let database: SQLiteDatabase
 
+    var syncChangeNotificationObject: AnyObject {
+        database
+    }
+
     private let defaultWorkspaceID = "workspace-local"
     private let defaultNotebookID = "notebook-local"
     private let defaultPageID = "page-welcome"

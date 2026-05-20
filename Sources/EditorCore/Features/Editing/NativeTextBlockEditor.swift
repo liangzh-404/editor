@@ -641,6 +641,18 @@ enum NativeTextInsertionPointRectResolver {
     }
 }
 
+enum NativeTextCursorChrome {
+#if os(macOS)
+    static var nsColor: NSColor {
+        EditorDesignTokens.Colors.accent.nsColor
+    }
+#elseif os(iOS)
+    static var uiColor: UIColor {
+        EditorDesignTokens.Colors.accent.uiColor
+    }
+#endif
+}
+
 enum NativeTextEditorLayout {
     static let verticalTextInset: CGFloat = 2
     static let textContainerInset = CGSize(width: 0, height: verticalTextInset)
@@ -1182,6 +1194,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         context.coordinator.applyModelText(text, to: textView)
         textView.font = nsFont
         textView.textColor = EditorDesignTokens.Colors.primaryText.nsColor
+        textView.insertionPointColor = NativeTextCursorChrome.nsColor
         textView.defaultParagraphStyle = paragraphStyle
         textView.backgroundColor = .clear
         textView.drawsBackground = false
@@ -1287,6 +1300,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         }
         textView.font = nsFont
         textView.textColor = EditorDesignTokens.Colors.primaryText.nsColor
+        textView.insertionPointColor = NativeTextCursorChrome.nsColor
         textView.defaultParagraphStyle = paragraphStyle
         configureLineWrapping(textView: textView)
         if NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.hasMarkedText()) {
@@ -1715,7 +1729,7 @@ private final class EditorNSTextView: NSTextView {
                 original: rect,
                 fontLineHeight: font?.boundingRectForFont.height
             ),
-            color: color,
+            color: NativeTextCursorChrome.nsColor,
             turnedOn: flag
         )
     }
@@ -2187,6 +2201,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         context.coordinator.applyModelText(text, to: textView)
         textView.font = uiFont
         textView.textColor = EditorDesignTokens.Colors.primaryText.uiColor
+        textView.tintColor = NativeTextCursorChrome.uiColor
         textView.typingAttributes = baseTextAttributes
         textView.backgroundColor = .clear
         textView.isScrollEnabled = false
@@ -2284,6 +2299,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
         textView.font = uiFont
         textView.textColor = EditorDesignTokens.Colors.primaryText.uiColor
+        textView.tintColor = NativeTextCursorChrome.uiColor
         textView.typingAttributes = baseTextAttributes
         configureLineWrapping(textView: textView)
         context.coordinator.configureKeyboardAccessory(

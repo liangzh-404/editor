@@ -44,7 +44,6 @@ private struct EditorEditingCommands: Commands {
     @FocusedValue(\.showAllDocumentsAction) private var showAllDocumentsAction
     @FocusedValue(\.showFavoritesAction) private var showFavoritesAction
     @FocusedValue(\.quickOpenAction) private var quickOpenAction
-    @FocusedValue(\.syncNowAction) private var syncNowAction
 
     @AppStorage(EditorShortcutCommand.newDocument.userDefaultsKey) private var newDocumentShortcut = EditorShortcutCommand.newDocument.defaultShortcutRawValue
     @AppStorage(EditorShortcutCommand.openToday.userDefaultsKey) private var openTodayShortcut = EditorShortcutCommand.openToday.defaultShortcutRawValue
@@ -103,13 +102,6 @@ private struct EditorEditingCommands: Commands {
             }
             .editorKeyboardShortcut(showFavoritesShortcut, fallback: .showFavorites)
             .disabled(showFavoritesAction == nil)
-        }
-
-        CommandMenu("同步") {
-            Button("立即同步") {
-                syncNowAction?()
-            }
-            .disabled(syncNowAction == nil)
         }
 
         CommandGroup(after: .textEditing) {

@@ -58,7 +58,7 @@ enum EditorDesignTokens {
         static let secondaryText = EditorColorToken.hex(0x62, 0x5F, 0x59)
         static let tertiaryText = EditorColorToken.hex(0x8A, 0x86, 0x7E)
         static let border = EditorColorToken.hex(0xEB, 0xE7, 0xDF)
-        static let accent = EditorColorToken.hex(0x2F, 0x7D, 0xFA)
+        static let accent = EditorColorToken.hex(0xE5, 0x45, 0x4F)
         static let shadow = EditorColorToken.hex(0x1E, 0x19, 0x12)
     }
 
@@ -214,10 +214,6 @@ struct EditorQuickOpenActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
-struct EditorSyncNowActionKey: FocusedValueKey {
-    typealias Value = () -> Void
-}
-
 extension FocusedValues {
     var insertMarkdownLinkAction: (() -> Void)? {
         get { self[EditorInsertMarkdownLinkActionKey.self] }
@@ -268,15 +264,12 @@ extension FocusedValues {
         get { self[EditorQuickOpenActionKey.self] }
         set { self[EditorQuickOpenActionKey.self] = newValue }
     }
-
-    var syncNowAction: (() -> Void)? {
-        get { self[EditorSyncNowActionKey.self] }
-        set { self[EditorSyncNowActionKey.self] = newValue }
-    }
 }
 
 struct ForegroundSyncActivationPolicy {
-    mutating func shouldSync(for phase: ScenePhase) -> Bool {
+    static let foregroundPollingIntervalNanoseconds: UInt64 = 30_000_000_000
+
+    func shouldSync(for phase: ScenePhase) -> Bool {
         phase == .active
     }
 }
@@ -306,6 +299,29 @@ struct EditorShellView: View {
                     viewModel.syncAfterActivation()
                 }
             }
+            .task(id: scenePhase) {
+                await runForegroundSyncPollingLoop(for: scenePhase)
+            }
+    }
+
+    private func runForegroundSyncPollingLoop(for phase: ScenePhase) async {
+        guard foregroundSyncActivationPolicy.shouldSync(for: phase) else {
+            return
+        }
+
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(
+                    nanoseconds: ForegroundSyncActivationPolicy.foregroundPollingIntervalNanoseconds
+                )
+            } catch {
+                return
+            }
+            guard foregroundSyncActivationPolicy.shouldSync(for: phase) else {
+                return
+            }
+            viewModel.syncAfterForegroundInterval()
+        }
     }
 }
 
@@ -375,6 +391,8 @@ private struct ThreeColumnEditorShell: View {
                     outlineItems: viewModel.selectedPageOutline,
                     parentPageLink: viewModel.selectedPageParentLink,
                     pageTagNames: viewModel.selectedPageTagNames,
+                    availableTags: viewModel.snapshot.tags,
+                    selectedPageTagIDs: viewModel.selectedPageTagIDs,
                     pendingFocusBlockID: viewModel.pendingFocusBlockID,
                     canUndoTextEdit: viewModel.canUndoTextEdit,
                     canRedoTextEdit: viewModel.canRedoTextEdit,
@@ -546,6 +564,15 @@ private struct ThreeColumnEditorShell: View {
                     onMobileRevealPageList: nil,
                     onPendingBlockFocusHandled: {
                         _ = viewModel.consumePendingFocusBlockID()
+                    },
+                    onAddTagToSelectedPage: { tagID in
+                        viewModel.addTagToSelectedPageForUI(tagID: tagID)
+                    },
+                    onRemoveTagFromSelectedPage: { tagID in
+                        viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
+                    },
+                    onCreateAndAssignTagToSelectedPage: { name in
+                        viewModel.createAndAssignTagToSelectedPageForUI(name: name)
                     }
                 )
             } else {
@@ -581,9 +608,6 @@ private struct ThreeColumnEditorShell: View {
         })
         .focusedValue(\.quickOpenAction, {
             viewModel.selectCollection(.search)
-        })
-        .focusedValue(\.syncNowAction, {
-            viewModel.syncNow()
         })
     }
 
@@ -646,6 +670,8 @@ private struct ThreeColumnEditorShell: View {
                 outlineItems: viewModel.selectedPageOutline,
                 parentPageLink: viewModel.selectedPageParentLink,
                 pageTagNames: viewModel.selectedPageTagNames,
+                availableTags: viewModel.snapshot.tags,
+                selectedPageTagIDs: viewModel.selectedPageTagIDs,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
                 canRedoTextEdit: viewModel.canRedoTextEdit,
@@ -817,6 +843,15 @@ private struct ThreeColumnEditorShell: View {
                 onMobileRevealPageList: nil,
                 onPendingBlockFocusHandled: {
                     _ = viewModel.consumePendingFocusBlockID()
+                },
+                onAddTagToSelectedPage: { tagID in
+                    viewModel.addTagToSelectedPageForUI(tagID: tagID)
+                },
+                onRemoveTagFromSelectedPage: { tagID in
+                    viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
+                },
+                onCreateAndAssignTagToSelectedPage: { name in
+                    viewModel.createAndAssignTagToSelectedPageForUI(name: name)
                 }
             )
         } else {
@@ -979,9 +1014,6 @@ private struct CompactEditorShell: View {
                 pushPageIfNeeded(pageID)
             }
         }
-        .focusedValue(\.syncNowAction, {
-            viewModel.syncNow()
-        })
     }
 
     private func pushInitialPageIfNeeded() {
@@ -1050,18 +1082,6 @@ private struct CompactHomeView: View {
                 .foregroundStyle(Color.white.opacity(0.92))
 
             Spacer()
-
-            Button {
-                viewModel.syncNow()
-            } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(0.86))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("立即同步")
-            .accessibilityValue(viewModel.syncStatusText)
-            .accessibilityIdentifier("editor.compact.sync-now")
 
             Button {
                 _ = viewModel.createNewDocumentForCompactUI()
@@ -1198,15 +1218,17 @@ enum EditorBlockChrome {
     static let listHorizontalPadding: Double = 0
     static let listBackgroundOpacity: Double = 0
     static let listMarkerWidth: Double = 18
-    static let listTextSpacing: Double = 6
+    static let listTextSpacing: Double = 4
     static let listMarkerTopPadding: Double = 3
-    static let listMarkerLineHeight: Double = 20
+    static let listMarkerLineHeight: Double = 18
     static let canvasTrailingFocusHitHeight: Double = 760
-    static let listNestingIndentWidth: Double = 48
+    static let listNestingIndentWidth: Double = 24
     static let actionColumnWidth: Double = 18
     static let actionColumnSpacing: Double = 5
     static let dragHandleWidth: Double = 18
     static let inactiveHandleOpacity: Double = 0
+    static let inlineControlTopPadding: Double = 1
+    static let taskControlIconSize: Double = 16
     static let specialBlockCornerRadius: Double = 5
     static let dropTargetHeight: Double = 32
     static let dropSlotHeight: Double = 4
@@ -1582,6 +1604,51 @@ enum BlockSelectionKeyboardAnchorResolver {
     }
 }
 
+enum SelectedBlockMarkdownCopyResolver {
+    static func markdown(
+        selectedBlockIDs: Set<String>,
+        visibleBlocks: [BlockSnapshot],
+        attachments: [AttachmentSnapshot]
+    ) -> String {
+        let selectedBlocks = visibleBlocks.filter { selectedBlockIDs.contains($0.id) }
+        return MarkdownTransformer.export(blocks: selectedBlocks, attachments: attachments)
+    }
+}
+
+enum PageDragPayloadResolver {
+    private static let prefix = "editor-page-ids:"
+
+    static func pageIDsForDrag(
+        pageID: String,
+        selectedPageIDs: Set<String>,
+        visiblePageIDs: [String]
+    ) -> [String] {
+        guard selectedPageIDs.contains(pageID) else {
+            return [pageID]
+        }
+
+        let orderedSelection = visiblePageIDs.filter { selectedPageIDs.contains($0) }
+        return orderedSelection.isEmpty ? [pageID] : orderedSelection
+    }
+
+    static func payloadText(pageIDs: [String]) -> String {
+        "\(prefix)\(pageIDs.joined(separator: ","))"
+    }
+
+    static func pageIDs(from payloads: [String]) -> [String] {
+        var pageIDs: [String] = []
+        for payload in payloads where payload.hasPrefix(prefix) {
+            let rawIDs = payload.dropFirst(prefix.count)
+                .split(separator: ",")
+                .map(String.init)
+            for pageID in rawIDs where !pageID.isEmpty && !pageIDs.contains(pageID) {
+                pageIDs.append(pageID)
+            }
+        }
+        return pageIDs
+    }
+}
+
 enum BlockSelectionRangeResolver {
     static func selection(
         anchorBlockID: String,
@@ -1800,50 +1867,36 @@ private enum MobileFormatPaletteTab: Equatable, Sendable {
 }
 
 private struct MobileKeyboardInputBar: View {
-    let onShowFormatPanel: () -> Void
+    let onRevealOutline: () -> Void
     let onShowMoreFormatPanel: () -> Void
-    let onInsertBlockAfter: () -> Void
-    let onDismissKeyboard: () -> Void
 
     var body: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 12) {
+            Spacer(minLength: 0)
+
             Button {
-                onShowFormatPanel()
+                onRevealOutline()
             } label: {
-                Label("格式", systemImage: "textformat")
-                    .labelStyle(.titleAndIcon)
-                    .font(.system(size: 16, weight: .semibold))
+                Image(systemName: "sidebar.right")
+                    .font(.system(size: 20, weight: .semibold))
+                    .frame(width: 38, height: 38)
             }
-            .accessibilityIdentifier("editor.mobile-keyboard.format")
+            .accessibilityLabel("右侧栏")
+            .accessibilityIdentifier("editor.mobile-keyboard.outline")
 
             Button {
                 onShowMoreFormatPanel()
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 20, weight: .semibold))
+                HStack(spacing: 3) {
+                    Image(systemName: "ellipsis")
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 46, height: 38)
             }
             .accessibilityLabel("更多格式")
             .accessibilityIdentifier("editor.mobile-keyboard.more-format")
-
-            Spacer(minLength: 0)
-
-            Button {
-                onInsertBlockAfter()
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 21, weight: .semibold))
-            }
-            .accessibilityLabel("下方新增")
-            .accessibilityIdentifier("editor.mobile-keyboard.add-block")
-
-            Button {
-                onDismissKeyboard()
-            } label: {
-                Image(systemName: "keyboard.chevron.compact.down")
-                    .font(.system(size: 21, weight: .medium))
-            }
-            .accessibilityLabel("收起键盘")
-            .accessibilityIdentifier("editor.mobile-keyboard.dismiss")
         }
         .buttonStyle(.plain)
         .foregroundStyle(Color.primary.opacity(0.82))
@@ -2952,6 +3005,8 @@ private struct CompactPageDestination: View {
                 outlineItems: viewModel.selectedPageOutline,
                 parentPageLink: viewModel.selectedPageParentLink,
                 pageTagNames: viewModel.selectedPageTagNames,
+                availableTags: viewModel.snapshot.tags,
+                selectedPageTagIDs: viewModel.selectedPageTagIDs,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
                 canRedoTextEdit: viewModel.canRedoTextEdit,
@@ -3120,6 +3175,15 @@ private struct CompactPageDestination: View {
                 onMobileRevealPageList: onRevealPageList,
                 onPendingBlockFocusHandled: {
                     _ = viewModel.consumePendingFocusBlockID()
+                },
+                onAddTagToSelectedPage: { tagID in
+                    viewModel.addTagToSelectedPageForUI(tagID: tagID)
+                },
+                onRemoveTagFromSelectedPage: { tagID in
+                    viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
+                },
+                onCreateAndAssignTagToSelectedPage: { name in
+                    viewModel.createAndAssignTagToSelectedPageForUI(name: name)
                 }
             )
             .onAppear {
@@ -3317,7 +3381,12 @@ private struct WorkspaceSidebar: View {
                 favoritePageShortcuts
                 tagGroup
                 sidebarDivider
-                sidebarGroup(items: sidebarModel.utilityItems)
+                sidebarGroup(items: sidebarModel.utilityItems) { item, pageIDs in
+                    guard case .archive = item.collection else {
+                        return false
+                    }
+                    return viewModel.archivePagesForUI(pageIDs: pageIDs)
+                }
             }
             .padding(.horizontal, CGFloat(SidebarChrome.horizontalPadding))
             .padding(.vertical, CGFloat(SidebarChrome.verticalPadding))
@@ -3364,10 +3433,18 @@ private struct WorkspaceSidebar: View {
         .accessibilityIdentifier("editor.sidebar.new-document")
     }
 
-    private func sidebarGroup(items: [SidebarNavigationItem]) -> some View {
+    private func sidebarGroup(
+        items: [SidebarNavigationItem],
+        onDropPages: ((SidebarNavigationItem, [String]) -> Bool)? = nil
+    ) -> some View {
         VStack(spacing: CGFloat(SidebarChrome.rowSpacing)) {
             ForEach(items) { item in
-                CollectionRailButton(item: item) {
+                CollectionRailButton(
+                    item: item,
+                    onDropPageIDs: onDropPages.map { handler in
+                        { pageIDs in handler(item, pageIDs) }
+                    }
+                ) {
                     viewModel.selectCollection(item.collection)
                 }
             }
@@ -3436,7 +3513,15 @@ private struct WorkspaceSidebar: View {
 
                 if isTagsExpanded {
                     ForEach(sidebarModel.tagItems) { item in
-                        CollectionRailButton(item: item) {
+                        CollectionRailButton(
+                            item: item,
+                            onDropPageIDs: { pageIDs in
+                                guard case .tag(let tagID) = item.collection else {
+                                    return false
+                                }
+                                return viewModel.assignTagToPagesForUI(pageIDs: pageIDs, tagID: tagID)
+                            }
+                        ) {
                             viewModel.selectCollection(item.collection)
                         }
                         .padding(.leading, CGFloat(SidebarChrome.nestedItemIndent))
@@ -3485,6 +3570,7 @@ private struct SidebarDisclosureHeader: View {
 
 private struct CollectionRailButton: View {
     let item: SidebarNavigationItem
+    var onDropPageIDs: (([String]) -> Bool)? = nil
     let action: () -> Void
 
     var body: some View {
@@ -3526,6 +3612,16 @@ private struct CollectionRailButton: View {
         .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor : SidebarChrome.foregroundColor)
         .accessibilityIdentifier(item.identifier)
         .accessibilityValue(item.isSelected ? "已选中，\(item.count)" : "未选中，\(item.count)")
+        .dropDestination(for: String.self) { payloads, _ in
+            guard let onDropPageIDs else {
+                return false
+            }
+            let pageIDs = PageDragPayloadResolver.pageIDs(from: payloads)
+            guard !pageIDs.isEmpty else {
+                return false
+            }
+            return onDropPageIDs(pageIDs)
+        }
     }
 }
 
@@ -3622,6 +3718,7 @@ enum PageListDateSectionModel {
 
 private struct PageListView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
+    @State private var selectedPageIDs: Set<String> = []
 
     var body: some View {
 #if os(macOS)
@@ -3770,6 +3867,7 @@ private struct PageListView: View {
         PageRow(
             page: page,
             isSelected: viewModel.selectedPageID == page.id,
+            isMarkedForBatch: selectedPageIDs.contains(page.id),
             tagNames: tagNames(for: page),
             preview: PageListPreviewResolver.preview(
                 pageID: page.id,
@@ -3777,6 +3875,9 @@ private struct PageListView: View {
                 attachments: viewModel.snapshot.attachments
             ),
             usesRichPreview: true,
+            onBatchSelectionToggle: {
+                togglePageBatchSelection(page.id)
+            },
             onFavoriteToggle: {
                 viewModel.updatePageFavoriteForUI(
                     id: page.id,
@@ -3786,7 +3887,11 @@ private struct PageListView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture {
+            selectedPageIDs = []
             viewModel.selectPage(id: page.id)
+        }
+        .draggable(pageDragPayload(for: page.id)) {
+            PageDragPreview(title: page.title, count: dragPageIDs(for: page.id).count)
         }
         .contextMenu {
             Button {
@@ -3807,6 +3912,26 @@ private struct PageListView: View {
                 Label("归档", systemImage: "archivebox")
             }
         }
+    }
+
+    private func togglePageBatchSelection(_ pageID: String) {
+        if selectedPageIDs.contains(pageID) {
+            selectedPageIDs.remove(pageID)
+        } else {
+            selectedPageIDs.insert(pageID)
+        }
+    }
+
+    private func dragPageIDs(for pageID: String) -> [String] {
+        PageDragPayloadResolver.pageIDsForDrag(
+            pageID: pageID,
+            selectedPageIDs: selectedPageIDs,
+            visiblePageIDs: viewModel.visibleDocumentPages.map(\.id)
+        )
+    }
+
+    private func pageDragPayload(for pageID: String) -> String {
+        PageDragPayloadResolver.payloadText(pageIDs: dragPageIDs(for: pageID))
     }
 
     private var navigationTitle: String {
@@ -4362,9 +4487,11 @@ private struct SearchResultRow: View {
 private struct PageRow: View {
     let page: PageSummary
     var isSelected = false
+    var isMarkedForBatch = false
     var tagNames: [String] = []
     var preview: PageListPreview?
     var usesRichPreview = false
+    var onBatchSelectionToggle: (() -> Void)? = nil
     var onFavoriteToggle: (() -> Void)? = nil
 
     var body: some View {
@@ -4377,6 +4504,7 @@ private struct PageRow: View {
 
     private var compactBody: some View {
         HStack(spacing: 8) {
+            batchSelectionButton
             pageIcon
 
             VStack(alignment: .leading, spacing: 3) {
@@ -4423,6 +4551,9 @@ private struct PageRow: View {
 
     private var richPreviewBody: some View {
         HStack(alignment: .top, spacing: 12) {
+            batchSelectionButton
+                .padding(.top, 4)
+
             pageIcon
                 .padding(.top, 5)
 
@@ -4486,6 +4617,22 @@ private struct PageRow: View {
         .accessibilityElement(children: .contain)
     }
 
+    @ViewBuilder
+    private var batchSelectionButton: some View {
+        if let onBatchSelectionToggle {
+            Button(action: onBatchSelectionToggle) {
+                Image(systemName: isMarkedForBatch ? "checkmark.circle.fill" : "circle")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(isMarkedForBatch ? Color.accentColor : EditorDesignTokens.Colors.tertiaryText.color)
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(isMarkedForBatch ? "取消选择页面" : "选择页面")
+            .accessibilityValue(isMarkedForBatch ? "已选择" : "未选择")
+            .accessibilityIdentifier("editor.page-row.\(page.id).selection-toggle")
+        }
+    }
+
     private var pageIcon: some View {
         Image(systemName: "doc.text")
             .font(.callout.weight(.medium))
@@ -4529,6 +4676,115 @@ private struct PageRow: View {
         let favorite = page.isFavorite ? "已收藏" : "未收藏"
         let tags = tagNames.isEmpty ? "无标签" : "标签：\(tagNames.joined(separator: ", "))"
         return "\(selection), \(favorite), \(tags)"
+    }
+}
+
+private struct PageTagEditor: View {
+    let availableTags: [TagSummary]
+    let selectedTagIDs: [String]
+    let selectedTagNames: [String]
+    let onAddTag: (String) -> Bool
+    let onRemoveTag: (String) -> Bool
+    let onCreateTag: (String) -> Bool
+    @State private var draftName = ""
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(selectedTags) { tag in
+                Button {
+                    _ = onRemoveTag(tag.id)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(tag.name)
+                            .lineLimit(1)
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(EditorDesignTokens.Colors.border.color.opacity(0.42))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("移除标签 \(tag.name)")
+                .accessibilityIdentifier("editor.page-tag.\(tag.id).remove")
+            }
+
+            if !unassignedTags.isEmpty {
+                Menu {
+                    ForEach(unassignedTags) { tag in
+                        Button(tag.path) {
+                            _ = onAddTag(tag.id)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "tag.badge.plus")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .accessibilityLabel("添加已有标签")
+                .accessibilityIdentifier("editor.page-tag.add-existing")
+            }
+
+            TextField("添加标签", text: $draftName)
+                .textFieldStyle(.plain)
+                .font(.caption)
+                .frame(width: 86)
+                .onSubmit(commitDraft)
+                .accessibilityIdentifier("editor.page-tag.add-field")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("页面标签")
+        .accessibilityValue(selectedTagNames.isEmpty ? "无标签" : selectedTagNames.joined(separator: ", "))
+    }
+
+    private var selectedTags: [TagSummary] {
+        let selectedTagIDSet = Set(selectedTagIDs)
+        let matchedTags = availableTags.filter { selectedTagIDSet.contains($0.id) }
+        if !matchedTags.isEmpty {
+            return matchedTags
+        }
+        return selectedTagNames.map { name in
+            TagSummary(id: name, workspaceID: "", parentTagID: nil, name: name, path: name)
+        }
+    }
+
+    private var unassignedTags: [TagSummary] {
+        let selectedTagIDSet = Set(selectedTagIDs)
+        return availableTags.filter { !selectedTagIDSet.contains($0.id) }
+    }
+
+    private func commitDraft() {
+        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            return
+        }
+        if onCreateTag(name) {
+            draftName = ""
+        }
+    }
+}
+
+private struct PageDragPreview: View {
+    let title: String
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: count > 1 ? "doc.on.doc" : "doc.text")
+                .font(.callout.weight(.semibold))
+            Text(count > 1 ? "\(count) 个文档" : title)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -4698,6 +4954,8 @@ private struct EditorCanvasView: View {
     let outlineItems: [PageOutlineItem]
     let parentPageLink: PageParentLink?
     let pageTagNames: [String]
+    var availableTags: [TagSummary] = []
+    var selectedPageTagIDs: [String] = []
     let pendingFocusBlockID: String?
     let canUndoTextEdit: Bool
     let canRedoTextEdit: Bool
@@ -4754,6 +5012,9 @@ private struct EditorCanvasView: View {
     let onRetryAttachmentPreview: (String) -> Void
     let onMobileRevealPageList: (() -> Void)?
     let onPendingBlockFocusHandled: () -> Void
+    var onAddTagToSelectedPage: (String) -> Bool = { _ in false }
+    var onRemoveTagFromSelectedPage: (String) -> Bool = { _ in false }
+    var onCreateAndAssignTagToSelectedPage: (String) -> Bool = { _ in false }
     @State private var isAttachmentImporterPresented = false
     @State private var isMarkdownImporterPresented = false
     @State private var isMarkdownExporterPresented = false
@@ -4803,22 +5064,15 @@ private struct EditorCanvasView: View {
 #endif
                 }
 
-                if !pageTagNames.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(pageTagNames, id: \.self) { tagName in
-                            Text(tagName)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(EditorDesignTokens.Colors.border.color.opacity(0.42))
-                                .clipShape(Capsule())
-                        }
-                    }
-                    .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
-                    .accessibilityLabel("页面标签")
-                    .accessibilityValue(pageTagNames.joined(separator: ", "))
-                }
+                PageTagEditor(
+                    availableTags: availableTags,
+                    selectedTagIDs: selectedPageTagIDs,
+                    selectedTagNames: pageTagNames,
+                    onAddTag: onAddTagToSelectedPage,
+                    onRemoveTag: onRemoveTagFromSelectedPage,
+                    onCreateTag: onCreateAndAssignTagToSelectedPage
+                )
+                .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
 
                 if isInlineLinkPopoverPresented {
                     inlineLinkPopover
@@ -5191,6 +5445,9 @@ private struct EditorCanvasView: View {
                     let hadBlockSelection = !editorSession.selectedBlockIDs.isEmpty
                     editorSession.clearBlockSelection()
                     return hadBlockSelection
+                },
+                onCopySelection: {
+                    copySelectedBlocksToPasteboard()
                 },
                 onMoveFocus: { direction in
                     guard let blockID = BlockSelectionKeyboardAnchorResolver.anchorBlockID(
@@ -5640,6 +5897,22 @@ private struct EditorCanvasView: View {
         withAnimation(.easeInOut(duration: 0.18)) {
             isMobileOutlinePresented = false
         }
+    }
+#endif
+
+#if os(macOS)
+    private func copySelectedBlocksToPasteboard() -> Bool {
+        let markdown = SelectedBlockMarkdownCopyResolver.markdown(
+            selectedBlockIDs: editorSession.selectedBlockIDs,
+            visibleBlocks: blocks,
+            attachments: attachments
+        )
+        guard !markdown.isEmpty else {
+            return false
+        }
+
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.setString(markdown, forType: .string)
     }
 #endif
 
@@ -6421,6 +6694,7 @@ private struct EditorCanvasView: View {
 #if os(macOS)
 enum MacEditorKeyboardShortcutAction: Equatable, Sendable {
     case cancelSelection
+    case copySelection
     case deleteSelection
     case indentSelection(BlockKeyboardIndentationDirection)
     case extendBlockSelection(BlockKeyboardFocusDirection)
@@ -6456,6 +6730,12 @@ enum MacEditorKeyboardShortcutActionResolver {
            deleteKeyCodes.contains(keyCode),
            modifiers.isEmpty {
             return .deleteSelection
+        }
+
+        if hasBlockSelection,
+           input?.lowercased() == "c",
+           modifiers == [.command] {
+            return .copySelection
         }
 
         if hasBlockSelection,
@@ -6531,6 +6811,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
     let onPasteAttachments: () -> Bool
     let hasBlockSelection: () -> Bool
     let onCancelSelection: () -> Bool
+    let onCopySelection: () -> Bool
     let onMoveFocus: (BlockKeyboardFocusDirection) -> Bool
     let onExtendBlockSelection: (BlockKeyboardFocusDirection) -> Bool
     let onIndentSelection: (BlockKeyboardIndentationDirection) -> Bool
@@ -6549,6 +6830,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         context.coordinator.onPasteAttachments = onPasteAttachments
         context.coordinator.hasBlockSelection = hasBlockSelection
         context.coordinator.onCancelSelection = onCancelSelection
+        context.coordinator.onCopySelection = onCopySelection
         context.coordinator.onMoveFocus = onMoveFocus
         context.coordinator.onExtendBlockSelection = onExtendBlockSelection
         context.coordinator.onIndentSelection = onIndentSelection
@@ -6566,6 +6848,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         context.coordinator.onPasteAttachments = onPasteAttachments
         context.coordinator.hasBlockSelection = hasBlockSelection
         context.coordinator.onCancelSelection = onCancelSelection
+        context.coordinator.onCopySelection = onCopySelection
         context.coordinator.onMoveFocus = onMoveFocus
         context.coordinator.onExtendBlockSelection = onExtendBlockSelection
         context.coordinator.onIndentSelection = onIndentSelection
@@ -6585,6 +6868,7 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
         var onPasteAttachments: (() -> Bool)?
         var hasBlockSelection: (() -> Bool)?
         var onCancelSelection: (() -> Bool)?
+        var onCopySelection: (() -> Bool)?
         var onMoveFocus: ((BlockKeyboardFocusDirection) -> Bool)?
         var onExtendBlockSelection: ((BlockKeyboardFocusDirection) -> Bool)?
         var onIndentSelection: ((BlockKeyboardIndentationDirection) -> Bool)?
@@ -6616,6 +6900,10 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
                 switch action {
                 case .cancelSelection:
                     if self.onCancelSelection?() == true {
+                        return nil
+                    }
+                case .copySelection:
+                    if self.onCopySelection?() == true {
                         return nil
                     }
                 case .deleteSelection:
@@ -7496,6 +7784,7 @@ private struct ListMarkerGlyph: View {
         }
         .frame(
             width: CGFloat(frameDescriptor.width),
+            height: CGFloat(frameDescriptor.height),
             alignment: frameDescriptor.horizontalAlignment.frameAlignment
         )
         .accessibilityHidden(true)
@@ -8332,7 +8621,9 @@ private struct BlockRowView: View {
             .accessibilityValue(descriptor.accessibilityValue)
             .accessibilityIdentifier(descriptor.accessibilityIdentifier)
         } else if block.type == .taskItem {
-            let controlFrame = InlineLeadingControlFrameDescriptor()
+            let controlFrame = InlineLeadingControlFrameDescriptor(
+                topPadding: EditorBlockChrome.inlineControlTopPadding
+            )
             HStack(alignment: .top, spacing: CGFloat(controlFrame.textSpacing)) {
                 inlineLeadingControl(taskItemCompletionButton, descriptor: controlFrame)
 
@@ -8373,7 +8664,9 @@ private struct BlockRowView: View {
             .accessibilityValue(block.codeBlockLineWrapping ? "已开启自动换行" : "已关闭自动换行")
             .accessibilityIdentifier("editor.code.\(block.id)")
         } else if block.type == .toggle {
-            let controlFrame = InlineLeadingControlFrameDescriptor()
+            let controlFrame = InlineLeadingControlFrameDescriptor(
+                topPadding: EditorBlockChrome.inlineControlTopPadding
+            )
             HStack(alignment: .top, spacing: CGFloat(controlFrame.textSpacing)) {
                 inlineLeadingControl(toggleBlockExpansionButton, descriptor: controlFrame)
 
@@ -8475,7 +8768,7 @@ private struct BlockRowView: View {
             Image(systemName: block.taskItemIsCompleted ? "checkmark.circle.fill" : "circle")
         }
         .buttonStyle(.plain)
-        .font(.system(size: 18, weight: .regular))
+        .font(.system(size: CGFloat(EditorBlockChrome.taskControlIconSize), weight: .regular))
         .foregroundStyle(block.taskItemIsCompleted ? .green : .secondary)
         .contentShape(Rectangle())
         .help(block.taskItemIsCompleted ? "标记未完成" : "标记完成")
@@ -8614,28 +8907,14 @@ private struct BlockRowView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
         } else {
             MobileKeyboardInputBar(
-                onShowFormatPanel: {
+                onRevealOutline: {
+                    onRevealOutline()
+                },
+                onShowMoreFormatPanel: {
                     withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
                         mobileFormatPaletteTab = .body
                         isMobileFormatPanelPresented = true
                     }
-                },
-                onShowMoreFormatPanel: {
-                    withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
-                        mobileFormatPaletteTab = .more
-                        isMobileFormatPanelPresented = true
-                    }
-                },
-                onInsertBlockAfter: {
-                    _ = onInsertBlockAfter(blockEndSelection)
-                },
-                onDismissKeyboard: {
-                    UIApplication.shared.sendAction(
-                        #selector(UIResponder.resignFirstResponder),
-                        to: nil,
-                        from: nil,
-                        for: nil
-                    )
                 }
             )
             .transition(.opacity)
