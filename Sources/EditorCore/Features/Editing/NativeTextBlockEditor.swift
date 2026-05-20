@@ -88,6 +88,24 @@ enum BlockKeyboardShortcutResolver {
     }
 }
 
+enum EmptyTextBlockReturnResolver {
+    static func shouldDemoteToParagraph(blockType: BlockType, text: String) -> Bool {
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        switch blockType {
+        case .unorderedListItem,
+             .orderedListItem,
+             .taskItem,
+             .toggle:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 enum MarkdownInlineFormatKeyboardResolver {
     static func format(
         input: String?,
@@ -661,7 +679,7 @@ enum NativeTextEditorLayout {
     static let uiVerticalTextInset = uiTextContainerInset.top + uiTextContainerInset.bottom
     static let uiCaretVerticalOffset: CGFloat = -1
     static let placeholderTopPadding: CGFloat = 5
-    static let keyboardToolbarHeight: CGFloat = 50
+    static let keyboardToolbarHeight: CGFloat = MobileKeyboardToolbarChrome.height
     static let keyboardFormatPanelHeight: CGFloat = 220
 #endif
 

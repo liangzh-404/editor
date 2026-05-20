@@ -876,6 +876,15 @@ enum DesktopColumnResizeDragResolver {
     }
 }
 
+enum DesktopAuxiliaryRailButtonPolicy {
+    static func isOffered(
+        showsAuxiliaryRail: Bool,
+        displayMode: EditorDisplayMode
+    ) -> Bool {
+        showsAuxiliaryRail && displayMode.showsAuxiliaryRail
+    }
+}
+
 private struct DesktopColumnDivider: View {
     let width: CGFloat
     let minWidth: Double
@@ -987,14 +996,17 @@ private struct CompactEditorShell: View {
                 case .collection(let collection):
                     CompactCollectionDestination(
                         viewModel: viewModel,
-                        collection: collection
+                        collection: collection,
+                        onRevealMainMenu: {
+                            revealPreviousScreen()
+                        }
                     )
                 case .page(let pageID):
                     CompactPageDestination(
                         viewModel: viewModel,
                         pageID: pageID,
                         onRevealPageList: {
-                            revealPageList()
+                            revealPreviousScreen()
                         }
                     )
                 }
@@ -1044,8 +1056,13 @@ private struct CompactEditorShell: View {
         )
     }
 
-    private func revealPageList() {
-        path = [CompactShellRoutePlanner.documentListRoute(selectedCollection: viewModel.selectedCollection)]
+    private func revealPreviousScreen() {
+        let previousPath = CompactShellRoutePlanner.previousScreenPath(currentPath: path)
+        if previousPath.isEmpty, path.count > 1 {
+            path = [CompactShellRoutePlanner.documentListRoute(selectedCollection: viewModel.selectedCollection)]
+        } else {
+            path = previousPath
+        }
     }
 }
 
@@ -1431,6 +1448,26 @@ enum BlockDropIndicatorChrome {
     static let lineHeight: Double = 1.5
     static let standardOpacity: Double = 0.58
     static let emphasizedOpacity: Double = 0.72
+}
+
+enum MobileActionChrome {
+    static let accentToken = EditorDesignTokens.Colors.accent
+    static let selectedFillOpacity: Double = 0.12
+    static let selectedButtonFillOpacity: Double = 0.13
+    static let selectionBorderOpacity: Double = 0.24
+
+    static var accentColor: Color {
+        accentToken.color
+    }
+}
+
+enum MobileKeyboardToolbarChrome {
+    static let height: CGFloat = 44
+    static let buttonSize: CGFloat = 34
+    static let iconSize: CGFloat = 19
+    static let chevronSize: CGFloat = 11
+    static let primaryIconWeight: Font.Weight = .regular
+    static let secondaryIconWeight: Font.Weight = .medium
 }
 
 enum CompactChrome {
@@ -1868,7 +1905,8 @@ private enum MobileFormatPaletteTab: Equatable, Sendable {
 }
 
 private struct MobileKeyboardInputBar: View {
-    let onRevealOutline: () -> Void
+    let isOutlinePresented: Bool
+    let onToggleOutline: () -> Void
     let onShowMoreFormatPanel: () -> Void
 
     var body: some View {
@@ -1876,13 +1914,19 @@ private struct MobileKeyboardInputBar: View {
             Spacer(minLength: 0)
 
             Button {
-                onRevealOutline()
+                onToggleOutline()
             } label: {
                 Image(systemName: "sidebar.right")
-                    .font(.system(size: 20, weight: .semibold))
-                    .frame(width: 38, height: 38)
+                    .font(.system(
+                        size: MobileKeyboardToolbarChrome.iconSize,
+                        weight: MobileKeyboardToolbarChrome.primaryIconWeight
+                    ))
+                    .frame(
+                        width: MobileKeyboardToolbarChrome.buttonSize,
+                        height: MobileKeyboardToolbarChrome.buttonSize
+                    )
             }
-            .accessibilityLabel("右侧栏")
+            .accessibilityLabel(isOutlinePresented ? "关闭右侧栏" : "右侧栏")
             .accessibilityIdentifier("editor.mobile-keyboard.outline")
 
             Button {
@@ -1891,10 +1935,19 @@ private struct MobileKeyboardInputBar: View {
                 HStack(spacing: 3) {
                     Image(systemName: "ellipsis")
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(
+                            size: MobileKeyboardToolbarChrome.chevronSize,
+                            weight: MobileKeyboardToolbarChrome.secondaryIconWeight
+                        ))
                 }
-                .font(.system(size: 20, weight: .semibold))
-                .frame(width: 46, height: 38)
+                .font(.system(
+                    size: MobileKeyboardToolbarChrome.iconSize,
+                    weight: MobileKeyboardToolbarChrome.primaryIconWeight
+                ))
+                .frame(
+                    width: MobileKeyboardToolbarChrome.buttonSize + 8,
+                    height: MobileKeyboardToolbarChrome.buttonSize
+                )
             }
             .accessibilityLabel("更多格式")
             .accessibilityIdentifier("editor.mobile-keyboard.more-format")
@@ -2082,10 +2135,15 @@ private struct MobileFormatPalette: View {
             .minimumScaleFactor(0.82)
             .frame(maxWidth: .infinity)
             .frame(height: 38)
-            .background(selectedTab == tab ? Color.accentColor.opacity(0.12) : Color.clear)
+            .background(selectedTab == tab ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectedFillOpacity) : Color.clear)
             .overlay(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(selectedTab == tab ? Color.accentColor : Color.clear, lineWidth: 1.6)
+                    .stroke(
+                        selectedTab == tab
+                            ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectionBorderOpacity)
+                            : Color.clear,
+                        lineWidth: 1.6
+                    )
             )
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
@@ -2138,10 +2196,10 @@ private struct MobileFormatPalette: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(isSelected ? Color.accentColor : Color.primary.opacity(isEnabled ? 0.92 : 0.28))
+                .foregroundStyle(isSelected ? MobileActionChrome.accentColor : Color.primary.opacity(isEnabled ? 0.92 : 0.28))
                 .frame(maxWidth: .infinity)
                 .frame(height: 56)
-                .background(isSelected ? Color.accentColor.opacity(0.14) : Color.black.opacity(isEnabled ? 0.058 : 0.035))
+                .background(isSelected ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectedButtonFillOpacity) : Color.black.opacity(isEnabled ? 0.058 : 0.035))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -2166,10 +2224,10 @@ private struct MobileFormatPalette: View {
                     .font(.system(size: 16, weight: .medium))
                     .lineLimit(1)
             }
-            .foregroundStyle(isSelected ? Color.accentColor : Color.primary.opacity(isEnabled ? 0.92 : 0.28))
+            .foregroundStyle(isSelected ? MobileActionChrome.accentColor : Color.primary.opacity(isEnabled ? 0.92 : 0.28))
             .frame(maxWidth: .infinity)
             .frame(height: 48)
-            .background(isSelected ? Color.accentColor.opacity(0.14) : Color.black.opacity(isEnabled ? 0.055 : 0.035))
+            .background(isSelected ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectedButtonFillOpacity) : Color.black.opacity(isEnabled ? 0.055 : 0.035))
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -2227,6 +2285,7 @@ private struct MobileBlockSelectionToolbar: View {
             Button("取消", action: onClear)
                 .font(.subheadline.weight(.medium))
                 .buttonStyle(.borderless)
+                .foregroundStyle(MobileActionChrome.accentColor)
                 .accessibilityIdentifier("editor.mobile-selection-clear")
 
             Button(action: onOutdent) {
@@ -2234,6 +2293,7 @@ private struct MobileBlockSelectionToolbar: View {
                     .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.borderless)
+            .foregroundStyle(MobileActionChrome.accentColor)
             .accessibilityLabel("减少缩进")
             .accessibilityIdentifier("editor.mobile-selection-outdent")
 
@@ -2242,6 +2302,7 @@ private struct MobileBlockSelectionToolbar: View {
                     .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.borderless)
+            .foregroundStyle(MobileActionChrome.accentColor)
             .accessibilityLabel("增加缩进")
             .accessibilityIdentifier("editor.mobile-selection-indent")
 
@@ -2255,6 +2316,7 @@ private struct MobileBlockSelectionToolbar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.regularMaterial)
+        .tint(MobileActionChrome.accentColor)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Color.black.opacity(0.08))
@@ -2947,6 +3009,13 @@ enum CompactShellRoutePlanner {
         default:
             return selectedCollection
         }
+    }
+
+    static func previousScreenPath(currentPath: [CompactRoute]) -> [CompactRoute] {
+        guard !currentPath.isEmpty else {
+            return []
+        }
+        return Array(currentPath.dropLast())
     }
 
     private static func collectionForPage(
@@ -4241,10 +4310,15 @@ private struct CompactPageListView: View {
 private struct CompactCollectionDestination: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     let collection: WorkspaceCollection
+    let onRevealMainMenu: () -> Void
     @State private var didSelectCollection = false
 
     var body: some View {
-        CompactCollectionPageListView(viewModel: viewModel, collection: collection)
+        CompactCollectionPageListView(
+            viewModel: viewModel,
+            collection: collection,
+            onRevealMainMenu: onRevealMainMenu
+        )
         .onAppear {
             guard !didSelectCollection else {
                 return
@@ -4258,6 +4332,7 @@ private struct CompactCollectionDestination: View {
 private struct CompactCollectionPageListView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     let collection: WorkspaceCollection
+    let onRevealMainMenu: () -> Void
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -4280,6 +4355,18 @@ private struct CompactCollectionPageListView: View {
         .navigationTitle(navigationTitle)
         .background(CompactChrome.backgroundColor)
         .accessibilityIdentifier("editor.compact-document-list")
+#if os(iOS)
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 56, coordinateSpace: .local)
+                .onEnded { value in
+                    guard value.translation.width > 56,
+                          abs(value.translation.width) > abs(value.translation.height) * 1.25 else {
+                        return
+                    }
+                    onRevealMainMenu()
+                }
+        )
+#endif
     }
 
     private var items: [CompactCollectionPageListItem] {
@@ -4767,7 +4854,7 @@ private struct PageRow: View {
             Button(action: onBatchSelectionToggle) {
                 Image(systemName: isMarkedForBatch ? "checkmark.circle.fill" : "circle")
                     .font(.callout.weight(.medium))
-                    .foregroundStyle(isMarkedForBatch ? Color.accentColor : EditorDesignTokens.Colors.tertiaryText.color)
+                    .foregroundStyle(isMarkedForBatch ? MobileActionChrome.accentColor : EditorDesignTokens.Colors.tertiaryText.color)
                     .frame(width: 22, height: 22)
             }
             .buttonStyle(.borderless)
@@ -5322,6 +5409,21 @@ private struct EditorCanvasView: View {
                             presentInlineLinkInsertion(selection: selection)
                         },
                         onInsertBlockAfter: { selection in
+                            if EmptyTextBlockReturnResolver.shouldDemoteToParagraph(
+                                blockType: block.type,
+                                text: block.textPlain
+                            ) {
+                                onBlockTypeChange(block.id, .paragraph)
+                                pendingFocusRequest = BlockFocusRequest(
+                                    blockID: block.id,
+                                    selection: EditorTextSelection(
+                                        blockID: block.id,
+                                        location: 0,
+                                        length: 0
+                                    )
+                                )
+                                return true
+                            }
                             guard let nextSelection = onSplitTextBlockAtSelection(block.id, selection) else {
                                 return false
                             }
@@ -5796,20 +5898,27 @@ private struct EditorCanvasView: View {
     }
 
     private var shouldOfferAuxiliaryRail: Bool {
-        shouldShowAuxiliaryRail
+        DesktopAuxiliaryRailButtonPolicy.isOffered(
+            showsAuxiliaryRail: showsAuxiliaryRail,
+            displayMode: displayMode
+        )
+    }
+
+    private var shouldReserveAuxiliaryRailSpace: Bool {
+        shouldShowAuxiliaryRail && !isAuxiliaryRailCollapsed
     }
 
     private var activeEditorMaxWidth: CGFloat {
         CGFloat(
             EditorCanvasWidthPolicy.maxWidth(
-                hasVisibleAuxiliaryRail: shouldOfferAuxiliaryRail && !isAuxiliaryRailCollapsed
+                hasVisibleAuxiliaryRail: shouldReserveAuxiliaryRailSpace
             )
         )
     }
 
 #if os(macOS)
     private var macCanvasToolbarTrailingPadding: CGFloat {
-        if shouldOfferAuxiliaryRail && !isAuxiliaryRailCollapsed {
+        if shouldReserveAuxiliaryRailSpace {
             return CGFloat(EditorDesignTokens.Layout.auxiliaryRailWidth + 24)
         }
         return 28
@@ -5819,7 +5928,7 @@ private struct EditorCanvasView: View {
         HStack(spacing: 10) {
             pageActionsMenu
 
-            if shouldShowAuxiliaryRail {
+            if shouldOfferAuxiliaryRail {
                 Button {
                     isAuxiliaryRailCollapsed.toggle()
                 } label: {
@@ -5829,9 +5938,9 @@ private struct EditorCanvasView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color.opacity(0.78))
-                .help(isAuxiliaryRailCollapsed ? "展开右侧栏" : "收起右侧栏")
-                .accessibilityLabel(isAuxiliaryRailCollapsed ? "展开右侧栏" : "收起右侧栏")
-                .accessibilityIdentifier(isAuxiliaryRailCollapsed ? "editor.auxiliary-rail.expand" : "editor.auxiliary-rail.collapse")
+                .help(shouldReserveAuxiliaryRailSpace ? "收起右侧栏" : "展开右侧栏")
+                .accessibilityLabel(shouldReserveAuxiliaryRailSpace ? "收起右侧栏" : "展开右侧栏")
+                .accessibilityIdentifier(shouldReserveAuxiliaryRailSpace ? "editor.auxiliary-rail.collapse" : "editor.auxiliary-rail.expand")
                 .focusable(false)
             }
         }
@@ -7488,7 +7597,7 @@ private struct MobileOutlineDrawer: View {
                             } label: {
                                 HStack(alignment: .center, spacing: 10) {
                                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                        .fill(Color.accentColor.opacity(item.level == 1 ? 0.72 : 0.28))
+                                        .fill(MobileActionChrome.accentColor.opacity(item.level == 1 ? 0.72 : 0.28))
                                         .frame(width: 3, height: item.level == 1 ? 22 : 16)
 
                                     VStack(alignment: .leading, spacing: 2) {
@@ -8565,7 +8674,7 @@ private struct BlockRowView: View {
             } label: {
                 Image(systemName: MobileBlockSelectionChromeResolver.symbolName(isSelected: isBlockSelected))
                     .font(.callout.weight(isBlockSelected ? .semibold : .regular))
-                    .foregroundStyle(isBlockSelected ? Color.accentColor : Color.secondary.opacity(0.72))
+                    .foregroundStyle(isBlockSelected ? MobileActionChrome.accentColor : Color.secondary.opacity(0.72))
             }
             .buttonStyle(.plain)
             .frame(width: CGFloat(EditorBlockChrome.dragHandleWidth), height: 24)
@@ -9062,8 +9171,13 @@ private struct BlockRowView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
         } else {
             MobileKeyboardInputBar(
-                onRevealOutline: {
-                    onRevealOutline()
+                isOutlinePresented: isMobileOutlinePresented,
+                onToggleOutline: {
+                    if isMobileOutlinePresented {
+                        onCloseOutline()
+                    } else {
+                        onRevealOutline()
+                    }
                 },
                 onShowMoreFormatPanel: {
                     withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
@@ -9991,7 +10105,7 @@ private struct StructuredTableBlockEditor: View {
         .overlay {
             if selection.rows.contains(rowIndex) || selection.columns.contains(columnIndex) {
                 RoundedRectangle(cornerRadius: 0)
-                    .stroke(Color.accentColor.opacity(0.14), lineWidth: 1)
+                    .stroke(MobileActionChrome.accentColor.opacity(0.14), lineWidth: 1)
             }
         }
         .overlay(alignment: .trailing) {
@@ -10017,7 +10131,7 @@ private struct StructuredTableBlockEditor: View {
 
     private func cellBackgroundColor(row rowIndex: Int, column columnIndex: Int) -> Color {
         if selection.rows.contains(rowIndex) || selection.columns.contains(columnIndex) {
-            return Color.accentColor.opacity(0.045)
+            return MobileActionChrome.accentColor.opacity(0.045)
         }
         return rowIndex == 0
             ? EditorDesignTokens.Colors.border.color.opacity(0.18)
@@ -10035,7 +10149,7 @@ private struct StructuredTableBlockEditor: View {
         } label: {
             ZStack(alignment: .leading) {
                 Rectangle()
-                    .fill(Color.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
+                    .fill(MobileActionChrome.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
                     .frame(
                         width: CGFloat(TableBlockChrome.selectorWidth),
                         height: CGFloat(TableBlockChrome.cellHeight)
@@ -10043,7 +10157,7 @@ private struct StructuredTableBlockEditor: View {
 
                 if selection.rows.contains(rowIndex) {
                     Capsule()
-                        .fill(Color.accentColor.opacity(TableBlockChrome.selectorSelectedIndicatorOpacity))
+                        .fill(MobileActionChrome.accentColor.opacity(TableBlockChrome.selectorSelectedIndicatorOpacity))
                         .frame(
                             width: CGFloat(TableBlockChrome.selectorSelectedIndicatorThickness),
                             height: CGFloat(TableBlockChrome.cellHeight - TableBlockChrome.selectorSelectedIndicatorInset * 2)
@@ -10075,7 +10189,7 @@ private struct StructuredTableBlockEditor: View {
         } label: {
             ZStack(alignment: .top) {
                 Rectangle()
-                    .fill(Color.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
+                    .fill(MobileActionChrome.accentColor.opacity(TableBlockChrome.selectorHitOpacity))
                     .frame(
                         width: CGFloat(TableBlockChrome.cellWidth),
                         height: CGFloat(TableBlockChrome.selectorHeight)
@@ -10083,7 +10197,7 @@ private struct StructuredTableBlockEditor: View {
 
                 if selection.columns.contains(columnIndex) {
                     Capsule()
-                        .fill(Color.accentColor.opacity(TableBlockChrome.selectorSelectedIndicatorOpacity))
+                        .fill(MobileActionChrome.accentColor.opacity(TableBlockChrome.selectorSelectedIndicatorOpacity))
                         .frame(
                             width: CGFloat(TableBlockChrome.cellWidth - TableBlockChrome.selectorSelectedIndicatorInset * 2),
                             height: CGFloat(TableBlockChrome.selectorSelectedIndicatorThickness)
@@ -10218,7 +10332,7 @@ private struct TableInsertControl: View {
 
     private var insertControlColor: Color {
         if isHovered {
-            return Color.accentColor.opacity(TableBlockChrome.insertControlHoverOpacity)
+            return MobileActionChrome.accentColor.opacity(TableBlockChrome.insertControlHoverOpacity)
         }
         return Color.secondary.opacity(TableBlockChrome.insertControlIdleOpacity)
     }

@@ -800,6 +800,151 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(snapshot.attachments.map(\.originalFilename), ["brief.pdf"])
     }
 
+    func testFetchRemoteChangesReportsEntityIDWhenRemoteApplyFails() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            changes: [
+                RemoteBlockChange(
+                    blockID: "block-orphan",
+                    pageID: "missing-page",
+                    type: .paragraph,
+                    textPlain: "Remote body",
+                    payloadJSON: "{\"text\":\"Remote body\"}",
+                    revision: 1,
+                    orderKey: "000001"
+                )
+            ]
+        )
+
+        XCTAssertThrowsError(
+            try SyncEngine(
+                syncRepository: SyncRepository(database: database),
+                adapter: RecordingCloudKitSyncAdapter(),
+                remoteChangeFetcher: fetcher,
+                mergeEngine: SyncMergeEngine(database: database)
+            ).fetchRemoteChanges()
+        ) { error in
+            let applyError = error as? SyncRemoteApplyError
+            XCTAssertEqual(applyError?.entityType, "block")
+            XCTAssertEqual(applyError?.entityID, "block-orphan")
+            XCTAssertEqual(applyError?.details, "page_id=missing-page parent_block_id=nil")
+            XCTAssertEqual(
+                applyError?.description,
+                "remote_apply_failed entity_type=block entity_id=block-orphan page_id=missing-page parent_block_id=nil error=Step failed: FOREIGN KEY constraint failed"
+            )
+        }
+    }
+
+    func testFetchRemoteChangesAppliesParentBlocksBeforeChildrenFromSameBatch() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            workspaceChanges: [
+                RemoteWorkspaceChange(workspaceID: "workspace-remote", name: "Remote")
+            ],
+            pageChanges: [
+                RemotePageChange(
+                    pageID: "page-remote",
+                    workspaceID: "workspace-remote",
+                    notebookID: nil,
+                    title: "Roadmap",
+                    orderKey: "000001",
+                    isArchived: false
+                )
+            ],
+            changes: [
+                RemoteBlockChange(
+                    blockID: "block-child",
+                    pageID: "page-remote",
+                    type: .paragraph,
+                    textPlain: "Child",
+                    payloadJSON: "{\"text\":\"Child\"}",
+                    revision: 1,
+                    parentBlockID: "block-parent",
+                    orderKey: "000002"
+                ),
+                RemoteBlockChange(
+                    blockID: "block-parent",
+                    pageID: "page-remote",
+                    type: .paragraph,
+                    textPlain: "Parent",
+                    payloadJSON: "{\"text\":\"Parent\"}",
+                    revision: 1,
+                    orderKey: "000001"
+                )
+            ]
+        )
+
+        _ = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+
+        let childRow = try XCTUnwrap(
+            try database.query(
+                "SELECT parent_block_id FROM blocks WHERE id = ? LIMIT 1",
+                bindings: [.text("block-child")]
+            ).first
+        )
+        XCTAssertEqual(childRow["parent_block_id"], "block-parent")
+    }
+
+    func testFetchRemoteChangesReparentsBlockToRootWhenRemoteParentIsMissing() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            workspaceChanges: [
+                RemoteWorkspaceChange(workspaceID: "workspace-remote", name: "Remote")
+            ],
+            pageChanges: [
+                RemotePageChange(
+                    pageID: "page-remote",
+                    workspaceID: "workspace-remote",
+                    notebookID: nil,
+                    title: "Roadmap",
+                    orderKey: "000001",
+                    isArchived: false
+                )
+            ],
+            changes: [
+                RemoteBlockChange(
+                    blockID: "block-orphan-child",
+                    pageID: "page-remote",
+                    type: .paragraph,
+                    textPlain: "Child",
+                    payloadJSON: "{\"text\":\"Child\"}",
+                    revision: 1,
+                    parentBlockID: "block-missing-parent",
+                    orderKey: "000002"
+                )
+            ],
+            serverChangeTokenData: Data("next-token".utf8)
+        )
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+
+        let childRow = try XCTUnwrap(
+            try database.query(
+                "SELECT parent_block_id FROM blocks WHERE id = ? LIMIT 1",
+                bindings: [.text("block-orphan-child")]
+            ).first
+        )
+        XCTAssertNil(childRow["parent_block_id"] ?? nil)
+        XCTAssertEqual(result.appliedCount, 3)
+        XCTAssertNotNil(try SyncRepository(database: database).serverChangeTokenData(scope: "privateDatabase"))
+    }
+
     func testFetchRemoteChangesPersistsNestedNotebookParent() throws {
         let database = try migratedDatabase()
         defer { database.close() }
