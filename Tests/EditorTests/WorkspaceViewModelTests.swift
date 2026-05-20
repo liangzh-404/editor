@@ -1337,9 +1337,10 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.visibleBlocks.first?.type, .quote)
         XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用块写作。")
-        XCTAssertEqual(
-            try SyncRepository(database: database).pendingChanges().last,
-            SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+            )
         )
     }
 
@@ -2759,7 +2760,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedPageConflicts, [])
         XCTAssertEqual(
             try SyncRepository(database: database).pendingChanges().filter { $0.changeType == "update" }.count,
-            2
+            3
         )
         XCTAssertEqual(viewModel.pendingFocusBlockID, firstBlockID)
     }
@@ -2838,7 +2839,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedPageConflicts, [])
         XCTAssertEqual(
             try SyncRepository(database: database).pendingChanges().filter { $0.changeType == "update" }.count,
-            2
+            3
         )
         XCTAssertEqual(viewModel.pendingFocusBlockID, firstBlockID)
     }
@@ -3548,7 +3549,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try scheduler.runNextScheduledOperation()
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
-        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 2 条变更")
     }
 
     @MainActor
@@ -3578,7 +3579,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         try scheduler.runNextScheduledOperation()
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
-        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 2 条变更")
     }
 
     @MainActor
@@ -3604,13 +3605,13 @@ final class WorkspaceViewModelTests: XCTestCase {
         try viewModel.updateBlockText(blockID: blockID, text: "Automatic sync from edit")
 
         XCTAssertEqual(scheduler.scheduledOperationCount, 1)
-        XCTAssertEqual(try syncRepository.pendingChanges().count, 1)
+        XCTAssertEqual(try syncRepository.pendingChanges().count, 2)
         XCTAssertEqual(viewModel.syncStatusText, "同步中...")
 
         try scheduler.runNextScheduledOperation()
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
-        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 2 条变更")
     }
 
     @MainActor
@@ -3665,13 +3666,13 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.syncAfterActivation()
 
         XCTAssertEqual(scheduler.scheduledOperationCount, 1)
-        XCTAssertEqual(try syncRepository.pendingChanges().count, 1)
+        XCTAssertEqual(try syncRepository.pendingChanges().count, 2)
         XCTAssertEqual(viewModel.syncStatusText, "同步中...")
 
         try scheduler.runNextScheduledOperation()
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
-        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 2 条变更")
     }
 
     @MainActor
@@ -3698,13 +3699,13 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.syncNow()
 
         XCTAssertEqual(scheduler.scheduledOperationCount, 1)
-        XCTAssertEqual(try syncRepository.pendingChanges().count, 1)
+        XCTAssertEqual(try syncRepository.pendingChanges().count, 2)
         XCTAssertEqual(viewModel.syncStatusText, "同步中...")
 
         try scheduler.runNextScheduledOperation()
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
-        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 2 条变更")
     }
 
     @MainActor

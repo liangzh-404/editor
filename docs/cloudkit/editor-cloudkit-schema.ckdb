@@ -81,6 +81,23 @@ DEFINE SCHEMA
         GRANT READ TO "_creator"
     );
 
+    RECORD TYPE DiaryPageRecord (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        diaryDate       STRING,
+        entityID        STRING,
+        entityType      STRING,
+        syncGeneration  STRING,
+        updatedAt       STRING,
+        workspaceID     STRING,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_creator"
+    );
+
     RECORD TYPE BlockRecord (
         "___createTime" TIMESTAMP,
         "___createdBy"  REFERENCE,

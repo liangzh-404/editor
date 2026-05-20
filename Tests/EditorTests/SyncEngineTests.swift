@@ -19,6 +19,7 @@ final class SyncEngineTests: XCTestCase {
 
         let pageRepository = PageRepository(database: database)
         let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try pageRepository.updateBlockText(blockID: blockID, text: "Sync me")
 
@@ -28,18 +29,54 @@ final class SyncEngineTests: XCTestCase {
             adapter: adapter
         ).uploadPendingChanges()
 
-        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), [blockID])
+        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), [blockID, pageID])
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
-        XCTAssertEqual(
-            try SyncRepository(database: database).syncRecords(),
-            [
-                SyncRecord(
-                    entityType: "block",
-                    entityID: blockID,
-                    recordName: "block-\(blockID)",
-                    changeTag: "tag-\(blockID)"
-                )
-            ]
+        let syncRecords = try SyncRepository(database: database).syncRecords()
+        XCTAssertTrue(syncRecords.contains(SyncRecord(
+            entityType: "block",
+            entityID: blockID,
+            recordName: "block-\(blockID)",
+            changeTag: "tag-\(blockID)"
+        )))
+        XCTAssertTrue(syncRecords.contains(SyncRecord(
+            entityType: "page",
+            entityID: pageID,
+            recordName: "page-\(pageID)",
+            changeTag: "tag-\(pageID)"
+        )))
+    }
+
+    func testUploadPendingChangesBackfillsExistingDiaryPageMappings() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let page = try DiaryRepository(database: database).openDailyPage(
+            workspaceID: workspaceID,
+            date: try XCTUnwrap(Self.date(year: 2026, month: 5, day: 21)),
+            calendar: Self.calendar
+        )
+        try database.execute("DELETE FROM sync_changes")
+        try database.execute("DELETE FROM sync_records")
+        let adapter = RecordingCloudKitSyncAdapter()
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: adapter
+        ).uploadPendingChanges()
+
+        XCTAssertEqual(result.failedCount, 0)
+        XCTAssertTrue(
+            adapter.uploadedChanges.contains(
+                SyncChange(entityType: "diaryPage", entityID: page.id, changeType: "create")
+            )
+        )
+        XCTAssertTrue(
+            try SyncRepository(database: database).syncRecords().contains {
+                $0.entityType == "diaryPage" && $0.entityID == page.id
+            }
         )
     }
 
@@ -79,6 +116,7 @@ final class SyncEngineTests: XCTestCase {
 
         let pageRepository = PageRepository(database: database)
         let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try pageRepository.updateBlockText(blockID: blockID, text: "Offline edit survives")
         let syncRepository = SyncRepository(database: database)
@@ -98,7 +136,8 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(result.uploadedCount, 0)
         XCTAssertEqual(result.failedCount, 1)
         XCTAssertEqual(try syncRepository.pendingChanges(), [
-            SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+            SyncChange(entityType: "block", entityID: blockID, changeType: "update"),
+            SyncChange(entityType: "page", entityID: pageID, changeType: "update")
         ])
         XCTAssertEqual(try syncRepository.syncRecords(), [])
         XCTAssertEqual(
@@ -335,6 +374,43 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try pageRepository.loadWorkspaceSnapshot().blocks.first?.textPlain, "Remote fetched text")
     }
 
+    func testFetchRemoteChangesAppliesEmptyRemotePageSnapshot() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        XCTAssertFalse(snapshot.blocks.filter { $0.pageID == pageID }.isEmpty)
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            pageChanges: [
+                RemotePageChange(
+                    pageID: pageID,
+                    workspaceID: try XCTUnwrap(snapshot.selectedWorkspaceID),
+                    notebookID: nil,
+                    title: "Remote empty page",
+                    orderKey: "000001",
+                    isArchived: false,
+                    updatedAt: "2026-05-21T00:00:00Z"
+                )
+            ],
+            changes: [],
+            fullSnapshotPageIDs: [pageID]
+        )
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(result.appliedCount, 1)
+        XCTAssertEqual(reloadedSnapshot.blocks.filter { $0.pageID == pageID }, [])
+        XCTAssertEqual(reloadedSnapshot.pages.first { $0.id == pageID }?.title, "Remote empty page")
+    }
+
     func testFetchRemoteChangesUsesAndPersistsServerChangeToken() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -457,7 +533,18 @@ final class SyncEngineTests: XCTestCase {
         let result = RemoteNotificationSyncHandler(syncer: syncer).handleRemoteNotification()
 
         XCTAssertEqual(result, .newData)
-        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
+        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .fetchRemoteChanges, .uploadPendingChanges])
+    }
+
+    func testRemoteNotificationSyncHandlerFetchesBeforeUploadingLocalChanges() {
+        let syncer = RecordingRemoteNotificationSyncer(
+            uploadSummary: SyncUploadSummary(uploadedCount: 1, failedCount: 0),
+            fetchSummary: SyncFetchSummary(appliedCount: 1)
+        )
+
+        _ = RemoteNotificationSyncHandler(syncer: syncer).handleRemoteNotification()
+
+        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .fetchRemoteChanges, .uploadPendingChanges])
     }
 
     func testRemoteNotificationSyncHandlerReportIncludesUploadAndFetchCounts() {
@@ -473,7 +560,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(report.failedUploadCount, 0)
         XCTAssertEqual(report.fetchedCount, 2)
         XCTAssertNil(report.errorDescription)
-        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
+        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .fetchRemoteChanges, .uploadPendingChanges])
     }
 
     func testRemoteNotificationSyncHandlerReturnsNoDataWithoutSyncEngine() {
@@ -492,7 +579,7 @@ final class SyncEngineTests: XCTestCase {
         let result = RemoteNotificationSyncHandler(syncer: syncer).handleRemoteNotification()
 
         XCTAssertEqual(result, .failed)
-        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
+        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .fetchRemoteChanges])
     }
 
     func testRemoteNotificationSyncHandlerStillFetchesWhenLocalUploadFails() {
@@ -504,7 +591,7 @@ final class SyncEngineTests: XCTestCase {
         let result = RemoteNotificationSyncHandler(syncer: syncer).handleRemoteNotification()
 
         XCTAssertEqual(result, .newData)
-        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
+        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .fetchRemoteChanges, .uploadPendingChanges])
     }
 
     @MainActor
@@ -1013,6 +1100,13 @@ final class SyncEngineTests: XCTestCase {
                     $0["isEncrypted"] = NSNumber(value: true)
                 }
             ],
+            "DiaryPageRecord": [
+                makeRecord(type: "DiaryPageRecord", entityType: "diaryPage", entityID: "page-remote") {
+                    $0["workspaceID"] = "workspace-remote" as CKRecordValue
+                    $0["diaryDate"] = "2026-05-21" as CKRecordValue
+                    $0["updatedAt"] = "2026-05-21T00:00:00Z" as CKRecordValue
+                }
+            ],
             "AttachmentRecord": [
                 makeRecord(type: "AttachmentRecord", entityType: "attachment", entityID: "attachment-remote") {
                     $0["workspaceID"] = "workspace-remote" as CKRecordValue
@@ -1043,10 +1137,118 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.workspaceChanges.map(\.workspaceID), ["workspace-remote"])
         XCTAssertEqual(changeSet.notebookChanges.map(\.notebookID), ["notebook-remote"])
         XCTAssertEqual(changeSet.pageChanges.map(\.pageID), ["page-remote"])
+        XCTAssertEqual(changeSet.diaryPageChanges.map(\.pageID), ["page-remote"])
+        XCTAssertEqual(changeSet.diaryPageChanges.first?.diaryDate, "2026-05-21")
         XCTAssertEqual(changeSet.pageChanges.first?.isFavorite, true)
         XCTAssertEqual(changeSet.pageChanges.first?.isEncrypted, true)
         XCTAssertEqual(changeSet.attachmentChanges.map(\.attachmentID), ["attachment-remote"])
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
+    }
+
+    func testCloudKitPrivateDatabaseAdapterFetchesFullBlockSnapshotForChangedPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let changedPageRecord = makeRecord(type: "PageRecord", entityType: "page", entityID: "page-remote") {
+            $0["workspaceID"] = "workspace-remote" as CKRecordValue
+            $0["title"] = "Roadmap" as CKRecordValue
+            $0["orderKey"] = "000001" as CKRecordValue
+            $0["isArchived"] = NSNumber(value: false)
+        }
+        let fetcher = TokenAwareCloudKitRecordFetcher(
+            recordsByType: [
+                "PageRecord": [
+                    changedPageRecord
+                ],
+                "BlockRecord": [
+                    makeRecord(type: "BlockRecord", entityType: "block", entityID: "block-first") {
+                        $0["pageID"] = "page-remote" as CKRecordValue
+                        $0["orderKey"] = "000001" as CKRecordValue
+                        $0["type"] = BlockType.paragraph.rawValue as CKRecordValue
+                        $0["payloadJSON"] = "{\"text\":\"First\"}" as CKRecordValue
+                        $0["textPlain"] = "First" as CKRecordValue
+                        $0["revision"] = NSNumber(value: 1)
+                    },
+                    makeRecord(type: "BlockRecord", entityType: "block", entityID: "block-second") {
+                        $0["pageID"] = "page-remote" as CKRecordValue
+                        $0["orderKey"] = "000002" as CKRecordValue
+                        $0["type"] = BlockType.paragraph.rawValue as CKRecordValue
+                        $0["payloadJSON"] = "{\"text\":\"Second\"}" as CKRecordValue
+                        $0["textPlain"] = "Second" as CKRecordValue
+                        $0["revision"] = NSNumber(value: 1)
+                    },
+                    makeRecord(type: "BlockRecord", entityType: "block", entityID: "block-other-page") {
+                        $0["pageID"] = "page-other" as CKRecordValue
+                        $0["orderKey"] = "000001" as CKRecordValue
+                        $0["type"] = BlockType.paragraph.rawValue as CKRecordValue
+                        $0["payloadJSON"] = "{\"text\":\"Other\"}" as CKRecordValue
+                        $0["textPlain"] = "Other" as CKRecordValue
+                        $0["revision"] = NSNumber(value: 1)
+                    }
+                ]
+            ],
+            changedRecordsByType: [
+                "PageRecord": [changedPageRecord]
+            ],
+            nextServerChangeTokenData: Data("next-token".utf8)
+        )
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+
+        XCTAssertEqual(changeSet.fullSnapshotPageIDs, ["page-remote"])
+        XCTAssertEqual(changeSet.blockChanges.map(\.blockID).sorted(), ["block-first", "block-second"])
+        XCTAssertEqual(fetcher.fetchRecordsCalls, ["BlockRecord"])
+    }
+
+    func testFetchRemoteChangesAppliesDiaryPageMappingAfterPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            workspaceChanges: [
+                RemoteWorkspaceChange(workspaceID: "workspace-remote", name: "Remote")
+            ],
+            pageChanges: [
+                RemotePageChange(
+                    pageID: "page-thursday",
+                    workspaceID: "workspace-remote",
+                    notebookID: nil,
+                    title: "2026年5月21日 星期四",
+                    orderKey: "000001",
+                    isArchived: false
+                )
+            ],
+            diaryPageChanges: [
+                RemoteDiaryPageChange(
+                    pageID: "page-thursday",
+                    workspaceID: "workspace-remote",
+                    diaryDate: "2026-05-21"
+                )
+            ],
+            changes: []
+        )
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let rows = try database.query(
+            """
+            SELECT page_id, workspace_id, diary_date
+            FROM diary_pages
+            WHERE page_id = ?
+            """,
+            bindings: [.text("page-thursday")]
+        )
+
+        XCTAssertEqual(result.appliedCount, 3)
+        XCTAssertEqual(rows.first?["workspace_id"], "workspace-remote")
+        XCTAssertEqual(rows.first?["diary_date"], "2026-05-21")
     }
 
     func testCloudKitPrivateDatabaseAdapterIgnoresRecordsFromPreviousSyncGeneration() throws {
@@ -1436,6 +1638,36 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertTrue((record["title"] as? String)?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
     }
 
+    func testCloudKitPrivateDatabaseAdapterMapsDiaryPageToRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let page = try DiaryRepository(database: database).openDailyPage(
+            workspaceID: workspaceID,
+            date: try XCTUnwrap(Self.date(year: 2026, month: 5, day: 21)),
+            calendar: Self.calendar
+        )
+        let saver = CapturingCloudKitRecordSaver()
+
+        let result = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordSaver: saver
+        ).upload(change: SyncChange(entityType: "diaryPage", entityID: page.id, changeType: "create"))
+
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        XCTAssertEqual(record.recordType, "DiaryPageRecord")
+        XCTAssertEqual(record.recordID.recordName, "editor-cloudkit-v2.diaryPage.\(page.id)")
+        XCTAssertEqual(record["entityID"] as? String, page.id)
+        XCTAssertEqual(record["entityType"] as? String, "diaryPage")
+        XCTAssertEqual(record["syncGeneration"] as? String, "editor-cloudkit-v2")
+        XCTAssertEqual(record["workspaceID"] as? String, workspaceID)
+        XCTAssertEqual(record["diaryDate"] as? String, "2026-05-21")
+        XCTAssertEqual(result.recordName, "editor-cloudkit-v2.diaryPage.\(page.id)")
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsAttachmentAssetsToRecord() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -1542,6 +1774,17 @@ final class SyncEngineTests: XCTestCase {
         return fileURL
     }
 
+    private static var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "zh_Hans_CN")
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private static func date(year: Int, month: Int, day: Int) -> Date? {
+        calendar.date(from: DateComponents(year: year, month: month, day: day))
+    }
+
 }
 
 final class RecordingCloudKitSyncAdapter: CloudKitSyncAdapter {
@@ -1581,8 +1824,10 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
     let workspaceChanges: [RemoteWorkspaceChange]
     let notebookChanges: [RemoteNotebookChange]
     let pageChanges: [RemotePageChange]
+    let diaryPageChanges: [RemoteDiaryPageChange]
     let attachmentChanges: [RemoteAttachmentChange]
     let changes: [RemoteBlockChange]
+    let fullSnapshotPageIDs: Set<String>
     let deletedRecords: [RemoteDeletedRecord]
     let serverChangeTokenData: Data?
     private(set) var receivedServerChangeTokenData: Data?
@@ -1591,16 +1836,20 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
         workspaceChanges: [RemoteWorkspaceChange] = [],
         notebookChanges: [RemoteNotebookChange] = [],
         pageChanges: [RemotePageChange] = [],
+        diaryPageChanges: [RemoteDiaryPageChange] = [],
         attachmentChanges: [RemoteAttachmentChange] = [],
         changes: [RemoteBlockChange],
+        fullSnapshotPageIDs: Set<String> = [],
         deletedRecords: [RemoteDeletedRecord] = [],
         serverChangeTokenData: Data? = nil
     ) {
         self.workspaceChanges = workspaceChanges
         self.notebookChanges = notebookChanges
         self.pageChanges = pageChanges
+        self.diaryPageChanges = diaryPageChanges
         self.attachmentChanges = attachmentChanges
         self.changes = changes
+        self.fullSnapshotPageIDs = fullSnapshotPageIDs
         self.deletedRecords = deletedRecords
         self.serverChangeTokenData = serverChangeTokenData
     }
@@ -1613,8 +1862,10 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
             workspaceChanges: workspaceChanges,
             notebookChanges: notebookChanges,
             pageChanges: pageChanges,
+            diaryPageChanges: diaryPageChanges,
             attachmentChanges: attachmentChanges,
             blockChanges: changes,
+            fullSnapshotPageIDs: fullSnapshotPageIDs,
             deletedRecords: deletedRecords,
             serverChangeTokenData: self.serverChangeTokenData
         )
@@ -1881,6 +2132,7 @@ final class StaticCloudKitRecordFetcher: CloudKitRecordFetching {
 
 final class TokenAwareCloudKitRecordFetcher: CloudKitRecordFetching {
     let recordsByType: [String: [CKRecord]]
+    let changedRecordsByType: [String: [CKRecord]]
     let deletedRecordIDsByType: [String: [CKRecord.ID]]
     let nextServerChangeTokenData: Data
     private(set) var receivedServerChangeTokenData: Data?
@@ -1888,10 +2140,12 @@ final class TokenAwareCloudKitRecordFetcher: CloudKitRecordFetching {
 
     init(
         recordsByType: [String: [CKRecord]],
+        changedRecordsByType: [String: [CKRecord]]? = nil,
         deletedRecordIDsByType: [String: [CKRecord.ID]] = [:],
         nextServerChangeTokenData: Data
     ) {
         self.recordsByType = recordsByType
+        self.changedRecordsByType = changedRecordsByType ?? recordsByType
         self.deletedRecordIDsByType = deletedRecordIDsByType
         self.nextServerChangeTokenData = nextServerChangeTokenData
     }
@@ -1906,7 +2160,7 @@ final class TokenAwareCloudKitRecordFetcher: CloudKitRecordFetching {
     ) throws -> CloudKitFetchedRecordChangeSet {
         receivedServerChangeTokenData = serverChangeTokenData
         return CloudKitFetchedRecordChangeSet(
-            recordsByType: recordsByType,
+            recordsByType: changedRecordsByType,
             deletedRecordIDsByType: deletedRecordIDsByType,
             serverChangeTokenData: nextServerChangeTokenData
         )

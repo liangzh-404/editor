@@ -33,6 +33,67 @@ final class DiaryRepositoryTests: XCTestCase {
         XCTAssertEqual(pageBlocks.first?.textPlain, "")
     }
 
+    func testOpenDailyDiaryPageQueuesDiaryMappingForSync() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let repository = DiaryRepository(database: database)
+        let date = try XCTUnwrap(Self.date(year: 2026, month: 5, day: 16))
+
+        let page = try repository.openDailyPage(workspaceID: workspaceID, date: date, calendar: Self.calendar)
+
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "diaryPage", entityID: page.id, changeType: "create")
+            )
+        )
+    }
+
+    func testOpenDailyDiaryPageAdoptsSyncedPageWithMatchingDailyTitleWhenMappingMissing() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let repository = DiaryRepository(database: database)
+        let date = try XCTUnwrap(Self.date(year: 2026, month: 5, day: 16))
+        let syncedPage = try pageRepository.createPage(
+            workspaceID: workspaceID,
+            title: "2026年5月16日 星期六"
+        )
+
+        let page = try repository.openDailyPage(workspaceID: workspaceID, date: date, calendar: Self.calendar)
+        let matchingTitleRows = try database.query(
+            "SELECT COUNT(*) AS page_count FROM pages WHERE workspace_id = ? AND title = ? AND is_archived = 0",
+            bindings: [
+                .text(workspaceID),
+                .text("2026年5月16日 星期六")
+            ]
+        )
+        let diaryRows = try database.query(
+            """
+            SELECT page_id, diary_date
+            FROM diary_pages
+            WHERE workspace_id = ? AND diary_date = ?
+            """,
+            bindings: [
+                .text(workspaceID),
+                .text("2026-05-16")
+            ]
+        )
+
+        XCTAssertEqual(page.id, syncedPage.id)
+        XCTAssertEqual(Int(matchingTitleRows.first?["page_count"] ?? ""), 1)
+        XCTAssertEqual(diaryRows.first?["page_id"], syncedPage.id)
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "diaryPage", entityID: syncedPage.id, changeType: "create")
+            )
+        )
+    }
+
     func testOpenDailyDiaryPageCreatesSeparatePageForDifferentDate() throws {
         let database = try migratedDatabase()
         defer { database.close() }

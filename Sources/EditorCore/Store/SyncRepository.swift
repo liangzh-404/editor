@@ -32,13 +32,48 @@ extension Notification.Name {
 
 final class SyncRepository {
     private let database: SQLiteDatabase
-    private let dateFormatter = ISO8601DateFormatter()
+    private let dateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
     init(database: SQLiteDatabase) {
         self.database = database
     }
 
     func enqueue(entityType: String, entityID: String, changeType: String) throws {
+        let createdAt = dateFormatter.string(from: Date())
+        try enqueueCoalesced(
+            entityType: entityType,
+            entityID: entityID,
+            changeType: changeType,
+            createdAt: createdAt
+        )
+        if entityType == "block" {
+            try enqueueParentPageContentChange(blockID: entityID, createdAt: createdAt)
+        }
+
+        EditorLog.sync.debug(
+            "sync_change_enqueued entity_type=\(entityType, privacy: .public) entity_id=\(entityID, privacy: .public) change_type=\(changeType, privacy: .public)"
+        )
+        NotificationCenter.default.post(
+            name: .editorSyncChangeEnqueued,
+            object: database,
+            userInfo: [
+                "entityType": entityType,
+                "entityID": entityID,
+                "changeType": changeType
+            ]
+        )
+    }
+
+    private func enqueueCoalesced(
+        entityType: String,
+        entityID: String,
+        changeType: String,
+        createdAt: String
+    ) throws {
         try database.execute(
             """
             DELETE FROM sync_changes
@@ -71,22 +106,85 @@ final class SyncRepository {
                 .text(entityID),
                 .text(changeType),
                 .integer(0),
-                .text(dateFormatter.string(from: Date()))
+                .text(createdAt)
             ]
         )
+    }
 
-        EditorLog.sync.debug(
-            "sync_change_enqueued entity_type=\(entityType, privacy: .public) entity_id=\(entityID, privacy: .public) change_type=\(changeType, privacy: .public)"
-        )
-        NotificationCenter.default.post(
-            name: .editorSyncChangeEnqueued,
-            object: database,
-            userInfo: [
-                "entityType": entityType,
-                "entityID": entityID,
-                "changeType": changeType
+    private func enqueueParentPageContentChange(blockID: String, createdAt: String) throws {
+        guard let pageID = try database.query(
+            """
+            SELECT page_id
+            FROM blocks
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        ).first?["page_id"] ?? nil else {
+            return
+        }
+
+        try database.execute(
+            """
+            UPDATE pages
+            SET updated_at = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .text(createdAt),
+                .text(pageID)
             ]
         )
+        let pendingPageCreateRow = try database.query(
+            """
+            SELECT COUNT(*) AS count
+            FROM sync_changes
+            WHERE entity_type = 'page'
+              AND entity_id = ?
+              AND change_type = 'create'
+            """,
+            bindings: [.text(pageID)]
+        ).first
+        let pendingPageCreateCount = Int(pendingPageCreateRow?["count"] ?? "") ?? 0
+        guard pendingPageCreateCount == 0 else {
+            return
+        }
+
+        try enqueueCoalesced(
+            entityType: "page",
+            entityID: pageID,
+            changeType: "update",
+            createdAt: createdAt
+        )
+    }
+
+    func pageIDForBlock(blockID: String) throws -> String? {
+        try database.query(
+            """
+            SELECT page_id
+            FROM blocks
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        ).first?["page_id"] ?? nil
+    }
+
+    func hasPendingBlockChanges(pageID: String) throws -> Bool {
+        let row = try database.query(
+            """
+            SELECT COUNT(*) AS count
+            FROM sync_changes
+            WHERE entity_type = 'block'
+              AND entity_id IN (
+                  SELECT id
+                  FROM blocks
+                  WHERE page_id = ?
+              )
+            """,
+            bindings: [.text(pageID)]
+        ).first
+        return Int(row?["count"] ?? "") ?? 0 > 0
     }
 
     func pendingChanges() throws -> [SyncChange] {
@@ -104,6 +202,42 @@ final class SyncRepository {
                 changeType: row["change_type"] ?? ""
             )
         }
+    }
+
+    func enqueueUnsyncedDiaryPageMappings() throws {
+        let now = dateFormatter.string(from: Date())
+        try database.execute(
+            """
+            INSERT INTO sync_changes (
+                id,
+                entity_type,
+                entity_id,
+                change_type,
+                attempt_count,
+                created_at
+            )
+            SELECT 'sync-' || lower(hex(randomblob(16))),
+                   'diaryPage',
+                   diary_pages.page_id,
+                   'create',
+                   0,
+                   ?
+            FROM diary_pages
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM sync_records
+                WHERE entity_type = 'diaryPage'
+                  AND entity_id = diary_pages.page_id
+            )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM sync_changes
+                WHERE entity_type = 'diaryPage'
+                  AND entity_id = diary_pages.page_id
+            )
+            """,
+            bindings: [.text(now)]
+        )
     }
 
     func retryState(change: SyncChange) throws -> SyncRetryState {

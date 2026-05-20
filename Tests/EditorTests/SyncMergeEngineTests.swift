@@ -38,8 +38,194 @@ final class SyncMergeEngineTests: XCTestCase {
         XCTAssertEqual(
             try SyncRepository(database: database).pendingChanges(),
             [
+                SyncChange(entityType: "block", entityID: blockID, changeType: "update"),
+                SyncChange(entityType: "page", entityID: pageID, changeType: "update")
+            ]
+        )
+    }
+
+    func testRemoteNewerBlockWinsPendingLocalChangeAndClearsPendingUpdate() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Local stale edit")
+        try setBlockUpdatedAt(database: database, blockID: blockID, updatedAt: "2026-05-21T00:00:00Z")
+
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: blockID,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote latest edit",
+                payloadJSON: "{\"text\":\"Remote latest edit\"}",
+                revision: 3,
+                updatedAt: "2026-05-21T00:00:01Z"
+            )
+        )
+
+        let reloadedBlock = try XCTUnwrap(try pageRepository.loadWorkspaceSnapshot().blocks.first)
+        XCTAssertEqual(reloadedBlock.textPlain, "Remote latest edit")
+        XCTAssertEqual(try blockRevision(database: database, blockID: blockID), 3)
+        XCTAssertEqual(try ConflictRepository(database: database).conflicts(blockID: blockID), [])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().filter {
+                $0 == SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+            },
+            []
+        )
+    }
+
+    func testLocalNewerBlockKeepsPendingUpdateOverOlderRemoteChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Local latest edit")
+        try setBlockUpdatedAt(database: database, blockID: blockID, updatedAt: "2026-05-21T00:00:02Z")
+
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: blockID,
+                pageID: pageID,
+                type: .paragraph,
+                textPlain: "Remote stale edit",
+                payloadJSON: "{\"text\":\"Remote stale edit\"}",
+                revision: 3,
+                updatedAt: "2026-05-21T00:00:01Z"
+            )
+        )
+
+        XCTAssertEqual(try pageRepository.loadWorkspaceSnapshot().blocks.first?.textPlain, "Local latest edit")
+        XCTAssertEqual(try ConflictRepository(database: database).conflicts(blockID: blockID), [])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().filter {
+                $0 == SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+            },
+            [
                 SyncChange(entityType: "block", entityID: blockID, changeType: "update")
             ]
+        )
+    }
+
+    func testRemoteNewerPageSnapshotReplacesWholePendingLocalPageContent() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let firstBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try database.execute("DELETE FROM sync_changes")
+        let localOnlyBlock = try pageRepository.appendBlock(
+            pageID: pageID,
+            type: .paragraph,
+            text: "Local only"
+        )
+        try pageRepository.updateBlockText(blockID: firstBlockID, text: "Local stale first")
+        try setPageUpdatedAt(database: database, pageID: pageID, updatedAt: "2026-05-21T00:00:00Z")
+
+        try SyncMergeEngine(database: database).applyRemoteBlockPageSnapshot(
+            pageID: pageID,
+            changes: [
+                RemoteBlockChange(
+                    blockID: firstBlockID,
+                    pageID: pageID,
+                    type: .paragraph,
+                    textPlain: "Remote latest first",
+                    payloadJSON: "{\"text\":\"Remote latest first\"}",
+                    revision: 4,
+                    orderKey: "000001",
+                    updatedAt: "2026-05-21T00:00:01Z"
+                ),
+                RemoteBlockChange(
+                    blockID: "block-remote-second",
+                    pageID: pageID,
+                    type: .paragraph,
+                    textPlain: "Remote second",
+                    payloadJSON: "{\"text\":\"Remote second\"}",
+                    revision: 1,
+                    orderKey: "000002",
+                    updatedAt: "2026-05-21T00:00:01Z"
+                )
+            ],
+            remoteUpdatedAt: "2026-05-21T00:00:01Z"
+        )
+
+        let activeBlocks = try pageRepository.loadWorkspaceSnapshot().blocks
+            .filter { $0.pageID == pageID }
+            .sorted { $0.orderKey < $1.orderKey }
+        XCTAssertEqual(activeBlocks.map(\.id), [firstBlockID, "block-remote-second"])
+        XCTAssertEqual(activeBlocks.map(\.textPlain), ["Remote latest first", "Remote second"])
+        XCTAssertEqual(try isBlockDeleted(database: database, blockID: localOnlyBlock.id), true)
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().filter { change in
+                change.entityID == pageID || change.entityID == firstBlockID || change.entityID == localOnlyBlock.id
+            },
+            []
+        )
+    }
+
+    func testLocalNewerPageSnapshotKeepsWholePendingLocalPageContent() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let firstBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try database.execute("DELETE FROM sync_changes")
+        let localOnlyBlock = try pageRepository.appendBlock(
+            pageID: pageID,
+            type: .paragraph,
+            text: "Local only"
+        )
+        try pageRepository.updateBlockText(blockID: firstBlockID, text: "Local latest first")
+        try setPageUpdatedAt(database: database, pageID: pageID, updatedAt: "2026-05-21T00:00:02Z")
+
+        try SyncMergeEngine(database: database).applyRemoteBlockPageSnapshot(
+            pageID: pageID,
+            changes: [
+                RemoteBlockChange(
+                    blockID: firstBlockID,
+                    pageID: pageID,
+                    type: .paragraph,
+                    textPlain: "Remote stale first",
+                    payloadJSON: "{\"text\":\"Remote stale first\"}",
+                    revision: 4,
+                    orderKey: "000001",
+                    updatedAt: "2026-05-21T00:00:01Z"
+                ),
+                RemoteBlockChange(
+                    blockID: "block-remote-second",
+                    pageID: pageID,
+                    type: .paragraph,
+                    textPlain: "Remote second",
+                    payloadJSON: "{\"text\":\"Remote second\"}",
+                    revision: 1,
+                    orderKey: "000002",
+                    updatedAt: "2026-05-21T00:00:01Z"
+                )
+            ],
+            remoteUpdatedAt: "2026-05-21T00:00:01Z"
+        )
+
+        let activeBlocks = try pageRepository.loadWorkspaceSnapshot().blocks
+            .filter { $0.pageID == pageID }
+            .sorted { $0.orderKey < $1.orderKey }
+        XCTAssertEqual(activeBlocks.map(\.id), [firstBlockID, localOnlyBlock.id])
+        XCTAssertEqual(activeBlocks.map(\.textPlain), ["Local latest first", "Local only"])
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().filter { change in
+                change.entityID == pageID || change.entityID == firstBlockID || change.entityID == localOnlyBlock.id
+            }.isEmpty,
+            false
         )
     }
 
@@ -307,5 +493,53 @@ final class SyncMergeEngineTests: XCTestCase {
                 remoteRevision: revision
             )
         )
+    }
+
+    private func setBlockUpdatedAt(
+        database: SQLiteDatabase,
+        blockID: String,
+        updatedAt: String
+    ) throws {
+        try database.execute(
+            "UPDATE blocks SET updated_at = ? WHERE id = ?",
+            bindings: [
+                .text(updatedAt),
+                .text(blockID)
+            ]
+        )
+    }
+
+    private func setPageUpdatedAt(
+        database: SQLiteDatabase,
+        pageID: String,
+        updatedAt: String
+    ) throws {
+        try database.execute(
+            "UPDATE pages SET updated_at = ? WHERE id = ?",
+            bindings: [
+                .text(updatedAt),
+                .text(pageID)
+            ]
+        )
+    }
+
+    private func isBlockDeleted(database: SQLiteDatabase, blockID: String) throws -> Bool {
+        let row = try XCTUnwrap(
+            try database.query(
+                "SELECT is_deleted FROM blocks WHERE id = ? LIMIT 1",
+                bindings: [.text(blockID)]
+            ).first
+        )
+        return (Int(row["is_deleted"] ?? "") ?? 0) == 1
+    }
+
+    private func blockRevision(database: SQLiteDatabase, blockID: String) throws -> Int {
+        let row = try XCTUnwrap(
+            try database.query(
+                "SELECT revision FROM blocks WHERE id = ? LIMIT 1",
+                bindings: [.text(blockID)]
+            ).first
+        )
+        return Int(row["revision"] ?? "") ?? 0
     }
 }

@@ -21,24 +21,26 @@ final class DiaryRepository {
             return page
         }
 
+        let title = Self.diaryTitle(from: date, calendar: calendar)
         let pageRepository = PageRepository(database: database)
+        if let page = try pageMatchingTitle(workspaceID: workspaceID, title: title) {
+            try recordDailyPageMapping(
+                pageID: page.id,
+                workspaceID: workspaceID,
+                diaryDate: diaryDate
+            )
+            try normalizeDailyPageBlocks(page, pageRepository: pageRepository)
+            return page
+        }
+
         let page = try pageRepository.createPage(
             workspaceID: workspaceID,
-            title: Self.diaryTitle(from: date, calendar: calendar)
+            title: title
         )
-        let now = Self.timestamp()
-        try database.execute(
-            """
-            INSERT INTO diary_pages (page_id, workspace_id, diary_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            bindings: [
-                .text(page.id),
-                .text(workspaceID),
-                .text(diaryDate),
-                .text(now),
-                .text(now)
-            ]
+        try recordDailyPageMapping(
+            pageID: page.id,
+            workspaceID: workspaceID,
+            diaryDate: diaryDate
         )
 
         if let legacyText = try newestEntry(workspaceID: workspaceID)?.textPlain {
@@ -171,6 +173,80 @@ final class DiaryRepository {
                 updatedAt: row["updated_at"]
             )
         }
+    }
+
+    private func pageMatchingTitle(workspaceID: String, title: String) throws -> PageSummary? {
+        try database.query(
+            """
+            SELECT id,
+                   workspace_id,
+                   notebook_id,
+                   title,
+                   is_favorite,
+                   is_encrypted,
+                   updated_at
+            FROM pages
+            WHERE workspace_id = ?
+              AND title = ?
+              AND is_archived = 0
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            bindings: [
+                .text(workspaceID),
+                .text(title)
+            ]
+        ).first.map { row in
+            PageSummary(
+                id: row["id"] ?? "",
+                workspaceID: row["workspace_id"] ?? "",
+                notebookID: row["notebook_id"] ?? nil,
+                title: row["title"] ?? "",
+                isFavorite: Self.sqliteBool(row["is_favorite"]),
+                isEncrypted: Self.sqliteBool(row["is_encrypted"]),
+                updatedAt: row["updated_at"]
+            )
+        }
+    }
+
+    private func recordDailyPageMapping(
+        pageID: String,
+        workspaceID: String,
+        diaryDate: String
+    ) throws {
+        let now = Self.timestamp()
+        try database.withImmediateTransaction("record_daily_page_mapping") {
+            try database.execute(
+                """
+                DELETE FROM diary_pages
+                WHERE (workspace_id = ? AND diary_date = ?)
+                   OR page_id = ?
+                """,
+                bindings: [
+                    .text(workspaceID),
+                    .text(diaryDate),
+                    .text(pageID)
+                ]
+            )
+            try database.execute(
+                """
+                INSERT INTO diary_pages (page_id, workspace_id, diary_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                bindings: [
+                    .text(pageID),
+                    .text(workspaceID),
+                    .text(diaryDate),
+                    .text(now),
+                    .text(now)
+                ]
+            )
+        }
+        try SyncRepository(database: database).enqueue(
+            entityType: "diaryPage",
+            entityID: pageID,
+            changeType: "create"
+        )
     }
 
     private func normalizeDailyPageBlocks(
