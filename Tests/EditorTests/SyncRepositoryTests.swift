@@ -18,14 +18,16 @@ final class SyncRepositoryTests: XCTestCase {
 
         let pageRepository = PageRepository(database: database)
         let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
 
         try pageRepository.updateBlockText(blockID: blockID, text: "Dirty local edit")
 
         let changes = try SyncRepository(database: database).pendingChanges()
-        XCTAssertEqual(changes.map(\.entityType), ["block"])
-        XCTAssertEqual(changes.map(\.entityID), [blockID])
-        XCTAssertEqual(changes.map(\.changeType), ["update"])
+        XCTAssertEqual(changes, [
+            SyncChange(entityType: "block", entityID: blockID, changeType: "update"),
+            SyncChange(entityType: "page", entityID: pageID, changeType: "update")
+        ])
     }
 
     func testAttachmentImportEnqueuesAttachmentAndBlockSyncChanges() throws {

@@ -3567,8 +3567,8 @@ final class WorkspaceViewModel: ObservableObject {
                 )
             }
 
-            let uploadSummary = try syncEngine.uploadPendingChanges()
             let fetchSummary = try syncEngine.fetchRemoteChanges()
+            let uploadSummary = try syncEngine.uploadPendingChanges()
             return .success(
                 WorkspaceForegroundSyncSummary(
                     uploadSummary: uploadSummary,

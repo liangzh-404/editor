@@ -3,6 +3,13 @@ import Foundation
 struct RemoteWorkspaceChange: Equatable, Sendable {
     let workspaceID: String
     let name: String
+    let updatedAt: String?
+
+    init(workspaceID: String, name: String, updatedAt: String? = nil) {
+        self.workspaceID = workspaceID
+        self.name = name
+        self.updatedAt = updatedAt
+    }
 }
 
 struct RemoteNotebookChange: Equatable, Sendable {
@@ -11,19 +18,22 @@ struct RemoteNotebookChange: Equatable, Sendable {
     let parentNotebookID: String?
     let name: String
     let orderKey: String
+    let updatedAt: String?
 
     init(
         notebookID: String,
         workspaceID: String,
         parentNotebookID: String? = nil,
         name: String,
-        orderKey: String
+        orderKey: String,
+        updatedAt: String? = nil
     ) {
         self.notebookID = notebookID
         self.workspaceID = workspaceID
         self.parentNotebookID = parentNotebookID
         self.name = name
         self.orderKey = orderKey
+        self.updatedAt = updatedAt
     }
 }
 
@@ -36,6 +46,7 @@ struct RemotePageChange: Equatable, Sendable {
     let isArchived: Bool
     let isFavorite: Bool
     let isEncrypted: Bool
+    let updatedAt: String?
 
     init(
         pageID: String,
@@ -45,7 +56,8 @@ struct RemotePageChange: Equatable, Sendable {
         orderKey: String,
         isArchived: Bool,
         isFavorite: Bool = false,
-        isEncrypted: Bool = false
+        isEncrypted: Bool = false,
+        updatedAt: String? = nil
     ) {
         self.pageID = pageID
         self.workspaceID = workspaceID
@@ -55,6 +67,21 @@ struct RemotePageChange: Equatable, Sendable {
         self.isArchived = isArchived
         self.isFavorite = isFavorite
         self.isEncrypted = isEncrypted
+        self.updatedAt = updatedAt
+    }
+}
+
+struct RemoteDiaryPageChange: Equatable, Sendable {
+    let pageID: String
+    let workspaceID: String
+    let diaryDate: String
+    let updatedAt: String?
+
+    init(pageID: String, workspaceID: String, diaryDate: String, updatedAt: String? = nil) {
+        self.pageID = pageID
+        self.workspaceID = workspaceID
+        self.diaryDate = diaryDate
+        self.updatedAt = updatedAt
     }
 }
 
@@ -68,6 +95,7 @@ struct RemoteBlockChange: Equatable, Sendable {
     let parentBlockID: String?
     let orderKey: String
     let isDeleted: Bool
+    let updatedAt: String?
 
     init(
         blockID: String,
@@ -78,7 +106,8 @@ struct RemoteBlockChange: Equatable, Sendable {
         revision: Int,
         parentBlockID: String? = nil,
         orderKey: String = "000001",
-        isDeleted: Bool = false
+        isDeleted: Bool = false,
+        updatedAt: String? = nil
     ) {
         self.blockID = blockID
         self.pageID = pageID
@@ -89,6 +118,7 @@ struct RemoteBlockChange: Equatable, Sendable {
         self.parentBlockID = parentBlockID
         self.orderKey = orderKey
         self.isDeleted = isDeleted
+        self.updatedAt = updatedAt
     }
 }
 
@@ -101,6 +131,29 @@ struct RemoteAttachmentChange: Equatable, Sendable {
     let contentHash: String
     let localPath: String
     let thumbnailPath: String?
+    let updatedAt: String?
+
+    init(
+        attachmentID: String,
+        workspaceID: String,
+        originalFilename: String,
+        utiType: String,
+        byteSize: Int,
+        contentHash: String,
+        localPath: String,
+        thumbnailPath: String?,
+        updatedAt: String? = nil
+    ) {
+        self.attachmentID = attachmentID
+        self.workspaceID = workspaceID
+        self.originalFilename = originalFilename
+        self.utiType = utiType
+        self.byteSize = byteSize
+        self.contentHash = contentHash
+        self.localPath = localPath
+        self.thumbnailPath = thumbnailPath
+        self.updatedAt = updatedAt
+    }
 }
 
 struct RemoteDeletedRecord: Equatable, Sendable {
@@ -116,11 +169,16 @@ final class SyncMergeEngine {
     }
 
     func applyRemoteWorkspace(_ remote: RemoteWorkspaceChange) throws {
-        guard try !hasPendingLocalChange(entityType: "workspace", entityID: remote.workspaceID) else {
+        guard try shouldApplyRemoteChange(
+            entityType: "workspace",
+            entityID: remote.workspaceID,
+            remoteUpdatedAt: remote.updatedAt,
+            localUpdatedAt: localUpdatedAt(table: "workspaces", idColumn: "id", entityID: remote.workspaceID)
+        ) else {
             return
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = remote.updatedAt ?? ISO8601DateFormatter().string(from: Date())
         try database.execute(
             """
             INSERT INTO workspaces (id, name, created_at, updated_at)
@@ -136,14 +194,20 @@ final class SyncMergeEngine {
                 .text(now)
             ]
         )
+        try clearPendingLocalChanges(entityType: "workspace", entityID: remote.workspaceID)
     }
 
     func applyRemoteNotebook(_ remote: RemoteNotebookChange) throws {
-        guard try !hasPendingLocalChange(entityType: "notebook", entityID: remote.notebookID) else {
+        guard try shouldApplyRemoteChange(
+            entityType: "notebook",
+            entityID: remote.notebookID,
+            remoteUpdatedAt: remote.updatedAt,
+            localUpdatedAt: localUpdatedAt(table: "notebooks", idColumn: "id", entityID: remote.notebookID)
+        ) else {
             return
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = remote.updatedAt ?? ISO8601DateFormatter().string(from: Date())
         try database.execute(
             """
             INSERT INTO notebooks (id, workspace_id, parent_notebook_id, name, order_key, created_at, updated_at)
@@ -165,14 +229,20 @@ final class SyncMergeEngine {
                 .text(now)
             ]
         )
+        try clearPendingLocalChanges(entityType: "notebook", entityID: remote.notebookID)
     }
 
     func applyRemotePage(_ remote: RemotePageChange) throws {
-        guard try !hasPendingLocalChange(entityType: "page", entityID: remote.pageID) else {
+        guard try shouldApplyRemoteChange(
+            entityType: "page",
+            entityID: remote.pageID,
+            remoteUpdatedAt: remote.updatedAt,
+            localUpdatedAt: localUpdatedAt(table: "pages", idColumn: "id", entityID: remote.pageID)
+        ) else {
             return
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = remote.updatedAt ?? ISO8601DateFormatter().string(from: Date())
         try database.execute(
             """
             INSERT INTO pages (
@@ -211,60 +281,312 @@ final class SyncMergeEngine {
                 .text(now)
             ]
         )
+        try clearPendingLocalChanges(entityType: "page", entityID: remote.pageID)
+    }
+
+    func applyRemoteDiaryPage(_ remote: RemoteDiaryPageChange) throws {
+        guard try shouldApplyRemoteChange(
+            entityType: "diaryPage",
+            entityID: remote.pageID,
+            remoteUpdatedAt: remote.updatedAt,
+            localUpdatedAt: localDiaryPageUpdatedAt(remote)
+        ) else {
+            return
+        }
+
+        let now = remote.updatedAt ?? ISO8601DateFormatter().string(from: Date())
+        try database.withImmediateTransaction("apply_remote_diary_page") {
+            try database.execute(
+                """
+                DELETE FROM diary_pages
+                WHERE (workspace_id = ? AND diary_date = ?)
+                   OR page_id = ?
+                """,
+                bindings: [
+                    .text(remote.workspaceID),
+                    .text(remote.diaryDate),
+                    .text(remote.pageID)
+                ]
+            )
+            try database.execute(
+                """
+                INSERT INTO diary_pages (page_id, workspace_id, diary_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                bindings: [
+                    .text(remote.pageID),
+                    .text(remote.workspaceID),
+                    .text(remote.diaryDate),
+                    .text(now),
+                    .text(now)
+                ]
+            )
+            try clearPendingLocalChanges(entityType: "diaryPage", entityID: remote.pageID)
+        }
     }
 
     func applyRemoteBlock(_ remote: RemoteBlockChange) throws {
         if try hasPendingLocalChange(entityType: "block", entityID: remote.blockID) {
+            if let decision = try pendingTimestampDecision(
+                entityType: "block",
+                entityID: remote.blockID,
+                remoteUpdatedAt: remote.updatedAt,
+                localUpdatedAt: localUpdatedAt(table: "blocks", idColumn: "id", entityID: remote.blockID)
+            ) {
+                switch decision {
+                case .applyRemote:
+                    try applyRemoteBlockReplacingLocal(remote, shouldClearPendingLocalChanges: true)
+                case .keepLocal:
+                    EditorLog.sync.debug(
+                        "sync_remote_block_lww_kept_local block_id=\(remote.blockID, privacy: .public)"
+                    )
+                }
+                return
+            }
             try autoMergeRemoteBlockWithPendingLocalChange(remote)
             return
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
-        let parentBlockID = try resolvableParentBlockID(remote.parentBlockID, childBlockID: remote.blockID)
-        try database.execute(
-            """
-            INSERT INTO blocks (
-                id,
-                page_id,
-                parent_block_id,
-                order_key,
-                type,
-                payload_json,
-                text_plain,
-                revision,
-                sync_state,
-                is_deleted,
-                created_at,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                page_id = excluded.page_id,
-                parent_block_id = excluded.parent_block_id,
-                order_key = excluded.order_key,
-                type = excluded.type,
-                payload_json = excluded.payload_json,
-                text_plain = excluded.text_plain,
-                revision = excluded.revision,
-                sync_state = excluded.sync_state,
-                is_deleted = excluded.is_deleted,
-                updated_at = excluded.updated_at
-            """,
-            bindings: [
-                .text(remote.blockID),
-                .text(remote.pageID),
-                parentBlockID.map(SQLiteValue.text) ?? .null,
-                .text(remote.orderKey),
-                .text(remote.type.rawValue),
-                .text(remote.payloadJSON),
-                .text(remote.textPlain),
-                .integer(remote.revision),
-                .text("synced"),
-                .integer(remote.isDeleted ? 1 : 0),
-                .text(now),
-                .text(now)
-            ]
+        try applyRemoteBlockReplacingLocal(remote, shouldClearPendingLocalChanges: false)
+    }
+
+    func applyRemoteBlockPageSnapshot(
+        pageID: String,
+        changes: [RemoteBlockChange],
+        remoteUpdatedAt: String?
+    ) throws {
+        if try hasPendingLocalPageContentChange(pageID: pageID) {
+            guard let decision = try pendingTimestampDecision(
+                entityType: "pageSnapshot",
+                entityID: pageID,
+                remoteUpdatedAt: remoteUpdatedAt ?? Self.latestUpdatedAt(in: changes),
+                localUpdatedAt: localUpdatedAt(table: "pages", idColumn: "id", entityID: pageID)
+            ) else {
+                EditorLog.sync.debug(
+                    "sync_remote_page_snapshot_kept_local_missing_timestamp page_id=\(pageID, privacy: .public)"
+                )
+                return
+            }
+
+            guard decision == .applyRemote else {
+                EditorLog.sync.debug(
+                    "sync_remote_page_snapshot_lww_kept_local page_id=\(pageID, privacy: .public)"
+                )
+                return
+            }
+        }
+
+        try applyRemoteBlockPageSnapshotReplacingLocal(
+            pageID: pageID,
+            changes: changes,
+            remoteUpdatedAt: remoteUpdatedAt
         )
+    }
+
+    private func applyRemoteBlockPageSnapshotReplacingLocal(
+        pageID: String,
+        changes: [RemoteBlockChange],
+        remoteUpdatedAt: String?
+    ) throws {
+        let sortedChanges = RemoteBlockChangeDependencySorter.sorted(changes)
+        let localBlockIDs = Set(try blockIDs(pageID: pageID))
+        let remoteBlockIDs = Set(sortedChanges.map(\.blockID))
+        let remoteDeletedBlockIDs = Set(sortedChanges.filter(\.isDeleted).map(\.blockID))
+        let missingLocalBlockIDs = localBlockIDs.subtracting(remoteBlockIDs)
+        let deletedBlockIDs = missingLocalBlockIDs.union(remoteDeletedBlockIDs)
+        let timestamp = remoteUpdatedAt
+            ?? Self.latestUpdatedAt(in: sortedChanges)
+            ?? ISO8601DateFormatter().string(from: Date())
+
+        try database.withImmediateTransaction("apply_remote_block_page_snapshot") {
+            try database.execute(
+                """
+                UPDATE pages
+                SET updated_at = ?
+                WHERE id = ?
+                """,
+                bindings: [
+                    .text(timestamp),
+                    .text(pageID)
+                ]
+            )
+
+            if !deletedBlockIDs.isEmpty {
+                let placeholders = Array(repeating: "?", count: deletedBlockIDs.count).joined(separator: ", ")
+                try database.execute(
+                    """
+                    UPDATE blocks
+                    SET is_deleted = 1,
+                        sync_state = ?,
+                        updated_at = ?
+                    WHERE id IN (\(placeholders))
+                    """,
+                    bindings: [
+                        .text("synced"),
+                        .text(timestamp)
+                    ] + deletedBlockIDs.map(SQLiteValue.text)
+                )
+            }
+
+            for remote in sortedChanges {
+                let now = remote.updatedAt ?? timestamp
+                let parentBlockID = try resolvableParentBlockID(
+                    remote.parentBlockID,
+                    childBlockID: remote.blockID
+                )
+                try database.execute(
+                    """
+                    INSERT INTO blocks (
+                        id,
+                        page_id,
+                        parent_block_id,
+                        order_key,
+                        type,
+                        payload_json,
+                        text_plain,
+                        revision,
+                        sync_state,
+                        is_deleted,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        page_id = excluded.page_id,
+                        parent_block_id = excluded.parent_block_id,
+                        order_key = excluded.order_key,
+                        type = excluded.type,
+                        payload_json = excluded.payload_json,
+                        text_plain = excluded.text_plain,
+                        revision = excluded.revision,
+                        sync_state = excluded.sync_state,
+                        is_deleted = excluded.is_deleted,
+                        updated_at = excluded.updated_at
+                    """,
+                    bindings: [
+                        .text(remote.blockID),
+                        .text(remote.pageID),
+                        parentBlockID.map(SQLiteValue.text) ?? .null,
+                        .text(remote.orderKey),
+                        .text(remote.type.rawValue),
+                        .text(remote.payloadJSON),
+                        .text(remote.textPlain),
+                        .integer(remote.revision),
+                        .text("synced"),
+                        .integer(remote.isDeleted ? 1 : 0),
+                        .text(now),
+                        .text(now)
+                    ]
+                )
+                try database.execute(
+                    """
+                    DELETE FROM conflict_versions
+                    WHERE block_id = ?
+                    """,
+                    bindings: [.text(remote.blockID)]
+                )
+            }
+
+            try clearPendingLocalPageContentChanges(
+                pageID: pageID,
+                blockIDs: localBlockIDs.union(remoteBlockIDs)
+            )
+        }
+
+        for blockID in deletedBlockIDs {
+            try deleteSourceLinks(blockID: blockID)
+            try deletePageParentLink(sourceBlockID: blockID)
+        }
+        for remote in sortedChanges {
+            if remote.isDeleted {
+                try deleteSourceLinks(blockID: remote.blockID)
+                try deletePageParentLink(sourceBlockID: remote.blockID)
+            } else {
+                let pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: remote.payloadJSON)
+                try BacklinkRepository(database: database).rebuildLinksForBlock(
+                    blockID: remote.blockID,
+                    text: remote.textPlain,
+                    pageReferenceTargetPageID: pageReferenceTargetPageID,
+                    blockReferenceTargetBlockID: remote.type == .blockReference
+                        ? Self.blockReferenceTargetBlockID(payloadJSON: remote.payloadJSON)
+                        : nil
+                )
+                try syncPageParentLink(
+                    sourceBlockID: remote.blockID,
+                    parentPageID: remote.pageID,
+                    childPageID: pageReferenceTargetPageID,
+                    orderKey: remote.orderKey
+                )
+            }
+        }
+
+        EditorLog.sync.debug(
+            "sync_remote_page_snapshot_applied page_id=\(pageID, privacy: .public) remote_blocks=\(sortedChanges.count, privacy: .public) deleted_local_blocks=\(deletedBlockIDs.count, privacy: .public)"
+        )
+    }
+
+    private func applyRemoteBlockReplacingLocal(
+        _ remote: RemoteBlockChange,
+        shouldClearPendingLocalChanges: Bool
+    ) throws {
+        let now = remote.updatedAt ?? ISO8601DateFormatter().string(from: Date())
+        let parentBlockID = try resolvableParentBlockID(remote.parentBlockID, childBlockID: remote.blockID)
+        try database.withImmediateTransaction("apply_remote_block") {
+            try database.execute(
+                """
+                INSERT INTO blocks (
+                    id,
+                    page_id,
+                    parent_block_id,
+                    order_key,
+                    type,
+                    payload_json,
+                    text_plain,
+                    revision,
+                    sync_state,
+                    is_deleted,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    page_id = excluded.page_id,
+                    parent_block_id = excluded.parent_block_id,
+                    order_key = excluded.order_key,
+                    type = excluded.type,
+                    payload_json = excluded.payload_json,
+                    text_plain = excluded.text_plain,
+                    revision = excluded.revision,
+                    sync_state = excluded.sync_state,
+                    is_deleted = excluded.is_deleted,
+                    updated_at = excluded.updated_at
+                """,
+                bindings: [
+                    .text(remote.blockID),
+                    .text(remote.pageID),
+                    parentBlockID.map(SQLiteValue.text) ?? .null,
+                    .text(remote.orderKey),
+                    .text(remote.type.rawValue),
+                    .text(remote.payloadJSON),
+                    .text(remote.textPlain),
+                    .integer(remote.revision),
+                    .text("synced"),
+                    .integer(remote.isDeleted ? 1 : 0),
+                    .text(now),
+                    .text(now)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM conflict_versions
+                WHERE block_id = ?
+                """,
+                bindings: [.text(remote.blockID)]
+            )
+            if shouldClearPendingLocalChanges {
+                try clearPendingLocalChanges(entityType: "block", entityID: remote.blockID)
+            }
+        }
         if remote.isDeleted {
             try deleteSourceLinks(blockID: remote.blockID)
             try deletePageParentLink(sourceBlockID: remote.blockID)
@@ -392,11 +714,16 @@ final class SyncMergeEngine {
     }
 
     func applyRemoteAttachment(_ remote: RemoteAttachmentChange) throws {
-        guard try !hasPendingLocalChange(entityType: "attachment", entityID: remote.attachmentID) else {
+        guard try shouldApplyRemoteChange(
+            entityType: "attachment",
+            entityID: remote.attachmentID,
+            remoteUpdatedAt: remote.updatedAt,
+            localUpdatedAt: localUpdatedAt(table: "attachments", idColumn: "id", entityID: remote.attachmentID)
+        ) else {
             return
         }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = remote.updatedAt ?? ISO8601DateFormatter().string(from: Date())
         try database.execute(
             """
             INSERT INTO attachments (
@@ -438,6 +765,7 @@ final class SyncMergeEngine {
                 .text(now)
             ]
         )
+        try clearPendingLocalChanges(entityType: "attachment", entityID: remote.attachmentID)
     }
 
     func applyRemoteDeletion(_ remote: RemoteDeletedRecord) throws {
@@ -448,6 +776,8 @@ final class SyncMergeEngine {
         switch remote.entityType {
         case "page":
             try applyRemotePageDeletion(pageID: remote.entityID)
+        case "diaryPage":
+            try applyRemoteDiaryPageDeletion(pageID: remote.entityID)
         case "notebook":
             try applyRemoteNotebookDeletion(notebookID: remote.entityID)
         case "attachment":
@@ -474,6 +804,181 @@ final class SyncMergeEngine {
             ]
         )
         return Int(rows.first?["COUNT(*)"] ?? "") ?? 0 > 0
+    }
+
+    private func hasPendingLocalPageContentChange(pageID: String) throws -> Bool {
+        let rows = try database.query(
+            """
+            SELECT COUNT(*) AS count
+            FROM sync_changes
+            WHERE (entity_type = 'page' AND entity_id = ?)
+               OR (
+                   entity_type = 'block'
+                   AND entity_id IN (
+                       SELECT id
+                       FROM blocks
+                       WHERE page_id = ?
+                   )
+               )
+            """,
+            bindings: [
+                .text(pageID),
+                .text(pageID)
+            ]
+        )
+        return Int(rows.first?["count"] ?? "") ?? 0 > 0
+    }
+
+    private enum PendingTimestampDecision {
+        case applyRemote
+        case keepLocal
+    }
+
+    private func shouldApplyRemoteChange(
+        entityType: String,
+        entityID: String,
+        remoteUpdatedAt: String?,
+        localUpdatedAt: String?
+    ) throws -> Bool {
+        guard try hasPendingLocalChange(entityType: entityType, entityID: entityID) else {
+            return true
+        }
+        guard let decision = try pendingTimestampDecision(
+            entityType: entityType,
+            entityID: entityID,
+            remoteUpdatedAt: remoteUpdatedAt,
+            localUpdatedAt: localUpdatedAt
+        ) else {
+            return false
+        }
+        return decision == .applyRemote
+    }
+
+    private func pendingTimestampDecision(
+        entityType: String,
+        entityID: String,
+        remoteUpdatedAt: String?,
+        localUpdatedAt: String?
+    ) throws -> PendingTimestampDecision? {
+        guard let remoteUpdatedAt, let localUpdatedAt else {
+            return nil
+        }
+        let decision: PendingTimestampDecision = Self.compareRemoteToLocal(
+            remoteUpdatedAt: remoteUpdatedAt,
+            localUpdatedAt: localUpdatedAt
+        ) == .orderedAscending ? .keepLocal : .applyRemote
+        if decision == .applyRemote {
+            EditorLog.sync.debug(
+                "sync_remote_lww_applied_remote entity_type=\(entityType, privacy: .public) entity_id=\(entityID, privacy: .public)"
+            )
+        } else {
+            EditorLog.sync.debug(
+                "sync_remote_lww_kept_local entity_type=\(entityType, privacy: .public) entity_id=\(entityID, privacy: .public)"
+            )
+        }
+        return decision
+    }
+
+    private func clearPendingLocalChanges(entityType: String, entityID: String) throws {
+        try database.execute(
+            """
+            DELETE FROM sync_changes
+            WHERE entity_type = ?
+              AND entity_id = ?
+            """,
+            bindings: [
+                .text(entityType),
+                .text(entityID)
+            ]
+        )
+    }
+
+    private func clearPendingLocalPageContentChanges(pageID: String, blockIDs: Set<String>) throws {
+        try clearPendingLocalChanges(entityType: "page", entityID: pageID)
+        guard !blockIDs.isEmpty else {
+            return
+        }
+
+        let placeholders = Array(repeating: "?", count: blockIDs.count).joined(separator: ", ")
+        try database.execute(
+            """
+            DELETE FROM sync_changes
+            WHERE entity_type = 'block'
+              AND entity_id IN (\(placeholders))
+            """,
+            bindings: blockIDs.map(SQLiteValue.text)
+        )
+    }
+
+    private func localUpdatedAt(table: String, idColumn: String, entityID: String) throws -> String? {
+        try database.query(
+            """
+            SELECT updated_at
+            FROM \(table)
+            WHERE \(idColumn) = ?
+            LIMIT 1
+            """,
+            bindings: [.text(entityID)]
+        ).first?["updated_at"] ?? nil
+    }
+
+    private func blockIDs(pageID: String) throws -> [String] {
+        try database.query(
+            """
+            SELECT id
+            FROM blocks
+            WHERE page_id = ?
+            """,
+            bindings: [.text(pageID)]
+        ).compactMap { $0["id"] }
+    }
+
+    private func localDiaryPageUpdatedAt(_ remote: RemoteDiaryPageChange) throws -> String? {
+        try database.query(
+            """
+            SELECT updated_at
+            FROM diary_pages
+            WHERE page_id = ?
+               OR (workspace_id = ? AND diary_date = ?)
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            bindings: [
+                .text(remote.pageID),
+                .text(remote.workspaceID),
+                .text(remote.diaryDate)
+            ]
+        ).first?["updated_at"] ?? nil
+    }
+
+    private static func compareRemoteToLocal(
+        remoteUpdatedAt: String,
+        localUpdatedAt: String
+    ) -> ComparisonResult {
+        if let remoteDate = parseTimestamp(remoteUpdatedAt),
+           let localDate = parseTimestamp(localUpdatedAt) {
+            return remoteDate.compare(localDate)
+        }
+        if remoteUpdatedAt == localUpdatedAt {
+            return .orderedSame
+        }
+        return remoteUpdatedAt < localUpdatedAt ? .orderedAscending : .orderedDescending
+    }
+
+    private static func parseTimestamp(_ value: String) -> Date? {
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: value) {
+            return date
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
+    }
+
+    private static func latestUpdatedAt(in changes: [RemoteBlockChange]) -> String? {
+        changes.compactMap(\.updatedAt).max()
     }
 
     private func applyRemotePageDeletion(pageID: String) throws {
@@ -532,6 +1037,16 @@ final class SyncMergeEngine {
 
         EditorLog.sync.debug(
             "remote_page_deleted page_id=\(pageID, privacy: .public)"
+        )
+    }
+
+    private func applyRemoteDiaryPageDeletion(pageID: String) throws {
+        try database.execute(
+            """
+            DELETE FROM diary_pages
+            WHERE page_id = ?
+            """,
+            bindings: [.text(pageID)]
         )
     }
 

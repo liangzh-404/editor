@@ -702,7 +702,7 @@ final class PageRepositoryTests: XCTestCase {
 
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.type), [.heading1, .paragraph, .unorderedListItem])
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.textPlain), ["Imported", "Body", "Item"])
-        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().map(\.entityType), ["block", "block", "block"])
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().map(\.entityType), ["block", "block", "block", "page"])
     }
 
     func testImportMarkdownPersistsOuterPipeOptionalTableRows() throws {
@@ -967,9 +967,10 @@ final class PageRepositoryTests: XCTestCase {
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
 
         XCTAssertEqual(reloadedSnapshot.blocks.first { $0.id == secondBlockID }?.parentBlockID, firstBlockID)
-        XCTAssertEqual(
-            try SyncRepository(database: database).pendingChanges().last,
-            SyncChange(entityType: "block", entityID: secondBlockID, changeType: "update")
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "block", entityID: secondBlockID, changeType: "update")
+            )
         )
     }
 
@@ -996,9 +997,10 @@ final class PageRepositoryTests: XCTestCase {
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
 
         XCTAssertNil(reloadedSnapshot.blocks.first { $0.id == secondBlockID }?.parentBlockID)
-        XCTAssertEqual(
-            try SyncRepository(database: database).pendingChanges().last,
-            SyncChange(entityType: "block", entityID: secondBlockID, changeType: "update")
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "block", entityID: secondBlockID, changeType: "update")
+            )
         )
     }
 
@@ -1030,9 +1032,10 @@ final class PageRepositoryTests: XCTestCase {
         try repository.updateBlockParent(blockID: movedID, parentBlockID: childID)
         var reloadedSnapshot = try repository.loadWorkspaceSnapshot()
         XCTAssertEqual(reloadedSnapshot.blocks.first { $0.id == movedID }?.parentBlockID, childID)
-        XCTAssertEqual(
-            try SyncRepository(database: database).pendingChanges().last,
-            SyncChange(entityType: "block", entityID: movedID, changeType: "update")
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "block", entityID: movedID, changeType: "update")
+            )
         )
 
         try repository.updateBlockParent(blockID: movedID, parentBlockID: nil)
@@ -1065,7 +1068,11 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(appendedBlock.textPlain, "")
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.id).last, appendedBlock.id)
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.orderKey), ["000001", "000002"])
-        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityID, appendedBlock.id)
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "block", entityID: appendedBlock.id, changeType: "create")
+            )
+        )
     }
 
     func testAppendPageReferenceBlockCreatesTypedBlockAndBacklink() throws {
@@ -1398,16 +1405,21 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.textPlain), ["First", "", "Second"])
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.orderKey), ["000001", "000002", "000003"])
         XCTAssertEqual(reloadedSnapshot.blocks.dropFirst().first?.id, insertedBlock.id)
-        XCTAssertEqual(
-            Array(try SyncRepository(database: database).pendingChanges().suffix(2)),
-            [
-                SyncChange(entityType: "block", entityID: insertedBlock.id, changeType: "create"),
-                SyncChange(
-                    entityType: "block",
-                    entityID: try XCTUnwrap(importedSnapshot.blocks.last?.id),
-                    changeType: "update"
-                )
-            ]
+        let pendingChanges = try SyncRepository(database: database).pendingChanges()
+        XCTAssertTrue(pendingChanges.contains(
+            SyncChange(entityType: "block", entityID: insertedBlock.id, changeType: "create")
+        ))
+        XCTAssertTrue(pendingChanges.contains(
+            SyncChange(
+                entityType: "block",
+                entityID: try XCTUnwrap(importedSnapshot.blocks.last?.id),
+                changeType: "update"
+            )
+        ))
+        XCTAssertTrue(
+            pendingChanges.contains(
+                SyncChange(entityType: "page", entityID: pageID, changeType: "update")
+            )
         )
     }
 
@@ -1427,9 +1439,10 @@ final class PageRepositoryTests: XCTestCase {
 
         XCTAssertEqual(reloadedSnapshot.blocks, [])
         XCTAssertEqual(try BacklinkRepository(database: database).backlinks(targetPageID: pageID), [])
-        XCTAssertEqual(
-            try SyncRepository(database: database).pendingChanges().last,
-            SyncChange(entityType: "block", entityID: blockID, changeType: "delete")
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "block", entityID: blockID, changeType: "delete")
+            )
         )
     }
 

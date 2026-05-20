@@ -312,9 +312,15 @@ final class ConflictRepository {
     func acceptRemoteVersion(conflictID: String) throws -> ConflictSnapshot {
         guard let row = try database.query(
             """
-            SELECT id, block_id, payload_json, text_plain, remote_revision
+            SELECT conflict_versions.id,
+                   conflict_versions.block_id,
+                   conflict_versions.payload_json,
+                   conflict_versions.text_plain,
+                   conflict_versions.remote_revision,
+                   blocks.page_id
             FROM conflict_versions
-            WHERE id = ?
+            INNER JOIN blocks ON blocks.id = conflict_versions.block_id
+            WHERE conflict_versions.id = ?
             LIMIT 1
             """,
             bindings: [.text(conflictID)]
@@ -329,6 +335,7 @@ final class ConflictRepository {
             remoteTextPlain: row["text_plain"] ?? "",
             remoteRevision: Int(row["remote_revision"] ?? "") ?? 0
         )
+        let pageID = row["page_id"] ?? ""
         let payloadJSON = row["payload_json"] ?? ""
         let now = ISO8601DateFormatter().string(from: Date())
 
@@ -360,6 +367,27 @@ final class ConflictRepository {
                 bindings: [
                     .text("block"),
                     .text(snapshot.blockID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM sync_changes
+                WHERE entity_type = 'page'
+                  AND entity_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM sync_changes
+                      WHERE entity_type = 'block'
+                        AND entity_id IN (
+                            SELECT id
+                            FROM blocks
+                            WHERE page_id = ?
+                        )
+                  )
+                """,
+                bindings: [
+                    .text(pageID),
+                    .text(pageID)
                 ]
             )
             try database.execute(

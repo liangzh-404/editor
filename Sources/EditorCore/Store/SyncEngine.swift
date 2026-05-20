@@ -421,8 +421,10 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
     let workspaceChanges: [RemoteWorkspaceChange]
     let notebookChanges: [RemoteNotebookChange]
     let pageChanges: [RemotePageChange]
+    let diaryPageChanges: [RemoteDiaryPageChange]
     let attachmentChanges: [RemoteAttachmentChange]
     let blockChanges: [RemoteBlockChange]
+    let fullSnapshotPageIDs: Set<String>
     let deletedRecords: [RemoteDeletedRecord]
     let serverChangeTokenData: Data?
 
@@ -430,16 +432,20 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
         workspaceChanges: [RemoteWorkspaceChange] = [],
         notebookChanges: [RemoteNotebookChange] = [],
         pageChanges: [RemotePageChange] = [],
+        diaryPageChanges: [RemoteDiaryPageChange] = [],
         attachmentChanges: [RemoteAttachmentChange] = [],
         blockChanges: [RemoteBlockChange] = [],
+        fullSnapshotPageIDs: Set<String> = [],
         deletedRecords: [RemoteDeletedRecord] = [],
         serverChangeTokenData: Data? = nil
     ) {
         self.workspaceChanges = workspaceChanges
         self.notebookChanges = notebookChanges
         self.pageChanges = pageChanges
+        self.diaryPageChanges = diaryPageChanges
         self.attachmentChanges = attachmentChanges
         self.blockChanges = blockChanges
+        self.fullSnapshotPageIDs = fullSnapshotPageIDs
         self.deletedRecords = deletedRecords
         self.serverChangeTokenData = serverChangeTokenData
     }
@@ -1023,6 +1029,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         "WorkspaceRecord",
         "NotebookRecord",
         "PageRecord",
+        "DiaryPageRecord",
         "AttachmentRecord",
         "BlockRecord"
     ]
@@ -1086,6 +1093,26 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             sinceServerChangeTokenData: serverChangeTokenData
         )
         let recordsByType = fetchedChanges.recordsByType
+        let pageRecords = currentGenerationRecords(recordsByType["PageRecord"] ?? [])
+        let pageChanges = pageRecords.compactMap(remotePageChange)
+        let changedBlockRecords = currentGenerationRecords(recordsByType["BlockRecord"] ?? [])
+        var fullSnapshotPageIDs = Set(pageChanges.map(\.pageID))
+        fullSnapshotPageIDs.formUnion(
+            changedBlockRecords.compactMap { $0["pageID"] as? String }
+        )
+        let blockRecords: [CKRecord]
+        if fullSnapshotPageIDs.isEmpty {
+            blockRecords = changedBlockRecords
+        } else {
+            blockRecords = try currentGenerationRecords(
+                recordFetcher.fetchRecords(recordType: "BlockRecord")
+            ).filter { record in
+                guard let pageID = record["pageID"] as? String else {
+                    return false
+                }
+                return fullSnapshotPageIDs.contains(pageID)
+            }
+        }
         let deletedRecords = Self.recordTypes.flatMap { recordType in
             (fetchedChanges.deletedRecordIDsByType[recordType] ?? []).compactMap { recordID in
                 remoteDeletedRecord(recordType: recordType, recordID: recordID)
@@ -1095,11 +1122,13 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         return CloudKitRemoteChangeSet(
             workspaceChanges: currentGenerationRecords(recordsByType["WorkspaceRecord"] ?? []).compactMap(remoteWorkspaceChange),
             notebookChanges: currentGenerationRecords(recordsByType["NotebookRecord"] ?? []).compactMap(remoteNotebookChange),
-            pageChanges: currentGenerationRecords(recordsByType["PageRecord"] ?? []).compactMap(remotePageChange),
+            pageChanges: pageChanges,
+            diaryPageChanges: currentGenerationRecords(recordsByType["DiaryPageRecord"] ?? []).compactMap(remoteDiaryPageChange),
             attachmentChanges: try currentGenerationRecords(recordsByType["AttachmentRecord"] ?? []).compactMap { record in
                 try remoteAttachmentChange(record: record)
             },
-            blockChanges: currentGenerationRecords(recordsByType["BlockRecord"] ?? []).compactMap(remoteBlockChange),
+            blockChanges: blockRecords.compactMap(remoteBlockChange),
+            fullSnapshotPageIDs: fullSnapshotPageIDs,
             deletedRecords: deletedRecords,
             serverChangeTokenData: fetchedChanges.serverChangeTokenData
         )
@@ -1131,6 +1160,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             return try notebookRecord(entityID: change.entityID)
         case "page":
             return try pageRecord(entityID: change.entityID)
+        case "diaryPage":
+            return try diaryPageRecord(entityID: change.entityID)
         case "block":
             return try blockRecord(entityID: change.entityID)
         case "attachment":
@@ -1193,6 +1224,23 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         record["isArchived"] = NSNumber(value: Int(row["is_archived"] ?? "") ?? 0)
         record["isFavorite"] = NSNumber(value: Int(row["is_favorite"] ?? "") ?? 0)
         record["isEncrypted"] = NSNumber(value: Int(row["is_encrypted"] ?? "") ?? 0)
+        record["updatedAt"] = row["updated_at"] as CKRecordValue?
+        return record
+    }
+
+    private func diaryPageRecord(entityID: String) throws -> CKRecord {
+        let row = try requiredRow(
+            """
+            SELECT page_id, workspace_id, diary_date, updated_at
+            FROM diary_pages
+            WHERE page_id = ?
+            LIMIT 1
+            """,
+            entityID: entityID
+        )
+        let record = makeRecord(type: "DiaryPageRecord", entityType: "diaryPage", entityID: entityID)
+        record["workspaceID"] = row["workspace_id"] as CKRecordValue?
+        record["diaryDate"] = row["diary_date"] as CKRecordValue?
         record["updatedAt"] = row["updated_at"] as CKRecordValue?
         return record
     }
@@ -1274,7 +1322,11 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             return nil
         }
 
-        return RemoteWorkspaceChange(workspaceID: workspaceID, name: name)
+        return RemoteWorkspaceChange(
+            workspaceID: workspaceID,
+            name: name,
+            updatedAt: record["updatedAt"] as? String
+        )
     }
 
     private func remoteNotebookChange(record: CKRecord) -> RemoteNotebookChange? {
@@ -1290,7 +1342,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             workspaceID: workspaceID,
             parentNotebookID: record["parentNotebookID"] as? String,
             name: name,
-            orderKey: orderKey
+            orderKey: orderKey,
+            updatedAt: record["updatedAt"] as? String
         )
     }
 
@@ -1310,7 +1363,23 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             orderKey: orderKey,
             isArchived: (record["isArchived"] as? NSNumber)?.boolValue ?? false,
             isFavorite: (record["isFavorite"] as? NSNumber)?.boolValue ?? false,
-            isEncrypted: (record["isEncrypted"] as? NSNumber)?.boolValue ?? false
+            isEncrypted: (record["isEncrypted"] as? NSNumber)?.boolValue ?? false,
+            updatedAt: record["updatedAt"] as? String
+        )
+    }
+
+    private func remoteDiaryPageChange(record: CKRecord) -> RemoteDiaryPageChange? {
+        guard let pageID = record["entityID"] as? String,
+              let workspaceID = record["workspaceID"] as? String,
+              let diaryDate = record["diaryDate"] as? String else {
+            return nil
+        }
+
+        return RemoteDiaryPageChange(
+            pageID: pageID,
+            workspaceID: workspaceID,
+            diaryDate: diaryDate,
+            updatedAt: record["updatedAt"] as? String
         )
     }
 
@@ -1334,7 +1403,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             revision: revision,
             parentBlockID: record["parentBlockID"] as? String,
             orderKey: record["orderKey"] as? String ?? "000001",
-            isDeleted: (record["isDeleted"] as? NSNumber)?.boolValue ?? false
+            isDeleted: (record["isDeleted"] as? NSNumber)?.boolValue ?? false,
+            updatedAt: record["updatedAt"] as? String
         )
     }
 
@@ -1364,7 +1434,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
                 record: record,
                 workspaceID: workspaceID,
                 attachmentID: attachmentID
-            )
+            ) ?? (record["thumbnailPath"] as? String),
+            updatedAt: record["updatedAt"] as? String
         )
     }
 
@@ -1446,6 +1517,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             return "notebook"
         case "PageRecord":
             return "page"
+        case "DiaryPageRecord":
+            return "diaryPage"
         case "AttachmentRecord":
             return "attachment"
         case "BlockRecord":
@@ -1697,6 +1770,7 @@ struct RemoteNotificationSyncHandler {
         var fetchSummary = SyncFetchSummary(appliedCount: 0)
         do {
             try syncer.ensureRemoteChangeSubscription()
+            fetchSummary = try syncer.fetchRemoteChanges()
             uploadSummary = try syncer.uploadPendingChanges()
             if uploadSummary.failedCount > 0 {
                 EditorLog.sync.error(
@@ -1704,7 +1778,6 @@ struct RemoteNotificationSyncHandler {
                 )
             }
 
-            fetchSummary = try syncer.fetchRemoteChanges()
             if uploadSummary.failedCount > 0 {
                 return RemoteNotificationSyncReport(
                     result: fetchSummary.appliedCount > 0 ? .newData : .failed,
@@ -1813,18 +1886,60 @@ final class SyncEngine {
                 try mergeEngine.applyRemotePage(change)
             }
         }
+        for change in changeSet.diaryPageChanges {
+            try applyRemoteChange(entityType: "diaryPage", entityID: change.pageID) {
+                try mergeEngine.applyRemoteDiaryPage(change)
+            }
+        }
         for change in changeSet.attachmentChanges {
             try applyRemoteChange(entityType: "attachment", entityID: change.attachmentID) {
                 try mergeEngine.applyRemoteAttachment(change)
             }
         }
+        var remotePageUpdatedAtByID: [String: String] = [:]
+        for change in changeSet.pageChanges {
+            if let updatedAt = change.updatedAt {
+                remotePageUpdatedAtByID[change.pageID] = updatedAt
+            }
+        }
+        var pageOrder: [String] = []
+        var blockChangesByPageID: [String: [RemoteBlockChange]] = [:]
         for change in RemoteBlockChangeDependencySorter.sorted(changeSet.blockChanges) {
-            try applyRemoteChange(
-                entityType: "block",
-                entityID: change.blockID,
-                details: "page_id=\(change.pageID) parent_block_id=\(change.parentBlockID ?? "nil")"
-            ) {
-                try mergeEngine.applyRemoteBlock(change)
+            if blockChangesByPageID[change.pageID] == nil {
+                pageOrder.append(change.pageID)
+            }
+            blockChangesByPageID[change.pageID, default: []].append(change)
+        }
+        for pageID in changeSet.fullSnapshotPageIDs.sorted()
+            where blockChangesByPageID[pageID] == nil {
+            pageOrder.append(pageID)
+            blockChangesByPageID[pageID] = []
+        }
+        for pageID in pageOrder {
+            let pageBlockChanges = blockChangesByPageID[pageID] ?? []
+            if changeSet.fullSnapshotPageIDs.contains(pageID) {
+                try applyRemoteChange(
+                    entityType: "pageSnapshot",
+                    entityID: pageID,
+                    details: "blocks=\(pageBlockChanges.count)"
+                ) {
+                    try mergeEngine.applyRemoteBlockPageSnapshot(
+                        pageID: pageID,
+                        changes: pageBlockChanges,
+                        remoteUpdatedAt: remotePageUpdatedAtByID[pageID] ?? Self.latestUpdatedAt(in: pageBlockChanges)
+                    )
+                }
+                continue
+            }
+
+            for change in pageBlockChanges {
+                try applyRemoteChange(
+                    entityType: "block",
+                    entityID: change.blockID,
+                    details: "page_id=\(change.pageID) parent_block_id=\(change.parentBlockID ?? "nil")"
+                ) {
+                    try mergeEngine.applyRemoteBlock(change)
+                }
             }
         }
         for deletion in changeSet.deletedRecords {
@@ -1842,6 +1957,7 @@ final class SyncEngine {
             appliedCount: changeSet.workspaceChanges.count
                 + changeSet.notebookChanges.count
                 + changeSet.pageChanges.count
+                + changeSet.diaryPageChanges.count
                 + changeSet.attachmentChanges.count
                 + changeSet.blockChanges.count
                 + changeSet.deletedRecords.count
@@ -1874,16 +1990,41 @@ final class SyncEngine {
             && nsError.code == CKError.changeTokenExpired.rawValue
     }
 
+    private static func latestUpdatedAt(in changes: [RemoteBlockChange]) -> String? {
+        changes.compactMap(\.updatedAt).max()
+    }
+
     @discardableResult
     func uploadPendingChanges() throws -> SyncUploadSummary {
+        try syncRepository.enqueueUnsyncedDiaryPageMappings()
         let changes = try syncRepository.pendingChanges()
         var uploadedCount = 0
         var failedCount = 0
+        var blockedPageIDs = Set<String>()
         for change in changes {
+            if change.entityType == "page" {
+                let hasBlockedBlocks: Bool
+                if blockedPageIDs.contains(change.entityID) {
+                    hasBlockedBlocks = true
+                } else {
+                    hasBlockedBlocks = try syncRepository.hasPendingBlockChanges(pageID: change.entityID)
+                }
+                if hasBlockedBlocks {
+                    EditorLog.sync.debug(
+                        "sync_page_change_deferred_pending_blocks page_id=\(change.entityID, privacy: .public)"
+                    )
+                    continue
+                }
+            }
+
             let retryState = try syncRepository.retryState(change: change)
             let currentDate = now()
             if let nextAttemptAt = retryState.nextAttemptAt,
                nextAttemptAt > currentDate {
+                if change.entityType == "block",
+                   let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {
+                    blockedPageIDs.insert(pageID)
+                }
                 EditorLog.sync.debug(
                     "sync_change_deferred entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
                 )
@@ -1898,6 +2039,10 @@ final class SyncEngine {
                     "sync_change_uploaded entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
                 )
             } catch {
+                if change.entityType == "block",
+                   let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {
+                    blockedPageIDs.insert(pageID)
+                }
                 let failureCount = retryState.attemptCount + 1
                 let errorDescription = CloudKitErrorDiagnostic.describe(error)
                 try syncRepository.recordFailure(
