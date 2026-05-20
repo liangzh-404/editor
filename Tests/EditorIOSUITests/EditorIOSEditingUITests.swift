@@ -474,6 +474,33 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneReturnCreatesNewTextBlockAndContinuesTypingThere() {
+        let app = makeApp()
+        app.launch()
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should be editable")
+
+        let firstBlockID = firstTextView.identifier
+        firstTextView.tap()
+        firstTextView.typeText(" Alpha\nBeta")
+
+        let secondTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).element(boundBy: 1)
+        XCTAssertTrue(secondTextView.waitForExistence(timeout: 5), "Return should create a second text block")
+        XCTAssertNotEqual(secondTextView.identifier, firstBlockID)
+
+        let firstValue = firstTextView.value as? String ?? ""
+        let secondValue = secondTextView.value as? String ?? ""
+        XCTAssertTrue(firstValue.contains("Alpha"), "The original block should keep the text before Return; value: \(firstValue)")
+        XCTAssertFalse(firstValue.contains("Beta"), "Text after Return should not remain in the original block; value: \(firstValue)")
+        XCTAssertTrue(secondValue.contains("Beta"), "Typing after Return should continue in the inserted block; value: \(secondValue)")
+    }
+
+    @MainActor
     private func navigateToWelcomePage(in app: XCUIApplication) {
         if app.textViews["editor.text.block-welcome-001"].waitForExistence(timeout: 1) {
             return

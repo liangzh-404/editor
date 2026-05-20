@@ -504,6 +504,9 @@ private struct ThreeColumnEditorShell: View {
                     onSplitTextBlockAtSelection: { blockID, selection in
                         viewModel.splitTextBlockAtSelectionForUI(blockID: blockID, selection: selection)
                     },
+                    onReplaceTextAtSelection: { selection, replacementText in
+                        viewModel.replaceTextAtSelectionForUI(selection: selection, replacementText: replacementText)
+                    },
                     onMergeTextBlockWithPrevious: { blockID, selection in
                         viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
                     },
@@ -801,6 +804,9 @@ private struct ThreeColumnEditorShell: View {
                 },
                 onSplitTextBlockAtSelection: { blockID, selection in
                     viewModel.splitTextBlockAtSelectionForUI(blockID: blockID, selection: selection)
+                },
+                onReplaceTextAtSelection: { selection, replacementText in
+                    viewModel.replaceTextAtSelectionForUI(selection: selection, replacementText: replacementText)
                 },
                 onMergeTextBlockWithPrevious: { blockID, selection in
                     viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
@@ -1408,6 +1414,105 @@ enum AttachmentImageDisplayWidthPolicy {
 
     static func storedWidth(_ width: CGFloat) -> Double {
         Double(width.rounded())
+    }
+}
+
+enum AttachmentImageCandidatePathState: Equatable, Sendable {
+    case missing
+    case undecodable
+    case loadable
+}
+
+enum AttachmentImagePreviewDiagnosticReason: String, Equatable, Sendable {
+    case missingAttachment
+    case waitingForSync
+    case fileMissing
+    case decodeFailed
+    case generationFailed
+
+    var showsWarningIcon: Bool {
+        self != .waitingForSync
+    }
+}
+
+struct AttachmentImagePreviewDiagnosticMessage: Equatable, Sendable {
+    let title: String
+    let detail: String
+}
+
+enum AttachmentImagePreviewDiagnosticResolver {
+    static func reason(
+        attachmentAvailable: Bool,
+        candidatePathStates: [AttachmentImageCandidatePathState],
+        isPending: Bool,
+        isGenerationFailed: Bool
+    ) -> AttachmentImagePreviewDiagnosticReason? {
+        guard attachmentAvailable else {
+            return .missingAttachment
+        }
+
+        if isGenerationFailed {
+            return .generationFailed
+        }
+
+        if candidatePathStates.contains(.loadable) {
+            return nil
+        }
+
+        if isPending || candidatePathStates.isEmpty {
+            return .waitingForSync
+        }
+
+        if candidatePathStates.allSatisfy({ $0 == .missing }) {
+            return .fileMissing
+        }
+
+        return .decodeFailed
+    }
+
+    static func message(
+        for reason: AttachmentImagePreviewDiagnosticReason
+    ) -> AttachmentImagePreviewDiagnosticMessage {
+        switch reason {
+        case .missingAttachment:
+            return AttachmentImagePreviewDiagnosticMessage(
+                title: "图片附件缺失",
+                detail: "当前块找不到对应的附件记录，可能是同步未完成或附件元数据丢失。"
+            )
+        case .waitingForSync:
+            return AttachmentImagePreviewDiagnosticMessage(
+                title: "等待图片同步",
+                detail: "图片记录已存在，但本机还没有可读取的图片文件或缩略图。"
+            )
+        case .fileMissing:
+            return AttachmentImagePreviewDiagnosticMessage(
+                title: "图片文件缺失",
+                detail: "附件路径已记录，但本机找不到对应文件。"
+            )
+        case .decodeFailed:
+            return AttachmentImagePreviewDiagnosticMessage(
+                title: "图片无法读取",
+                detail: "文件存在，但系统图片解码失败，可能是文件损坏或格式不支持。"
+            )
+        case .generationFailed:
+            return AttachmentImagePreviewDiagnosticMessage(
+                title: "预览生成失败",
+                detail: "缩略图生成失败，可以点右侧按钮重试。"
+            )
+        }
+    }
+}
+
+enum AttachmentImagePreviewZoomPolicy {
+    static let minimumScale: CGFloat = 1
+    static let maximumScale: CGFloat = 5
+
+    static func clampedScale(_ scale: CGFloat) -> CGFloat {
+        min(max(scale, minimumScale), maximumScale)
+    }
+
+    static func persistedOffset(currentOffset: CGSize, scale: CGFloat) -> CGSize {
+        scale > minimumScale ? currentOffset : .zero
     }
 }
 
@@ -3609,6 +3714,9 @@ private struct CompactPageDestination: View {
                 },
                 onSplitTextBlockAtSelection: { blockID, selection in
                     viewModel.splitTextBlockAtSelectionForUI(blockID: blockID, selection: selection)
+                },
+                onReplaceTextAtSelection: { selection, replacementText in
+                    viewModel.replaceTextAtSelectionForUI(selection: selection, replacementText: replacementText)
                 },
                 onMergeTextBlockWithPrevious: { blockID, selection in
                     viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
@@ -5827,6 +5935,7 @@ private struct EditorCanvasView: View {
     let onMoveBlockByKeyboard: (String, BlockKeyboardMoveDirection) -> Bool
     let onInsertBlockAfter: (String) -> Bool
     let onSplitTextBlockAtSelection: (String, EditorTextSelection) -> EditorTextSelection?
+    let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeTextBlockWithPrevious: (String, EditorTextSelection) -> EditorTextSelection?
     let onMergeTextBlockWithNext: (String, EditorTextSelection) -> EditorTextSelection?
     let onIndentBlock: (String) -> Bool
@@ -6045,25 +6154,36 @@ private struct EditorCanvasView: View {
                                 blockType: block.type,
                                 text: block.textPlain
                             ) {
+                                let nextSelection = EditorTextSelection(
+                                    blockID: block.id,
+                                    location: 0,
+                                    length: 0
+                                )
                                 onBlockTypeChange(block.id, .paragraph)
                                 pendingFocusRequest = BlockFocusRequest(
                                     blockID: block.id,
-                                    selection: EditorTextSelection(
-                                        blockID: block.id,
-                                        location: 0,
-                                        length: 0
-                                    )
+                                    selection: nextSelection
                                 )
-                                return true
+                                return nextSelection
                             }
                             guard let nextSelection = onSplitTextBlockAtSelection(block.id, selection) else {
-                                return false
+                                return nil
                             }
                             pendingFocusRequest = BlockFocusRequest(
                                 blockID: nextSelection.blockID,
                                 selection: nextSelection
                             )
-                            return true
+                            return nextSelection
+                        },
+                        onReplaceTextAtSelection: { selection, replacementText in
+                            guard let nextSelection = onReplaceTextAtSelection(selection, replacementText) else {
+                                return nil
+                            }
+                            pendingFocusRequest = BlockFocusRequest(
+                                blockID: nextSelection.blockID,
+                                selection: nextSelection
+                            )
+                            return nextSelection
                         },
                         onMergeBlockWithPrevious: { selection in
                             guard let nextSelection = onMergeTextBlockWithPrevious(block.id, selection) else {
@@ -9112,7 +9232,8 @@ private struct BlockRowView: View {
     let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
-    let onInsertBlockAfter: (EditorTextSelection) -> Bool
+    let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
+    let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onIndent: () -> Bool
@@ -9181,7 +9302,8 @@ private struct BlockRowView: View {
         onExtendBlockSelectionByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
         onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
-        onInsertBlockAfter: @escaping (EditorTextSelection) -> Bool = { _ in false },
+        onInsertBlockAfter: @escaping (EditorTextSelection) -> EditorTextSelection? = { _ in nil },
+        onReplaceTextAtSelection: @escaping (EditorTextSelection, String) -> EditorTextSelection? = { _, _ in nil },
         onMergeBlockWithPrevious: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onMergeBlockWithNext: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onIndent: @escaping () -> Bool = { false },
@@ -9240,6 +9362,7 @@ private struct BlockRowView: View {
         self.onApplyInlineFormatByKeyboard = onApplyInlineFormatByKeyboard
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
+        self.onReplaceTextAtSelection = onReplaceTextAtSelection
         self.onMergeBlockWithPrevious = onMergeBlockWithPrevious
         self.onMergeBlockWithNext = onMergeBlockWithNext
         self.onIndent = onIndent
@@ -9924,6 +10047,7 @@ private struct BlockRowView: View {
             onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
             onInsertLinkByKeyboard: onInsertLinkByKeyboard,
             onInsertBlockAfter: onInsertBlockAfter,
+            onReplaceTextAtSelection: onReplaceTextAtSelection,
             onMergeBlockWithPrevious: onMergeBlockWithPrevious,
             onMergeBlockWithNext: onMergeBlockWithNext,
             onSlashCommandNavigationByKeyboard: handleSlashCommandNavigation,
@@ -11789,12 +11913,127 @@ private struct BlockReferenceBlockRow: View {
 private struct AttachmentPreviewImage {
     let image: Image
     let size: CGSize
+    let sourcePath: String
 
     func height(forWidth width: CGFloat) -> CGFloat {
         guard size.width > 0 else {
             return width
         }
         return width * max(size.height, 1) / size.width
+    }
+}
+
+private struct AttachmentImagePreviewPayload: Identifiable {
+    let id: String
+    let blockID: String
+    let title: String
+    let image: AttachmentPreviewImage
+}
+
+private struct AttachmentImagePreviewOverlay: View {
+    let payload: AttachmentImagePreviewPayload
+    let onDismiss: () -> Void
+
+    @State private var committedScale: CGFloat = AttachmentImagePreviewZoomPolicy.minimumScale
+    @State private var committedOffset: CGSize = .zero
+    @GestureState private var gestureScale: CGFloat = AttachmentImagePreviewZoomPolicy.minimumScale
+    @GestureState private var gestureOffset: CGSize = .zero
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black
+                .ignoresSafeArea()
+
+            payload.image.image
+                .resizable()
+                .scaledToFit()
+                .padding(18)
+                .scaleEffect(currentScale)
+                .offset(currentOffset)
+                .contentShape(Rectangle())
+                .simultaneousGesture(zoomGesture)
+                .simultaneousGesture(panGesture)
+                .onTapGesture(count: 2) {
+                    toggleZoom()
+                }
+                .accessibilityLabel("图片预览：\(payload.title)")
+                .accessibilityValue("双指缩放，拖动查看细节")
+                .accessibilityIdentifier("editor.attachment.\(payload.blockID).image-preview")
+
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.94), .black.opacity(0.35))
+                    .padding(18)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭图片预览")
+            .accessibilityIdentifier("editor.attachment.\(payload.blockID).image-preview-close")
+        }
+    }
+
+    private var currentScale: CGFloat {
+        AttachmentImagePreviewZoomPolicy.clampedScale(committedScale * gestureScale)
+    }
+
+    private var currentOffset: CGSize {
+        let proposed = CGSize(
+            width: committedOffset.width + gestureOffset.width,
+            height: committedOffset.height + gestureOffset.height
+        )
+        return AttachmentImagePreviewZoomPolicy.persistedOffset(
+            currentOffset: proposed,
+            scale: currentScale
+        )
+    }
+
+    private var zoomGesture: some Gesture {
+        MagnificationGesture()
+            .updating($gestureScale) { value, state, _ in
+                state = value
+            }
+            .onEnded { value in
+                committedScale = AttachmentImagePreviewZoomPolicy.clampedScale(committedScale * value)
+                committedOffset = AttachmentImagePreviewZoomPolicy.persistedOffset(
+                    currentOffset: committedOffset,
+                    scale: committedScale
+                )
+            }
+    }
+
+    private var panGesture: some Gesture {
+        DragGesture(minimumDistance: 2)
+            .updating($gestureOffset) { value, state, _ in
+                guard currentScale > AttachmentImagePreviewZoomPolicy.minimumScale else {
+                    state = .zero
+                    return
+                }
+                state = value.translation
+            }
+            .onEnded { value in
+                let proposed = CGSize(
+                    width: committedOffset.width + value.translation.width,
+                    height: committedOffset.height + value.translation.height
+                )
+                committedOffset = AttachmentImagePreviewZoomPolicy.persistedOffset(
+                    currentOffset: proposed,
+                    scale: committedScale
+                )
+            }
+    }
+
+    private func toggleZoom() {
+        withAnimation(.easeInOut(duration: 0.16)) {
+            if committedScale > AttachmentImagePreviewZoomPolicy.minimumScale {
+                committedScale = AttachmentImagePreviewZoomPolicy.minimumScale
+                committedOffset = .zero
+            } else {
+                committedScale = 2
+                committedOffset = .zero
+            }
+        }
     }
 }
 
@@ -11892,6 +12131,7 @@ private struct AttachmentBlockRow: View {
     @State private var transientImageWidth: CGFloat?
     @State private var resizeDragStartWidth: CGFloat?
     @State private var measuredImageAvailableWidth = AttachmentImageDisplayWidthPolicy.defaultWidth
+    @State private var presentedImagePreview: AttachmentImagePreviewPayload?
 
     var body: some View {
         let descriptor = AttachmentBlockChromeDescriptor(
@@ -11899,11 +12139,32 @@ private struct AttachmentBlockRow: View {
             attachment: attachment,
             generationStatus: generationStatus
         )
-        if block.type == .attachmentImage, let thumbnailImage {
-            imageAttachmentBody(thumbnailImage: thumbnailImage, descriptor: descriptor)
-        } else {
-            compactAttachmentBody(descriptor: descriptor)
+        imagePreviewPresentation(
+            Group {
+                if block.type == .attachmentImage, let thumbnailImage {
+                    imageAttachmentBody(thumbnailImage: thumbnailImage, descriptor: descriptor)
+                } else {
+                    compactAttachmentBody(descriptor: descriptor)
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func imagePreviewPresentation<Content: View>(_ content: Content) -> some View {
+#if os(iOS)
+        content.fullScreenCover(item: $presentedImagePreview) { payload in
+            AttachmentImagePreviewOverlay(payload: payload) {
+                presentedImagePreview = nil
+            }
         }
+#else
+        content.sheet(item: $presentedImagePreview) { payload in
+            AttachmentImagePreviewOverlay(payload: payload) {
+                presentedImagePreview = nil
+            }
+        }
+#endif
     }
 
     private func imageAttachmentBody(
@@ -11924,16 +12185,23 @@ private struct AttachmentBlockRow: View {
 
             VStack(alignment: .leading, spacing: showsCaption ? 6 : 0) {
                 ZStack(alignment: .bottomTrailing) {
-                    thumbnailImage.image
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: resolvedWidth, height: imageHeight, alignment: .leading)
-                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .stroke(Color.black.opacity(0.06), lineWidth: 1)
-                        )
-                        .accessibilityHidden(true)
+                    Button {
+                        presentImagePreview(fallbackImage: thumbnailImage)
+                    } label: {
+                        thumbnailImage.image
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: resolvedWidth, height: imageHeight, alignment: .leading)
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("查看图片：\(imagePreviewTitle)")
+                    .accessibilityValue("打开后可双指缩放")
+                    .accessibilityIdentifier("editor.attachment.\(block.id).image-open")
 
                     imageResizeHandle(
                         currentWidth: resolvedWidth,
@@ -12050,7 +12318,9 @@ private struct AttachmentBlockRow: View {
     }
 
     private func compactAttachmentBody(descriptor: AttachmentBlockChromeDescriptor) -> some View {
-        HStack(spacing: 10) {
+        let diagnosticReason = imagePreviewDiagnosticReason
+        let diagnosticMessage = diagnosticReason.map(AttachmentImagePreviewDiagnosticResolver.message(for:))
+        return HStack(spacing: 10) {
             if let thumbnailImage {
                 thumbnailImage.image
                     .resizable()
@@ -12058,7 +12328,7 @@ private struct AttachmentBlockRow: View {
                     .frame(width: 52, height: 40)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .accessibilityHidden(true)
-            } else if isPreviewFailed {
+            } else if diagnosticReason?.showsWarningIcon == true || isPreviewFailed {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.title3)
                     .foregroundStyle(.orange)
@@ -12066,7 +12336,7 @@ private struct AttachmentBlockRow: View {
                     .background(Color.orange.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .accessibilityHidden(true)
-            } else if isPreviewPending {
+            } else if isPreviewPending || diagnosticReason == .waitingForSync {
                 ProgressView()
                     .controlSize(.small)
                     .frame(width: 52, height: 40)
@@ -12081,14 +12351,22 @@ private struct AttachmentBlockRow: View {
                     .frame(width: 28, height: 28)
             }
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: diagnosticMessage == nil ? 2 : 3) {
                 Text(block.textPlain)
                     .font(.body)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text(kindLabel)
+                Text(diagnosticMessage?.title ?? kindLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let diagnosticMessage {
+                    Text(diagnosticMessage.detail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("editor.attachment.\(block.id).preview-diagnostic")
+                }
             }
 
             Spacer(minLength: 8)
@@ -12111,28 +12389,109 @@ private struct AttachmentBlockRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .accessibilityIdentifier(descriptor.accessibilityIdentifier)
         .accessibilityLabel(descriptor.accessibilityLabel)
-        .accessibilityValue(descriptor.accessibilityValue)
+        .accessibilityValue(diagnosticMessage?.title ?? descriptor.accessibilityValue)
+        .onAppear {
+            logImagePreviewDiagnosticIfNeeded(diagnosticReason)
+        }
+        .onChange(of: diagnosticReason) { _, newReason in
+            logImagePreviewDiagnosticIfNeeded(newReason)
+        }
     }
 
     private var thumbnailImage: AttachmentPreviewImage? {
-        guard let attachment else {
-            return nil
-        }
-        let candidatePaths = attachment.previewCandidatePaths(for: block)
-        for path in candidatePaths {
-#if os(macOS)
-            if let image = NSImage(contentsOfFile: path) {
-                return AttachmentPreviewImage(image: Image(nsImage: image), size: image.size)
+        attachmentPreviewImage(preferOriginal: false)
+    }
+
+    private var fullSizePreviewImage: AttachmentPreviewImage? {
+        attachmentPreviewImage(preferOriginal: true)
+    }
+
+    private func attachmentPreviewImage(preferOriginal: Bool) -> AttachmentPreviewImage? {
+        for path in imageCandidatePaths(preferOriginal: preferOriginal) {
+            if let image = loadPreviewImage(at: path) {
+                return image
             }
-#elseif os(iOS)
-            if let image = UIImage(contentsOfFile: path) {
-                return AttachmentPreviewImage(image: Image(uiImage: image), size: image.size)
-            }
-#else
-            return nil
-#endif
         }
         return nil
+    }
+
+    private func loadPreviewImage(at path: String) -> AttachmentPreviewImage? {
+#if os(macOS)
+        guard let image = NSImage(contentsOfFile: path) else {
+            return nil
+        }
+        return AttachmentPreviewImage(image: Image(nsImage: image), size: image.size, sourcePath: path)
+#elseif os(iOS)
+        guard let image = UIImage(contentsOfFile: path) else {
+            return nil
+        }
+        return AttachmentPreviewImage(image: Image(uiImage: image), size: image.size, sourcePath: path)
+#else
+        return nil
+#endif
+    }
+
+    private func imageCandidatePaths(preferOriginal: Bool) -> [String] {
+        guard let attachment else {
+            return []
+        }
+
+        let candidatePaths = attachment.previewCandidatePaths(for: block)
+        guard preferOriginal,
+              !attachment.localPath.isEmpty,
+              candidatePaths.contains(attachment.localPath) else {
+            return candidatePaths
+        }
+
+        return [attachment.localPath] + candidatePaths.filter { $0 != attachment.localPath }
+    }
+
+    private var imagePreviewDiagnosticReason: AttachmentImagePreviewDiagnosticReason? {
+        guard block.type == .attachmentImage else {
+            return nil
+        }
+        return AttachmentImagePreviewDiagnosticResolver.reason(
+            attachmentAvailable: attachment != nil,
+            candidatePathStates: imageCandidatePathStates,
+            isPending: isPreviewPending,
+            isGenerationFailed: isPreviewFailed
+        )
+    }
+
+    private var imageCandidatePathStates: [AttachmentImageCandidatePathState] {
+        imageCandidatePaths(preferOriginal: false).map { path in
+            guard FileManager.default.fileExists(atPath: path) else {
+                return .missing
+            }
+            return loadPreviewImage(at: path) == nil ? .undecodable : .loadable
+        }
+    }
+
+    private var imagePreviewTitle: String {
+        let trimmed = block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return attachment?.originalFilename ?? "图片"
+    }
+
+    private func presentImagePreview(fallbackImage: AttachmentPreviewImage) {
+        let image = fullSizePreviewImage ?? fallbackImage
+        presentedImagePreview = AttachmentImagePreviewPayload(
+            id: "\(block.id)-\(image.sourcePath)",
+            blockID: block.id,
+            title: imagePreviewTitle,
+            image: image
+        )
+    }
+
+    private func logImagePreviewDiagnosticIfNeeded(_ reason: AttachmentImagePreviewDiagnosticReason?) {
+        guard let reason else {
+            return
+        }
+        EditorLog.attachment.error(
+            "attachment_image_preview_unavailable block_id=\(block.id, privacy: .public) attachment_id=\(attachment?.id ?? "nil", privacy: .public) reason=\(reason.rawValue, privacy: .public) candidate_count=\(imageCandidatePathStates.count, privacy: .public)"
+        )
     }
 
     private var previewState: AttachmentPreviewState {

@@ -386,6 +386,77 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testAttachmentImagePreviewDiagnosticExplainsMissingOrUnreadableImages() {
+        XCTAssertEqual(
+            AttachmentImagePreviewDiagnosticResolver.reason(
+                attachmentAvailable: false,
+                candidatePathStates: [],
+                isPending: false,
+                isGenerationFailed: false
+            ),
+            .missingAttachment
+        )
+        XCTAssertEqual(
+            AttachmentImagePreviewDiagnosticResolver.reason(
+                attachmentAvailable: true,
+                candidatePathStates: [],
+                isPending: true,
+                isGenerationFailed: false
+            ),
+            .waitingForSync
+        )
+        XCTAssertEqual(
+            AttachmentImagePreviewDiagnosticResolver.reason(
+                attachmentAvailable: true,
+                candidatePathStates: [.missing],
+                isPending: false,
+                isGenerationFailed: false
+            ),
+            .fileMissing
+        )
+        XCTAssertEqual(
+            AttachmentImagePreviewDiagnosticResolver.reason(
+                attachmentAvailable: true,
+                candidatePathStates: [.undecodable],
+                isPending: false,
+                isGenerationFailed: false
+            ),
+            .decodeFailed
+        )
+        XCTAssertNil(
+            AttachmentImagePreviewDiagnosticResolver.reason(
+                attachmentAvailable: true,
+                candidatePathStates: [.loadable],
+                isPending: false,
+                isGenerationFailed: false
+            )
+        )
+        XCTAssertEqual(
+            AttachmentImagePreviewDiagnosticResolver.message(for: .fileMissing).title,
+            "图片文件缺失"
+        )
+    }
+
+    func testAttachmentImagePreviewZoomPolicyClampsScaleAndClearsOffsetAtRest() {
+        XCTAssertEqual(AttachmentImagePreviewZoomPolicy.clampedScale(0.4), 1)
+        XCTAssertEqual(AttachmentImagePreviewZoomPolicy.clampedScale(6.8), 5)
+        XCTAssertEqual(AttachmentImagePreviewZoomPolicy.clampedScale(2.25), 2.25)
+        XCTAssertEqual(
+            AttachmentImagePreviewZoomPolicy.persistedOffset(
+                currentOffset: CGSize(width: 20, height: 10),
+                scale: 1
+            ),
+            .zero
+        )
+        XCTAssertEqual(
+            AttachmentImagePreviewZoomPolicy.persistedOffset(
+                currentOffset: CGSize(width: 20, height: 10),
+                scale: 2
+            ),
+            CGSize(width: 20, height: 10)
+        )
+    }
+
     func testInlineLeadingControlsKeepTaskAndToggleTextBaselineCompensation() {
         let descriptor = InlineLeadingControlFrameDescriptor()
         let compactControlDescriptor = InlineLeadingControlFrameDescriptor(

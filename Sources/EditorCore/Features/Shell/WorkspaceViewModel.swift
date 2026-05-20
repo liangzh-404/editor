@@ -2309,6 +2309,34 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     @discardableResult
+    func replaceTextAtSelection(
+        selection: EditorTextSelection,
+        replacementText: String
+    ) throws -> EditorTextSelection? {
+        guard let block = snapshot.blocks.first(where: { $0.id == selection.blockID && $0.type.isTextEditable }) else {
+            return nil
+        }
+
+        let nsText = block.textPlain as NSString
+        guard selection.location >= 0,
+              selection.length >= 0,
+              selection.location <= nsText.length,
+              selection.length <= nsText.length - selection.location else {
+            return nil
+        }
+
+        let selectedRange = NSRange(location: selection.location, length: selection.length)
+        let updatedText = nsText.replacingCharacters(in: selectedRange, with: replacementText)
+        try updateBlockText(blockID: selection.blockID, text: updatedText)
+
+        return EditorTextSelection(
+            blockID: selection.blockID,
+            location: selection.location + (replacementText as NSString).length,
+            length: 0
+        )
+    }
+
+    @discardableResult
     func mergeTextBlockWithPreviousAtSelection(
         blockID: String,
         selection: EditorTextSelection
@@ -2612,6 +2640,26 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "text_block_split_at_selection_failed previous_block_id=\(blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func replaceTextAtSelectionForUI(
+        selection: EditorTextSelection,
+        replacementText: String
+    ) -> EditorTextSelection? {
+        do {
+            let nextSelection = try replaceTextAtSelection(selection: selection, replacementText: replacementText)
+            if nextSelection != nil {
+                EditorLog.input.debug(
+                    "text_replaced_at_selection block_id=\(selection.blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public) replacement_length=\(replacementText.count, privacy: .public)"
+                )
+            }
+            return nextSelection
+        } catch {
+            EditorLog.input.error(
+                "text_replace_at_selection_failed block_id=\(selection.blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return nil
         }
