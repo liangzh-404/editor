@@ -1149,6 +1149,34 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
+    func testCloudKitPrivateDatabaseAdapterDoesNotReuseRemoteLocalPathWithoutAsset() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let downloadDirectory = makeTemporaryDirectory()
+        let fetcher = StaticCloudKitRecordFetcher(recordsByType: [
+            "AttachmentRecord": [
+                makeRecord(type: "AttachmentRecord", entityType: "attachment", entityID: "attachment-remote") {
+                    $0["workspaceID"] = "workspace-remote" as CKRecordValue
+                    $0["originalFilename"] = "photo.png" as CKRecordValue
+                    $0["utiType"] = "public.png" as CKRecordValue
+                    $0["byteSize"] = NSNumber(value: 12)
+                    $0["contentHash"] = "hash-remote" as CKRecordValue
+                    $0["localPath"] = "/remote/photo.png" as CKRecordValue
+                }
+            ]
+        ])
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher,
+            attachmentDownloadDirectory: downloadDirectory
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+        let attachment = try XCTUnwrap(changeSet.attachmentChanges.first)
+
+        XCTAssertEqual(attachment.localPath, "")
+    }
+
     func testCloudKitPrivateDatabaseAdapterDownloadsAttachmentThumbnailAssets() throws {
         let database = try migratedDatabase()
         defer { database.close() }

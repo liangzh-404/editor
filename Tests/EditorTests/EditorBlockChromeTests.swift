@@ -1546,7 +1546,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(PageRowLayoutPolicy.favoriteButtonSize, 22)
     }
 
-    func testImageAttachmentPreviewCandidatesFallBackFromMissingThumbnailToOriginalFile() {
+    func testImageAttachmentPreviewCandidatesPreferOriginalFileBeforeThumbnail() {
         let block = BlockSnapshot(
             id: "image-block",
             pageID: "page",
@@ -1570,7 +1570,7 @@ final class EditorBlockChromeTests: XCTestCase {
 
         XCTAssertEqual(
             attachment.previewCandidatePaths(for: block),
-            ["/tmp/missing-thumbnail.jpg", "/tmp/photo.png"]
+            ["/tmp/photo.png", "/tmp/missing-thumbnail.jpg"]
         )
     }
 
