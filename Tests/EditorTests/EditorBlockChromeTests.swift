@@ -46,8 +46,9 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testEditorCanvasChromeKeepsContentCloseToPhoneEdges() {
+        XCTAssertEqual(EditorCanvasChromeLayout.compactHorizontalPadding, 14)
 #if os(iOS)
-        XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, 20)
+        XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, EditorCanvasChromeLayout.compactHorizontalPadding)
         XCTAssertEqual(EditorCanvasChromeLayout.verticalPadding, 18)
         XCTAssertEqual(EditorCanvasChromeLayout.pageTitleLeadingPadding, 27)
 #else
@@ -56,6 +57,65 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorCanvasChromeLayout.pageTitleLeadingPadding, 27)
         XCTAssertEqual(EditorCanvasChromeLayout.blockRowTitleAlignmentCompensation, 0)
 #endif
+    }
+
+    func testMobileNavigationTitleAppearsOnlyAfterBodyTitleEntersTopMask() {
+        XCTAssertFalse(
+            MobileNavigationTitleVisibilityResolver.isNavigationTitleVisible(
+                titleFrame: .zero,
+                topMaskHeight: 72
+            ),
+            "The default preference value should not make the top title flash on first render"
+        )
+        XCTAssertFalse(
+            MobileNavigationTitleVisibilityResolver.isNavigationTitleVisible(
+                titleFrame: CGRect(x: 14, y: 96, width: 320, height: 40),
+                topMaskHeight: 72
+            )
+        )
+        XCTAssertTrue(
+            MobileNavigationTitleVisibilityResolver.isNavigationTitleVisible(
+                titleFrame: CGRect(x: 14, y: 20, width: 320, height: 40),
+                topMaskHeight: 72
+            ),
+            "The top title should appear once the body title is fully inside the blurred top mask"
+        )
+        XCTAssertTrue(
+            MobileNavigationTitleVisibilityResolver.isNavigationTitleVisible(
+                titleFrame: CGRect(x: 14, y: -20, width: 320, height: 40),
+                topMaskHeight: 72
+            )
+        )
+        XCTAssertTrue(
+            MobileNavigationTitleVisibilityResolver.isNavigationTitleVisible(
+                titleFrame: CGRect(x: 14, y: -48, width: 320, height: 40),
+                topMaskHeight: 72
+            )
+        )
+        XCTAssertFalse(
+            MobileNavigationTitleScrollVisibilityResolver.isNavigationTitleVisible(
+                baselineMaxY: 169,
+                scrollOffsetY: 96,
+                topMaskHeight: 72
+            ),
+            "The top title should stay hidden while the body title has not fully entered the top mask"
+        )
+        XCTAssertTrue(
+            MobileNavigationTitleScrollVisibilityResolver.isNavigationTitleVisible(
+                baselineMaxY: 169,
+                scrollOffsetY: 97,
+                topMaskHeight: 72
+            ),
+            "The top title should appear as soon as scrolling moves the body title fully into the top mask"
+        )
+        XCTAssertTrue(
+            MobileNavigationTitleScrollVisibilityResolver.isNavigationTitleVisible(
+                baselineMaxY: 169,
+                scrollOffsetY: 681,
+                topMaskHeight: 72
+            ),
+            "The top title should remain visible after the body title has fully scrolled away"
+        )
     }
 
     func testDesktopColumnDividerStaysVisualOnlyAndSubtle() {

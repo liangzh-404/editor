@@ -6,9 +6,12 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
-    private func makeApp() -> XCUIApplication {
+    private func makeApp(extraEnvironment: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_UI_TEST_RESET_STORE"] = "1"
+        for (key, value) in extraEnvironment {
+            app.launchEnvironment[key] = value
+        }
         return app
     }
 
@@ -69,6 +72,100 @@ final class EditorIOSEditingUITests: XCTestCase {
         XCTAssertFalse(
             app.buttons["editor.insert-attachment"].exists,
             "iPhone editor should not show a separate attachment button"
+        )
+    }
+
+    @MainActor
+    func testIPhoneEditorKeepsPageActionsPinnedInNavigationBar() {
+        let app = makeApp(extraEnvironment: ["EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT": "40"])
+        app.launch()
+
+        let pinnedActions = app.navigationBars.buttons["editor.page-actions"]
+        XCTAssertTrue(
+            pinnedActions.waitForExistence(timeout: 5),
+            "The iPhone page actions menu should be fixed in the navigation bar next to Back"
+        )
+        let initialFrame = pinnedActions.frame
+
+        let canvas = app.scrollViews["editor.canvas-scroll"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5), "The editor canvas should be scrollable")
+        canvas.swipeUp()
+
+        XCTAssertTrue(pinnedActions.waitForExistence(timeout: 3), "The page actions menu should remain visible after scrolling")
+        XCTAssertEqual(
+            pinnedActions.frame.minY,
+            initialFrame.minY,
+            accuracy: 2,
+            "The fixed page actions menu should not move with the document title row"
+        )
+    }
+
+    @MainActor
+    func testIPhoneEditorShowsCollapsedNavigationTitleAfterBodyTitleScrollsAway() {
+        let app = makeApp(extraEnvironment: ["EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT": "40"])
+        app.launch()
+
+        let pageTitle = app.textFields["editor.page-title"]
+        XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "The editable page title should start in the document body")
+        let collapsedTitle = app.staticTexts["editor.mobile-navigation-title"]
+        XCTAssertFalse(
+            collapsedTitle.exists,
+            "The navigation title should stay hidden while the body title is visible"
+        )
+
+        let canvas = app.scrollViews["editor.canvas-scroll"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5), "The editor canvas should be scrollable")
+        canvas.swipeUp()
+
+        XCTAssertTrue(
+            collapsedTitle.waitForExistence(timeout: 3),
+            "The page title should appear in the blurred top bar once the body title scrolls away"
+        )
+    }
+
+    @MainActor
+    func testIPhoneEditorKeepsTextColumnCloserToLeftEdge() {
+        let app = makeApp()
+        app.launch()
+
+        let pageTitle = app.textFields["editor.page-title"]
+        XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "The editable page title should be visible")
+        XCTAssertLessThanOrEqual(
+            pageTitle.frame.minX,
+            43,
+            "The page title should sit closer to the left edge to preserve writing space"
+        )
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should be visible")
+        XCTAssertLessThanOrEqual(
+            firstTextView.frame.minX,
+            43,
+            "The text column should sit closer to the left edge to preserve writing space"
+        )
+    }
+
+    @MainActor
+    func testIPhoneLongUnbrokenTextStaysInsideViewport() {
+        let app = makeApp()
+        app.launch()
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should be editable")
+
+        firstTextView.tap()
+        firstTextView.typeText(" \(String(repeating: "longclipboardtoken", count: 10))")
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 5), "The app window should be available for viewport checks")
+        XCTAssertLessThanOrEqual(
+            firstTextView.frame.maxX,
+            window.frame.maxX - 8,
+            "Long typed or pasted text should wrap inside the iPhone viewport instead of stretching to the right"
         )
     }
 
