@@ -1010,6 +1010,7 @@ final class SyncEngineTests: XCTestCase {
                     $0["orderKey"] = "000001" as CKRecordValue
                     $0["isArchived"] = NSNumber(value: false)
                     $0["isFavorite"] = NSNumber(value: true)
+                    $0["isEncrypted"] = NSNumber(value: true)
                 }
             ],
             "AttachmentRecord": [
@@ -1043,6 +1044,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.notebookChanges.map(\.notebookID), ["notebook-remote"])
         XCTAssertEqual(changeSet.pageChanges.map(\.pageID), ["page-remote"])
         XCTAssertEqual(changeSet.pageChanges.first?.isFavorite, true)
+        XCTAssertEqual(changeSet.pageChanges.first?.isEncrypted, true)
         XCTAssertEqual(changeSet.attachmentChanges.map(\.attachmentID), ["attachment-remote"])
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
     }
@@ -1406,14 +1408,18 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(record["parentNotebookID"] as? String, parent.id)
     }
 
-    func testCloudKitPrivateDatabaseAdapterMapsPageFavoriteToRecord() throws {
+    func testCloudKitPrivateDatabaseAdapterMapsPageFavoriteAndEncryptionToRecord() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
-        let pageRepository = PageRepository(database: database)
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let pageRepository = PageRepository(database: database, encryptedNoteCipher: cipher)
         let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         try pageRepository.updatePageFavorite(pageID: pageID, isFavorite: true)
+        try pageRepository.updatePageEncryption(pageID: pageID, isEncrypted: true)
         let saver = CapturingCloudKitRecordSaver()
 
         _ = try CloudKitPrivateDatabaseAdapter(
@@ -1425,7 +1431,9 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(record.recordType, "PageRecord")
         XCTAssertEqual(record["entityID"] as? String, pageID)
         XCTAssertEqual((record["isFavorite"] as? NSNumber)?.boolValue, true)
+        XCTAssertEqual((record["isEncrypted"] as? NSNumber)?.boolValue, true)
         XCTAssertEqual((record["isArchived"] as? NSNumber)?.boolValue, false)
+        XCTAssertTrue((record["title"] as? String)?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
     }
 
     func testCloudKitPrivateDatabaseAdapterMapsAttachmentAssetsToRecord() throws {

@@ -15,6 +15,7 @@ enum WorkspaceCollection: Equatable, Hashable, Sendable {
     case diary
     case allDocuments
     case favorites
+    case encrypted
     case tag(String)
     case search
     case archive
@@ -225,6 +226,8 @@ final class WorkspaceViewModel: ObservableObject {
             return snapshot.pages.filter { !diaryPageIDs.contains($0.id) }
         case .favorites:
             return snapshot.favoritePages
+        case .encrypted:
+            return snapshot.pages.filter(\.isEncrypted)
         case .tag(let tagID):
             guard !tagID.isEmpty else {
                 return []
@@ -528,6 +531,8 @@ final class WorkspaceViewModel: ObservableObject {
             return .allDocuments
         case .favorites where snapshot.favoritePages.contains(where: { $0.id == pageID }):
             return .favorites
+        case .encrypted where snapshot.pages.contains(where: { $0.id == pageID && $0.isEncrypted }):
+            return .encrypted
         case .tag(let tagID) where snapshot.pageTags.contains(where: { $0.pageID == pageID && $0.tagID == tagID }):
             return .tag(tagID)
         case .archive where snapshot.archivedPages.contains(where: { $0.id == pageID }):
@@ -1433,6 +1438,20 @@ final class WorkspaceViewModel: ObservableObject {
         try refreshDerivedState(rebuildSearchIndex: false)
     }
 
+    func updatePageEncryption(id pageID: String, isEncrypted: Bool) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let previousCollection = selectedCollection
+        let previousPageID = selectedPageID
+        try repository.updatePageEncryption(pageID: pageID, isEncrypted: isEncrypted)
+        let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+        apply(snapshot: loadedSnapshot)
+        restoreSelectionAfterReload(collection: previousCollection, pageID: previousPageID)
+        try refreshDerivedState(rebuildSearchIndex: true)
+    }
+
     func editBlockText(blockID: String, text: String) {
         do {
             try updateBlockText(blockID: blockID, text: text)
@@ -1642,7 +1661,8 @@ final class WorkspaceViewModel: ObservableObject {
         let page = try repository.createPage(
             workspaceID: selectedWorkspaceID,
             title: title,
-            notebookID: notebookID ?? selectedNotebookID
+            notebookID: notebookID ?? selectedNotebookID,
+            isEncrypted: selectedCollection == .encrypted
         )
         try load()
         selectPage(id: page.id)
@@ -1977,6 +1997,19 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "page_favorite_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func updatePageEncryptionForUI(id pageID: String, isEncrypted: Bool) {
+        do {
+            try updatePageEncryption(id: pageID, isEncrypted: isEncrypted)
+            EditorLog.input.debug(
+                "page_encryption_visible page_id=\(pageID, privacy: .public) is_encrypted=\(isEncrypted, privacy: .public)"
+            )
+        } catch {
+            EditorLog.input.error(
+                "page_encryption_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }
@@ -3218,6 +3251,8 @@ final class WorkspaceViewModel: ObservableObject {
             return snapshot.pages.contains { $0.id == pageID }
         case .allDocuments:
             return snapshot.pages.contains { $0.id == pageID } && !diaryPageIDs.contains(pageID)
+        case .encrypted:
+            return snapshot.pages.contains { $0.id == pageID && $0.isEncrypted }
         case .favorites, .tag, .search:
             return snapshot.pages.contains { $0.id == pageID }
         }

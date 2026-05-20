@@ -1,5 +1,6 @@
 import Foundation
 import CloudKit
+import CryptoKit
 import Security
 
 enum DataProtectionService {
@@ -67,25 +68,37 @@ enum CloudKitEntitlementInspector {
 
 final class KeychainMetadataStore {
     private let service: String
+    private let accessible: CFString
+    private let synchronizesAcrossDevices: Bool
 
-    init(service: String = "com.liangzhang.editor.metadata") {
+    init(
+        service: String = "com.liangzhang.editor.metadata",
+        accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        synchronizesAcrossDevices: Bool = false
+    ) {
         self.service = service
+        self.accessible = accessible
+        self.synchronizesAcrossDevices = synchronizesAcrossDevices
     }
 
     func setString(_ value: String, for account: String) throws {
-        try removeValue(for: account)
-
         guard let data = value.data(using: .utf8) else {
             throw KeychainMetadataStoreError.invalidStringEncoding
         }
+
+        try setData(data, for: account)
+    }
+
+    func setData(_ data: Data, for account: String) throws {
+        try removeValue(for: account)
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecAttrAccessible as String: accessible,
             kSecValueData as String: data
-        ]
+        ].includingSynchronizableFlag(synchronizesAcrossDevices)
 
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
@@ -94,6 +107,16 @@ final class KeychainMetadataStore {
     }
 
     func string(for account: String) throws -> String? {
+        guard let data = try data(for: account) else {
+            return nil
+        }
+        guard let value = String(data: data, encoding: .utf8) else {
+            throw KeychainMetadataStoreError.invalidStoredData
+        }
+        return value
+    }
+
+    func data(for account: String) throws -> Data? {
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -107,11 +130,10 @@ final class KeychainMetadataStore {
         guard status == errSecSuccess else {
             throw KeychainMetadataStoreError.unexpectedStatus(status)
         }
-        guard let data = item as? Data,
-              let value = String(data: data, encoding: .utf8) else {
+        guard let data = item as? Data else {
             throw KeychainMetadataStoreError.invalidStoredData
         }
-        return value
+        return data
     }
 
     func removeValue(for account: String) throws {
@@ -126,7 +148,7 @@ final class KeychainMetadataStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
-        ]
+        ].includingSynchronizableFlag(synchronizesAcrossDevices)
     }
 }
 
@@ -134,6 +156,99 @@ enum KeychainMetadataStoreError: Error, Equatable {
     case invalidStringEncoding
     case invalidStoredData
     case unexpectedStatus(OSStatus)
+}
+
+protocol EncryptedNoteCiphering {
+    func encrypt(_ plaintext: String) throws -> String
+    func decrypt(_ storedValue: String) throws -> String
+    func isCiphertext(_ storedValue: String) -> Bool
+}
+
+struct EncryptedNoteCipher: EncryptedNoteCiphering {
+    static let ciphertextPrefix = "enc:v1:"
+    private static let masterKeyAccount = "encrypted-notes.master-key.v1"
+
+    private let metadataStore: KeychainMetadataStore
+
+    init(
+        metadataStore: KeychainMetadataStore = KeychainMetadataStore(
+            service: "com.liangzhang.editor.encrypted-notes",
+            accessible: kSecAttrAccessibleAfterFirstUnlock,
+            synchronizesAcrossDevices: true
+        )
+    ) {
+        self.metadataStore = metadataStore
+    }
+
+    func encrypt(_ plaintext: String) throws -> String {
+        guard !isCiphertext(plaintext) else {
+            return plaintext
+        }
+
+        let plaintextData = Data(plaintext.utf8)
+        let key = SymmetricKey(data: try masterKeyData())
+        let sealedBox = try AES.GCM.seal(plaintextData, using: key)
+        guard let combined = sealedBox.combined else {
+            throw EncryptedNoteCipherError.missingCombinedCiphertext
+        }
+
+        return Self.ciphertextPrefix + combined.base64EncodedString()
+    }
+
+    func decrypt(_ storedValue: String) throws -> String {
+        guard isCiphertext(storedValue) else {
+            return storedValue
+        }
+
+        let encoded = String(storedValue.dropFirst(Self.ciphertextPrefix.count))
+        guard let combined = Data(base64Encoded: encoded) else {
+            throw EncryptedNoteCipherError.invalidCiphertext
+        }
+
+        let key = SymmetricKey(data: try masterKeyData())
+        let sealedBox = try AES.GCM.SealedBox(combined: combined)
+        let plaintextData = try AES.GCM.open(sealedBox, using: key)
+        guard let plaintext = String(data: plaintextData, encoding: .utf8) else {
+            throw EncryptedNoteCipherError.invalidPlaintext
+        }
+
+        return plaintext
+    }
+
+    func isCiphertext(_ storedValue: String) -> Bool {
+        storedValue.hasPrefix(Self.ciphertextPrefix)
+    }
+
+    private func masterKeyData() throws -> Data {
+        if let existingKey = try metadataStore.data(for: Self.masterKeyAccount) {
+            return existingKey
+        }
+
+        let key = SymmetricKey(size: .bits256)
+        let keyData = key.withUnsafeBytes { buffer in
+            Data(buffer)
+        }
+        try metadataStore.setData(keyData, for: Self.masterKeyAccount)
+        return keyData
+    }
+}
+
+enum EncryptedNoteCipherError: Error, Equatable {
+    case missingCombinedCiphertext
+    case invalidCiphertext
+    case invalidPlaintext
+}
+
+private extension Dictionary where Key == String, Value == Any {
+    func includingSynchronizableFlag(_ isSynchronizable: Bool) -> [String: Any] {
+        guard isSynchronizable else {
+            return self
+        }
+
+        var copy = self
+        copy[kSecAttrSynchronizable as String] = kCFBooleanTrue
+        return copy
+    }
 }
 
 enum CloudKitAccountAvailability: String, Equatable, Sendable {

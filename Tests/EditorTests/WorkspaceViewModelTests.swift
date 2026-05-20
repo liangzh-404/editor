@@ -184,6 +184,37 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testEncryptedCollectionShowsOnlyEncryptedPagesAndKeepsAllDocumentsVisible() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let publicPageID = try XCTUnwrap(snapshot.selectedPageID)
+        let encryptedPage = try repository.createPage(
+            workspaceID: workspaceID,
+            title: "加密计划",
+            isEncrypted: true
+        )
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        viewModel.selectCollection(.encrypted)
+
+        XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [encryptedPage.id])
+        XCTAssertEqual(viewModel.selectedCollection, .encrypted)
+        XCTAssertEqual(viewModel.selectedPageID, encryptedPage.id)
+
+        viewModel.selectCollection(.allDocuments)
+
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == publicPageID })
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == encryptedPage.id })
+    }
+
+    @MainActor
     func testOpenParentPageForCurrentPageUsesRecordedPageParentLink() throws {
         let database = try migratedDatabase()
         defer { database.close() }

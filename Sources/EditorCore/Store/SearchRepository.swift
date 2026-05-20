@@ -54,6 +54,7 @@ final class SearchRepository {
                 WHERE blocks.id = ?
                   AND blocks.is_deleted = 0
                   AND blocks.text_plain != ''
+                  AND pages.is_encrypted = 0
                 LIMIT 1
                 """,
                 bindings: [.text(blockID)]
@@ -148,6 +149,8 @@ final class SearchRepository {
                 INNER JOIN pages ON pages.id = blocks.page_id
                 WHERE blocks.is_deleted = 0
                   AND pages.is_archived = 0
+                  AND pages.is_encrypted = 0
+                  AND json_valid(blocks.payload_json)
                   AND json_extract(blocks.payload_json, '$.attachment_id') = ?
                 LIMIT 1
                 """,
@@ -164,6 +167,7 @@ final class SearchRepository {
             SELECT id, title
             FROM pages
             WHERE is_archived = 0
+              AND is_encrypted = 0
             """
         )
 
@@ -184,6 +188,7 @@ final class SearchRepository {
             INNER JOIN pages ON pages.id = blocks.page_id
             WHERE blocks.is_deleted = 0
               AND blocks.text_plain != ''
+              AND pages.is_encrypted = 0
             """
         )
 
@@ -202,6 +207,16 @@ final class SearchRepository {
             """
             SELECT id, original_filename
             FROM attachments
+            WHERE EXISTS (
+                SELECT 1
+                FROM blocks
+                INNER JOIN pages ON pages.id = blocks.page_id
+                WHERE blocks.is_deleted = 0
+                  AND pages.is_archived = 0
+                  AND pages.is_encrypted = 0
+                  AND json_valid(blocks.payload_json)
+                  AND json_extract(blocks.payload_json, '$.attachment_id') = attachments.id
+            )
             """
         )
 
