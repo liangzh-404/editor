@@ -26,6 +26,7 @@ struct PageSummary: Identifiable, Equatable, Sendable {
     let notebookID: String?
     let title: String
     let isFavorite: Bool
+    let isEncrypted: Bool
     let updatedAt: String?
 
     init(
@@ -34,6 +35,7 @@ struct PageSummary: Identifiable, Equatable, Sendable {
         notebookID: String? = nil,
         title: String,
         isFavorite: Bool = false,
+        isEncrypted: Bool = false,
         updatedAt: String? = nil
     ) {
         self.id = id
@@ -41,6 +43,7 @@ struct PageSummary: Identifiable, Equatable, Sendable {
         self.notebookID = notebookID
         self.title = title
         self.isFavorite = isFavorite
+        self.isEncrypted = isEncrypted
         self.updatedAt = updatedAt
     }
 }
@@ -682,6 +685,7 @@ extension WorkspaceSnapshot {
                         notebookID: page.notebookID,
                         title: title,
                         isFavorite: page.isFavorite,
+                        isEncrypted: page.isEncrypted,
                         updatedAt: page.updatedAt
                     )
                     : page
@@ -712,6 +716,7 @@ extension WorkspaceSnapshot {
                         notebookID: page.notebookID,
                         title: page.title,
                         isFavorite: isFavorite,
+                        isEncrypted: page.isEncrypted,
                         updatedAt: page.updatedAt
                     )
                     : page
@@ -724,6 +729,50 @@ extension WorkspaceSnapshot {
                         notebookID: page.notebookID,
                         title: page.title,
                         isFavorite: isFavorite,
+                        isEncrypted: page.isEncrypted,
+                        updatedAt: page.updatedAt
+                    )
+                    : page
+            },
+            blocks: blocks,
+            attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
+
+    func replacingPageEncryption(pageID: String, isEncrypted: Bool) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages.map { page in
+                page.id == pageID
+                    ? PageSummary(
+                        id: page.id,
+                        workspaceID: page.workspaceID,
+                        notebookID: page.notebookID,
+                        title: page.title,
+                        isFavorite: page.isFavorite,
+                        isEncrypted: isEncrypted,
+                        updatedAt: page.updatedAt
+                    )
+                    : page
+            },
+            archivedPages: archivedPages.map { page in
+                page.id == pageID
+                    ? PageSummary(
+                        id: page.id,
+                        workspaceID: page.workspaceID,
+                        notebookID: page.notebookID,
+                        title: page.title,
+                        isFavorite: page.isFavorite,
+                        isEncrypted: isEncrypted,
                         updatedAt: page.updatedAt
                     )
                     : page

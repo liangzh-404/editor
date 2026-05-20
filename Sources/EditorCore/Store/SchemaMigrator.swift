@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 11
+    static let currentVersion = 12
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -50,6 +50,7 @@ enum SchemaMigrator {
                 order_key TEXT NOT NULL,
                 is_archived INTEGER NOT NULL DEFAULT 0,
                 is_favorite INTEGER NOT NULL DEFAULT 0,
+                is_encrypted INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -73,6 +74,12 @@ enum SchemaMigrator {
             database: database,
             table: "pages",
             column: "is_favorite",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "pages",
+            column: "is_encrypted",
             definition: "INTEGER NOT NULL DEFAULT 0"
         )
 

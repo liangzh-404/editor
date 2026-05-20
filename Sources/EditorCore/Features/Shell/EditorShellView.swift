@@ -1279,7 +1279,7 @@ private struct CompactRecentPageCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: page.isFavorite ? "star.fill" : "doc.text")
+                Image(systemName: page.isFavorite ? "star.fill" : PageRowIconResolver.systemName(isEncrypted: page.isEncrypted))
                     .foregroundStyle(page.isFavorite ? Color.yellow : Color.secondary)
                 Text(page.title)
                     .font(.headline.weight(.bold))
@@ -1287,7 +1287,7 @@ private struct CompactRecentPageCard: View {
                 Spacer()
             }
 
-            Text(preview.excerpt?.isEmpty == false ? preview.excerpt ?? "" : "空白文档")
+            Text(page.isEncrypted ? "加密内容" : preview.excerpt?.isEmpty == false ? preview.excerpt ?? "" : "空白文档")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -1847,6 +1847,12 @@ enum PageDragPayloadResolver {
             }
         }
         return pageIDs
+    }
+}
+
+enum PageRowIconResolver {
+    static func systemName(isEncrypted: Bool) -> String {
+        isEncrypted ? "lock.doc" : "doc.text"
     }
 }
 
@@ -2916,8 +2922,17 @@ enum PageListPreviewResolver {
     static func preview(
         pageID: String,
         blocks: [BlockSnapshot],
-        attachments: [AttachmentSnapshot]
+        attachments: [AttachmentSnapshot],
+        isEncrypted: Bool = false
     ) -> PageListPreview {
+        guard !isEncrypted else {
+            return PageListPreview(
+                excerpt: nil,
+                imageAttachment: nil,
+                fileAttachment: nil
+            )
+        }
+
         let pageBlocks = blocks.filter { $0.pageID == pageID }
         let excerpt = pageBlocks.first { block in
             block.type == .paragraph
@@ -3179,6 +3194,7 @@ enum CompactLibraryNavigationModel {
     static func items(snapshot: WorkspaceSnapshot) -> [CompactLibraryNavigationItem] {
         let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
         let allDocumentCount = snapshot.pages.filter { !diaryPageIDs.contains($0.id) }.count
+        let encryptedCount = snapshot.pages.filter(\.isEncrypted).count
 
         return [
             CompactLibraryNavigationItem(
@@ -3207,6 +3223,15 @@ enum CompactLibraryNavigationModel {
                 collection: .favorites,
                 route: .collection(.favorites),
                 identifier: "editor.compact.favorites"
+            ),
+            CompactLibraryNavigationItem(
+                id: "encrypted",
+                title: "加密",
+                systemImage: "lock.doc",
+                count: encryptedCount,
+                collection: .encrypted,
+                route: .collection(.encrypted),
+                identifier: "editor.compact.encrypted"
             )
         ]
     }
@@ -3232,6 +3257,8 @@ enum CompactCollectionPageListModel {
             return snapshot.pages.filter { !diaryPageIDs.contains($0.id) }
         case .favorites:
             return snapshot.favoritePages
+        case .encrypted:
+            return snapshot.pages.filter(\.isEncrypted)
         case .tag(let tagID):
             guard !tagID.isEmpty else {
                 return []
@@ -3258,7 +3285,8 @@ enum CompactCollectionPageListModel {
                 preview: PageListPreviewResolver.preview(
                     pageID: page.id,
                     blocks: snapshot.blocks,
-                    attachments: snapshot.attachments
+                    attachments: snapshot.attachments,
+                    isEncrypted: page.isEncrypted
                 )
             )
         }
@@ -3690,6 +3718,7 @@ struct SidebarNavigationModel: Equatable, Sendable {
     init(snapshot: WorkspaceSnapshot, selectedCollection: WorkspaceCollection) {
         let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
         let allDocumentCount = snapshot.pages.filter { !diaryPageIDs.contains($0.id) }.count
+        let encryptedCount = snapshot.pages.filter(\.isEncrypted).count
         let tagCounts = Dictionary(
             grouping: snapshot.pageTags,
             by: \.tagID
@@ -3717,6 +3746,15 @@ struct SidebarNavigationModel: Equatable, Sendable {
                 collection: .diary,
                 identifier: "editor.collection.diary",
                 isSelected: selectedCollection == .diary
+            ),
+            SidebarNavigationItem(
+                id: "encrypted",
+                title: "加密",
+                systemImage: "lock.doc",
+                count: encryptedCount,
+                collection: .encrypted,
+                identifier: "editor.collection.encrypted",
+                isSelected: selectedCollection == .encrypted
             )
         ]
 
@@ -4263,6 +4301,8 @@ private struct PageListView: View {
                     pageRowsSection(title: "全部文档", pages: viewModel.visibleDocumentPages)
                 case .favorites:
                     pageRowsSection(title: "收藏", pages: viewModel.visibleDocumentPages)
+                case .encrypted:
+                    pageRowsSection(title: "加密", pages: viewModel.visibleDocumentPages)
                 case .tag(let tagID):
                     tagSection(tagID: tagID)
                 case .search:
@@ -4406,7 +4446,8 @@ private struct PageListView: View {
             preview: PageListPreviewResolver.preview(
                 pageID: page.id,
                 blocks: viewModel.snapshot.blocks,
-                attachments: viewModel.snapshot.attachments
+                attachments: viewModel.snapshot.attachments,
+                isEncrypted: page.isEncrypted
             ),
             usesRichPreview: true,
             onBatchSelectionToggle: showsMiddleColumnRowControls ? {
@@ -4446,6 +4487,18 @@ private struct PageListView: View {
                         systemImage: page.isFavorite ? "star.slash" : "star"
                     )
                 }
+            }
+
+            Button {
+                viewModel.updatePageEncryptionForUI(
+                    id: page.id,
+                    isEncrypted: !page.isEncrypted
+                )
+            } label: {
+                Label(
+                    page.isEncrypted ? "取消加密" : "加密",
+                    systemImage: page.isEncrypted ? "lock.open" : "lock"
+                )
             }
 
             Button {
@@ -4494,6 +4547,8 @@ private struct PageListView: View {
             return "全部文档"
         case .favorites:
             return "收藏"
+        case .encrypted:
+            return "加密"
         case .tag(let tagID):
             return tagID.isEmpty ? "标签" : tagName(for: tagID)
         case .search:
@@ -4558,6 +4613,18 @@ private struct CompactPageListView: View {
                                 Label(
                                     page.isFavorite ? "取消收藏" : "加入收藏",
                                     systemImage: page.isFavorite ? "star.slash" : "star"
+                                )
+                            }
+
+                            Button {
+                                viewModel.updatePageEncryptionForUI(
+                                    id: page.id,
+                                    isEncrypted: !page.isEncrypted
+                                )
+                            } label: {
+                                Label(
+                                    page.isEncrypted ? "取消加密" : "加密",
+                                    systemImage: page.isEncrypted ? "lock.open" : "lock"
                                 )
                             }
 
@@ -4761,6 +4828,8 @@ private struct CompactCollectionPageListView: View {
             return "全部文档"
         case .favorites:
             return "收藏"
+        case .encrypted:
+            return "加密"
         case .recent:
             return "近期文件"
         case .diary:
@@ -5182,6 +5251,10 @@ private struct PageRow: View {
                         .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if page.isEncrypted {
+                    Label("加密内容", systemImage: "lock.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
                 }
 
                 if preview?.imageAttachment != nil || preview?.fileAttachment != nil {
@@ -5244,7 +5317,7 @@ private struct PageRow: View {
     }
 
     private var pageIcon: some View {
-        Image(systemName: "doc.text")
+        Image(systemName: PageRowIconResolver.systemName(isEncrypted: page.isEncrypted))
             .font(.callout.weight(.medium))
             .foregroundStyle(isSelected ? EditorDesignTokens.Colors.primaryText.color : EditorDesignTokens.Colors.tertiaryText.color)
             .accessibilityHidden(true)
@@ -5284,8 +5357,9 @@ private struct PageRow: View {
     private var pageRowAccessibilityValue: String {
         let selection = isSelected ? "已选中" : "未选中"
         let favorite = page.isFavorite ? "已收藏" : "未收藏"
+        let encryption = page.isEncrypted ? "已加密" : "未加密"
         let tags = tagNames.isEmpty ? "无标签" : "标签：\(tagNames.joined(separator: ", "))"
-        return "\(selection), \(favorite), \(tags)"
+        return "\(selection), \(favorite), \(encryption), \(tags)"
     }
 }
 

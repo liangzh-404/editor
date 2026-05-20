@@ -188,6 +188,147 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(unfavoriteSnapshot.favoritePages, [])
     }
 
+    func testEncryptPageStoresCiphertextAndReloadsPlaintextFromKeychainBackedCipher() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let blockID = try XCTUnwrap(initialSnapshot.blocks.first?.id)
+
+        try repository.updatePageTitle(pageID: pageID, title: "Private Plan")
+        try repository.updateBlockText(blockID: blockID, text: "secret launch detail")
+        try repository.updatePageEncryption(pageID: pageID, isEncrypted: true)
+
+        let rawPage = try XCTUnwrap(
+            try database.query("SELECT title, is_encrypted FROM pages WHERE id = ? LIMIT 1", bindings: [.text(pageID)]).first
+        )
+        let rawBlock = try XCTUnwrap(
+            try database.query("SELECT payload_json, text_plain FROM blocks WHERE id = ? LIMIT 1", bindings: [.text(blockID)]).first
+        )
+        XCTAssertEqual(rawPage["is_encrypted"], "1")
+        XCTAssertTrue(rawPage["title"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
+        XCTAssertTrue(rawBlock["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
+        XCTAssertTrue(rawBlock["text_plain"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
+        XCTAssertNotEqual(rawPage["title"], "Private Plan")
+        XCTAssertNotEqual(rawBlock["text_plain"], "secret launch detail")
+
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.pages.first?.title, "Private Plan")
+        XCTAssertEqual(reloadedSnapshot.pages.first?.isEncrypted, true)
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "secret launch detail")
+    }
+
+    func testEncryptedPageUpdatesContinueWritingCiphertextAndCanBeDecrypted() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let blockID = try XCTUnwrap(initialSnapshot.blocks.first?.id)
+
+        try repository.updatePageEncryption(pageID: pageID, isEncrypted: true)
+        try repository.updatePageTitle(pageID: pageID, title: "Updated Secret")
+        try repository.updateBlockText(blockID: blockID, text: "rotated secret body")
+
+        let rawPageTitle = try XCTUnwrap(
+            try database.query("SELECT title FROM pages WHERE id = ? LIMIT 1", bindings: [.text(pageID)]).first?["title"]
+        )
+        let rawBlockText = try XCTUnwrap(
+            try database.query("SELECT text_plain FROM blocks WHERE id = ? LIMIT 1", bindings: [.text(blockID)]).first?["text_plain"]
+        )
+        XCTAssertTrue(rawPageTitle.hasPrefix(EncryptedNoteCipher.ciphertextPrefix))
+        XCTAssertTrue(rawBlockText.hasPrefix(EncryptedNoteCipher.ciphertextPrefix))
+        XCTAssertNotEqual(rawPageTitle, "Updated Secret")
+        XCTAssertNotEqual(rawBlockText, "rotated secret body")
+
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.pages.first?.title, "Updated Secret")
+        XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "rotated secret body")
+
+        try repository.updatePageEncryption(pageID: pageID, isEncrypted: false)
+        let decryptedRawPageTitle = try XCTUnwrap(
+            try database.query("SELECT title FROM pages WHERE id = ? LIMIT 1", bindings: [.text(pageID)]).first?["title"]
+        )
+        let decryptedRawBlockText = try XCTUnwrap(
+            try database.query("SELECT text_plain FROM blocks WHERE id = ? LIMIT 1", bindings: [.text(blockID)]).first?["text_plain"]
+        )
+        XCTAssertEqual(decryptedRawPageTitle, "Updated Secret")
+        XCTAssertEqual(decryptedRawBlockText, "rotated secret body")
+        XCTAssertEqual(try repository.loadWorkspaceSnapshot().pages.first?.isEncrypted, false)
+    }
+
+    func testSearchIndexSkipsEncryptedPageTitlesAndBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        try repository.updatePageTitle(pageID: pageID, title: "Classified Roadmap")
+        try repository.updateBlockText(blockID: blockID, text: "vault-only launch phrase")
+        try repository.updatePageEncryption(pageID: pageID, isEncrypted: true)
+
+        let searchRepository = SearchRepository(database: database)
+        try searchRepository.rebuildIndex()
+
+        XCTAssertEqual(try searchRepository.search("Classified Roadmap"), [])
+        XCTAssertEqual(try searchRepository.search("vault-only"), [])
+        XCTAssertEqual(try database.queryInt("SELECT COUNT(*) FROM search_index"), 0)
+    }
+
+    func testConvertTextBlockToPageFromEncryptedPagePreservesEncryption() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Secret Child")
+        try repository.updatePageEncryption(pageID: sourcePageID, isEncrypted: true)
+
+        let createdPage = try repository.convertTextBlockToPage(blockID: blockID)
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let reloadedCreatedPage = try XCTUnwrap(reloadedSnapshot.pages.first { $0.id == createdPage.id })
+        let sourceBlock = try XCTUnwrap(reloadedSnapshot.blocks.first { $0.id == blockID })
+        let rawCreatedPage = try XCTUnwrap(
+            try database.query("SELECT title, is_encrypted FROM pages WHERE id = ? LIMIT 1", bindings: [.text(createdPage.id)]).first
+        )
+        let rawSourceBlock = try XCTUnwrap(
+            try database.query("SELECT text_plain, payload_json FROM blocks WHERE id = ? LIMIT 1", bindings: [.text(blockID)]).first
+        )
+
+        XCTAssertEqual(reloadedCreatedPage.title, "Secret Child")
+        XCTAssertEqual(reloadedCreatedPage.isEncrypted, true)
+        XCTAssertEqual(sourceBlock.type, .pageReference)
+        XCTAssertEqual(sourceBlock.textPlain, "Secret Child")
+        XCTAssertEqual(sourceBlock.pageReferenceTargetPageID, createdPage.id)
+        XCTAssertEqual(rawCreatedPage["is_encrypted"], "1")
+        XCTAssertTrue(rawCreatedPage["title"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
+        XCTAssertTrue(rawSourceBlock["text_plain"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
+        XCTAssertTrue(rawSourceBlock["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == true)
+        XCTAssertEqual(reloadedSnapshot.pageParentLinks, [])
+    }
+
     func testLoadWorkspaceSnapshotOrdersActivePagesByUpdatedTimeDescending() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -892,6 +1033,30 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedBlock.pageReferenceTargetPageID, targetPage.id)
     }
 
+    func testAppendPageReferenceBlockUsesPlaintextTitleFromEncryptedTarget() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Secret Specs")
+        try repository.updatePageEncryption(pageID: targetPage.id, isEncrypted: true)
+
+        let block = try repository.appendPageReferenceBlock(
+            pageID: sourcePageID,
+            targetPageID: targetPage.id
+        )
+
+        XCTAssertEqual(block.type, .pageReference)
+        XCTAssertEqual(block.textPlain, "Secret Specs")
+        XCTAssertEqual(block.pageReferenceTargetPageID, targetPage.id)
+    }
+
     func testConvertTextBlockToPageReplacesSourceWithPageReference() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -1103,6 +1268,36 @@ final class PageRepositoryTests: XCTestCase {
                 )
             ]
         )
+    }
+
+    func testAppendBlockReferenceBlockUsesPlaintextFromEncryptedTarget() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Encrypted Source")
+        let targetBlock = try repository.appendBlock(
+            pageID: targetPage.id,
+            type: .paragraph,
+            text: "Secret API contract"
+        )
+        try repository.updatePageEncryption(pageID: targetPage.id, isEncrypted: true)
+
+        let block = try repository.appendBlockReferenceBlock(
+            pageID: sourcePageID,
+            targetBlockID: targetBlock.id
+        )
+
+        XCTAssertEqual(block.type, .blockReference)
+        XCTAssertEqual(block.textPlain, "Secret API contract")
+        XCTAssertEqual(block.pageReferenceTargetPageID, targetPage.id)
+        XCTAssertEqual(block.blockReferenceTargetBlockID, targetBlock.id)
     }
 
     func testInsertParagraphBlockAfterCurrentBlockPersistsOrderAndQueuesSync() throws {

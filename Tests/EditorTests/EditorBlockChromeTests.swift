@@ -1389,6 +1389,30 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testPageListPreviewResolverHidesEncryptedPagePreviewContent() {
+        let preview = PageListPreviewResolver.preview(
+            pageID: "encrypted-page",
+            blocks: [
+                BlockSnapshot(
+                    id: "secret",
+                    pageID: "encrypted-page",
+                    parentBlockID: nil,
+                    orderKey: "1",
+                    type: .paragraph,
+                    textPlain: "不要出现在中栏"
+                )
+            ],
+            attachments: [],
+            isEncrypted: true
+        )
+
+        XCTAssertNil(preview.excerpt)
+        XCTAssertNil(preview.imageAttachment)
+        XCTAssertNil(preview.fileAttachment)
+        XCTAssertEqual(PageRowIconResolver.systemName(isEncrypted: true), "lock.doc")
+        XCTAssertEqual(PageRowIconResolver.systemName(isEncrypted: false), "doc.text")
+    }
+
     func testPageListDateSectionsGroupRecentPagesByLocalDay() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -1430,7 +1454,8 @@ final class EditorBlockChromeTests: XCTestCase {
         let pages = [
             PageSummary(id: "page-recent", workspaceID: workspaceID, title: "最近文件"),
             PageSummary(id: "page-diary", workspaceID: workspaceID, title: "2026年5月18日 星期一"),
-            PageSummary(id: "page-favorite", workspaceID: workspaceID, title: "收藏文件", isFavorite: true)
+            PageSummary(id: "page-favorite", workspaceID: workspaceID, title: "收藏文件", isFavorite: true),
+            PageSummary(id: "page-encrypted", workspaceID: workspaceID, title: "加密文件", isEncrypted: true)
         ]
         let tags = [
             TagSummary(id: "tag-work", workspaceID: workspaceID, parentTagID: nil, name: "工作", path: "工作"),
@@ -1446,7 +1471,8 @@ final class EditorBlockChromeTests: XCTestCase {
             pageTags: [
                 PageTagAssignment(pageID: "page-recent", tagID: "tag-project"),
                 PageTagAssignment(pageID: "page-favorite", tagID: "tag-project"),
-                PageTagAssignment(pageID: "page-diary", tagID: "tag-life")
+                PageTagAssignment(pageID: "page-diary", tagID: "tag-life"),
+                PageTagAssignment(pageID: "page-encrypted", tagID: "tag-life")
             ],
             diaryPages: [
                 DiaryPageSnapshot(pageID: "page-diary", workspaceID: workspaceID, diaryDate: "2026-05-18")
@@ -1459,14 +1485,16 @@ final class EditorBlockChromeTests: XCTestCase {
 
         XCTAssertEqual(
             model.primaryItems.map(\.title),
-            ["全部文档", "日记"]
+            ["全部文档", "日记", "加密"]
         )
-        XCTAssertEqual(model.primaryItems.map(\.count), [2, 1])
+        XCTAssertEqual(model.primaryItems.map(\.count), [3, 1, 1])
         XCTAssertEqual(model.primaryItems.first?.identifier, "editor.collection.all-documents")
         XCTAssertEqual(model.primaryItems.first?.isSelected, true)
         XCTAssertEqual(model.tagItems.map(\.title), ["工作", "项目", "生活"])
-        XCTAssertEqual(model.tagItems.map(\.count), [2, 2, 1])
+        XCTAssertEqual(model.tagItems.map(\.count), [2, 2, 2])
         XCTAssertEqual(model.tagItems.map(\.nestingLevel), [0, 1, 0])
+        XCTAssertEqual(model.primaryItems.last?.identifier, "editor.collection.encrypted")
+        XCTAssertEqual(model.primaryItems.last?.collection, .encrypted)
     }
 
     func testSidebarChromeUsesCompactBearLikeRailMetrics() {
@@ -1510,7 +1538,8 @@ final class EditorBlockChromeTests: XCTestCase {
             pages: [
                 PageSummary(id: "page-a", workspaceID: workspaceID, title: "A"),
                 PageSummary(id: "page-diary", workspaceID: workspaceID, title: "2026年5月18日 星期一"),
-                PageSummary(id: "page-favorite", workspaceID: workspaceID, title: "收藏", isFavorite: true)
+                PageSummary(id: "page-favorite", workspaceID: workspaceID, title: "收藏", isFavorite: true),
+                PageSummary(id: "page-encrypted", workspaceID: workspaceID, title: "密文", isEncrypted: true)
             ],
             blocks: [],
             attachments: [],
@@ -1523,14 +1552,14 @@ final class EditorBlockChromeTests: XCTestCase {
 
         let items = CompactLibraryNavigationModel.items(snapshot: snapshot)
 
-        XCTAssertEqual(items.map(\.title), ["全部文档", "日记", "收藏"])
-        XCTAssertEqual(items.map(\.collection), [.allDocuments, .diary, .favorites])
-        XCTAssertEqual(items.map(\.count), [2, 1, 1])
-        XCTAssertEqual(items.map(\.route), [.collection(.allDocuments), .collection(.diary), .collection(.favorites)])
+        XCTAssertEqual(items.map(\.title), ["全部文档", "日记", "收藏", "加密"])
+        XCTAssertEqual(items.map(\.collection), [.allDocuments, .diary, .favorites, .encrypted])
+        XCTAssertEqual(items.map(\.count), [3, 1, 1, 1])
+        XCTAssertEqual(items.map(\.route), [.collection(.allDocuments), .collection(.diary), .collection(.favorites), .collection(.encrypted)])
 
         XCTAssertEqual(
             CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .allDocuments).map(\.id),
-            ["page-a", "page-favorite"]
+            ["page-a", "page-favorite", "page-encrypted"]
         )
         XCTAssertEqual(
             CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .diary).map(\.id),
@@ -1539,6 +1568,10 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(
             CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .favorites).map(\.id),
             ["page-favorite"]
+        )
+        XCTAssertEqual(
+            CompactCollectionPageListModel.pages(snapshot: snapshot, collection: .encrypted).map(\.id),
+            ["page-encrypted"]
         )
     }
 

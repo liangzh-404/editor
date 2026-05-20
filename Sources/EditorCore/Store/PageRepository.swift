@@ -2,6 +2,7 @@ import Foundation
 
 final class PageRepository {
     private let database: SQLiteDatabase
+    private let encryptedNoteCipher: EncryptedNoteCiphering
 
     var syncChangeNotificationObject: AnyObject {
         database
@@ -12,8 +13,12 @@ final class PageRepository {
     private let defaultPageID = "page-welcome"
     private let defaultBlockID = "block-welcome-001"
 
-    init(database: SQLiteDatabase) {
+    init(
+        database: SQLiteDatabase,
+        encryptedNoteCipher: EncryptedNoteCiphering = EncryptedNoteCipher()
+    ) {
         self.database = database
+        self.encryptedNoteCipher = encryptedNoteCipher
     }
 
     @discardableResult
@@ -75,6 +80,7 @@ final class PageRepository {
                    pages.notebook_id,
                    pages.title,
                    pages.is_favorite,
+                   pages.is_encrypted,
                    pages.updated_at
             FROM pages
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
@@ -88,8 +94,9 @@ final class PageRepository {
                 id: row["id"] ?? "",
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
-                title: row["title"] ?? "",
+                title: try decryptPageTitleIfNeeded(row),
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
+                isEncrypted: Self.sqliteBool(row["is_encrypted"]),
                 updatedAt: row["updated_at"]
             )
         }
@@ -101,6 +108,7 @@ final class PageRepository {
                    pages.notebook_id,
                    pages.title,
                    pages.is_favorite,
+                   pages.is_encrypted,
                    pages.updated_at
             FROM pages
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
@@ -114,8 +122,9 @@ final class PageRepository {
                 id: row["id"] ?? "",
                 workspaceID: row["workspace_id"] ?? "",
                 notebookID: row["notebook_id"] ?? nil,
-                title: row["title"] ?? "",
+                title: try decryptPageTitleIfNeeded(row),
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
+                isEncrypted: Self.sqliteBool(row["is_encrypted"]),
                 updatedAt: row["updated_at"]
             )
         }
@@ -209,7 +218,7 @@ final class PageRepository {
             """
             SELECT type
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -225,7 +234,8 @@ final class PageRepository {
         let rows = try database.query(
             """
             SELECT id,
-                   title
+                   title,
+                   is_encrypted
             FROM pages
             WHERE id = ? AND is_archived = 0
             LIMIT 1
@@ -235,7 +245,9 @@ final class PageRepository {
         guard let row = rows.first else {
             throw PageRepositoryError.pageNotFound
         }
-        if row["title"] == title {
+        let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+        let currentTitle = try decryptedStoredValue(row["title"] ?? "", isEncrypted: isEncrypted)
+        if currentTitle == title {
             EditorLog.store.debug(
                 "page_title_update_skipped_noop page_id=\(pageID, privacy: .public)"
             )
@@ -243,6 +255,7 @@ final class PageRepository {
         }
 
         let now = Self.timestamp()
+        let storedTitle = try storedValue(title, isEncrypted: isEncrypted)
         try database.execute(
             """
             UPDATE pages
@@ -251,7 +264,7 @@ final class PageRepository {
             WHERE id = ? AND is_archived = 0
             """,
             bindings: [
-                .text(title),
+                .text(storedTitle),
                 .text(now),
                 .text(pageID)
             ]
@@ -303,6 +316,120 @@ final class PageRepository {
 
         EditorLog.store.debug(
             "page_favorite_updated page_id=\(pageID, privacy: .public) is_favorite=\(isFavorite, privacy: .public)"
+        )
+    }
+
+    func updatePageEncryption(pageID: String, isEncrypted: Bool) throws {
+        let pageRow = try database.query(
+            """
+            SELECT id,
+                   title,
+                   is_encrypted
+            FROM pages
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        ).first
+        guard let pageRow else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        let wasEncrypted = Self.sqliteBool(pageRow["is_encrypted"])
+        guard wasEncrypted != isEncrypted else {
+            EditorLog.store.debug(
+                "page_encryption_update_skipped_noop page_id=\(pageID, privacy: .public)"
+            )
+            return
+        }
+
+        let blockRows = try database.query(
+            """
+            SELECT id,
+                   payload_json,
+                   text_plain
+            FROM blocks
+            WHERE page_id = ? AND is_deleted = 0
+            ORDER BY order_key ASC
+            """,
+            bindings: [.text(pageID)]
+        )
+        let currentTitle = try decryptedStoredValue(pageRow["title"] ?? "", isEncrypted: wasEncrypted)
+        let storedTitle = try storedValue(currentTitle, isEncrypted: isEncrypted)
+        let now = Self.timestamp()
+        var changedBlockIDs: [String] = []
+
+        try database.withImmediateTransaction("update_page_encryption") {
+            try database.execute(
+                """
+                UPDATE pages
+                SET title = ?,
+                    is_encrypted = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                bindings: [
+                    .text(storedTitle),
+                    .integer(isEncrypted ? 1 : 0),
+                    .text(now),
+                    .text(pageID)
+                ]
+            )
+
+            for blockRow in blockRows {
+                guard let blockID = blockRow["id"] else {
+                    continue
+                }
+                let plaintextPayloadJSON = try decryptedStoredValue(
+                    blockRow["payload_json"] ?? "",
+                    isEncrypted: wasEncrypted
+                )
+                let plaintextText = try decryptedStoredValue(
+                    blockRow["text_plain"] ?? "",
+                    isEncrypted: wasEncrypted
+                )
+                try database.execute(
+                    """
+                    UPDATE blocks
+                    SET payload_json = ?,
+                        text_plain = ?,
+                        revision = revision + 1,
+                        sync_state = ?,
+                        updated_at = ?
+                    WHERE id = ? AND is_deleted = 0
+                    """,
+                    bindings: [
+                        .text(try storedValue(plaintextPayloadJSON, isEncrypted: isEncrypted)),
+                        .text(try storedValue(plaintextText, isEncrypted: isEncrypted)),
+                        .text("local"),
+                        .text(now),
+                        .text(blockID)
+                    ]
+                )
+                changedBlockIDs.append(blockID)
+            }
+
+            try database.execute(
+                """
+                DELETE FROM links
+                WHERE source_page_id = ?
+                """,
+                bindings: [.text(pageID)]
+            )
+        }
+
+        let syncRepository = SyncRepository(database: database)
+        try syncRepository.enqueue(entityType: "page", entityID: pageID, changeType: "update")
+        for blockID in changedBlockIDs {
+            try syncRepository.enqueue(entityType: "block", entityID: blockID, changeType: "update")
+        }
+        try deleteSearchIndexForPage(pageID: pageID, blockIDs: changedBlockIDs)
+        if !isEncrypted {
+            try rebuildLinksForBlocks(blockIDs: changedBlockIDs)
+        }
+
+        EditorLog.store.debug(
+            "page_encryption_updated page_id=\(pageID, privacy: .public) is_encrypted=\(isEncrypted, privacy: .public) blocks=\(changedBlockIDs.count, privacy: .public)"
         )
     }
 
@@ -575,7 +702,12 @@ final class PageRepository {
         )
     }
 
-    func createPage(workspaceID: String, title: String, notebookID: String? = nil) throws -> PageSummary {
+    func createPage(
+        workspaceID: String,
+        title: String,
+        notebookID: String? = nil,
+        isEncrypted: Bool = false
+    ) throws -> PageSummary {
         let workspaceRows = try database.query(
             """
             SELECT id
@@ -612,19 +744,21 @@ final class PageRepository {
         let pageID = "page-\(UUID().uuidString.lowercased())"
         let blockID = "block-\(UUID().uuidString.lowercased())"
         let orderKey = try nextPageOrderKey(workspaceID: workspaceID, notebookID: resolvedNotebookID)
+        let storedTitle = try storedValue(title, isEncrypted: isEncrypted)
 
         try database.withImmediateTransaction("create_page") {
             try database.execute(
                 """
-                INSERT INTO pages (id, workspace_id, notebook_id, title, order_key, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO pages (id, workspace_id, notebook_id, title, order_key, is_encrypted, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 bindings: [
                     .text(pageID),
                     .text(workspaceID),
                     resolvedNotebookID.map(SQLiteValue.text) ?? .null,
-                    .text(title),
+                    .text(storedTitle),
                     .text(orderKey),
+                    .integer(isEncrypted ? 1 : 0),
                     .text(now),
                     .text(now)
                 ]
@@ -654,6 +788,7 @@ final class PageRepository {
             notebookID: resolvedNotebookID,
             title: title,
             isFavorite: false,
+            isEncrypted: isEncrypted,
             updatedAt: now
         )
     }
@@ -786,11 +921,14 @@ final class PageRepository {
         let now = Self.timestamp()
         let currentRows = try database.query(
             """
-            SELECT type,
-                   payload_json,
-                   text_plain
+            SELECT blocks.type AS type,
+                   blocks.payload_json AS payload_json,
+                   blocks.text_plain AS text_plain,
+                   blocks.page_id AS page_id,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -798,8 +936,16 @@ final class PageRepository {
         guard let currentRow = currentRows.first else {
             throw PageRepositoryError.blockNotFound
         }
+        let isEncrypted = Self.sqliteBool(currentRow["is_encrypted"])
         let currentType = BlockType(rawValue: currentRow["type"] ?? "") ?? .paragraph
-        let currentPayloadJSON = currentRow["payload_json"] ?? ""
+        let currentPayloadJSON = try decryptedStoredValue(
+            currentRow["payload_json"] ?? "",
+            isEncrypted: isEncrypted
+        )
+        let currentText = try decryptedStoredValue(
+            currentRow["text_plain"] ?? "",
+            isEncrypted: isEncrypted
+        )
         let referenceTargets = try currentReferenceTargets(blockID: blockID)
         let taskItemIsCompleted: Bool
         if type == .taskItem {
@@ -857,9 +1003,11 @@ final class PageRepository {
                 tableRows: explicitTableRows
             )
         }
+        let storedPayloadJSON = try storedValue(payloadJSON, isEncrypted: isEncrypted)
+        let storedText = try storedValue(text, isEncrypted: isEncrypted)
         if currentRow["type"] == type.rawValue,
-           currentRow["payload_json"] == payloadJSON,
-           currentRow["text_plain"] == text {
+           currentPayloadJSON == payloadJSON,
+           currentText == text {
             EditorLog.store.debug(
                 "block_update_skipped_noop block_id=\(blockID, privacy: .public) type=\(type.rawValue, privacy: .public)"
             )
@@ -875,12 +1023,12 @@ final class PageRepository {
                 revision = revision + 1,
                 sync_state = ?,
                 updated_at = ?
-            WHERE id = ? AND is_deleted = 0
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             """,
             bindings: [
                 .text(type.rawValue),
-                .text(payloadJSON),
-                .text(text),
+                .text(storedPayloadJSON),
+                .text(storedText),
                 .text("local"),
                 .text(now),
                 .text(blockID)
@@ -891,12 +1039,23 @@ final class PageRepository {
             entityID: blockID,
             changeType: "update"
         )
-        try BacklinkRepository(database: database).rebuildLinksForBlock(
-            blockID: blockID,
-            text: text,
-            pageReferenceTargetPageID: referenceTargets.pageID,
-            blockReferenceTargetBlockID: referenceTargets.blockID
-        )
+        if isEncrypted {
+            try database.execute(
+                """
+                DELETE FROM links
+                WHERE source_block_id = ?
+                """,
+                bindings: [.text(blockID)]
+            )
+            try deleteSearchIndexForPage(pageID: currentRow["page_id"] ?? "", blockIDs: [blockID])
+        } else {
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: blockID,
+                text: text,
+                pageReferenceTargetPageID: referenceTargets.pageID,
+                blockReferenceTargetBlockID: referenceTargets.blockID
+            )
+        }
     }
 
     func replaceBlocks(pageID: String, blocks replacementBlocks: [BlockSnapshot]) throws {
@@ -944,6 +1103,7 @@ final class PageRepository {
         }
 
         let now = Self.timestamp()
+        let isEncrypted = try pageIsEncrypted(pageID: pageID)
         try database.withImmediateTransaction("replace_page_blocks") {
             if !removedBlockIDs.isEmpty {
                 let placeholders = Array(repeating: "?", count: removedBlockIDs.count).joined(separator: ", ")
@@ -971,6 +1131,8 @@ final class PageRepository {
 
             for block in replacementBlocks {
                 let payloadJSON = try blockPayloadJSON(block: block)
+                let storedPayloadJSON = try storedValue(payloadJSON, isEncrypted: isEncrypted)
+                let storedText = try storedValue(block.textPlain, isEncrypted: isEncrypted)
                 if existingReplacementBlockIDs.contains(block.id) {
                     try database.execute(
                         """
@@ -992,8 +1154,8 @@ final class PageRepository {
                             block.parentBlockID.map(SQLiteValue.text) ?? .null,
                             .text(block.orderKey),
                             .text(block.type.rawValue),
-                            .text(payloadJSON),
-                            .text(block.textPlain),
+                            .text(storedPayloadJSON),
+                            .text(storedText),
                             .text("local"),
                             .text(now),
                             .text(block.id)
@@ -1024,8 +1186,8 @@ final class PageRepository {
                             block.parentBlockID.map(SQLiteValue.text) ?? .null,
                             .text(block.orderKey),
                             .text(block.type.rawValue),
-                            .text(payloadJSON),
-                            .text(block.textPlain),
+                            .text(storedPayloadJSON),
+                            .text(storedText),
                             .integer(1),
                             .text("local"),
                             .integer(0),
@@ -1061,9 +1223,13 @@ final class PageRepository {
     func updateToggleExpansion(blockID: String, isExpanded: Bool) throws {
         guard let row = try database.query(
             """
-            SELECT type, text_plain
+            SELECT blocks.type,
+                   blocks.text_plain,
+                   blocks.page_id AS page_id,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -1072,7 +1238,16 @@ final class PageRepository {
             throw PageRepositoryError.blockNotFound
         }
 
-        let text = row["text_plain"] ?? ""
+        let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+        let text = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+        let payloadJSON = try storedValue(
+            try blockPayloadJSON(
+                type: .toggle,
+                text: text,
+                toggleIsExpanded: isExpanded
+            ),
+            isEncrypted: isEncrypted
+        )
         let now = Self.timestamp()
         try database.execute(
             """
@@ -1081,14 +1256,10 @@ final class PageRepository {
                 revision = revision + 1,
                 sync_state = ?,
                 updated_at = ?
-            WHERE id = ? AND is_deleted = 0
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             """,
             bindings: [
-                .text(try blockPayloadJSON(
-                    type: .toggle,
-                    text: text,
-                    toggleIsExpanded: isExpanded
-                )),
+                .text(payloadJSON),
                 .text("local"),
                 .text(now),
                 .text(blockID)
@@ -1099,18 +1270,26 @@ final class PageRepository {
             entityID: blockID,
             changeType: "update"
         )
-        try BacklinkRepository(database: database).rebuildLinksForBlock(
-            blockID: blockID,
-            text: text
-        )
+        if isEncrypted {
+            try deleteSearchIndexForPage(pageID: row["page_id"] ?? "", blockIDs: [blockID])
+        } else {
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: blockID,
+                text: text
+            )
+        }
     }
 
     func updateCodeBlockLineWrapping(blockID: String, isWrapped: Bool) throws {
         guard let row = try database.query(
             """
-            SELECT type, text_plain
+            SELECT blocks.type,
+                   blocks.text_plain,
+                   blocks.page_id AS page_id,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -1119,7 +1298,16 @@ final class PageRepository {
             throw PageRepositoryError.blockNotFound
         }
 
-        let text = row["text_plain"] ?? ""
+        let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+        let text = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+        let payloadJSON = try storedValue(
+            try blockPayloadJSON(
+                type: .codeBlock,
+                text: text,
+                codeBlockLineWrapping: isWrapped
+            ),
+            isEncrypted: isEncrypted
+        )
         let now = Self.timestamp()
         try database.execute(
             """
@@ -1128,14 +1316,10 @@ final class PageRepository {
                 revision = revision + 1,
                 sync_state = ?,
                 updated_at = ?
-            WHERE id = ? AND is_deleted = 0
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             """,
             bindings: [
-                .text(try blockPayloadJSON(
-                    type: .codeBlock,
-                    text: text,
-                    codeBlockLineWrapping: isWrapped
-                )),
+                .text(payloadJSON),
                 .text("local"),
                 .text(now),
                 .text(blockID)
@@ -1146,18 +1330,26 @@ final class PageRepository {
             entityID: blockID,
             changeType: "update"
         )
-        try BacklinkRepository(database: database).rebuildLinksForBlock(
-            blockID: blockID,
-            text: text
-        )
+        if isEncrypted {
+            try deleteSearchIndexForPage(pageID: row["page_id"] ?? "", blockIDs: [blockID])
+        } else {
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: blockID,
+                text: text
+            )
+        }
     }
 
     func updateTaskItemCompletion(blockID: String, isCompleted: Bool) throws {
         guard let row = try database.query(
             """
-            SELECT type, text_plain
+            SELECT blocks.type,
+                   blocks.text_plain,
+                   blocks.page_id AS page_id,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -1166,7 +1358,16 @@ final class PageRepository {
             throw PageRepositoryError.blockNotFound
         }
 
-        let text = row["text_plain"] ?? ""
+        let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+        let text = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+        let payloadJSON = try storedValue(
+            try blockPayloadJSON(
+                type: .taskItem,
+                text: text,
+                taskItemIsCompleted: isCompleted
+            ),
+            isEncrypted: isEncrypted
+        )
         let now = Self.timestamp()
         try database.execute(
             """
@@ -1175,14 +1376,10 @@ final class PageRepository {
                 revision = revision + 1,
                 sync_state = ?,
                 updated_at = ?
-            WHERE id = ? AND is_deleted = 0
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             """,
             bindings: [
-                .text(try blockPayloadJSON(
-                    type: .taskItem,
-                    text: text,
-                    taskItemIsCompleted: isCompleted
-                )),
+                .text(payloadJSON),
                 .text("local"),
                 .text(now),
                 .text(blockID)
@@ -1193,10 +1390,14 @@ final class PageRepository {
             entityID: blockID,
             changeType: "update"
         )
-        try BacklinkRepository(database: database).rebuildLinksForBlock(
-            blockID: blockID,
-            text: text
-        )
+        if isEncrypted {
+            try deleteSearchIndexForPage(pageID: row["page_id"] ?? "", blockIDs: [blockID])
+        } else {
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: blockID,
+                text: text
+            )
+        }
     }
 
     func importMarkdown(
@@ -1206,6 +1407,7 @@ final class PageRepository {
     ) throws {
         let drafts = MarkdownTransformer.importBlocks(markdown: markdown)
         let now = Self.timestamp()
+        let isEncrypted = try pageIsEncrypted(pageID: pageID)
 
         try database.execute(
             """
@@ -1233,10 +1435,12 @@ final class PageRepository {
             let importDraft: MarkdownBlockDraft
             if draft.attachmentRelativePath != nil {
                 if let importedAttachment = try attachmentImporter?(draft) {
-                    try BacklinkRepository(database: database).rebuildLinksForBlock(
-                        blockID: importedAttachment.block.id,
-                        text: importedAttachment.block.textPlain
-                    )
+                    if !isEncrypted {
+                        try BacklinkRepository(database: database).rebuildLinksForBlock(
+                            blockID: importedAttachment.block.id,
+                            text: importedAttachment.block.textPlain
+                        )
+                    }
                     continue
                 }
                 importDraft = markdownAttachmentFallbackDraft(for: draft)
@@ -1260,12 +1464,14 @@ final class PageRepository {
                 entityID: blockID,
                 changeType: "create"
             )
-            try BacklinkRepository(database: database).rebuildLinksForBlock(
-                blockID: blockID,
-                text: importDraft.textPlain,
-                pageReferenceTargetPageID: referenceTargets.pageID,
-                blockReferenceTargetBlockID: referenceTargets.blockID
-            )
+            if !isEncrypted {
+                try BacklinkRepository(database: database).rebuildLinksForBlock(
+                    blockID: blockID,
+                    text: importDraft.textPlain,
+                    pageReferenceTargetPageID: referenceTargets.pageID,
+                    blockReferenceTargetBlockID: referenceTargets.blockID
+                )
+            }
         }
 
         EditorLog.markdown.debug(
@@ -1388,21 +1594,24 @@ final class PageRepository {
     func appendPageReferenceBlock(pageID: String, targetPageID: String) throws -> BlockSnapshot {
         let targetRows = try database.query(
             """
-            SELECT title
+            SELECT title,
+                   is_encrypted
             FROM pages
             WHERE id = ? AND is_archived = 0
             LIMIT 1
             """,
             bindings: [.text(targetPageID)]
         )
-        guard let targetTitle = targetRows.first?["title"] else {
+        guard let targetRow = targetRows.first,
+              targetRow["title"] != nil else {
             throw PageRepositoryError.pageNotFound
         }
+        let targetTitlePlaintext = try decryptPageTitleIfNeeded(targetRow)
 
         return try appendBlock(
             pageID: pageID,
             type: .pageReference,
-            text: targetTitle,
+            text: targetTitlePlaintext,
             taskItemIsCompleted: false,
             pageReferenceTargetPageID: targetPageID,
             blockReferenceTargetBlockID: nil
@@ -1419,7 +1628,8 @@ final class PageRepository {
                    blocks.order_key,
                    blocks.payload_json,
                    pages.workspace_id,
-                   pages.notebook_id
+                   pages.notebook_id,
+                   pages.is_encrypted AS source_is_encrypted
             FROM blocks
             INNER JOIN pages ON pages.id = blocks.page_id
             WHERE blocks.id = ?
@@ -1438,8 +1648,16 @@ final class PageRepository {
             throw PageRepositoryError.blockNotFound
         }
 
-        let sourceText = source["text_plain"] ?? ""
-        if let targetPageID = Self.pageReferenceTargetPageID(payloadJSON: source["payload_json"] ?? ""),
+        let sourceIsEncrypted = Self.sqliteBool(source["source_is_encrypted"])
+        let sourceText = try decryptedStoredValue(
+            source["text_plain"] ?? "",
+            isEncrypted: sourceIsEncrypted
+        )
+        let sourcePayloadJSON = try decryptedStoredValue(
+            source["payload_json"] ?? "",
+            isEncrypted: sourceIsEncrypted
+        )
+        if let targetPageID = Self.pageReferenceTargetPageID(payloadJSON: sourcePayloadJSON),
            let existingPage = try pageSummary(pageID: targetPageID) {
             EditorLog.store.debug(
                 "block_page_conversion_reused block_id=\(blockID, privacy: .public) target_page_id=\(targetPageID, privacy: .public)"
@@ -1462,19 +1680,23 @@ final class PageRepository {
             text: sourceReferenceText,
             pageReferenceTargetPageID: newPageID
         )
+        let storedTitle = try storedValue(title, isEncrypted: sourceIsEncrypted)
+        let storedSourceReferenceText = try storedValue(sourceReferenceText, isEncrypted: sourceIsEncrypted)
+        let storedPageReferencePayload = try storedValue(pageReferencePayload, isEncrypted: sourceIsEncrypted)
 
         try database.withImmediateTransaction("convert_text_block_to_page") {
             try database.execute(
                 """
-                INSERT INTO pages (id, workspace_id, notebook_id, title, order_key, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO pages (id, workspace_id, notebook_id, title, order_key, is_encrypted, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 bindings: [
                     .text(newPageID),
                     .text(workspaceID),
                     notebookID.map(SQLiteValue.text) ?? .null,
-                    .text(title),
+                    .text(storedTitle),
                     .text(orderKey),
+                    .integer(sourceIsEncrypted ? 1 : 0),
                     .text(now),
                     .text(now)
                 ]
@@ -1526,34 +1748,36 @@ final class PageRepository {
                 """,
                 bindings: [
                     .text(sourceReferenceType.rawValue),
-                    .text(pageReferencePayload),
-                    .text(sourceReferenceText),
+                    .text(storedPageReferencePayload),
+                    .text(storedSourceReferenceText),
                     .text("local"),
                     .text(now),
                     .text(blockID)
                 ]
             )
-            try database.execute(
-                """
-                INSERT OR REPLACE INTO page_parent_links (
-                    parent_page_id,
-                    child_page_id,
-                    source_block_id,
-                    order_key,
-                    created_at,
-                    updated_at
+            if !sourceIsEncrypted {
+                try database.execute(
+                    """
+                    INSERT OR REPLACE INTO page_parent_links (
+                        parent_page_id,
+                        child_page_id,
+                        source_block_id,
+                        order_key,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    bindings: [
+                        .text(pageID),
+                        .text(newPageID),
+                        .text(blockID),
+                        .text(sourceOrderKey),
+                        .text(now),
+                        .text(now)
+                    ]
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                bindings: [
-                    .text(pageID),
-                    .text(newPageID),
-                    .text(blockID),
-                    .text(sourceOrderKey),
-                    .text(now),
-                    .text(now)
-                ]
-            )
+            }
 
             let syncRepository = SyncRepository(database: database)
             try syncRepository.enqueue(entityType: "page", entityID: newPageID, changeType: "create")
@@ -1563,14 +1787,20 @@ final class PageRepository {
                 for descendantBlockID in descendantBlockIDs {
                     try syncRepository.enqueue(entityType: "block", entityID: descendantBlockID, changeType: "update")
                 }
-                try rebuildLinksForBlocks(blockIDs: descendantBlockIDs)
+                if !sourceIsEncrypted {
+                    try rebuildLinksForBlocks(blockIDs: descendantBlockIDs)
+                }
             }
             try syncRepository.enqueue(entityType: "block", entityID: blockID, changeType: "update")
-            try BacklinkRepository(database: database).rebuildLinksForBlock(
-                blockID: blockID,
-                text: sourceReferenceText,
-                pageReferenceTargetPageID: newPageID
-            )
+            if sourceIsEncrypted {
+                try deleteSearchIndexForPage(pageID: pageID, blockIDs: [blockID] + descendantBlockIDs)
+            } else {
+                try BacklinkRepository(database: database).rebuildLinksForBlock(
+                    blockID: blockID,
+                    text: sourceReferenceText,
+                    pageReferenceTargetPageID: newPageID
+                )
+            }
         }
 
         EditorLog.store.debug(
@@ -1583,18 +1813,20 @@ final class PageRepository {
             notebookID: notebookID,
             title: title,
             isFavorite: false,
+            isEncrypted: sourceIsEncrypted,
             updatedAt: now
         )
     }
 
     private func pageSummary(pageID: String) throws -> PageSummary? {
-        try database.query(
+        guard let row = try database.query(
             """
             SELECT id,
                    workspace_id,
                    notebook_id,
                    title,
                    is_favorite,
+                   is_encrypted,
                    updated_at
             FROM pages
             WHERE id = ?
@@ -1602,24 +1834,31 @@ final class PageRepository {
             LIMIT 1
             """,
             bindings: [.text(pageID)]
-        ).first.map { row in
-            PageSummary(
-                id: row["id"] ?? "",
-                workspaceID: row["workspace_id"] ?? "",
-                notebookID: row["notebook_id"] ?? nil,
-                title: row["title"] ?? "",
-                isFavorite: Self.sqliteBool(row["is_favorite"]),
-                updatedAt: row["updated_at"]
-            )
+        ).first else {
+            return nil
         }
+
+        return PageSummary(
+            id: row["id"] ?? "",
+            workspaceID: row["workspace_id"] ?? "",
+            notebookID: row["notebook_id"] ?? nil,
+            title: try decryptPageTitleIfNeeded(row),
+            isFavorite: Self.sqliteBool(row["is_favorite"]),
+            isEncrypted: Self.sqliteBool(row["is_encrypted"]),
+            updatedAt: row["updated_at"]
+        )
     }
 
     func appendBlockReferenceBlock(pageID: String, targetBlockID: String) throws -> BlockSnapshot {
         guard let targetRow = try database.query(
             """
-            SELECT id, page_id, text_plain
+            SELECT blocks.id,
+                   blocks.page_id,
+                   blocks.text_plain,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(targetBlockID)]
@@ -1630,7 +1869,10 @@ final class PageRepository {
         return try appendBlock(
             pageID: pageID,
             type: .blockReference,
-            text: targetRow["text_plain"] ?? "",
+            text: try decryptedStoredValue(
+                targetRow["text_plain"] ?? "",
+                isEncrypted: Self.sqliteBool(targetRow["is_encrypted"])
+            ),
             taskItemIsCompleted: false,
             pageReferenceTargetPageID: targetRow["page_id"],
             blockReferenceTargetBlockID: targetBlockID
@@ -1688,12 +1930,14 @@ final class PageRepository {
             entityID: blockID,
             changeType: "create"
         )
-        try BacklinkRepository(database: database).rebuildLinksForBlock(
-            blockID: blockID,
-            text: text,
-            pageReferenceTargetPageID: pageReferenceTargetPageID,
-            blockReferenceTargetBlockID: blockReferenceTargetBlockID
-        )
+        if try !pageIsEncrypted(pageID: pageID) {
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: blockID,
+                text: text,
+                pageReferenceTargetPageID: pageReferenceTargetPageID,
+                blockReferenceTargetBlockID: blockReferenceTargetBlockID
+            )
+        }
 
         EditorLog.store.debug(
             "block_appended block_id=\(blockID, privacy: .public) page_id=\(pageID, privacy: .public) type=\(type.rawValue, privacy: .public)"
@@ -1719,7 +1963,7 @@ final class PageRepository {
             """
             SELECT page_id, parent_block_id
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -1789,10 +2033,12 @@ final class PageRepository {
                 changeType: "update"
             )
         }
-        try BacklinkRepository(database: database).rebuildLinksForBlock(
-            blockID: insertedBlockID,
-            text: text
-        )
+        if try !pageIsEncrypted(pageID: pageID) {
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: insertedBlockID,
+                text: text
+            )
+        }
         EditorLog.store.debug(
             "block_inserted_after block_id=\(insertedBlockID, privacy: .public) previous_block_id=\(blockID, privacy: .public)"
         )
@@ -1821,7 +2067,7 @@ final class PageRepository {
             """
             SELECT page_id
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(firstBlockID)]
@@ -1939,7 +2185,7 @@ final class PageRepository {
             """
             SELECT page_id
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -2188,48 +2434,59 @@ final class PageRepository {
         let placeholders = Array(repeating: "?", count: pageIDs.count).joined(separator: ", ")
         return try database.query(
             """
-            SELECT id, page_id, parent_block_id, order_key, type, payload_json, text_plain
+            SELECT blocks.id AS id,
+                   blocks.page_id AS page_id,
+                   blocks.parent_block_id AS parent_block_id,
+                   blocks.order_key AS order_key,
+                   blocks.type AS type,
+                   blocks.payload_json AS payload_json,
+                   blocks.text_plain AS text_plain,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE page_id IN (\(placeholders)) AND is_deleted = 0
-            ORDER BY page_id ASC, order_key ASC
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.page_id IN (\(placeholders)) AND blocks.is_deleted = 0
+            ORDER BY blocks.page_id ASC, blocks.order_key ASC
             """,
             bindings: pageIDs.map(SQLiteValue.text)
         ).map { row in
             let type = BlockType(rawValue: row["type"] ?? "") ?? .paragraph
+            let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+            let payloadJSON = try decryptedStoredValue(row["payload_json"] ?? "", isEncrypted: isEncrypted)
+            let textPlain = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
             return BlockSnapshot(
                 id: row["id"] ?? "",
                 pageID: row["page_id"] ?? "",
                 parentBlockID: row["parent_block_id"] ?? nil,
                 orderKey: row["order_key"] ?? "",
                 type: type,
-                textPlain: row["text_plain"] ?? "",
+                textPlain: textPlain,
                 taskItemIsCompleted: Self.taskItemIsCompleted(
-                    payloadJSON: row["payload_json"] ?? ""
+                    payloadJSON: payloadJSON
                 ),
                 toggleIsExpanded: Self.toggleIsExpanded(
-                    payloadJSON: row["payload_json"] ?? ""
+                    payloadJSON: payloadJSON
                 ),
                 codeBlockLineWrapping: Self.codeBlockLineWrapping(
-                    payloadJSON: row["payload_json"] ?? ""
+                    payloadJSON: payloadJSON
                 ),
                 pageReferenceTargetPageID: Self.pageReferenceTargetPageID(
-                    payloadJSON: row["payload_json"] ?? ""
+                    payloadJSON: payloadJSON
                 ),
                 blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(
-                    payloadJSON: row["payload_json"] ?? ""
+                    payloadJSON: payloadJSON
                 ),
                 tableRows: Self.tableRows(
                     type: type,
-                    payloadJSON: row["payload_json"] ?? "",
-                    text: row["text_plain"] ?? ""
+                    payloadJSON: payloadJSON,
+                    text: textPlain
                 ),
                 attachmentID: Self.attachmentID(
                     type: type,
-                    payloadJSON: row["payload_json"] ?? ""
+                    payloadJSON: payloadJSON
                 ),
                 attachmentDisplayWidth: Self.attachmentDisplayWidth(
                     type: type,
-                    payloadJSON: row["payload_json"] ?? ""
+                    payloadJSON: payloadJSON
                 )
             )
         }
@@ -2238,6 +2495,61 @@ final class PageRepository {
     private static func pageTitle(fromBlockText text: String) -> String {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedText.isEmpty ? "未命名" : trimmedText
+    }
+
+    private func decryptPageTitleIfNeeded(_ row: SQLiteRow) throws -> String {
+        try decryptedStoredValue(
+            row["title"] ?? "",
+            isEncrypted: Self.sqliteBool(row["is_encrypted"])
+        )
+    }
+
+    private func storedValue(_ plaintext: String, isEncrypted: Bool) throws -> String {
+        isEncrypted ? try encryptedNoteCipher.encrypt(plaintext) : plaintext
+    }
+
+    private func decryptedStoredValue(_ storedValue: String, isEncrypted: Bool) throws -> String {
+        guard isEncrypted || encryptedNoteCipher.isCiphertext(storedValue) else {
+            return storedValue
+        }
+        return try encryptedNoteCipher.decrypt(storedValue)
+    }
+
+    private func pageIsEncrypted(pageID: String) throws -> Bool {
+        let row = try database.query(
+            """
+            SELECT is_encrypted
+            FROM pages
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        ).first
+
+        return Self.sqliteBool(row?["is_encrypted"])
+    }
+
+    private func deleteSearchIndexForPage(pageID: String, blockIDs: [String]) throws {
+        try database.execute(
+            """
+            DELETE FROM search_index
+            WHERE entity_type = 'page' AND entity_id = ?
+            """,
+            bindings: [.text(pageID)]
+        )
+
+        guard !blockIDs.isEmpty else {
+            return
+        }
+
+        let placeholders = blockIDs.map { _ in "?" }.joined(separator: ", ")
+        try database.execute(
+            """
+            DELETE FROM search_index
+            WHERE entity_type = 'block' AND entity_id IN (\(placeholders))
+            """,
+            bindings: blockIDs.map(SQLiteValue.text)
+        )
     }
 
     private func nextNotebookOrderKey(
@@ -2345,6 +2657,18 @@ final class PageRepository {
         blockReferenceTargetBlockID: String? = nil,
         createdAt: String
     ) throws {
+        let isEncrypted = try pageIsEncrypted(pageID: pageID)
+        let payloadJSON = try storedValue(
+            try blockPayloadJSON(
+                type: type,
+                text: text,
+                taskItemIsCompleted: taskItemIsCompleted,
+                pageReferenceTargetPageID: pageReferenceTargetPageID,
+                blockReferenceTargetBlockID: blockReferenceTargetBlockID
+            ),
+            isEncrypted: isEncrypted
+        )
+        let storedText = try storedValue(text, isEncrypted: isEncrypted)
         try database.execute(
             """
             INSERT INTO blocks (
@@ -2369,14 +2693,8 @@ final class PageRepository {
                 parentBlockID.map(SQLiteValue.text) ?? .null,
                 .text(orderKey),
                 .text(type.rawValue),
-                .text(try blockPayloadJSON(
-                    type: type,
-                    text: text,
-                    taskItemIsCompleted: taskItemIsCompleted,
-                    pageReferenceTargetPageID: pageReferenceTargetPageID,
-                    blockReferenceTargetBlockID: blockReferenceTargetBlockID
-                )),
-                .text(text),
+                .text(payloadJSON),
+                .text(storedText),
                 .integer(1),
                 .text("local"),
                 .integer(0),
@@ -2766,9 +3084,11 @@ final class PageRepository {
     private func currentReferenceTargets(blockID: String) throws -> (pageID: String?, blockID: String?) {
         guard let row = try database.query(
             """
-            SELECT payload_json
+            SELECT blocks.payload_json,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -2776,7 +3096,10 @@ final class PageRepository {
             return (nil, nil)
         }
 
-        let payloadJSON = row["payload_json"] ?? ""
+        let payloadJSON = try decryptedStoredValue(
+            row["payload_json"] ?? "",
+            isEncrypted: Self.sqliteBool(row["is_encrypted"])
+        )
         return (
             Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
             Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
@@ -2786,9 +3109,12 @@ final class PageRepository {
     private func currentTaskItemCompletion(blockID: String) throws -> Bool? {
         guard let row = try database.query(
             """
-            SELECT type, payload_json
+            SELECT blocks.type,
+                   blocks.payload_json,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -2797,15 +3123,22 @@ final class PageRepository {
             return nil
         }
 
-        return Self.taskItemIsCompleted(payloadJSON: row["payload_json"] ?? "")
+        let payloadJSON = try decryptedStoredValue(
+            row["payload_json"] ?? "",
+            isEncrypted: Self.sqliteBool(row["is_encrypted"])
+        )
+        return Self.taskItemIsCompleted(payloadJSON: payloadJSON)
     }
 
     private func currentToggleExpansion(blockID: String) throws -> Bool? {
         guard let row = try database.query(
             """
-            SELECT type, payload_json
+            SELECT blocks.type,
+                   blocks.payload_json,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -2814,15 +3147,22 @@ final class PageRepository {
             return nil
         }
 
-        return Self.toggleIsExpanded(payloadJSON: row["payload_json"] ?? "")
+        let payloadJSON = try decryptedStoredValue(
+            row["payload_json"] ?? "",
+            isEncrypted: Self.sqliteBool(row["is_encrypted"])
+        )
+        return Self.toggleIsExpanded(payloadJSON: payloadJSON)
     }
 
     private func currentCodeBlockLineWrapping(blockID: String) throws -> Bool? {
         guard let row = try database.query(
             """
-            SELECT type, payload_json
+            SELECT blocks.type,
+                   blocks.payload_json,
+                   pages.is_encrypted AS is_encrypted
             FROM blocks
-            WHERE id = ? AND is_deleted = 0
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
             LIMIT 1
             """,
             bindings: [.text(blockID)]
@@ -2831,7 +3171,11 @@ final class PageRepository {
             return nil
         }
 
-        return Self.codeBlockLineWrapping(payloadJSON: row["payload_json"] ?? "")
+        let payloadJSON = try decryptedStoredValue(
+            row["payload_json"] ?? "",
+            isEncrypted: Self.sqliteBool(row["is_encrypted"])
+        )
+        return Self.codeBlockLineWrapping(payloadJSON: payloadJSON)
     }
 
     private static func taskItemIsCompleted(payloadJSON: String) -> Bool {
