@@ -116,6 +116,8 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var canUndoPageArchive = false
     @Published private(set) var attachmentPreviewGenerationStatuses: [String: AttachmentPreviewGenerationStatus] = [:]
     @Published private(set) var markdownImportStatusText: String?
+    @Published private(set) var unlockedEncryptedPageIDs: Set<String> = []
+    @Published private(set) var authenticatingEncryptedPageID: String?
 
     private let repository: PageRepository?
     private let diaryRepository: DiaryRepository?
@@ -130,6 +132,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let syncEngine: SyncEngine?
     private let syncScheduler: WorkspaceSyncScheduling
     private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
+    private let encryptedPageAuthenticator: EncryptedPageAuthenticating
     private let currentDateProvider: () -> Date
     private let diaryCalendar: Calendar
     private var hasLoadedSnapshot = false
@@ -206,6 +209,9 @@ final class WorkspaceViewModel: ObservableObject {
 
     var visibleBlocks: [BlockSnapshot] {
         guard let selectedPageID else {
+            return []
+        }
+        guard isPageContentVisible(pageID: selectedPageID) else {
             return []
         }
         return snapshot.blocks.filter { $0.pageID == selectedPageID }
@@ -290,6 +296,7 @@ final class WorkspaceViewModel: ObservableObject {
         syncEngine: SyncEngine? = nil,
         syncScheduler: WorkspaceSyncScheduling = BackgroundWorkspaceSyncScheduler(),
         cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil,
+        encryptedPageAuthenticator: EncryptedPageAuthenticating = SystemEncryptedPageAuthenticator(),
         currentDateProvider: @escaping () -> Date = Date.init,
         diaryCalendar: Calendar = .current
     ) {
@@ -306,6 +313,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.syncEngine = syncEngine
         self.syncScheduler = syncScheduler
         self.cloudKitAccountMetadataService = cloudKitAccountMetadataService
+        self.encryptedPageAuthenticator = encryptedPageAuthenticator
         self.currentDateProvider = currentDateProvider
         self.diaryCalendar = diaryCalendar
         snapshot = .empty
@@ -320,6 +328,8 @@ final class WorkspaceViewModel: ObservableObject {
         canRedoTextEdit = false
         canUndoPageArchive = false
         attachmentPreviewGenerationStatuses = [:]
+        unlockedEncryptedPageIDs = []
+        authenticatingEncryptedPageID = nil
         startObservingSyncChangesIfNeeded()
     }
 
@@ -337,6 +347,7 @@ final class WorkspaceViewModel: ObservableObject {
         syncEngine = nil
         syncScheduler = BackgroundWorkspaceSyncScheduler()
         cloudKitAccountMetadataService = nil
+        encryptedPageAuthenticator = SystemEncryptedPageAuthenticator()
         currentDateProvider = Date.init
         diaryCalendar = .current
         self.snapshot = snapshot
@@ -351,6 +362,8 @@ final class WorkspaceViewModel: ObservableObject {
         canRedoTextEdit = false
         canUndoPageArchive = false
         attachmentPreviewGenerationStatuses = [:]
+        unlockedEncryptedPageIDs = []
+        authenticatingEncryptedPageID = nil
         requestInitialCompactPageNavigationIfNeeded(source: "snapshot")
     }
 
@@ -507,6 +520,69 @@ final class WorkspaceViewModel: ObservableObject {
 
     func selectPage(id: String) {
         selectPage(id: id, collection: defaultCollectionForOpeningPage(id: id), recordHistory: true)
+    }
+
+    func selectPageForUI(id pageID: String) async {
+        guard await unlockEncryptedPageForUIIfNeeded(id: pageID) else {
+            return
+        }
+        selectPage(id: pageID)
+    }
+
+    @discardableResult
+    func unlockSelectedEncryptedPageForUI() async -> Bool {
+        guard let selectedPageID else {
+            return false
+        }
+        return await unlockEncryptedPageForUIIfNeeded(id: selectedPageID)
+    }
+
+    func isEncryptedPageUnlocked(_ pageID: String) -> Bool {
+        guard snapshot.pages.contains(where: { $0.id == pageID && $0.isEncrypted }) else {
+            return true
+        }
+        return unlockedEncryptedPageIDs.contains(pageID)
+    }
+
+    func isEncryptedPageLocked(_ pageID: String) -> Bool {
+        !isEncryptedPageUnlocked(pageID)
+    }
+
+    private func isPageContentVisible(pageID: String) -> Bool {
+        isEncryptedPageUnlocked(pageID)
+    }
+
+    @discardableResult
+    private func unlockEncryptedPageForUIIfNeeded(id pageID: String) async -> Bool {
+        guard snapshot.pages.contains(where: { $0.id == pageID && $0.isEncrypted }) else {
+            return true
+        }
+        guard !unlockedEncryptedPageIDs.contains(pageID) else {
+            return true
+        }
+        guard authenticatingEncryptedPageID != pageID else {
+            return false
+        }
+
+        authenticatingEncryptedPageID = pageID
+        EditorLog.security.debug(
+            "encrypted_page_unlock_requested page_id=\(pageID, privacy: .public)"
+        )
+        let didAuthenticate = await encryptedPageAuthenticator.authenticateForEncryptedPage()
+        authenticatingEncryptedPageID = nil
+
+        if didAuthenticate {
+            unlockedEncryptedPageIDs.insert(pageID)
+            EditorLog.security.debug(
+                "encrypted_page_unlocked page_id=\(pageID, privacy: .public)"
+            )
+            return true
+        }
+
+        EditorLog.security.error(
+            "encrypted_page_unlock_denied page_id=\(pageID, privacy: .public)"
+        )
+        return false
     }
 
     private func selectPage(
@@ -969,6 +1045,9 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func editorVisibleBlocks(for pageID: String) -> [BlockSnapshot] {
+        guard isPageContentVisible(pageID: pageID) else {
+            return []
+        }
         let pageBlocks = snapshot.blocks.filter { $0.pageID == pageID }
         var hiddenBlockIDs: Set<String> = []
         var filteredBlocks: [BlockSnapshot] = []
@@ -2012,6 +2091,7 @@ final class WorkspaceViewModel: ObservableObject {
     func updatePageEncryptionForUI(id pageID: String, isEncrypted: Bool) {
         do {
             try updatePageEncryption(id: pageID, isEncrypted: isEncrypted)
+            unlockedEncryptedPageIDs.remove(pageID)
             EditorLog.input.debug(
                 "page_encryption_visible page_id=\(pageID, privacy: .public) is_encrypted=\(isEncrypted, privacy: .public)"
             )

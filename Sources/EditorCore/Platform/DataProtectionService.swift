@@ -2,6 +2,9 @@ import Foundation
 import CloudKit
 import CryptoKit
 import Security
+#if canImport(LocalAuthentication)
+import LocalAuthentication
+#endif
 
 enum DataProtectionService {
     static func applyNativeProtection(to url: URL) throws {
@@ -237,6 +240,49 @@ enum EncryptedNoteCipherError: Error, Equatable {
     case missingCombinedCiphertext
     case invalidCiphertext
     case invalidPlaintext
+}
+
+@MainActor
+protocol EncryptedPageAuthenticating {
+    func authenticateForEncryptedPage() async -> Bool
+}
+
+struct SystemEncryptedPageAuthenticator: EncryptedPageAuthenticating {
+    private let localizedReason: String
+
+    init(localizedReason: String = "解锁加密内容") {
+        self.localizedReason = localizedReason
+    }
+
+    func authenticateForEncryptedPage() async -> Bool {
+#if canImport(LocalAuthentication)
+        let context = LAContext()
+        var policyError: NSError?
+        let policy: LAPolicy = .deviceOwnerAuthentication
+        guard context.canEvaluatePolicy(policy, error: &policyError) else {
+            EditorLog.security.error(
+                "encrypted_page_auth_unavailable error=\(String(describing: policyError), privacy: .public)"
+            )
+            return false
+        }
+
+        return await withCheckedContinuation { continuation in
+            context.evaluatePolicy(policy, localizedReason: localizedReason) { success, error in
+                if success {
+                    EditorLog.security.debug("encrypted_page_auth_succeeded")
+                } else {
+                    EditorLog.security.error(
+                        "encrypted_page_auth_failed error=\(String(describing: error), privacy: .public)"
+                    )
+                }
+                continuation.resume(returning: success)
+            }
+        }
+#else
+        EditorLog.security.error("encrypted_page_auth_unavailable error=local_authentication_missing")
+        return false
+#endif
+    }
 }
 
 private extension Dictionary where Key == String, Value == Any {

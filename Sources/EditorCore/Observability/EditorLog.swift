@@ -12,4 +12,5 @@ enum EditorLog {
     static let store = Logger(subsystem: subsystem, category: "store.transaction")
     static let sync = Logger(subsystem: subsystem, category: "sync.cloudkit")
     static let attachment = Logger(subsystem: subsystem, category: "attachment.preview")
+    static let security = Logger(subsystem: subsystem, category: "security.encrypted-page")
 }

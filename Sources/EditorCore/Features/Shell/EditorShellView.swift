@@ -437,8 +437,15 @@ private struct ThreeColumnEditorShell: View {
                     canUndoTextEdit: viewModel.canUndoTextEdit,
                     canRedoTextEdit: viewModel.canRedoTextEdit,
                     displayMode: displayMode,
+                    isEncryptedContentLocked: viewModel.selectedPage.map { viewModel.isEncryptedPageLocked($0.id) } ?? false,
+                    isAuthenticatingEncryptedContent: viewModel.selectedPageID.map { viewModel.authenticatingEncryptedPageID == $0 } ?? false,
                     onDisplayModeChange: { mode in
                         displayMode = mode
+                    },
+                    onUnlockEncryptedContent: {
+                        Task {
+                            await viewModel.unlockSelectedEncryptedPageForUI()
+                        }
                     },
                     onAddParagraphBlock: {
                         viewModel.addParagraphBlockToCurrentPage()
@@ -728,8 +735,15 @@ private struct ThreeColumnEditorShell: View {
                 canUndoTextEdit: viewModel.canUndoTextEdit,
                 canRedoTextEdit: viewModel.canRedoTextEdit,
                 displayMode: displayMode,
+                isEncryptedContentLocked: viewModel.selectedPage.map { viewModel.isEncryptedPageLocked($0.id) } ?? false,
+                isAuthenticatingEncryptedContent: viewModel.selectedPageID.map { viewModel.authenticatingEncryptedPageID == $0 } ?? false,
                 onDisplayModeChange: { mode in
                     displayMode = mode
+                },
+                onUnlockEncryptedContent: {
+                    Task {
+                        await viewModel.unlockSelectedEncryptedPageForUI()
+                    }
                 },
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
@@ -3532,6 +3546,13 @@ private struct CompactPageDestination: View {
                 canUndoTextEdit: viewModel.canUndoTextEdit,
                 canRedoTextEdit: viewModel.canRedoTextEdit,
                 showsAuxiliaryRail: false,
+                isEncryptedContentLocked: viewModel.isEncryptedPageLocked(page.id),
+                isAuthenticatingEncryptedContent: viewModel.authenticatingEncryptedPageID == page.id,
+                onUnlockEncryptedContent: {
+                    Task {
+                        await viewModel.selectPageForUI(id: page.id)
+                    }
+                },
                 onAddParagraphBlock: {
                     viewModel.addParagraphBlockToCurrentPage()
                 },
@@ -3720,8 +3741,14 @@ private struct CompactPageDestination: View {
                 }
             )
             .onAppear {
-                viewModel.selectPage(id: page.id)
-                requestInitialFocusIfNeeded()
+                Task {
+                    await viewModel.selectPageForUI(id: page.id)
+                    guard viewModel.selectedPageID == page.id,
+                          !viewModel.isEncryptedPageLocked(page.id) else {
+                        return
+                    }
+                    requestInitialFocusIfNeeded()
+                }
             }
         } else {
             Color.white
@@ -4527,7 +4554,9 @@ private struct PageListView: View {
         .onTapGesture {
             selectedPageIDs = []
             activePageDragIDs = []
-            viewModel.selectPage(id: page.id)
+            Task {
+                await viewModel.selectPageForUI(id: page.id)
+            }
         }
         .onDrag {
             let pageIDs = dragPageIDs(for: page.id)
@@ -5728,6 +5757,35 @@ private struct BlockSelectionMarqueeOverlay: View {
     }
 }
 
+private struct EncryptedPageLockedView: View {
+    let isAuthenticating: Bool
+    let onUnlock: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+
+            Text("加密内容")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+
+            Button {
+                onUnlock()
+            } label: {
+                Label(isAuthenticating ? "验证中..." : "解锁", systemImage: "lock.open")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isAuthenticating)
+            .accessibilityIdentifier("editor.encrypted-page-unlock")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(EditorDesignTokens.Colors.appBackground.color)
+        .accessibilityIdentifier("editor.encrypted-page-locked")
+    }
+}
+
 private struct EditorCanvasView: View {
     let page: PageSummary?
     let pages: [PageSummary]
@@ -5749,7 +5807,10 @@ private struct EditorCanvasView: View {
     let canRedoTextEdit: Bool
     var displayMode: EditorDisplayMode = .standard
     var showsAuxiliaryRail = true
+    var isEncryptedContentLocked = false
+    var isAuthenticatingEncryptedContent = false
     var onDisplayModeChange: (EditorDisplayMode) -> Void = { _ in }
+    var onUnlockEncryptedContent: () -> Void = {}
     let onAddParagraphBlock: () -> String?
     let onAddPageReference: (String) -> Void
     let onAddBlockReference: (String) -> Void
@@ -5837,6 +5898,17 @@ private struct EditorCanvasView: View {
 #endif
 
     var body: some View {
+        if isEncryptedContentLocked {
+            EncryptedPageLockedView(
+                isAuthenticating: isAuthenticatingEncryptedContent,
+                onUnlock: onUnlockEncryptedContent
+            )
+        } else {
+            unlockedCanvasBody
+        }
+    }
+
+    private var unlockedCanvasBody: some View {
         ZStack(alignment: .topTrailing) {
             HStack(alignment: .top, spacing: 0) {
                 ScrollView(.vertical, showsIndicators: false) {

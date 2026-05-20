@@ -215,6 +215,50 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectingEncryptedPageForUIRequiresAuthenticationBeforeRevealingBlocks() async throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let publicPageID = try XCTUnwrap(snapshot.selectedPageID)
+        let encryptedPage = try repository.createPage(
+            workspaceID: workspaceID,
+            title: "加密计划",
+            isEncrypted: true
+        )
+        let snapshotAfterCreate = try repository.loadWorkspaceSnapshot()
+        let encryptedBlockID = try XCTUnwrap(
+            snapshotAfterCreate.blocks.first { $0.pageID == encryptedPage.id }?.id
+        )
+        try repository.updateBlockText(blockID: encryptedBlockID, text: "指纹后才显示")
+        let authenticator = RecordingEncryptedPageAuthenticator(results: [false, true])
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            encryptedPageAuthenticator: authenticator
+        )
+        try viewModel.load()
+        viewModel.selectPage(id: publicPageID)
+
+        await viewModel.selectPageForUI(id: encryptedPage.id)
+
+        XCTAssertEqual(authenticator.requestCount, 1)
+        XCTAssertEqual(viewModel.selectedPageID, publicPageID)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["开始用块写作。"])
+        XCTAssertFalse(viewModel.isEncryptedPageUnlocked(encryptedPage.id))
+
+        await viewModel.selectPageForUI(id: encryptedPage.id)
+
+        XCTAssertEqual(authenticator.requestCount, 2)
+        XCTAssertEqual(viewModel.selectedPageID, encryptedPage.id)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["指纹后才显示"])
+        XCTAssertTrue(viewModel.isEncryptedPageUnlocked(encryptedPage.id))
+    }
+
+    @MainActor
     func testOpenParentPageForCurrentPageUsesRecordedPageParentLink() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -3877,6 +3921,23 @@ private struct WorkspaceStaticCloudKitAccountStatusProvider: CloudKitAccountStat
 
     func accountStatus() throws -> CKAccountStatus {
         status
+    }
+}
+
+private final class RecordingEncryptedPageAuthenticator: EncryptedPageAuthenticating {
+    private var results: [Bool]
+    private(set) var requestCount = 0
+
+    init(results: [Bool]) {
+        self.results = results
+    }
+
+    func authenticateForEncryptedPage() async -> Bool {
+        requestCount += 1
+        guard !results.isEmpty else {
+            return false
+        }
+        return results.removeFirst()
     }
 }
 

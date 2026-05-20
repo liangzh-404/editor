@@ -234,6 +234,15 @@ final class PlatformSecurityTests: XCTestCase {
         )
     }
 
+    func testIOSAppDeclaresFaceIDUsageDescriptionForEncryptedPageUnlock() throws {
+        let plist = try appPlist(named: "EditorIOS-Info.plist")
+
+        XCTAssertEqual(
+            plist["NSFaceIDUsageDescription"] as? String,
+            "用于解锁加密内容。"
+        )
+    }
+
     func testDataProtectionServiceKeepsProtectedFileReadable() throws {
         let fileURL = makeTemporaryDirectory().appendingPathComponent("protected.sqlite")
         try Data("protected".utf8).write(to: fileURL)
