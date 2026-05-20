@@ -293,6 +293,64 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testPageTagEditorVisibilityHidesEmptyTagRow() {
+        XCTAssertFalse(
+            PageTagEditorVisibilityPolicy.isVisible(
+                selectedTagIDs: [],
+                selectedTagNames: []
+            )
+        )
+        XCTAssertTrue(
+            PageTagEditorVisibilityPolicy.isVisible(
+                selectedTagIDs: ["tag-work"],
+                selectedTagNames: []
+            )
+        )
+        XCTAssertTrue(
+            PageTagEditorVisibilityPolicy.isVisible(
+                selectedTagIDs: [],
+                selectedTagNames: ["工作"]
+            )
+        )
+    }
+
+    func testPageRowDragVisualPolicyMakesDraggedSourceFeelLifted() {
+        XCTAssertEqual(PageRowDragVisualPolicy.opacity(isBeingDragged: false), 1)
+        XCTAssertEqual(PageRowDragVisualPolicy.scale(isBeingDragged: false), 1)
+        XCTAssertEqual(PageRowDragVisualPolicy.shadowOpacity(isBeingDragged: false), 0)
+        XCTAssertLessThan(
+            PageRowDragVisualPolicy.opacity(isBeingDragged: true),
+            PageRowDragVisualPolicy.opacity(isBeingDragged: false)
+        )
+        XCTAssertLessThan(
+            PageRowDragVisualPolicy.scale(isBeingDragged: true),
+            PageRowDragVisualPolicy.scale(isBeingDragged: false)
+        )
+        XCTAssertGreaterThan(
+            PageRowDragVisualPolicy.shadowOpacity(isBeingDragged: true),
+            PageRowDragVisualPolicy.shadowOpacity(isBeingDragged: false)
+        )
+    }
+
+    func testSidebarDropTargetChromeHighlightsDropTargetsWithoutSelection() {
+        XCTAssertEqual(
+            SidebarDropTargetChromePolicy.fillOpacity(isSelected: false, isDropTargeted: false),
+            0
+        )
+        XCTAssertGreaterThan(
+            SidebarDropTargetChromePolicy.fillOpacity(isSelected: false, isDropTargeted: true),
+            SidebarDropTargetChromePolicy.fillOpacity(isSelected: false, isDropTargeted: false)
+        )
+        XCTAssertGreaterThan(
+            SidebarDropTargetChromePolicy.strokeOpacity(isSelected: false, isDropTargeted: true),
+            SidebarDropTargetChromePolicy.strokeOpacity(isSelected: false, isDropTargeted: false)
+        )
+        XCTAssertGreaterThan(
+            SidebarDropTargetChromePolicy.fillOpacity(isSelected: true, isDropTargeted: true),
+            SidebarDropTargetChromePolicy.fillOpacity(isSelected: true, isDropTargeted: false)
+        )
+    }
+
     func testBlockDropIndicatorChromeKeepsBlueLineClearButQuiet() {
         XCTAssertEqual(BlockDropIndicatorChrome.lineHeight, 1.5)
         XCTAssertGreaterThanOrEqual(BlockDropIndicatorChrome.standardOpacity, 0.55)

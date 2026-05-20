@@ -349,6 +349,7 @@ private struct ThreeColumnEditorShell: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     @State private var displayMode: EditorDisplayMode = .standard
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var activePageDragIDs: Set<String> = []
 #if os(macOS)
     @State private var desktopSidebarWidth = CGFloat(EditorDesignTokens.Layout.sidebarIdealWidth)
     @State private var desktopDocumentListWidth = CGFloat(EditorDesignTokens.Layout.documentListIdealWidth)
@@ -361,7 +362,7 @@ private struct ThreeColumnEditorShell: View {
 #else
         NavigationSplitView(columnVisibility: $columnVisibility) {
             if displayMode.showsSidebar {
-                WorkspaceSidebar(viewModel: viewModel)
+                WorkspaceSidebar(viewModel: viewModel, activePageDragIDs: $activePageDragIDs)
             } else {
                 Color.clear
                     .frame(width: 0)
@@ -369,7 +370,7 @@ private struct ThreeColumnEditorShell: View {
             }
         } content: {
             if displayMode.showsDocumentList {
-                PageListView(viewModel: viewModel)
+                PageListView(viewModel: viewModel, activePageDragIDs: $activePageDragIDs)
             } else {
                 Color.clear
                     .frame(width: 0)
@@ -615,7 +616,7 @@ private struct ThreeColumnEditorShell: View {
     private var desktopLayout: some View {
         HStack(alignment: .top, spacing: 0) {
             if displayMode.showsSidebar {
-                WorkspaceSidebar(viewModel: viewModel)
+                WorkspaceSidebar(viewModel: viewModel, activePageDragIDs: $activePageDragIDs)
                     .frame(width: desktopSidebarWidth)
                     .overlay(alignment: .trailing) {
                         DesktopColumnDivider(
@@ -629,7 +630,7 @@ private struct ThreeColumnEditorShell: View {
             }
 
             if displayMode.showsDocumentList {
-                PageListView(viewModel: viewModel)
+                PageListView(viewModel: viewModel, activePageDragIDs: $activePageDragIDs)
                     .frame(width: desktopDocumentListWidth)
                     .overlay(alignment: .trailing) {
                         DesktopColumnDivider(
@@ -3367,8 +3368,25 @@ enum SidebarChrome {
     }
 }
 
+enum SidebarDropTargetChromePolicy {
+    static func fillOpacity(isSelected: Bool, isDropTargeted: Bool) -> Double {
+        if isSelected {
+            return SidebarChrome.selectedFillOpacity + (isDropTargeted ? 0.16 : 0)
+        }
+        return isDropTargeted ? 0.34 : 0
+    }
+
+    static func strokeOpacity(isSelected: Bool, isDropTargeted: Bool) -> Double {
+        if isSelected {
+            return SidebarChrome.selectedStrokeOpacity + (isDropTargeted ? 0.16 : 0)
+        }
+        return isDropTargeted ? 0.22 : 0
+    }
+}
+
 private struct WorkspaceSidebar: View {
     @ObservedObject var viewModel: WorkspaceViewModel
+    @Binding var activePageDragIDs: Set<String>
     @AppStorage("editor.sidebar.favorites.expanded") private var isFavoritesExpanded = true
     @AppStorage("editor.sidebar.tags.expanded") private var isTagsExpanded = true
 
@@ -3382,6 +3400,7 @@ private struct WorkspaceSidebar: View {
                 tagGroup
                 sidebarDivider
                 sidebarGroup(items: sidebarModel.utilityItems) { item, pageIDs in
+                    defer { activePageDragIDs = [] }
                     guard case .archive = item.collection else {
                         return false
                     }
@@ -3516,6 +3535,7 @@ private struct WorkspaceSidebar: View {
                         CollectionRailButton(
                             item: item,
                             onDropPageIDs: { pageIDs in
+                                defer { activePageDragIDs = [] }
                                 guard case .tag(let tagID) = item.collection else {
                                     return false
                                 }
@@ -3572,6 +3592,7 @@ private struct CollectionRailButton: View {
     let item: SidebarNavigationItem
     var onDropPageIDs: (([String]) -> Bool)? = nil
     let action: () -> Void
+    @State private var isDropTargeted = false
 
     var body: some View {
         Button(action: action) {
@@ -3596,14 +3617,24 @@ private struct CollectionRailButton: View {
                 .padding(.vertical, CGFloat(SidebarChrome.rowVerticalPadding))
                 .background(
                     RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
-                        .fill(item.isSelected ? SidebarChrome.selectedFillColor.opacity(SidebarChrome.selectedFillOpacity) : Color.clear)
+                        .fill(
+                            SidebarChrome.selectedFillColor.opacity(
+                                SidebarDropTargetChromePolicy.fillOpacity(
+                                    isSelected: item.isSelected,
+                                    isDropTargeted: isDropTargeted
+                                )
+                            )
+                        )
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
                         .stroke(
-                            item.isSelected
-                                ? EditorDesignTokens.Colors.border.color.opacity(SidebarChrome.selectedStrokeOpacity)
-                                : Color.clear,
+                            EditorDesignTokens.Colors.border.color.opacity(
+                                SidebarDropTargetChromePolicy.strokeOpacity(
+                                    isSelected: item.isSelected,
+                                    isDropTargeted: isDropTargeted
+                                )
+                            ),
                             lineWidth: 1
                         )
                 )
@@ -3621,6 +3652,8 @@ private struct CollectionRailButton: View {
                 return false
             }
             return onDropPageIDs(pageIDs)
+        } isTargeted: { isTargeted in
+            isDropTargeted = isTargeted && onDropPageIDs != nil
         }
     }
 }
@@ -3718,6 +3751,7 @@ enum PageListDateSectionModel {
 
 private struct PageListView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
+    @Binding var activePageDragIDs: Set<String>
     @State private var selectedPageIDs: Set<String> = []
 
     var body: some View {
@@ -3740,6 +3774,12 @@ private struct PageListView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationSplitViewColumnWidth(CGFloat(EditorDesignTokens.Layout.documentListIdealWidth))
         .background(EditorDesignTokens.Colors.appBackground.color.ignoresSafeArea(edges: .top))
+        .background(
+            DropTargetCleanupEventBridge(isEnabled: !activePageDragIDs.isEmpty) {
+                activePageDragIDs = []
+            }
+            .frame(width: 0, height: 0)
+        )
 #else
         pageListScroll
             .navigationTitle(navigationTitle)
@@ -3883,14 +3923,20 @@ private struct PageListView: View {
                     id: page.id,
                     isFavorite: !page.isFavorite
                 )
-            }
+            },
+            isBeingDragged: isPageBeingDragged(page.id)
         )
         .contentShape(Rectangle())
         .onTapGesture {
             selectedPageIDs = []
+            activePageDragIDs = []
             viewModel.selectPage(id: page.id)
         }
-        .draggable(pageDragPayload(for: page.id)) {
+        .onDrag {
+            let pageIDs = dragPageIDs(for: page.id)
+            activePageDragIDs = Set(pageIDs)
+            return NSItemProvider(object: PageDragPayloadResolver.payloadText(pageIDs: pageIDs) as NSString)
+        } preview: {
             PageDragPreview(title: page.title, count: dragPageIDs(for: page.id).count)
         }
         .contextMenu {
@@ -3930,8 +3976,8 @@ private struct PageListView: View {
         )
     }
 
-    private func pageDragPayload(for pageID: String) -> String {
-        PageDragPayloadResolver.payloadText(pageIDs: dragPageIDs(for: pageID))
+    private func isPageBeingDragged(_ pageID: String) -> Bool {
+        activePageDragIDs.contains(pageID)
     }
 
     private var navigationTitle: String {
@@ -4484,6 +4530,28 @@ private struct SearchResultRow: View {
     }
 }
 
+enum PageRowDragVisualPolicy {
+    static func opacity(isBeingDragged: Bool) -> Double {
+        isBeingDragged ? 0.42 : 1
+    }
+
+    static func scale(isBeingDragged: Bool) -> Double {
+        isBeingDragged ? 0.985 : 1
+    }
+
+    static func shadowOpacity(isBeingDragged: Bool) -> Double {
+        isBeingDragged ? 0.10 : 0
+    }
+
+    static func shadowRadius(isBeingDragged: Bool) -> Double {
+        isBeingDragged ? 10 : 0
+    }
+
+    static func shadowYOffset(isBeingDragged: Bool) -> Double {
+        isBeingDragged ? 5 : 0
+    }
+}
+
 private struct PageRow: View {
     let page: PageSummary
     var isSelected = false
@@ -4493,13 +4561,27 @@ private struct PageRow: View {
     var usesRichPreview = false
     var onBatchSelectionToggle: (() -> Void)? = nil
     var onFavoriteToggle: (() -> Void)? = nil
+    var isBeingDragged = false
 
     var body: some View {
-        if usesRichPreview {
-            richPreviewBody
-        } else {
-            compactBody
+        Group {
+            if usesRichPreview {
+                richPreviewBody
+            } else {
+                compactBody
+            }
         }
+        .opacity(PageRowDragVisualPolicy.opacity(isBeingDragged: isBeingDragged))
+        .scaleEffect(PageRowDragVisualPolicy.scale(isBeingDragged: isBeingDragged), anchor: .center)
+        .shadow(
+            color: EditorDesignTokens.Colors.shadow.color.opacity(
+                PageRowDragVisualPolicy.shadowOpacity(isBeingDragged: isBeingDragged)
+            ),
+            radius: CGFloat(PageRowDragVisualPolicy.shadowRadius(isBeingDragged: isBeingDragged)),
+            x: 0,
+            y: CGFloat(PageRowDragVisualPolicy.shadowYOffset(isBeingDragged: isBeingDragged))
+        )
+        .animation(.easeOut(duration: 0.12), value: isBeingDragged)
     }
 
     private var compactBody: some View {
@@ -4676,6 +4758,12 @@ private struct PageRow: View {
         let favorite = page.isFavorite ? "已收藏" : "未收藏"
         let tags = tagNames.isEmpty ? "无标签" : "标签：\(tagNames.joined(separator: ", "))"
         return "\(selection), \(favorite), \(tags)"
+    }
+}
+
+enum PageTagEditorVisibilityPolicy {
+    static func isVisible(selectedTagIDs: [String], selectedTagNames: [String]) -> Bool {
+        !selectedTagIDs.isEmpty || !selectedTagNames.isEmpty
     }
 }
 
@@ -5064,15 +5152,20 @@ private struct EditorCanvasView: View {
 #endif
                 }
 
-                PageTagEditor(
-                    availableTags: availableTags,
+                if PageTagEditorVisibilityPolicy.isVisible(
                     selectedTagIDs: selectedPageTagIDs,
-                    selectedTagNames: pageTagNames,
-                    onAddTag: onAddTagToSelectedPage,
-                    onRemoveTag: onRemoveTagFromSelectedPage,
-                    onCreateTag: onCreateAndAssignTagToSelectedPage
-                )
-                .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
+                    selectedTagNames: pageTagNames
+                ) {
+                    PageTagEditor(
+                        availableTags: availableTags,
+                        selectedTagIDs: selectedPageTagIDs,
+                        selectedTagNames: pageTagNames,
+                        onAddTag: onAddTagToSelectedPage,
+                        onRemoveTag: onRemoveTagFromSelectedPage,
+                        onCreateTag: onCreateAndAssignTagToSelectedPage
+                    )
+                    .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
+                }
 
                 if isInlineLinkPopoverPresented {
                     inlineLinkPopover
