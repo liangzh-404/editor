@@ -21,6 +21,8 @@ targets:
     sources:
       - path: Sources/EditorApp
       - path: Sources/EditorCore
+    resources:
+      - path: Sources/EditorApp/Assets.xcassets
     dependencies:
       - package: HighlightSwift
     settings:
@@ -39,6 +41,8 @@ targets:
     sources:
       - path: Sources/EditorApp
       - path: Sources/EditorCore
+    resources:
+      - path: Sources/EditorApp/Assets.xcassets
     dependencies:
       - package: HighlightSwift
     info:
@@ -46,6 +50,7 @@ targets:
       properties:
         CFBundleDisplayName: Editor
         NSHumanReadableCopyright: ""
+        NSFaceIDUsageDescription: 用于解锁加密内容。
         UIBackgroundModes:
           - remote-notification
         UILaunchScreen: {}
