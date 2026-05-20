@@ -3215,6 +3215,7 @@ struct SidebarNavigationItem: Identifiable, Equatable, Sendable {
     let collection: WorkspaceCollection
     let identifier: String
     let isSelected: Bool
+    let nestingLevel: Int
 
     init(
         id: String,
@@ -3224,7 +3225,8 @@ struct SidebarNavigationItem: Identifiable, Equatable, Sendable {
         showsCount: Bool = true,
         collection: WorkspaceCollection,
         identifier: String,
-        isSelected: Bool
+        isSelected: Bool,
+        nestingLevel: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -3234,6 +3236,7 @@ struct SidebarNavigationItem: Identifiable, Equatable, Sendable {
         self.collection = collection
         self.identifier = identifier
         self.isSelected = isSelected
+        self.nestingLevel = nestingLevel
     }
 }
 
@@ -3249,7 +3252,10 @@ struct SidebarNavigationModel: Equatable, Sendable {
             grouping: snapshot.pageTags,
             by: \.tagID
         )
-        .mapValues(\.count)
+        .mapValues { assignments in
+            Set(assignments.map(\.pageID))
+        }
+        let tagDescendants = Self.descendantTagIDsByTagID(tags: snapshot.tags)
 
         primaryItems = [
             SidebarNavigationItem(
@@ -3269,27 +3275,25 @@ struct SidebarNavigationModel: Equatable, Sendable {
                 collection: .diary,
                 identifier: "editor.collection.diary",
                 isSelected: selectedCollection == .diary
-            ),
-            SidebarNavigationItem(
-                id: "favorites",
-                title: "收藏",
-                systemImage: "star",
-                count: snapshot.favoritePages.count,
-                collection: .favorites,
-                identifier: "editor.collection.favorites",
-                isSelected: selectedCollection == .favorites
             )
         ]
 
-        tagItems = snapshot.tags.map { tag in
-            SidebarNavigationItem(
+        tagItems = Self.hierarchicalTags(snapshot.tags).map { pair in
+            let tag = pair.0
+            let nestingLevel = pair.1
+            let visibleTagIDs = [tag.id] + (tagDescendants[tag.id] ?? [])
+            let visiblePageIDs = visibleTagIDs.reduce(into: Set<String>()) { pageIDs, tagID in
+                pageIDs.formUnion(tagCounts[tagID] ?? [])
+            }
+            return SidebarNavigationItem(
                 id: "tag-\(tag.id)",
-                title: tag.path,
+                title: tag.name,
                 systemImage: "tag",
-                count: tagCounts[tag.id] ?? 0,
+                count: visiblePageIDs.count,
                 collection: .tag(tag.id),
                 identifier: "editor.collection.tag.\(tag.id)",
-                isSelected: selectedCollection == .tag(tag.id)
+                isSelected: selectedCollection == .tag(tag.id),
+                nestingLevel: nestingLevel
             )
         }
 
@@ -3315,6 +3319,47 @@ struct SidebarNavigationModel: Equatable, Sendable {
                 isSelected: selectedCollection == .archive
             )
         ]
+    }
+
+    private static func hierarchicalTags(_ tags: [TagSummary]) -> [(TagSummary, Int)] {
+        let childrenByParentID = Dictionary(grouping: tags) { tag in
+            tag.parentTagID ?? ""
+        }
+
+        func sortedChildren(parentTagID: String?) -> [TagSummary] {
+            let key = parentTagID ?? ""
+            return (childrenByParentID[key] ?? []).sorted { left, right in
+                left.path.localizedStandardCompare(right.path) == .orderedAscending
+            }
+        }
+
+        func appendChildren(parentTagID: String?, level: Int, into result: inout [(TagSummary, Int)]) {
+            for tag in sortedChildren(parentTagID: parentTagID) {
+                result.append((tag, level))
+                appendChildren(parentTagID: tag.id, level: level + 1, into: &result)
+            }
+        }
+
+        var result: [(TagSummary, Int)] = []
+        appendChildren(parentTagID: nil, level: 0, into: &result)
+        return result
+    }
+
+    private static func descendantTagIDsByTagID(tags: [TagSummary]) -> [String: [String]] {
+        let childrenByParentID = Dictionary(grouping: tags) { tag in
+            tag.parentTagID ?? ""
+        }
+
+        func descendants(of tagID: String) -> [String] {
+            let children = childrenByParentID[tagID] ?? []
+            return children.flatMap { child in
+                [child.id] + descendants(of: child.id)
+            }
+        }
+
+        return Dictionary(uniqueKeysWithValues: tags.map { tag in
+            (tag.id, descendants(of: tag.id))
+        })
     }
 }
 
@@ -3387,7 +3432,6 @@ enum SidebarDropTargetChromePolicy {
 private struct WorkspaceSidebar: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     @Binding var activePageDragIDs: Set<String>
-    @AppStorage("editor.sidebar.favorites.expanded") private var isFavoritesExpanded = true
     @AppStorage("editor.sidebar.tags.expanded") private var isTagsExpanded = true
 
     var body: some View {
@@ -3396,7 +3440,6 @@ private struct WorkspaceSidebar: View {
                 newDocumentButton
                 sidebarDivider
                 sidebarGroup(items: sidebarModel.primaryItems)
-                favoritePageShortcuts
                 tagGroup
                 sidebarDivider
                 sidebarGroup(items: sidebarModel.utilityItems) { item, pageIDs in
@@ -3446,9 +3489,11 @@ private struct WorkspaceSidebar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, CGFloat(SidebarChrome.rowVerticalPadding))
             .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(SidebarChrome.foregroundColor)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("editor.sidebar.new-document")
     }
 
@@ -3479,46 +3524,6 @@ private struct WorkspaceSidebar: View {
     }
 
     @ViewBuilder
-    private var favoritePageShortcuts: some View {
-        if !viewModel.snapshot.favoritePages.isEmpty {
-            VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.rowSpacing)) {
-                SidebarDisclosureHeader(
-                    title: "收藏",
-                    count: viewModel.snapshot.favoritePages.count,
-                    isExpanded: isFavoritesExpanded
-                ) {
-                    isFavoritesExpanded.toggle()
-                }
-
-                if isFavoritesExpanded {
-                    ForEach(viewModel.snapshot.favoritePages) { page in
-                        Button {
-                            viewModel.selectPage(id: page.id)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "star.fill")
-                                    .font(.caption.weight(.semibold))
-                                    .frame(width: 16)
-                                    .foregroundStyle(Color(red: 0.74, green: 0.62, blue: 0.30))
-                                Text(page.title)
-                                    .font(.callout)
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.leading, 18)
-                            .padding(.trailing, 10)
-                            .padding(.vertical, 4)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(SidebarChrome.foregroundColor)
-                        .accessibilityIdentifier("editor.favorite-page.\(page.id)")
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
     private var tagGroup: some View {
         if !sidebarModel.tagItems.isEmpty {
             VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.rowSpacing)) {
@@ -3544,7 +3549,19 @@ private struct WorkspaceSidebar: View {
                         ) {
                             viewModel.selectCollection(item.collection)
                         }
-                        .padding(.leading, CGFloat(SidebarChrome.nestedItemIndent))
+                        .contextMenu {
+                            if case .tag(let tagID) = item.collection {
+                                Button(role: .destructive) {
+                                    _ = viewModel.deleteTagForUI(id: tagID)
+                                } label: {
+                                    Label("删除标签", systemImage: "trash")
+                                }
+                            }
+                        }
+                        .padding(
+                            .leading,
+                            CGFloat(SidebarChrome.nestedItemIndent * Double(item.nestingLevel))
+                        )
                     }
                 }
             }
@@ -3615,6 +3632,7 @@ private struct CollectionRailButton: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, CGFloat(SidebarChrome.rowVerticalPadding))
+                .contentShape(Rectangle())
                 .background(
                     RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
                         .fill(
@@ -3641,6 +3659,7 @@ private struct CollectionRailButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor : SidebarChrome.foregroundColor)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier(item.identifier)
         .accessibilityValue(item.isSelected ? "已选中，\(item.count)" : "未选中，\(item.count)")
         .dropDestination(for: String.self) { payloads, _ in
@@ -3844,24 +3863,57 @@ private struct PageListView: View {
                     .padding(.horizontal, 8)
                     .padding(.bottom, 2)
 
-                ForEach(viewModel.snapshot.tags) { tag in
+                ForEach(tagListItems) { item in
                     Button {
-                        viewModel.selectCollection(.tag(tag.id))
+                        viewModel.selectCollection(item.collection)
                     } label: {
-                        Label(tag.path, systemImage: "tag")
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
+                        HStack(spacing: 8) {
+                            Image(systemName: item.systemImage)
+                            Text(item.title)
+                                .lineLimit(1)
+                            Spacer(minLength: 6)
+                            Text("\(item.count)")
+                                .font(.caption.weight(.medium))
+                                .monospacedDigit()
+                                .foregroundStyle(.tertiary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("editor.tag-row.\(tag.id)")
+                    .contextMenu {
+                        if case .tag(let tagID) = item.collection {
+                            Button(role: .destructive) {
+                                _ = viewModel.deleteTagForUI(id: tagID)
+                            } label: {
+                                Label("删除标签", systemImage: "trash")
+                            }
+                        }
+                    }
+                    .padding(.leading, CGFloat(SidebarChrome.nestedItemIndent * Double(item.nestingLevel)))
+                    .accessibilityIdentifier(tagRowIdentifier(for: item))
                 }
             }
         } else {
             pageRowsSection(title: tagName(for: tagID), pages: viewModel.visibleDocumentPages)
         }
+    }
+
+    private var tagListItems: [SidebarNavigationItem] {
+        SidebarNavigationModel(
+            snapshot: viewModel.snapshot,
+            selectedCollection: viewModel.selectedCollection
+        ).tagItems
+    }
+
+    private func tagRowIdentifier(for item: SidebarNavigationItem) -> String {
+        if case .tag(let tagID) = item.collection {
+            return "editor.tag-row.\(tagID)"
+        }
+        return item.identifier
     }
 
     private var archiveSection: some View {
@@ -3915,15 +3967,15 @@ private struct PageListView: View {
                 attachments: viewModel.snapshot.attachments
             ),
             usesRichPreview: true,
-            onBatchSelectionToggle: {
+            onBatchSelectionToggle: showsMiddleColumnRowControls ? {
                 togglePageBatchSelection(page.id)
-            },
-            onFavoriteToggle: {
+            } : nil,
+            onFavoriteToggle: showsMiddleColumnRowControls ? {
                 viewModel.updatePageFavoriteForUI(
                     id: page.id,
                     isFavorite: !page.isFavorite
                 )
-            },
+            } : nil,
             isBeingDragged: isPageBeingDragged(page.id)
         )
         .contentShape(Rectangle())
@@ -3940,16 +3992,18 @@ private struct PageListView: View {
             PageDragPreview(title: page.title, count: dragPageIDs(for: page.id).count)
         }
         .contextMenu {
-            Button {
-                viewModel.updatePageFavoriteForUI(
-                    id: page.id,
-                    isFavorite: !page.isFavorite
-                )
-            } label: {
-                Label(
-                    page.isFavorite ? "取消收藏" : "加入收藏",
-                    systemImage: page.isFavorite ? "star.slash" : "star"
-                )
+            if showsMiddleColumnRowControls {
+                Button {
+                    viewModel.updatePageFavoriteForUI(
+                        id: page.id,
+                        isFavorite: !page.isFavorite
+                    )
+                } label: {
+                    Label(
+                        page.isFavorite ? "取消收藏" : "加入收藏",
+                        systemImage: page.isFavorite ? "star.slash" : "star"
+                    )
+                }
             }
 
             Button {
@@ -3958,6 +4012,14 @@ private struct PageListView: View {
                 Label("归档", systemImage: "archivebox")
             }
         }
+    }
+
+    private var showsMiddleColumnRowControls: Bool {
+#if os(macOS)
+        false
+#else
+        true
+#endif
     }
 
     private func togglePageBatchSelection(_ pageID: String) {

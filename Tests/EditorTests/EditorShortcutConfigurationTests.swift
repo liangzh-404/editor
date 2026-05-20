@@ -12,7 +12,7 @@ final class EditorShortcutConfigurationTests: XCTestCase {
         XCTAssertEqual(shortcuts.shortcut(for: .convertBlockToPage)?.rawValue, "cmd+]")
         XCTAssertEqual(shortcuts.shortcut(for: .quickOpen)?.rawValue, "cmd+o")
         XCTAssertEqual(shortcuts.shortcut(for: .showAllDocuments)?.rawValue, "cmd+opt+1")
-        XCTAssertEqual(shortcuts.shortcut(for: .showFavorites)?.rawValue, "cmd+opt+2")
+        XCTAssertFalse(EditorShortcutCommand.visibleCommands.contains(.showFavorites))
     }
 
     func testShortcutParserAcceptsCraftStyleDescriptors() throws {

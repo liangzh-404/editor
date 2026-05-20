@@ -1147,7 +1147,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(sections.map { $0.pages.map(\.id) }, [["today"], ["yesterday"], ["older"], ["unknown"]])
     }
 
-    func testSidebarNavigationModelOmitsRecentFromPrimaryRailAndShowsTagCounts() {
+    func testSidebarNavigationModelOmitsRecentAndFavoritesAndShowsHierarchicalTagCounts() {
         let workspaceID = "workspace"
         let pages = [
             PageSummary(id: "page-recent", workspaceID: workspaceID, title: "最近文件"),
@@ -1156,6 +1156,7 @@ final class EditorBlockChromeTests: XCTestCase {
         ]
         let tags = [
             TagSummary(id: "tag-work", workspaceID: workspaceID, parentTagID: nil, name: "工作", path: "工作"),
+            TagSummary(id: "tag-project", workspaceID: workspaceID, parentTagID: "tag-work", name: "项目", path: "工作/项目"),
             TagSummary(id: "tag-life", workspaceID: workspaceID, parentTagID: nil, name: "生活", path: "生活")
         ]
         let snapshot = WorkspaceSnapshot(
@@ -1165,8 +1166,8 @@ final class EditorBlockChromeTests: XCTestCase {
             attachments: [],
             tags: tags,
             pageTags: [
-                PageTagAssignment(pageID: "page-recent", tagID: "tag-work"),
-                PageTagAssignment(pageID: "page-favorite", tagID: "tag-work"),
+                PageTagAssignment(pageID: "page-recent", tagID: "tag-project"),
+                PageTagAssignment(pageID: "page-favorite", tagID: "tag-project"),
                 PageTagAssignment(pageID: "page-diary", tagID: "tag-life")
             ],
             diaryPages: [
@@ -1180,13 +1181,14 @@ final class EditorBlockChromeTests: XCTestCase {
 
         XCTAssertEqual(
             model.primaryItems.map(\.title),
-            ["全部文档", "日记", "收藏"]
+            ["全部文档", "日记"]
         )
-        XCTAssertEqual(model.primaryItems.map(\.count), [2, 1, 1])
+        XCTAssertEqual(model.primaryItems.map(\.count), [2, 1])
         XCTAssertEqual(model.primaryItems.first?.identifier, "editor.collection.all-documents")
         XCTAssertEqual(model.primaryItems.first?.isSelected, true)
-        XCTAssertEqual(model.tagItems.map(\.title), ["工作", "生活"])
-        XCTAssertEqual(model.tagItems.map(\.count), [2, 1])
+        XCTAssertEqual(model.tagItems.map(\.title), ["工作", "项目", "生活"])
+        XCTAssertEqual(model.tagItems.map(\.count), [2, 2, 1])
+        XCTAssertEqual(model.tagItems.map(\.nestingLevel), [0, 1, 0])
     }
 
     func testSidebarChromeUsesCompactBearLikeRailMetrics() {

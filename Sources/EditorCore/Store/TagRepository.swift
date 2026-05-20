@@ -113,6 +113,13 @@ final class TagRepository {
         ).compactMap { $0["page_id"] }
     }
 
+    func deleteTag(id tagID: String) throws {
+        try database.execute(
+            "DELETE FROM tags WHERE id = ?",
+            bindings: [.text(tagID)]
+        )
+    }
+
     private func nextTagOrderKey(workspaceID: String, parentTagID: String?) throws -> String {
         let rows = try database.query(
             """

@@ -298,6 +298,26 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectingParentTagIncludesPagesAssignedToChildTags() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let parent = try tagRepository.createTag(workspaceID: workspaceID, name: "Work")
+        let child = try tagRepository.createTag(workspaceID: workspaceID, parentTagID: parent.id, name: "PL")
+        try tagRepository.assignTags(pageID: pageID, tagIDs: [child.id])
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+
+        viewModel.selectCollection(.tag(parent.id))
+
+        XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [pageID])
+    }
+
+    @MainActor
     func testAddAndRemoveTagsOnSelectedPagePreservesOtherTags() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -340,6 +360,49 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.selectedPageTagIDs, [existing.id])
         XCTAssertEqual(viewModel.snapshot.tags.map(\.name), ["Writing"])
+    }
+
+    @MainActor
+    func testCreateAndAssignTagToSelectedPageCreatesSlashDelimitedTagPath() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+        viewModel.selectPage(id: pageID)
+
+        XCTAssertTrue(viewModel.createAndAssignTagToSelectedPageForUI(name: " Work / PL "))
+
+        XCTAssertEqual(viewModel.snapshot.tags.map(\.path), ["Work", "Work/PL"])
+        XCTAssertEqual(viewModel.selectedPageTagNames, ["PL"])
+        XCTAssertEqual(viewModel.selectedPageTagIDs, [try XCTUnwrap(viewModel.snapshot.tags.last?.id)])
+    }
+
+    @MainActor
+    func testDeleteTagForUIRemovesNestedAssignmentsAndLeavesCurrentPageVisible() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let parent = try tagRepository.createTag(workspaceID: workspaceID, name: "Work")
+        let child = try tagRepository.createTag(workspaceID: workspaceID, parentTagID: parent.id, name: "PL")
+        try tagRepository.assignTags(pageID: pageID, tagIDs: [child.id])
+        let viewModel = WorkspaceViewModel(repository: repository, tagRepository: tagRepository)
+        try viewModel.load()
+        viewModel.selectCollection(.tag(parent.id))
+
+        XCTAssertTrue(viewModel.deleteTagForUI(id: parent.id))
+
+        XCTAssertEqual(viewModel.snapshot.tags, [])
+        XCTAssertEqual(viewModel.snapshot.pageTags, [])
+        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+        XCTAssertEqual(viewModel.selectedPageID, pageID)
     }
 
     @MainActor
@@ -2012,7 +2075,7 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSelectSearchResultNavigatesToDestinationPage() throws {
+    func testSelectSearchResultDisplaysDestinationPageWithoutLeavingSearchCollection() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -2029,6 +2092,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let viewModel = WorkspaceViewModel(repository: repository)
         try viewModel.load()
+        viewModel.selectCollection(.search)
 
         viewModel.selectSearchResult(
             SearchResult(
@@ -2042,8 +2106,9 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.selectedPageID, secondPageID)
         XCTAssertEqual(viewModel.selectedPage?.title, "Second")
-        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, secondPageID)
-        XCTAssertEqual(viewModel.consumePendingCompactPageNavigationID(), secondPageID)
+        XCTAssertEqual(viewModel.selectedCollection, .search)
+        XCTAssertNil(viewModel.pendingCompactPageNavigationID)
+        XCTAssertNil(viewModel.consumePendingCompactPageNavigationID())
         XCTAssertNil(viewModel.pendingCompactPageNavigationID)
     }
 

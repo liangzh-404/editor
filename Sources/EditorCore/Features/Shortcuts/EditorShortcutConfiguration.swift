@@ -16,6 +16,10 @@ enum EditorShortcutCommand: String, CaseIterable, Identifiable {
         rawValue
     }
 
+    static var visibleCommands: [EditorShortcutCommand] {
+        allCases.filter { $0 != .showFavorites }
+    }
+
     var userDefaultsKey: String {
         "editor.shortcuts.\(rawValue)"
     }

@@ -229,9 +229,10 @@ final class WorkspaceViewModel: ObservableObject {
             guard !tagID.isEmpty else {
                 return []
             }
+            let visibleTagIDs = tagIDsIncludingDescendants(of: tagID)
             let pageIDs = Set(
                 snapshot.pageTags
-                    .filter { $0.tagID == tagID }
+                    .filter { visibleTagIDs.contains($0.tagID) }
                     .map(\.pageID)
             )
             return snapshot.pages.filter { pageIDs.contains($0.id) }
@@ -658,16 +659,11 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         do {
-            let existingTags = try tagRepository.tags(workspaceID: selectedWorkspaceID)
-            let tag: TagSummary
-            if let existingTag = existingTags.first(where: {
-                $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame ||
-                    $0.path.caseInsensitiveCompare(trimmedName) == .orderedSame
-            }) {
-                tag = existingTag
-            } else {
-                tag = try tagRepository.createTag(workspaceID: selectedWorkspaceID, name: trimmedName)
-            }
+            let tag = try findOrCreateTagPath(
+                trimmedName,
+                workspaceID: selectedWorkspaceID,
+                tagRepository: tagRepository
+            )
             return addTagToSelectedPageForUI(tagID: tag.id)
         } catch {
             EditorLog.input.error(
@@ -717,6 +713,48 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func deleteTagForUI(id tagID: String) -> Bool {
+        guard let repository,
+              let tagRepository else {
+            return false
+        }
+
+        let removedTagIDs = tagIDsIncludingDescendants(of: tagID)
+        guard !removedTagIDs.isEmpty else {
+            return false
+        }
+
+        let previousSelectedCollection = selectedCollection
+        let previousSelectedPageID = selectedPageID
+        do {
+            try tagRepository.deleteTag(id: tagID)
+            let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+            apply(snapshot: loadedSnapshot)
+
+            let nextCollection: WorkspaceCollection
+            if case .tag(let selectedTagID) = previousSelectedCollection,
+               removedTagIDs.contains(selectedTagID) {
+                nextCollection = .allDocuments
+            } else {
+                nextCollection = previousSelectedCollection
+            }
+            restoreSelectionAfterReload(collection: nextCollection, pageID: previousSelectedPageID)
+            refreshBacklinksForSelectedPage()
+            refreshExternalLinksForSelectedPage()
+            refreshConflictsForSelectedPage()
+            EditorLog.input.debug(
+                "tag_deleted tag_id=\(tagID, privacy: .public) removed_count=\(removedTagIDs.count, privacy: .public)"
+            )
+            return true
+        } catch {
+            restoreSelectionAfterReload(collection: previousSelectedCollection, pageID: previousSelectedPageID)
+            EditorLog.input.error(
+                "tag_delete_failed tag_id=\(tagID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
     func selectSearchResult(_ result: SearchResult) {
         guard let destinationPageID = result.destinationPageID else {
             EditorLog.render.debug(
@@ -725,8 +763,19 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
-        selectPage(id: destinationPageID)
-        pendingCompactPageNavigationID = destinationPageID
+        let previousCollection = selectedCollection
+        recordNavigationHistoryBeforeOpening(pageID: destinationPageID)
+        selectedPageID = destinationPageID
+        selectedNotebookID = snapshot.pages.first { $0.id == destinationPageID }?.notebookID ?? selectedNotebookID
+        selectedCollection = previousCollection == .search ? .search : defaultCollectionForOpeningPage(id: destinationPageID)
+        if previousCollection == .search {
+            pendingCompactPageNavigationID = nil
+        } else {
+            pendingCompactPageNavigationID = destinationPageID
+        }
+        refreshBacklinksForSelectedPage()
+        refreshExternalLinksForSelectedPage()
+        refreshConflictsForSelectedPage()
         EditorLog.render.debug(
             "search_result_selected page_id=\(destinationPageID, privacy: .public) entity_type=\(result.entityType, privacy: .public)"
         )
@@ -3445,6 +3494,51 @@ final class WorkspaceViewModel: ObservableObject {
         try tagRepository.assignTags(pageID: pageID, tagIDs: Array(assignedTagIDs).sorted())
     }
 
+    private func findOrCreateTagPath(
+        _ rawPath: String,
+        workspaceID: String,
+        tagRepository: TagRepository
+    ) throws -> TagSummary {
+        let pathComponents = rawPath
+            .split(separator: "/")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !pathComponents.isEmpty else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+
+        var existingTags = try tagRepository.tags(workspaceID: workspaceID)
+        var parentTagID: String?
+        var currentPath = ""
+        var currentTag: TagSummary?
+
+        for component in pathComponents {
+            currentPath = currentPath.isEmpty ? component : "\(currentPath)/\(component)"
+            if let existingTag = existingTags.first(where: { tag in
+                tag.parentTagID == parentTagID &&
+                    (tag.name.caseInsensitiveCompare(component) == .orderedSame ||
+                        tag.path.caseInsensitiveCompare(currentPath) == .orderedSame)
+            }) {
+                currentTag = existingTag
+                parentTagID = existingTag.id
+            } else {
+                let createdTag = try tagRepository.createTag(
+                    workspaceID: workspaceID,
+                    parentTagID: parentTagID,
+                    name: component
+                )
+                existingTags = try tagRepository.tags(workspaceID: workspaceID)
+                currentTag = createdTag
+                parentTagID = createdTag.id
+            }
+        }
+
+        guard let currentTag else {
+            throw WorkspaceViewModelError.missingSelection
+        }
+        return currentTag
+    }
+
     private func assignTagsForUI(
         pageID: String,
         transform: (Set<String>) -> Set<String>,
@@ -3493,6 +3587,25 @@ final class WorkspaceViewModel: ObservableObject {
         return knownTagIDs + tagIDs
             .filter { !knownTagIDSet.contains($0) }
             .sorted()
+    }
+
+    private func tagIDsIncludingDescendants(of tagID: String) -> Set<String> {
+        guard snapshot.tags.contains(where: { $0.id == tagID }) else {
+            return []
+        }
+
+        var result: Set<String> = [tagID]
+        var pending = [tagID]
+        while let current = pending.popLast() {
+            let children = snapshot.tags
+                .filter { $0.parentTagID == current }
+                .map(\.id)
+            for child in children where !result.contains(child) {
+                result.insert(child)
+                pending.append(child)
+            }
+        }
+        return result
     }
 
     private func orderedUniquePageIDs(_ pageIDs: [String]) -> [String] {

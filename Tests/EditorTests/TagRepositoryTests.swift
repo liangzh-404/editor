@@ -42,6 +42,25 @@ final class TagRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.pageIDs(tagID: tag.id), [pageID])
     }
 
+    func testDeleteTagRemovesChildrenAndAssignments() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let repository = TagRepository(database: database)
+        let parent = try repository.createTag(workspaceID: workspaceID, name: "Work")
+        let child = try repository.createTag(workspaceID: workspaceID, parentTagID: parent.id, name: "PL")
+        try repository.assignTags(pageID: pageID, tagIDs: [child.id])
+
+        try repository.deleteTag(id: parent.id)
+
+        XCTAssertEqual(try repository.tags(workspaceID: workspaceID), [])
+        XCTAssertEqual(try repository.tagAssignments(), [])
+        XCTAssertEqual(try repository.pageIDs(tagID: child.id), [])
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)

@@ -857,57 +857,23 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
-    func testFavoritePageAppearsInSidebarAndPageRowState() {
+    func testMacPageListHidesSelectionCircleAndFavoriteControls() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launchEnvironment["EDITOR_UI_TEST_FAVORITE_PAGE"] = "1"
         app.launch()
 
         let favoritePageButton = app.element(identifier: "editor.favorite-page.page-welcome")
-        let pageRow = app.element(identifier: "editor.page-row.page-welcome")
-
-        XCTAssertTrue(favoritePageButton.waitForExistence(timeout: 5), "Favorited pages should appear in the sidebar")
-        XCTAssertEqual(favoritePageButton.label, "欢迎")
-        XCTAssertTrue(pageRow.waitForExistence(timeout: 5), "Page list row should expose favorite state")
-        XCTAssertTrue(pageRow.waitForValue(containing: "已收藏", timeout: 5))
-    }
-
-    @MainActor
-    func testPageFavoriteToggleUpdatesSidebarAndRowState() {
-        let app = XCUIApplication()
-        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
-        app.launch()
-
+        let favoritesCollection = app.element(identifier: "editor.collection.favorites")
+        let selectionToggle = app.element(identifier: "editor.page-row.page-welcome.selection-toggle")
         let favoriteToggle = app.buttons["editor.page.page-welcome.favorite"]
-        let favoritePageButton = app.element(identifier: "editor.favorite-page.page-welcome")
         let pageRow = app.element(identifier: "editor.page-row.page-welcome")
 
-        XCTAssertTrue(pageRow.waitForExistence(timeout: 5), "Page list row should be visible before toggling favorite state")
-        XCTAssertTrue(favoriteToggle.waitForExistence(timeout: 5), "Page rows should expose a direct favorite toggle")
-        XCTAssertTrue(
-            favoriteToggle.waitForLabelOrValue(containing: "收藏页面", timeout: 5),
-            "Initial favorite toggle should describe the add action"
-        )
-        XCTAssertTrue(pageRow.waitForValue(containing: "未收藏", timeout: 5))
-        XCTAssertFalse(favoritePageButton.exists, "Fresh default page should not appear in Favorites before toggling")
-
-        favoriteToggle.click()
-
-        XCTAssertTrue(
-            favoriteToggle.waitForLabelOrValue(containing: "取消收藏页面", timeout: 5),
-            "Favorite toggle should describe the remove action after adding"
-        )
-        XCTAssertTrue(pageRow.waitForValue(containing: "已收藏", timeout: 5))
-        XCTAssertTrue(favoritePageButton.waitForExistence(timeout: 5), "Favorited page should appear in the sidebar")
-
-        favoriteToggle.click()
-
-        XCTAssertTrue(
-            favoriteToggle.waitForLabelOrValue(containing: "收藏页面", timeout: 5),
-            "Favorite toggle should return to the add action after removing"
-        )
-        XCTAssertTrue(pageRow.waitForValue(containing: "未收藏", timeout: 5))
-        XCTAssertTrue(favoritePageButton.waitForNonExistence(timeout: 5), "Removed favorite should leave the sidebar")
+        XCTAssertTrue(pageRow.waitForExistence(timeout: 5), "Page list row should be visible before checking removed controls")
+        XCTAssertFalse(selectionToggle.exists, "The macOS middle-column page row should not expose the unexplained selection circle")
+        XCTAssertFalse(favoriteToggle.exists, "The macOS middle-column page row should not expose a favorite toggle")
+        XCTAssertFalse(favoritesCollection.exists, "The macOS sidebar should not expose the Favorites collection")
+        XCTAssertFalse(favoritePageButton.exists, "The macOS sidebar should not expose individual favorite shortcuts")
     }
 
     @MainActor

@@ -42,7 +42,6 @@ private struct EditorEditingCommands: Commands {
     @FocusedValue(\.navigateBackAction) private var navigateBackAction
     @FocusedValue(\.navigateForwardAction) private var navigateForwardAction
     @FocusedValue(\.showAllDocumentsAction) private var showAllDocumentsAction
-    @FocusedValue(\.showFavoritesAction) private var showFavoritesAction
     @FocusedValue(\.quickOpenAction) private var quickOpenAction
 
     @AppStorage(EditorShortcutCommand.newDocument.userDefaultsKey) private var newDocumentShortcut = EditorShortcutCommand.newDocument.defaultShortcutRawValue
@@ -52,7 +51,6 @@ private struct EditorEditingCommands: Commands {
     @AppStorage(EditorShortcutCommand.convertBlockToPage.userDefaultsKey) private var convertBlockToPageShortcut = EditorShortcutCommand.convertBlockToPage.defaultShortcutRawValue
     @AppStorage(EditorShortcutCommand.quickOpen.userDefaultsKey) private var quickOpenShortcut = EditorShortcutCommand.quickOpen.defaultShortcutRawValue
     @AppStorage(EditorShortcutCommand.showAllDocuments.userDefaultsKey) private var showAllDocumentsShortcut = EditorShortcutCommand.showAllDocuments.defaultShortcutRawValue
-    @AppStorage(EditorShortcutCommand.showFavorites.userDefaultsKey) private var showFavoritesShortcut = EditorShortcutCommand.showFavorites.defaultShortcutRawValue
     @AppStorage(EditorShortcutCommand.insertMarkdownLink.userDefaultsKey) private var insertMarkdownLinkShortcut = EditorShortcutCommand.insertMarkdownLink.defaultShortcutRawValue
 
     var body: some Commands {
@@ -96,12 +94,6 @@ private struct EditorEditingCommands: Commands {
             }
             .editorKeyboardShortcut(showAllDocumentsShortcut, fallback: .showAllDocuments)
             .disabled(showAllDocumentsAction == nil)
-
-            Button("收藏") {
-                showFavoritesAction?()
-            }
-            .editorKeyboardShortcut(showFavoritesShortcut, fallback: .showFavorites)
-            .disabled(showFavoritesAction == nil)
         }
 
         CommandGroup(after: .textEditing) {
@@ -136,7 +128,7 @@ private struct EditorShortcutSettingsView: View {
     var body: some View {
         Form {
             Section("快捷键") {
-                ForEach(EditorShortcutCommand.allCases) { command in
+                ForEach(EditorShortcutCommand.visibleCommands) { command in
                     ShortcutSettingRow(command: command)
                 }
             }
@@ -151,7 +143,7 @@ private struct EditorShortcutSettingsView: View {
     }
 
     private func restoreDefaults() {
-        for command in EditorShortcutCommand.allCases {
+        for command in EditorShortcutCommand.visibleCommands {
             UserDefaults.standard.set(command.defaultShortcutRawValue, forKey: command.userDefaultsKey)
         }
     }
