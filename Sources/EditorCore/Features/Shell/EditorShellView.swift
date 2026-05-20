@@ -1016,7 +1016,12 @@ private struct CompactEditorShell: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            CompactHomeView(viewModel: viewModel)
+            CompactHomeView(
+                viewModel: viewModel,
+                onRevealNextScreen: {
+                    revealNextScreen()
+                }
+            )
             .navigationDestination(for: CompactRoute.self) { route in
                 switch route {
                 case .pages:
@@ -1032,6 +1037,9 @@ private struct CompactEditorShell: View {
                         collection: collection,
                         onRevealMainMenu: {
                             revealPreviousScreen()
+                        },
+                        onRevealNextScreen: {
+                            revealNextScreen()
                         }
                     )
                 case .page(let pageID):
@@ -1097,10 +1105,19 @@ private struct CompactEditorShell: View {
             path = previousPath
         }
     }
+
+    private func revealNextScreen() {
+        path = CompactShellRoutePlanner.nextScreenPath(
+            currentPath: path,
+            snapshot: viewModel.snapshot,
+            selectedCollection: viewModel.selectedCollection
+        )
+    }
 }
 
 private struct CompactHomeView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
+    let onRevealNextScreen: () -> Void
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -1116,11 +1133,25 @@ private struct CompactHomeView: View {
         .navigationTitle("资料库")
         .background(CompactLibraryChrome.backgroundColor)
 #if os(iOS)
+        .highPriorityGesture(compactForwardSwipeGesture)
         .toolbarBackground(CompactLibraryChrome.backgroundColor, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
 #endif
     }
+
+#if os(iOS)
+    private var compactForwardSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 56, coordinateSpace: .local)
+            .onEnded { value in
+                guard value.translation.width < -56,
+                      abs(value.translation.width) > abs(value.translation.height) * 1.25 else {
+                    return
+                }
+                onRevealNextScreen()
+            }
+    }
+#endif
 
     private var header: some View {
         HStack(spacing: 10) {
@@ -1897,6 +1928,23 @@ enum MobileBlockSelectionReducer {
     }
 }
 
+enum MobileBlockTapAction: Equatable, Sendable {
+    case focusCursor
+    case toggleBlockSelection
+}
+
+enum MobileBlockTapActionResolver {
+    static func action(isSelectionModeActive: Bool) -> MobileBlockTapAction {
+        isSelectionModeActive ? .toggleBlockSelection : .focusCursor
+    }
+}
+
+enum MobileBlockSelectionDragPolicy {
+    static func isEnabled(isSelectionModeActive: Bool) -> Bool {
+        isSelectionModeActive
+    }
+}
+
 enum MobileBlockSelectionBatchResolver {
     static func orderedBlockIDs(
         selectedBlockIDs: Set<String>,
@@ -1939,11 +1987,47 @@ private enum MobileFormatPaletteTab: Equatable, Sendable {
 
 private struct MobileKeyboardInputBar: View {
     let isOutlinePresented: Bool
+    let canCopy: Bool
+    let canUndo: Bool
+    let onCopy: () -> Void
+    let onPaste: () -> Void
+    let onUndo: () -> Void
+    let onShowHeadingPanel: () -> Void
     let onToggleOutline: () -> Void
     let onShowMoreFormatPanel: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
+            toolbarButton(
+                systemImage: "doc.on.doc",
+                accessibilityLabel: "复制",
+                identifier: "editor.mobile-keyboard.copy",
+                isEnabled: canCopy,
+                action: onCopy
+            )
+
+            toolbarButton(
+                systemImage: "clipboard",
+                accessibilityLabel: "粘贴",
+                identifier: "editor.mobile-keyboard.paste",
+                action: onPaste
+            )
+
+            toolbarButton(
+                systemImage: "arrow.uturn.backward",
+                accessibilityLabel: "撤销",
+                identifier: "editor.mobile-keyboard.undo",
+                isEnabled: canUndo,
+                action: onUndo
+            )
+
+            toolbarButton(
+                systemImage: "textformat.size",
+                accessibilityLabel: "标题",
+                identifier: "editor.mobile-keyboard.heading",
+                action: onShowHeadingPanel
+            )
+
             Spacer(minLength: 0)
 
             Button {
@@ -1993,6 +2077,31 @@ private struct MobileKeyboardInputBar: View {
         .background(.regularMaterial)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("editor.mobile-keyboard-toolbar")
+    }
+
+    private func toolbarButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        identifier: String,
+        isEnabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(
+                    size: MobileKeyboardToolbarChrome.iconSize,
+                    weight: MobileKeyboardToolbarChrome.primaryIconWeight
+                ))
+                .frame(
+                    width: MobileKeyboardToolbarChrome.buttonSize,
+                    height: MobileKeyboardToolbarChrome.buttonSize
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.34)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -3049,6 +3158,41 @@ enum CompactShellRoutePlanner {
             return []
         }
         return Array(currentPath.dropLast())
+    }
+
+    static func nextScreenPath(
+        currentPath: [CompactRoute],
+        snapshot: WorkspaceSnapshot,
+        selectedCollection: WorkspaceCollection
+    ) -> [CompactRoute] {
+        if currentPath.isEmpty {
+            return [documentListRoute(selectedCollection: selectedCollection)]
+        }
+
+        guard currentPath.count == 1 else {
+            return currentPath
+        }
+
+        let collection: WorkspaceCollection
+        if case .collection(let routeCollection) = currentPath[0] {
+            collection = routeCollection
+        } else {
+            collection = selectedCollection
+        }
+
+        let pageID = CompactInitialNavigationResolver.initialPageID(
+            selectedPageID: snapshot.selectedPageID,
+            availablePageIDs: CompactCollectionPageListModel.pages(
+                snapshot: snapshot,
+                collection: collection
+            ).map(\.id)
+        )
+
+        guard let pageID else {
+            return currentPath
+        }
+
+        return currentPath + [.page(pageID)]
     }
 
     private static func collectionForPage(
@@ -4344,13 +4488,15 @@ private struct CompactCollectionDestination: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     let collection: WorkspaceCollection
     let onRevealMainMenu: () -> Void
+    let onRevealNextScreen: () -> Void
     @State private var didSelectCollection = false
 
     var body: some View {
         CompactCollectionPageListView(
             viewModel: viewModel,
             collection: collection,
-            onRevealMainMenu: onRevealMainMenu
+            onRevealMainMenu: onRevealMainMenu,
+            onRevealNextScreen: onRevealNextScreen
         )
         .onAppear {
             guard !didSelectCollection else {
@@ -4366,6 +4512,7 @@ private struct CompactCollectionPageListView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     let collection: WorkspaceCollection
     let onRevealMainMenu: () -> Void
+    let onRevealNextScreen: () -> Void
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -4392,11 +4539,14 @@ private struct CompactCollectionPageListView: View {
         .highPriorityGesture(
             DragGesture(minimumDistance: 56, coordinateSpace: .local)
                 .onEnded { value in
-                    guard value.translation.width > 56,
-                          abs(value.translation.width) > abs(value.translation.height) * 1.25 else {
+                    guard abs(value.translation.width) > abs(value.translation.height) * 1.25 else {
                         return
                     }
-                    onRevealMainMenu()
+                    if value.translation.width > 56 {
+                        onRevealMainMenu()
+                    } else if value.translation.width < -56 {
+                        onRevealNextScreen()
+                    }
                 }
         )
 #endif
@@ -5520,6 +5670,8 @@ private struct EditorCanvasView: View {
                         onDelete: {
                             deleteBlockForCommand(fallbackBlockID: block.id)
                         },
+                        canUndoTextEdit: canUndoTextEdit,
+                        onUndoTextEdit: onUndoTextEdit,
                         onOpenPageReference: { targetPageID in
                             onOpenPageReference(targetPageID)
                         },
@@ -5676,6 +5828,14 @@ private struct EditorCanvasView: View {
             }
 #if os(macOS)
             .simultaneousGesture(blockSelectionMarqueeGesture())
+#elseif os(iOS)
+            .simultaneousGesture(
+                blockSelectionMarqueeGesture(
+                    isEnabled: MobileBlockSelectionDragPolicy.isEnabled(
+                        isSelectionModeActive: !editorSession.selectedBlockIDs.isEmpty
+                    )
+                )
+            )
 #endif
             .onChange(of: editorSession.focusedBlockID) { _, _ in
                 activeBlockDropTarget = BlockDropTargetLifecycleReducer
@@ -5968,14 +6128,12 @@ private struct EditorCanvasView: View {
 
 #if os(iOS)
     private var mobileNavigationTitleView: some View {
-        Group {
-            if isMobileNavigationTitleVisible {
-                Text(page?.title ?? "")
-                    .font(.headline)
-                    .lineLimit(1)
-                    .accessibilityIdentifier("editor.mobile-navigation-title")
-            }
-        }
+        Text(page?.title ?? "")
+            .font(.headline)
+            .lineLimit(1)
+            .opacity(isMobileNavigationTitleVisible ? 1 : 0)
+            .accessibilityHidden(!isMobileNavigationTitleVisible)
+            .accessibilityIdentifier("editor.mobile-navigation-title")
     }
 
     private func resetMobileNavigationTitleVisibility() {
@@ -6846,11 +7004,18 @@ private struct EditorCanvasView: View {
     }
 
     private func blockSelectionMarqueeGesture() -> some Gesture {
+        blockSelectionMarqueeGesture(isEnabled: true)
+    }
+
+    private func blockSelectionMarqueeGesture(isEnabled: Bool) -> some Gesture {
         DragGesture(
             minimumDistance: 2,
             coordinateSpace: .named(EditorCanvasCoordinateSpace.blockSelection)
         )
         .onChanged { value in
+            guard isEnabled else {
+                return
+            }
             guard isBlockSelectionMarqueeDragStart(value.startLocation) else {
                 return
             }
@@ -8483,6 +8648,8 @@ private struct BlockRowView: View {
     let onOutdent: () -> Bool
     let onPasteAttachmentURLs: ([URL]) -> Bool
     let onDelete: () -> Void
+    let canUndoTextEdit: Bool
+    let onUndoTextEdit: () -> Void
     let onOpenPageReference: (String) -> Void
     let onOpenBlockReference: (String, String) -> Void
     let onChangeType: (BlockType) -> Void
@@ -8546,6 +8713,8 @@ private struct BlockRowView: View {
         onOutdent: @escaping () -> Bool = { false },
         onPasteAttachmentURLs: @escaping ([URL]) -> Bool = { _ in false },
         onDelete: @escaping () -> Void = {},
+        canUndoTextEdit: Bool = false,
+        onUndoTextEdit: @escaping () -> Void = {},
         onOpenPageReference: @escaping (String) -> Void = { _ in },
         onOpenBlockReference: @escaping (String, String) -> Void = { _, _ in },
         onChangeType: @escaping (BlockType) -> Void = { _ in },
@@ -8600,6 +8769,8 @@ private struct BlockRowView: View {
         self.onOutdent = onOutdent
         self.onPasteAttachmentURLs = onPasteAttachmentURLs
         self.onDelete = onDelete
+        self.canUndoTextEdit = canUndoTextEdit
+        self.onUndoTextEdit = onUndoTextEdit
         self.onOpenPageReference = onOpenPageReference
         self.onOpenBlockReference = onOpenBlockReference
         self.onChangeType = onChangeType
@@ -8633,6 +8804,9 @@ private struct BlockRowView: View {
         HStack(alignment: .top, spacing: CGFloat(EditorBlockChrome.actionColumnSpacing)) {
             blockActionColumn
             blockContent
+#if os(iOS)
+                .allowsHitTesting(!isMobileSelectionModeActive)
+#endif
         }
         .padding(.vertical, CGFloat(EditorBlockChrome.rowVerticalPadding))
         .padding(.leading, CGFloat(BlockRowNestingIndentResolver.leadingPadding(
@@ -8653,7 +8827,7 @@ private struct BlockRowView: View {
         .accessibilityValue(rowAccessibilityValue)
         .simultaneousGesture(
             TapGesture().onEnded {
-                requestRowFocus()
+                handleRowTap()
             }
         )
 #if os(iOS)
@@ -8811,17 +8985,13 @@ private struct BlockRowView: View {
         if MobileBlockSelectionChromeResolver.isSelectionControlVisible(
             isSelectionModeActive: isMobileSelectionModeActive
         ) {
-            Button {
-                onToggleBlockSelection()
-            } label: {
-                Image(systemName: MobileBlockSelectionChromeResolver.symbolName(isSelected: isBlockSelected))
-                    .font(.callout.weight(isBlockSelected ? .semibold : .regular))
-                    .foregroundStyle(isBlockSelected ? MobileActionChrome.accentColor : Color.secondary.opacity(0.72))
-            }
-            .buttonStyle(.plain)
+            Image(systemName: MobileBlockSelectionChromeResolver.symbolName(isSelected: isBlockSelected))
+                .font(.callout.weight(isBlockSelected ? .semibold : .regular))
+                .foregroundStyle(isBlockSelected ? MobileActionChrome.accentColor : Color.secondary.opacity(0.72))
             .frame(width: CGFloat(EditorBlockChrome.dragHandleWidth), height: 24)
             .contentShape(Rectangle())
             .padding(.top, 0)
+            .accessibilityAddTraits(.isButton)
             .accessibilityLabel(isBlockSelected ? "取消选择块" : "选择块")
             .accessibilityValue(block.type.editorMenuTitle)
             .accessibilityIdentifier("editor.block.\(block.id).selection-toggle")
@@ -9314,6 +9484,25 @@ private struct BlockRowView: View {
         } else {
             MobileKeyboardInputBar(
                 isOutlinePresented: isMobileOutlinePresented,
+                canCopy: mobileKeyboardCopyText != nil,
+                canUndo: canUndoTextEdit,
+                onCopy: {
+                    copyMobileKeyboardText()
+                },
+                onPaste: {
+                    pasteMobileKeyboardContents()
+                },
+                onUndo: {
+                    let refocusSelection = mobileInlineFormatSelection
+                    onUndoTextEdit()
+                    requestMobileRefocusAfterFormatMutation(selection: refocusSelection)
+                },
+                onShowHeadingPanel: {
+                    withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
+                        mobileFormatPaletteTab = .heading
+                        isMobileFormatPanelPresented = true
+                    }
+                },
                 onToggleOutline: {
                     if isMobileOutlinePresented {
                         onCloseOutline()
@@ -9351,6 +9540,7 @@ private struct BlockRowView: View {
                 if type.isTextEditable && type != .table {
                     requestMobileRefocusAfterFormatMutation(selection: refocusSelection)
                 }
+                collapseMobileFormatPanelToKeyboard()
             },
             onConvertToPage: {
                 onConvertToPage()
@@ -9359,19 +9549,23 @@ private struct BlockRowView: View {
                 let refocusSelection = mobileInlineFormatSelection
                 if onIndent() {
                     requestMobileRefocusAfterFormatMutation(selection: refocusSelection)
+                    collapseMobileFormatPanelToKeyboard()
                 }
             },
             onOutdent: {
                 let refocusSelection = mobileInlineFormatSelection
                 if onOutdent() {
                     requestMobileRefocusAfterFormatMutation(selection: refocusSelection)
+                    collapseMobileFormatPanelToKeyboard()
                 }
             },
             onApplyInlineFormat: { format in
                 guard let selection = mobileInlineFormatSelection else {
                     return
                 }
-                _ = onApplyInlineFormatByKeyboard(format, selection)
+                if onApplyInlineFormatByKeyboard(format, selection) {
+                    collapseMobileFormatPanelToKeyboard()
+                }
             },
             onInsertLink: {
                 guard let selection = mobileInlineFormatSelection else {
@@ -9380,9 +9574,7 @@ private struct BlockRowView: View {
                 _ = onInsertLinkByKeyboard(selection)
             },
             onReturnToKeyboard: {
-                withAnimation(.spring(response: 0.22, dampingFraction: 0.92)) {
-                    isMobileFormatPanelPresented = false
-                }
+                collapseMobileFormatPanelToKeyboard()
             }
         )
     }
@@ -9407,6 +9599,75 @@ private struct BlockRowView: View {
             selection.length >= 0 &&
             selection.location <= textLength &&
             selection.length <= textLength - selection.location
+    }
+
+    private var mobileKeyboardCopyText: String? {
+        let blockText = block.textPlain as NSString
+        if let selection = editorSession.textSelection,
+           selection.blockID == block.id,
+           selection.length > 0,
+           isValidMobileSelection(selection) {
+            return blockText.substring(
+                with: NSRange(location: selection.location, length: selection.length)
+            )
+        }
+
+        return block.textPlain.isEmpty ? nil : block.textPlain
+    }
+
+    private func copyMobileKeyboardText() {
+        guard let text = mobileKeyboardCopyText else {
+            return
+        }
+        UIPasteboard.general.string = text
+    }
+
+    @discardableResult
+    private func pasteMobileKeyboardContents() -> Bool {
+        let attachmentURLs = IOSPasteboardAttachmentResolver.attachmentURLs(from: .general)
+        if !attachmentURLs.isEmpty {
+            return onPasteAttachmentURLs(attachmentURLs)
+        }
+
+        guard let pasteText = UIPasteboard.general.string,
+              !pasteText.isEmpty else {
+            return false
+        }
+
+        return pasteMobileKeyboardText(pasteText)
+    }
+
+    @discardableResult
+    private func pasteMobileKeyboardText(_ pasteText: String) -> Bool {
+        guard block.type.isTextEditable else {
+            return false
+        }
+
+        let selection = mobileInlineFormatSelection ?? blockEndSelection
+        guard isValidMobileSelection(selection) else {
+            return false
+        }
+
+        let range = NSRange(location: selection.location, length: selection.length)
+        let updatedText = (block.textPlain as NSString).replacingCharacters(
+            in: range,
+            with: pasteText
+        )
+        onTextChange(updatedText)
+
+        let nextSelection = EditorTextSelection(
+            blockID: block.id,
+            location: selection.location + (pasteText as NSString).length,
+            length: 0
+        )
+        requestMobileRefocusAfterFormatMutation(selection: nextSelection)
+        return true
+    }
+
+    private func collapseMobileFormatPanelToKeyboard() {
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.92)) {
+            isMobileFormatPanelPresented = false
+        }
     }
 
     private func requestMobileRefocusAfterFormatMutation(selection: EditorTextSelection?) {
@@ -9548,6 +9809,19 @@ private struct BlockRowView: View {
             return 0
         }
         return min(max(slashCommandSelectionIndex, 0), commands.count - 1)
+    }
+
+    private func handleRowTap() {
+#if os(iOS)
+        switch MobileBlockTapActionResolver.action(isSelectionModeActive: isMobileSelectionModeActive) {
+        case .focusCursor:
+            requestRowFocus()
+        case .toggleBlockSelection:
+            onToggleBlockSelection()
+        }
+#else
+        requestRowFocus()
+#endif
     }
 
     private func requestRowFocus() {

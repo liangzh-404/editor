@@ -121,6 +121,11 @@ final class EditorIOSEditingUITests: XCTestCase {
             collapsedTitle.waitForExistence(timeout: 3),
             "The page title should appear in the blurred top bar once the body title scrolls away"
         )
+        XCTAssertLessThanOrEqual(
+            collapsedTitle.frame.minY,
+            64,
+            "The collapsed page title should be pinned in the top navigation bar"
+        )
     }
 
     @MainActor
@@ -241,9 +246,45 @@ final class EditorIOSEditingUITests: XCTestCase {
             app.descendants(matching: .any)["editor.mobile-keyboard.more-format"].waitForExistence(timeout: 5),
             "The compact keyboard toolbar should keep the more-format action"
         )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["editor.mobile-keyboard.copy"].waitForExistence(timeout: 5),
+            "The compact keyboard toolbar should expose copy"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["editor.mobile-keyboard.paste"].waitForExistence(timeout: 5),
+            "The compact keyboard toolbar should expose paste"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["editor.mobile-keyboard.undo"].waitForExistence(timeout: 5),
+            "The compact keyboard toolbar should expose undo"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["editor.mobile-keyboard.heading"].waitForExistence(timeout: 5),
+            "The compact keyboard toolbar should expose the heading picker"
+        )
         XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.format"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.add-block"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["editor.mobile-keyboard.dismiss"].exists)
+    }
+
+    @MainActor
+    func testIPhoneKeyboardHeadingButtonOpensH1H2H3Palette() {
+        let app = makeApp()
+        app.launch()
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should be editable before checking the heading shortcut")
+        firstTextView.tap()
+
+        let headingButton = app.descendants(matching: .any)["editor.mobile-keyboard.heading"]
+        XCTAssertTrue(headingButton.waitForExistence(timeout: 5), "The compact keyboard toolbar should expose 标题")
+        headingButton.tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["editor.mobile-format.H1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["editor.mobile-format.H2"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["editor.mobile-format.H3"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -290,17 +331,40 @@ final class EditorIOSEditingUITests: XCTestCase {
         let bulletRow = app.descendants(matching: .any)["editor.unordered-list.\(blockID)"]
         XCTAssertTrue(bulletRow.waitForExistence(timeout: 5), "Tapping Bullets should convert the focused block to a list item")
         XCTAssertTrue(
-            palette.waitForExistence(timeout: 3),
-            "Changing block type from the format palette should keep the editor focused with the palette available"
-        )
-
-        let collapseButton = app.descendants(matching: .any)["editor.mobile-format.collapse"]
-        XCTAssertTrue(collapseButton.waitForExistence(timeout: 5), "The palette should still be able to return to the keyboard after a type change")
-        collapseButton.tap()
-        XCTAssertTrue(
             app.otherElements["editor.mobile-keyboard-toolbar"].waitForExistence(timeout: 5),
-            "Returning from the palette after a type change should restore the compact keyboard toolbar"
+            "Changing block type from the format palette should automatically return to the compact keyboard toolbar"
         )
+        XCTAssertTrue(
+            waitForNonExistence(palette, timeout: 5),
+            "Changing block type should dismiss the expanded format palette without a second tap"
+        )
+    }
+
+    @MainActor
+    func testIPhoneLeftAndMiddleScreensSwipeLeftForward() {
+        let app = makeApp()
+        app.launch()
+
+        let documentListBackButton = app.navigationBars.buttons["全部文档"]
+        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Initial compact page should expose a back button to the document list")
+        documentListBackButton.tap()
+
+        let libraryBackButton = app.navigationBars.buttons["资料库"]
+        XCTAssertTrue(libraryBackButton.waitForExistence(timeout: 5), "The document list should expose a back button to the library")
+        libraryBackButton.tap()
+
+        let library = app.scrollViews["editor.compact-library"]
+        XCTAssertTrue(library.waitForExistence(timeout: 5), "The left library screen should be visible")
+        library.swipeLeft()
+
+        let documentList = app.scrollViews["editor.compact-document-list"]
+        XCTAssertTrue(documentList.waitForExistence(timeout: 5), "Swiping left from the library should reveal the middle document-list screen")
+        documentList.swipeLeft()
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "Swiping left from the middle list should return to the editor screen")
     }
 
     @MainActor

@@ -702,6 +702,26 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testMobileBlockTapSelectsRowsInsteadOfFocusingCursorDuringSelectionMode() {
+        XCTAssertEqual(
+            MobileBlockTapActionResolver.action(isSelectionModeActive: true),
+            .toggleBlockSelection
+        )
+        XCTAssertEqual(
+            MobileBlockTapActionResolver.action(isSelectionModeActive: false),
+            .focusCursor
+        )
+    }
+
+    func testMobileBlockSelectionDragOnlyRunsAfterSelectionModeStarts() {
+        XCTAssertFalse(
+            MobileBlockSelectionDragPolicy.isEnabled(isSelectionModeActive: false)
+        )
+        XCTAssertTrue(
+            MobileBlockSelectionDragPolicy.isEnabled(isSelectionModeActive: true)
+        )
+    }
+
     func testBlockSelectionRangeResolverSelectsContiguousVisibleBlocks() {
         let visibleBlockIDs = ["first", "second", "third", "fourth"]
 
@@ -938,6 +958,44 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(
             CompactShellRoutePlanner.previousScreenPath(currentPath: []),
             []
+        )
+    }
+
+    func testCompactShellPathCanStepForwardOneColumnAtATimeForSwipeNavigation() {
+        let workspaceID = "workspace"
+        let page = PageSummary(id: "page-a", workspaceID: workspaceID, title: "A")
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [page],
+            blocks: [],
+            attachments: [],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: page.id
+        )
+
+        XCTAssertEqual(
+            CompactShellRoutePlanner.nextScreenPath(
+                currentPath: [],
+                snapshot: snapshot,
+                selectedCollection: .recent
+            ),
+            [.collection(.allDocuments)]
+        )
+        XCTAssertEqual(
+            CompactShellRoutePlanner.nextScreenPath(
+                currentPath: [.collection(.allDocuments)],
+                snapshot: snapshot,
+                selectedCollection: .recent
+            ),
+            [.collection(.allDocuments), .page(page.id)]
+        )
+        XCTAssertEqual(
+            CompactShellRoutePlanner.nextScreenPath(
+                currentPath: [.collection(.allDocuments), .page(page.id)],
+                snapshot: snapshot,
+                selectedCollection: .recent
+            ),
+            [.collection(.allDocuments), .page(page.id)]
         )
     }
 
