@@ -1940,8 +1940,17 @@ final class SyncEngine {
             pageOrder.append(pageID)
             blockChangesByPageID[pageID] = []
         }
+        var skippedRemoteBlockCount = 0
         for pageID in pageOrder {
             let pageBlockChanges = blockChangesByPageID[pageID] ?? []
+            guard try syncRepository.pageExists(pageID: pageID) else {
+                skippedRemoteBlockCount += pageBlockChanges.count
+                EditorLog.sync.error(
+                    "sync_remote_blocks_skipped_missing_page page_id=\(pageID, privacy: .public) remote_blocks=\(pageBlockChanges.count, privacy: .public) full_snapshot=\(changeSet.fullSnapshotPageIDs.contains(pageID), privacy: .public)"
+                )
+                continue
+            }
+
             if changeSet.fullSnapshotPageIDs.contains(pageID) {
                 try applyRemoteChange(
                     entityType: "pageSnapshot",
@@ -1985,6 +1994,7 @@ final class SyncEngine {
                 + changeSet.diaryPageChanges.count
                 + changeSet.attachmentChanges.count
                 + changeSet.blockChanges.count
+                - skippedRemoteBlockCount
                 + changeSet.deletedRecords.count
         )
     }

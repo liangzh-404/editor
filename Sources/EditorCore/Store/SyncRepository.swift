@@ -187,6 +187,19 @@ final class SyncRepository {
         return Int(row?["count"] ?? "") ?? 0 > 0
     }
 
+    func pageExists(pageID: String) throws -> Bool {
+        let rows = try database.query(
+            """
+            SELECT 1
+            FROM pages
+            WHERE id = ? AND is_archived = 0
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        return !rows.isEmpty
+    }
+
     func pendingChanges() throws -> [SyncChange] {
         try database.query(
             """

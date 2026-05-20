@@ -887,7 +887,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(snapshot.attachments.map(\.originalFilename), ["brief.pdf"])
     }
 
-    func testFetchRemoteChangesReportsEntityIDWhenRemoteApplyFails() throws {
+    func testFetchRemoteChangesSkipsRemoteBlockWhenPageIsMissing() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -905,23 +905,15 @@ final class SyncEngineTests: XCTestCase {
             ]
         )
 
-        XCTAssertThrowsError(
-            try SyncEngine(
-                syncRepository: SyncRepository(database: database),
-                adapter: RecordingCloudKitSyncAdapter(),
-                remoteChangeFetcher: fetcher,
-                mergeEngine: SyncMergeEngine(database: database)
-            ).fetchRemoteChanges()
-        ) { error in
-            let applyError = error as? SyncRemoteApplyError
-            XCTAssertEqual(applyError?.entityType, "block")
-            XCTAssertEqual(applyError?.entityID, "block-orphan")
-            XCTAssertEqual(applyError?.details, "page_id=missing-page parent_block_id=nil")
-            XCTAssertEqual(
-                applyError?.description,
-                "remote_apply_failed entity_type=block entity_id=block-orphan page_id=missing-page parent_block_id=nil error=Step failed: FOREIGN KEY constraint failed"
-            )
-        }
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+
+        XCTAssertEqual(result.appliedCount, 0)
+        XCTAssertEqual(try PageRepository(database: database).loadWorkspaceSnapshot().blocks, [])
     }
 
     func testFetchRemoteChangesAppliesParentBlocksBeforeChildrenFromSameBatch() throws {
