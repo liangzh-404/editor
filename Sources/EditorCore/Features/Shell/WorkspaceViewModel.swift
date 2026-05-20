@@ -2970,6 +2970,82 @@ final class WorkspaceViewModel: ObservableObject {
         scheduleMissingAttachmentThumbnail(attachmentID: attachmentID)
     }
 
+    func renameAttachmentImage(blockID: String, name: String) throws {
+        let displayName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !displayName.isEmpty,
+              let block = snapshot.blocks.first(where: { $0.id == blockID }),
+              block.type == .attachmentImage else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        try performPageEdit(pageID: block.pageID, focusBlockID: blockID) {
+            if let repository {
+                try repository.updateBlock(
+                    blockID: blockID,
+                    type: .attachmentImage,
+                    text: displayName,
+                    attachmentDisplayWidth: block.attachmentDisplayWidth
+                )
+            }
+
+            snapshot = snapshot.replacingBlock(
+                blockID: blockID,
+                type: .attachmentImage,
+                text: displayName
+            )
+            try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
+        }
+    }
+
+    func renameAttachmentImageForUI(blockID: String, name: String) {
+        do {
+            try renameAttachmentImage(blockID: blockID, name: name)
+            EditorLog.attachment.debug("attachment_image_renamed block_id=\(blockID, privacy: .public)")
+        } catch {
+            EditorLog.attachment.error(
+                "attachment_image_rename_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func updateAttachmentImageDisplayWidth(blockID: String, displayWidth: Double) throws {
+        let normalizedDisplayWidth = max(1, displayWidth.rounded())
+        guard let block = snapshot.blocks.first(where: { $0.id == blockID }),
+              block.type == .attachmentImage else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        try performPageEdit(pageID: block.pageID, focusBlockID: blockID) {
+            if let repository {
+                try repository.updateBlock(
+                    blockID: blockID,
+                    type: .attachmentImage,
+                    text: block.textPlain,
+                    attachmentDisplayWidth: normalizedDisplayWidth
+                )
+            }
+
+            snapshot = snapshot.replacingAttachmentDisplayWidth(
+                blockID: blockID,
+                displayWidth: normalizedDisplayWidth
+            )
+            try refreshDerivedState(rebuildSearchIndex: false)
+        }
+    }
+
+    func updateAttachmentImageDisplayWidthForUI(blockID: String, displayWidth: Double) {
+        do {
+            try updateAttachmentImageDisplayWidth(blockID: blockID, displayWidth: displayWidth)
+            EditorLog.attachment.debug(
+                "attachment_image_resized block_id=\(blockID, privacy: .public) width=\(displayWidth, privacy: .public)"
+            )
+        } catch {
+            EditorLog.attachment.error(
+                "attachment_image_resize_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     @discardableResult
     func purgeUnreferencedAttachments() throws -> Int {
         guard let attachmentRepository else {

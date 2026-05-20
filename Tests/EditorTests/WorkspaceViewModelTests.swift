@@ -823,6 +823,87 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAttachmentImageRenamePersistsDisplayNameAndShowsCaption() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let sourceURL = try makeSourceFile(name: "screen.png", data: Self.onePixelPNGData)
+
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil
+        )
+        try viewModel.load()
+        let result = try XCTUnwrap(viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL))
+
+        XCTAssertFalse(
+            AttachmentImageCaptionVisibilityPolicy.isVisible(
+                blockText: try XCTUnwrap(viewModel.visibleBlocks.last?.textPlain),
+                originalFilename: viewModel.snapshot.attachments.first?.originalFilename
+            )
+        )
+
+        try viewModel.renameAttachmentImage(blockID: result.block.id, name: "Product sketch")
+
+        let renamedBlock = try XCTUnwrap(viewModel.visibleBlocks.last)
+        XCTAssertEqual(renamedBlock.textPlain, "Product sketch")
+        XCTAssertEqual(renamedBlock.attachmentID, result.attachment.id)
+        XCTAssertTrue(
+            AttachmentImageCaptionVisibilityPolicy.isVisible(
+                blockText: renamedBlock.textPlain,
+                originalFilename: viewModel.snapshot.attachments.first?.originalFilename
+            )
+        )
+
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+        let reloadedBlock = try XCTUnwrap(reloadedSnapshot.blocks.first { $0.id == result.block.id })
+        XCTAssertEqual(reloadedBlock.textPlain, "Product sketch")
+        XCTAssertEqual(reloadedBlock.attachmentID, result.attachment.id)
+    }
+
+    @MainActor
+    func testAttachmentImageResizePersistsDisplayWidthWithoutChangingName() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let sourceURL = try makeSourceFile(name: "screen.png", data: Self.onePixelPNGData)
+
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil
+        )
+        try viewModel.load()
+        let result = try XCTUnwrap(viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL))
+
+        try viewModel.updateAttachmentImageDisplayWidth(blockID: result.block.id, displayWidth: 360)
+
+        let resizedBlock = try XCTUnwrap(viewModel.visibleBlocks.last)
+        XCTAssertEqual(resizedBlock.textPlain, "screen.png")
+        XCTAssertEqual(resizedBlock.attachmentID, result.attachment.id)
+        XCTAssertEqual(resizedBlock.attachmentDisplayWidth, 360)
+
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+        let reloadedBlock = try XCTUnwrap(reloadedSnapshot.blocks.first { $0.id == result.block.id })
+        XCTAssertEqual(reloadedBlock.textPlain, "screen.png")
+        XCTAssertEqual(reloadedBlock.attachmentID, result.attachment.id)
+        XCTAssertEqual(reloadedBlock.attachmentDisplayWidth, 360)
+    }
+
+    @MainActor
     func testUIAttachmentPasteInsertsAfterSourceBlockInsteadOfAppendingToEnd() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -780,9 +780,26 @@ final class PageRepository {
         taskItemIsCompleted explicitTaskItemIsCompleted: Bool? = nil,
         toggleIsExpanded explicitToggleIsExpanded: Bool? = nil,
         codeBlockLineWrapping explicitCodeBlockLineWrapping: Bool? = nil,
-        tableRows explicitTableRows: [[String]]? = nil
+        tableRows explicitTableRows: [[String]]? = nil,
+        attachmentDisplayWidth explicitAttachmentDisplayWidth: Double? = nil
     ) throws {
         let now = Self.timestamp()
+        let currentRows = try database.query(
+            """
+            SELECT type,
+                   payload_json,
+                   text_plain
+            FROM blocks
+            WHERE id = ? AND is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        )
+        guard let currentRow = currentRows.first else {
+            throw PageRepositoryError.blockNotFound
+        }
+        let currentType = BlockType(rawValue: currentRow["type"] ?? "") ?? .paragraph
+        let currentPayloadJSON = currentRow["payload_json"] ?? ""
         let referenceTargets = try currentReferenceTargets(blockID: blockID)
         let taskItemIsCompleted: Bool
         if type == .taskItem {
@@ -814,30 +831,31 @@ final class PageRepository {
         } else {
             codeBlockLineWrapping = true
         }
-        let payloadJSON = try blockPayloadJSON(
-            type: type,
-            text: text,
-            taskItemIsCompleted: taskItemIsCompleted,
-            toggleIsExpanded: toggleIsExpanded,
-            codeBlockLineWrapping: codeBlockLineWrapping,
-            pageReferenceTargetPageID: referenceTargets.pageID,
-            blockReferenceTargetBlockID: referenceTargets.blockID,
-            tableRows: explicitTableRows
-        )
-
-        let currentRows = try database.query(
-            """
-            SELECT type,
-                   payload_json,
-                   text_plain
-            FROM blocks
-            WHERE id = ? AND is_deleted = 0
-            LIMIT 1
-            """,
-            bindings: [.text(blockID)]
-        )
-        guard let currentRow = currentRows.first else {
-            throw PageRepositoryError.blockNotFound
+        let payloadJSON: String
+        if let attachmentKind = Self.attachmentKind(for: type) {
+            let displayWidth = type == .attachmentImage
+                ? explicitAttachmentDisplayWidth ?? Self.attachmentDisplayWidth(
+                    type: currentType,
+                    payloadJSON: currentPayloadJSON
+                )
+                : nil
+            payloadJSON = try attachmentBlockPayloadJSON(
+                attachmentID: Self.attachmentID(type: currentType, payloadJSON: currentPayloadJSON),
+                kind: attachmentKind,
+                filename: text,
+                displayWidth: displayWidth
+            )
+        } else {
+            payloadJSON = try blockPayloadJSON(
+                type: type,
+                text: text,
+                taskItemIsCompleted: taskItemIsCompleted,
+                toggleIsExpanded: toggleIsExpanded,
+                codeBlockLineWrapping: codeBlockLineWrapping,
+                pageReferenceTargetPageID: referenceTargets.pageID,
+                blockReferenceTargetBlockID: referenceTargets.blockID,
+                tableRows: explicitTableRows
+            )
         }
         if currentRow["type"] == type.rawValue,
            currentRow["payload_json"] == payloadJSON,
@@ -2208,6 +2226,10 @@ final class PageRepository {
                 attachmentID: Self.attachmentID(
                     type: type,
                     payloadJSON: row["payload_json"] ?? ""
+                ),
+                attachmentDisplayWidth: Self.attachmentDisplayWidth(
+                    type: type,
+                    payloadJSON: row["payload_json"] ?? ""
                 )
             )
         }
@@ -2617,7 +2639,8 @@ final class PageRepository {
             return try attachmentBlockPayloadJSON(
                 attachmentID: block.attachmentID,
                 kind: .image,
-                filename: block.textPlain
+                filename: block.textPlain,
+                displayWidth: block.attachmentDisplayWidth
             )
         case .attachmentVideo:
             return try attachmentBlockPayloadJSON(
@@ -2648,14 +2671,21 @@ final class PageRepository {
     private func attachmentBlockPayloadJSON(
         attachmentID: String?,
         kind: AttachmentKind,
-        filename: String
+        filename: String,
+        displayWidth: Double? = nil
     ) throws -> String {
+        var payload: [String: Any] = [
+            "attachment_id": attachmentID ?? "",
+            "filename": filename,
+            "kind": kind.rawValue
+        ]
+        if kind == .image,
+           let displayWidth {
+            payload["display_width"] = displayWidth
+        }
+
         let data = try JSONSerialization.data(
-            withJSONObject: [
-                "attachment_id": attachmentID ?? "",
-                "filename": filename,
-                "kind": kind.rawValue
-            ],
+            withJSONObject: payload,
             options: [.sortedKeys]
         )
 
@@ -2702,6 +2732,35 @@ final class PageRepository {
         }
 
         return payload["attachment_id"] as? String
+    }
+
+    private static func attachmentDisplayWidth(type: BlockType, payloadJSON: String) -> Double? {
+        guard type == .attachmentImage,
+              let data = payloadJSON.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        if let width = payload["display_width"] as? Double {
+            return width
+        }
+        if let width = payload["display_width"] as? Int {
+            return Double(width)
+        }
+        return nil
+    }
+
+    private static func attachmentKind(for type: BlockType) -> AttachmentKind? {
+        switch type {
+        case .attachmentImage:
+            return .image
+        case .attachmentVideo:
+            return .video
+        case .attachmentFile:
+            return .file
+        default:
+            return nil
+        }
     }
 
     private func currentReferenceTargets(blockID: String) throws -> (pageID: String?, blockID: String?) {

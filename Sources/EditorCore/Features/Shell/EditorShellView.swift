@@ -601,6 +601,15 @@ private struct ThreeColumnEditorShell: View {
                     onRetryAttachmentPreview: { attachmentID in
                         viewModel.retryAttachmentPreviewGeneration(attachmentID: attachmentID)
                     },
+                    onRenameAttachmentImage: { blockID, name in
+                        viewModel.renameAttachmentImageForUI(blockID: blockID, name: name)
+                    },
+                    onAttachmentImageDisplayWidthChange: { blockID, displayWidth in
+                        viewModel.updateAttachmentImageDisplayWidthForUI(
+                            blockID: blockID,
+                            displayWidth: displayWidth
+                        )
+                    },
                     onMobileRevealPageList: nil,
                     onPendingBlockFocusHandled: {
                         _ = viewModel.consumePendingFocusBlockID()
@@ -879,6 +888,15 @@ private struct ThreeColumnEditorShell: View {
                 },
                 onRetryAttachmentPreview: { attachmentID in
                     viewModel.retryAttachmentPreviewGeneration(attachmentID: attachmentID)
+                },
+                onRenameAttachmentImage: { blockID, name in
+                    viewModel.renameAttachmentImageForUI(blockID: blockID, name: name)
+                },
+                onAttachmentImageDisplayWidthChange: { blockID, displayWidth in
+                    viewModel.updateAttachmentImageDisplayWidthForUI(
+                        blockID: blockID,
+                        displayWidth: displayWidth
+                    )
                 },
                 onMobileRevealPageList: nil,
                 onPendingBlockFocusHandled: {
@@ -1327,6 +1345,49 @@ enum EditorBlockChrome {
 enum BlockDragHandleVisibilityPolicy {
     static func opacity(isHovered: Bool) -> Double {
         isHovered ? 1 : EditorBlockChrome.inactiveHandleOpacity
+    }
+}
+
+enum AttachmentImageCaptionVisibilityPolicy {
+    static func isVisible(blockText: String, originalFilename: String?) -> Bool {
+        let displayName = blockText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !displayName.isEmpty else {
+            return false
+        }
+
+        guard let originalFilename else {
+            return true
+        }
+
+        return displayName != originalFilename
+    }
+}
+
+enum AttachmentImageDisplayWidthPolicy {
+    static let defaultWidth: CGFloat = 460
+    static let minimumWidth: CGFloat = 160
+    static let maximumWidth: CGFloat = 680
+    static let resizeHandleSize: CGFloat = 18
+
+    static func resolvedWidth(storedWidth: Double?, availableWidth: CGFloat) -> CGFloat {
+        let available = max(1, availableWidth)
+        let preferred = CGFloat(storedWidth ?? Double(defaultWidth))
+        return min(max(preferred, minimumWidth), min(maximumWidth, available))
+    }
+
+    static func widthAfterDrag(
+        startWidth: CGFloat,
+        translation: CGSize,
+        availableWidth: CGFloat
+    ) -> CGFloat {
+        resolvedWidth(
+            storedWidth: Double(startWidth + translation.width),
+            availableWidth: availableWidth
+        )
+    }
+
+    static func storedWidth(_ width: CGFloat) -> Double {
+        Double(width.rounded())
     }
 }
 
@@ -3545,6 +3606,15 @@ private struct CompactPageDestination: View {
                 onRetryAttachmentPreview: { attachmentID in
                     viewModel.retryAttachmentPreviewGeneration(attachmentID: attachmentID)
                 },
+                onRenameAttachmentImage: { blockID, name in
+                    viewModel.renameAttachmentImageForUI(blockID: blockID, name: name)
+                },
+                onAttachmentImageDisplayWidthChange: { blockID, displayWidth in
+                    viewModel.updateAttachmentImageDisplayWidthForUI(
+                        blockID: blockID,
+                        displayWidth: displayWidth
+                    )
+                },
                 onMobileRevealPageList: onRevealPageList,
                 onPendingBlockFocusHandled: {
                     _ = viewModel.consumePendingFocusBlockID()
@@ -5571,6 +5641,8 @@ private struct EditorCanvasView: View {
     let onImportAttachment: (URL) -> Void
     let onImportAttachmentsAfterBlock: ([URL], String) -> Bool
     let onRetryAttachmentPreview: (String) -> Void
+    let onRenameAttachmentImage: (String, String) -> Void
+    let onAttachmentImageDisplayWidthChange: (String, Double) -> Void
     let onMobileRevealPageList: (() -> Void)?
     let onPendingBlockFocusHandled: () -> Void
     var onAddTagToSelectedPage: (String) -> Bool = { _ in false }
@@ -5821,6 +5893,12 @@ private struct EditorCanvasView: View {
                         },
                         onRetryAttachmentPreview: { attachmentID in
                             onRetryAttachmentPreview(attachmentID)
+                        },
+                        onRenameAttachmentImage: { name in
+                            onRenameAttachmentImage(block.id, name)
+                        },
+                        onAttachmentImageDisplayWidthChange: { displayWidth in
+                            onAttachmentImageDisplayWidthChange(block.id, displayWidth)
                         },
                         isToggleBlockExpanded: isToggleBlockExpanded(block.id),
                         isMobileOutlinePresented: isMobileOutlinePresented,
@@ -8785,6 +8863,8 @@ private struct BlockRowView: View {
     let onCodeBlockLineWrappingChange: (Bool) -> Void
     let onToggleBlockExpansion: () -> Void
     let onRetryAttachmentPreview: (String) -> Void
+    let onRenameAttachmentImage: (String) -> Void
+    let onAttachmentImageDisplayWidthChange: (Double) -> Void
     let isToggleBlockExpanded: Bool
     let isMobileOutlinePresented: Bool
     let onRevealPageList: () -> Void
@@ -8808,6 +8888,8 @@ private struct BlockRowView: View {
     @State private var rowFocusRequest: BlockFocusRequest?
     @State private var slashCommandSelectionIndex = 0
     @State private var slashCommandSelectionSource: SlashCommandSelectionSource = .keyboard
+    @State private var isAttachmentRenameAlertPresented = false
+    @State private var attachmentRenameText = ""
 #if os(iOS)
     @State private var mobileFormatPaletteTab: MobileFormatPaletteTab = .body
     @State private var isMobileFormatPanelPresented = false
@@ -8850,6 +8932,8 @@ private struct BlockRowView: View {
         onCodeBlockLineWrappingChange: @escaping (Bool) -> Void = { _ in },
         onToggleBlockExpansion: @escaping () -> Void = {},
         onRetryAttachmentPreview: @escaping (String) -> Void = { _ in },
+        onRenameAttachmentImage: @escaping (String) -> Void = { _ in },
+        onAttachmentImageDisplayWidthChange: @escaping (Double) -> Void = { _ in },
         isToggleBlockExpanded: Bool = true,
         isMobileOutlinePresented: Bool = false,
         onRevealPageList: @escaping () -> Void = {},
@@ -8906,6 +8990,8 @@ private struct BlockRowView: View {
         self.onCodeBlockLineWrappingChange = onCodeBlockLineWrappingChange
         self.onToggleBlockExpansion = onToggleBlockExpansion
         self.onRetryAttachmentPreview = onRetryAttachmentPreview
+        self.onRenameAttachmentImage = onRenameAttachmentImage
+        self.onAttachmentImageDisplayWidthChange = onAttachmentImageDisplayWidthChange
         self.isToggleBlockExpanded = isToggleBlockExpanded
         self.isMobileOutlinePresented = isMobileOutlinePresented
         self.onRevealPageList = onRevealPageList
@@ -8947,6 +9033,14 @@ private struct BlockRowView: View {
         .contentShape(Rectangle())
         .contextMenu {
             blockContextCommands
+        }
+        .alert("修改图片名字", isPresented: $isAttachmentRenameAlertPresented) {
+            TextField("图片名字", text: $attachmentRenameText)
+            Button("保存") {
+                commitAttachmentRename()
+            }
+            .disabled(attachmentRenameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("取消", role: .cancel) {}
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(rowAccessibilityIdentifier)
@@ -9050,7 +9144,8 @@ private struct BlockRowView: View {
                 block: block,
                 attachment: attachment,
                 generationStatus: attachmentPreviewGenerationStatus,
-                onRetryPreview: onRetryAttachmentPreview
+                onRetryPreview: onRetryAttachmentPreview,
+                onImageDisplayWidthChange: onAttachmentImageDisplayWidthChange
             )
         }
     }
@@ -9206,6 +9301,14 @@ private struct BlockRowView: View {
             Label("下方新增", systemImage: "plus")
         }
 
+        if block.type == .attachmentImage {
+            Button {
+                presentAttachmentRename()
+            } label: {
+                Label("修改名字", systemImage: "pencil")
+            }
+        }
+
         if block.type.isTextEditable {
             Divider()
 
@@ -9269,6 +9372,22 @@ private struct BlockRowView: View {
             location: (block.textPlain as NSString).length,
             length: 0
         )
+    }
+
+    private func presentAttachmentRename() {
+        attachmentRenameText = AttachmentImageCaptionVisibilityPolicy.isVisible(
+            blockText: block.textPlain,
+            originalFilename: attachment?.originalFilename
+        ) ? block.textPlain : ""
+        isAttachmentRenameAlertPresented = true
+    }
+
+    private func commitAttachmentRename() {
+        let displayName = attachmentRenameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !displayName.isEmpty else {
+            return
+        }
+        onRenameAttachmentImage(displayName)
     }
 
     private var effectiveFocusRequestID: UUID? {
@@ -11401,6 +11520,18 @@ private struct BlockReferenceBlockRow: View {
     }
 }
 
+private struct AttachmentPreviewImage {
+    let image: Image
+    let size: CGSize
+
+    func height(forWidth width: CGFloat) -> CGFloat {
+        guard size.width > 0 else {
+            return width
+        }
+        return width * max(size.height, 1) / size.width
+    }
+}
+
 private extension BlockType {
     var editorMenuTitle: String {
         switch self {
@@ -11490,6 +11621,11 @@ private struct AttachmentBlockRow: View {
     let attachment: AttachmentSnapshot?
     let generationStatus: AttachmentPreviewGenerationStatus
     let onRetryPreview: (String) -> Void
+    let onImageDisplayWidthChange: (Double) -> Void
+
+    @State private var transientImageWidth: CGFloat?
+    @State private var resizeDragStartWidth: CGFloat?
+    @State private var measuredImageAvailableWidth = AttachmentImageDisplayWidthPolicy.defaultWidth
 
     var body: some View {
         let descriptor = AttachmentBlockChromeDescriptor(
@@ -11505,26 +11641,57 @@ private struct AttachmentBlockRow: View {
     }
 
     private func imageAttachmentBody(
-        thumbnailImage: Image,
+        thumbnailImage: AttachmentPreviewImage,
         descriptor: AttachmentBlockChromeDescriptor
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            thumbnailImage
-                .resizable()
-                .scaledToFit()
-                .frame(maxWidth: 460, maxHeight: 280, alignment: .leading)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
-                )
-                .accessibilityHidden(true)
+        GeometryReader { proxy in
+            let availableWidth = max(1, proxy.size.width)
+            let resolvedWidth = transientImageWidth ?? AttachmentImageDisplayWidthPolicy.resolvedWidth(
+                storedWidth: block.attachmentDisplayWidth,
+                availableWidth: availableWidth
+            )
+            let imageHeight = thumbnailImage.height(forWidth: resolvedWidth)
+            let showsCaption = AttachmentImageCaptionVisibilityPolicy.isVisible(
+                blockText: block.textPlain,
+                originalFilename: attachment?.originalFilename
+            )
 
-            Text(block.textPlain)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: showsCaption ? 6 : 0) {
+                ZStack(alignment: .bottomTrailing) {
+                    thumbnailImage.image
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: resolvedWidth, height: imageHeight, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                        )
+                        .accessibilityHidden(true)
+
+                    imageResizeHandle(
+                        currentWidth: resolvedWidth,
+                        availableWidth: availableWidth
+                    )
+                }
+
+                if showsCaption {
+                    Text(block.textPlain)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(width: resolvedWidth, alignment: .leading)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear {
+                measuredImageAvailableWidth = availableWidth
+            }
+            .onChange(of: availableWidth) { _, newWidth in
+                measuredImageAvailableWidth = newWidth
+            }
         }
+        .frame(height: imageBodyHeight(for: thumbnailImage))
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier(descriptor.accessibilityIdentifier)
@@ -11532,10 +11699,69 @@ private struct AttachmentBlockRow: View {
         .accessibilityValue(descriptor.accessibilityValue)
     }
 
+    private func imageBodyHeight(for thumbnailImage: AttachmentPreviewImage) -> CGFloat {
+        let width = transientImageWidth ?? AttachmentImageDisplayWidthPolicy.resolvedWidth(
+            storedWidth: block.attachmentDisplayWidth,
+            availableWidth: measuredImageAvailableWidth
+        )
+        let showsCaption = AttachmentImageCaptionVisibilityPolicy.isVisible(
+            blockText: block.textPlain,
+            originalFilename: attachment?.originalFilename
+        )
+        return thumbnailImage.height(forWidth: width)
+            + (showsCaption ? 24 : 0)
+            + 2
+    }
+
+    private func imageResizeHandle(
+        currentWidth: CGFloat,
+        availableWidth: CGFloat
+    ) -> some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(Color.black.opacity(0.45))
+            .frame(
+                width: AttachmentImageDisplayWidthPolicy.resizeHandleSize,
+                height: AttachmentImageDisplayWidthPolicy.resizeHandleSize
+            )
+            .overlay(
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .accessibilityHidden(true)
+            )
+            .contentShape(Rectangle())
+            .padding(6)
+            .gesture(
+                DragGesture(minimumDistance: 2, coordinateSpace: .local)
+                    .onChanged { value in
+                        let startWidth = resizeDragStartWidth ?? currentWidth
+                        resizeDragStartWidth = startWidth
+                        transientImageWidth = AttachmentImageDisplayWidthPolicy.widthAfterDrag(
+                            startWidth: startWidth,
+                            translation: value.translation,
+                            availableWidth: availableWidth
+                        )
+                    }
+                    .onEnded { value in
+                        let startWidth = resizeDragStartWidth ?? currentWidth
+                        let finalWidth = AttachmentImageDisplayWidthPolicy.widthAfterDrag(
+                            startWidth: startWidth,
+                            translation: value.translation,
+                            availableWidth: availableWidth
+                        )
+                        transientImageWidth = nil
+                        resizeDragStartWidth = nil
+                        onImageDisplayWidthChange(AttachmentImageDisplayWidthPolicy.storedWidth(finalWidth))
+                    }
+            )
+            .accessibilityLabel("调整图片大小")
+            .accessibilityIdentifier("editor.attachment.\(block.id).resize-handle")
+    }
+
     private func compactAttachmentBody(descriptor: AttachmentBlockChromeDescriptor) -> some View {
         HStack(spacing: 10) {
             if let thumbnailImage {
-                thumbnailImage
+                thumbnailImage.image
                     .resizable()
                     .scaledToFill()
                     .frame(width: 52, height: 40)
@@ -11597,7 +11823,7 @@ private struct AttachmentBlockRow: View {
         .accessibilityValue(descriptor.accessibilityValue)
     }
 
-    private var thumbnailImage: Image? {
+    private var thumbnailImage: AttachmentPreviewImage? {
         guard let attachment else {
             return nil
         }
@@ -11605,11 +11831,11 @@ private struct AttachmentBlockRow: View {
         for path in candidatePaths {
 #if os(macOS)
             if let image = NSImage(contentsOfFile: path) {
-                return Image(nsImage: image)
+                return AttachmentPreviewImage(image: Image(nsImage: image), size: image.size)
             }
 #elseif os(iOS)
             if let image = UIImage(contentsOfFile: path) {
-                return Image(uiImage: image)
+                return AttachmentPreviewImage(image: Image(uiImage: image), size: image.size)
             }
 #else
             return nil

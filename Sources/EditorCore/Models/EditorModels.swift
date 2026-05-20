@@ -194,6 +194,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
     let blockReferenceTargetBlockID: String?
     let tableRows: [[String]]
     let attachmentID: String?
+    let attachmentDisplayWidth: Double?
 
     init(
         id: String,
@@ -208,7 +209,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
         pageReferenceTargetPageID: String? = nil,
         blockReferenceTargetBlockID: String? = nil,
         tableRows: [[String]] = [],
-        attachmentID: String? = nil
+        attachmentID: String? = nil,
+        attachmentDisplayWidth: Double? = nil
     ) {
         self.id = id
         self.pageID = pageID
@@ -223,6 +225,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
         self.blockReferenceTargetBlockID = blockReferenceTargetBlockID
         self.tableRows = Self.normalizedTableRows(type: type, text: textPlain, rows: tableRows)
         self.attachmentID = type.isAttachment ? attachmentID : nil
+        self.attachmentDisplayWidth = type == .attachmentImage ? attachmentDisplayWidth : nil
     }
 
     func replacingText(_ text: String) -> BlockSnapshot {
@@ -243,7 +246,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: type == .blockReference ? blockReferenceTargetBlockID : nil,
             tableRows: type == .table && self.type == .table ? tableRows : [],
-            attachmentID: type.isAttachment && type == self.type ? attachmentID : nil
+            attachmentID: type.isAttachment && type == self.type ? attachmentID : nil,
+            attachmentDisplayWidth: type == .attachmentImage && type == self.type ? attachmentDisplayWidth : nil
         )
     }
 
@@ -261,7 +265,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
             tableRows: tableRows,
-            attachmentID: attachmentID
+            attachmentID: attachmentID,
+            attachmentDisplayWidth: attachmentDisplayWidth
         )
     }
 
@@ -279,7 +284,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
             tableRows: tableRows,
-            attachmentID: attachmentID
+            attachmentID: attachmentID,
+            attachmentDisplayWidth: attachmentDisplayWidth
         )
     }
 
@@ -297,7 +303,8 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
             tableRows: tableRows,
-            attachmentID: attachmentID
+            attachmentID: attachmentID,
+            attachmentDisplayWidth: attachmentDisplayWidth
         )
     }
 
@@ -315,7 +322,27 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
             tableRows: type == .table ? rows : [],
-            attachmentID: attachmentID
+            attachmentID: attachmentID,
+            attachmentDisplayWidth: attachmentDisplayWidth
+        )
+    }
+
+    func replacingAttachmentDisplayWidth(_ displayWidth: Double?) -> BlockSnapshot {
+        BlockSnapshot(
+            id: id,
+            pageID: pageID,
+            parentBlockID: parentBlockID,
+            orderKey: orderKey,
+            type: type,
+            textPlain: textPlain,
+            taskItemIsCompleted: taskItemIsCompleted,
+            toggleIsExpanded: toggleIsExpanded,
+            codeBlockLineWrapping: codeBlockLineWrapping,
+            pageReferenceTargetPageID: pageReferenceTargetPageID,
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            tableRows: tableRows,
+            attachmentID: attachmentID,
+            attachmentDisplayWidth: displayWidth
         )
     }
 
@@ -546,6 +573,27 @@ extension WorkspaceSnapshot {
             archivedPages: archivedPages,
             blocks: blocks.map { block in
                 block.id == blockID ? block.replacingTableRows(rows, text: text) : block
+            },
+            attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
+
+    func replacingAttachmentDisplayWidth(blockID: String, displayWidth: Double?) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages,
+            archivedPages: archivedPages,
+            blocks: blocks.map { block in
+                block.id == blockID ? block.replacingAttachmentDisplayWidth(displayWidth) : block
             },
             attachments: attachments,
             tags: tags,

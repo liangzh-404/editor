@@ -321,6 +321,62 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertGreaterThan(descriptor.strokeOpacity, 0.45)
     }
 
+    func testAttachmentImageCaptionHidesOriginalFilenameUntilRenamed() {
+        XCTAssertFalse(
+            AttachmentImageCaptionVisibilityPolicy.isVisible(
+                blockText: "screen.png",
+                originalFilename: "screen.png"
+            ),
+            "Imported images use the original filename as backing block text, but the visible caption should start hidden."
+        )
+        XCTAssertTrue(
+            AttachmentImageCaptionVisibilityPolicy.isVisible(
+                blockText: "Product sketch",
+                originalFilename: "screen.png"
+            ),
+            "A user-provided display name should become a visible image caption."
+        )
+        XCTAssertFalse(
+            AttachmentImageCaptionVisibilityPolicy.isVisible(
+                blockText: "   ",
+                originalFilename: "screen.png"
+            )
+        )
+    }
+
+    func testAttachmentImageResizePolicyUsesCanvasWidthAndDragDelta() {
+        XCTAssertEqual(
+            AttachmentImageDisplayWidthPolicy.resolvedWidth(
+                storedWidth: nil,
+                availableWidth: 320
+            ),
+            320
+        )
+        XCTAssertEqual(
+            AttachmentImageDisplayWidthPolicy.resolvedWidth(
+                storedWidth: 520,
+                availableWidth: 420
+            ),
+            420
+        )
+        XCTAssertEqual(
+            AttachmentImageDisplayWidthPolicy.widthAfterDrag(
+                startWidth: 300,
+                translation: CGSize(width: 80, height: 40),
+                availableWidth: 500
+            ),
+            380
+        )
+        XCTAssertEqual(
+            AttachmentImageDisplayWidthPolicy.widthAfterDrag(
+                startWidth: 300,
+                translation: CGSize(width: -400, height: 0),
+                availableWidth: 500
+            ),
+            AttachmentImageDisplayWidthPolicy.minimumWidth
+        )
+    }
+
     func testInlineLeadingControlsKeepTaskAndToggleTextBaselineCompensation() {
         let descriptor = InlineLeadingControlFrameDescriptor()
         let compactControlDescriptor = InlineLeadingControlFrameDescriptor(
