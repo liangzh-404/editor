@@ -270,14 +270,22 @@ final class SyncMergeEngine {
         )
         if remote.isDeleted {
             try deleteSourceLinks(blockID: remote.blockID)
+            try deletePageParentLink(sourceBlockID: remote.blockID)
         } else {
+            let pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: remote.payloadJSON)
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: remote.blockID,
                 text: remote.textPlain,
-                pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: remote.payloadJSON),
+                pageReferenceTargetPageID: pageReferenceTargetPageID,
                 blockReferenceTargetBlockID: remote.type == .blockReference
                     ? Self.blockReferenceTargetBlockID(payloadJSON: remote.payloadJSON)
                     : nil
+            )
+            try syncPageParentLink(
+                sourceBlockID: remote.blockID,
+                parentPageID: remote.pageID,
+                childPageID: pageReferenceTargetPageID,
+                orderKey: remote.orderKey
             )
         }
     }
@@ -531,6 +539,7 @@ final class SyncMergeEngine {
                 ]
             )
             try deleteSourceLinks(blockID: blockID)
+            try deletePageParentLink(sourceBlockID: blockID)
         }
 
         EditorLog.sync.debug(
@@ -545,6 +554,53 @@ final class SyncMergeEngine {
             WHERE source_block_id = ?
             """,
             bindings: [.text(blockID)]
+        )
+    }
+
+    private func syncPageParentLink(
+        sourceBlockID: String,
+        parentPageID: String,
+        childPageID: String?,
+        orderKey: String
+    ) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try database.withImmediateTransaction("sync_remote_page_parent_link") {
+            try deletePageParentLink(sourceBlockID: sourceBlockID)
+            guard let childPageID else {
+                return
+            }
+
+            try database.execute(
+                """
+                INSERT OR REPLACE INTO page_parent_links (
+                    parent_page_id,
+                    child_page_id,
+                    source_block_id,
+                    order_key,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                bindings: [
+                    .text(parentPageID),
+                    .text(childPageID),
+                    .text(sourceBlockID),
+                    .text(orderKey),
+                    .text(now),
+                    .text(now)
+                ]
+            )
+        }
+    }
+
+    private func deletePageParentLink(sourceBlockID: String) throws {
+        try database.execute(
+            """
+            DELETE FROM page_parent_links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(sourceBlockID)]
         )
     }
 

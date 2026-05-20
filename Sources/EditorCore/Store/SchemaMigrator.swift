@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 9
+    static let currentVersion = 11
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -257,6 +257,13 @@ enum SchemaMigrator {
             column: "next_attempt_at",
             definition: "TEXT"
         )
+        try compactDuplicateSyncChanges(database: database)
+        try database.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_changes_entity_change
+            ON sync_changes (entity_type, entity_id, change_type);
+            """
+        )
 
         try database.execute(
             """
@@ -278,6 +285,23 @@ enum SchemaMigrator {
                 token_base64 TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            """
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_diagnostics (
+                id TEXT PRIMARY KEY,
+                event_name TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        try database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_runtime_diagnostics_created_at
+            ON runtime_diagnostics (created_at DESC);
             """
         )
 
@@ -329,6 +353,27 @@ enum SchemaMigrator {
         }
 
         try database.execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
+    }
+
+    private static func compactDuplicateSyncChanges(database: SQLiteDatabase) throws {
+        try database.execute(
+            """
+            DELETE FROM sync_changes
+            WHERE rowid NOT IN (
+                SELECT survivor.rowid
+                FROM sync_changes AS survivor
+                WHERE survivor.rowid = (
+                    SELECT candidate.rowid
+                    FROM sync_changes AS candidate
+                    WHERE candidate.entity_type = survivor.entity_type
+                      AND candidate.entity_id = survivor.entity_id
+                      AND candidate.change_type = survivor.change_type
+                    ORDER BY candidate.created_at DESC, candidate.rowid DESC
+                    LIMIT 1
+                )
+            );
+            """
+        )
     }
 
     private static func ensureDefaultNotebooks(database: SQLiteDatabase) throws {

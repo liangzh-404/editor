@@ -94,6 +94,57 @@ final class SyncRepositoryTests: XCTestCase {
         ))
     }
 
+    func testEnqueueCoalescesDuplicateChangeAndClearsRetryState() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = SyncRepository(database: database)
+        try repository.enqueue(entityType: "page", entityID: "page-welcome", changeType: "update")
+        let failedChange = try XCTUnwrap(repository.pendingChanges().first)
+        try repository.recordFailure(
+            change: failedChange,
+            errorDescription: "CloudKit unavailable",
+            nextAttemptAt: Date(timeIntervalSince1970: 1_800)
+        )
+
+        try repository.enqueue(entityType: "page", entityID: "page-welcome", changeType: "update")
+
+        let expectedChange = SyncChange(entityType: "page", entityID: "page-welcome", changeType: "update")
+        XCTAssertEqual(try repository.pendingChanges(), [expectedChange])
+        XCTAssertEqual(
+            try repository.retryState(change: expectedChange),
+            SyncRetryState(attemptCount: 0, lastError: nil, nextAttemptAt: nil)
+        )
+    }
+
+    func testPendingChangesCoalescesExistingDuplicateRows() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        try database.execute("DROP INDEX IF EXISTS idx_sync_changes_entity_change")
+        try insertSyncChange(
+            database: database,
+            id: "sync-old",
+            entityType: "page",
+            entityID: "page-welcome",
+            changeType: "update",
+            createdAt: "2026-05-20T01:40:00Z"
+        )
+        try insertSyncChange(
+            database: database,
+            id: "sync-new",
+            entityType: "page",
+            entityID: "page-welcome",
+            changeType: "update",
+            createdAt: "2026-05-20T01:41:00Z"
+        )
+
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges(),
+            [SyncChange(entityType: "page", entityID: "page-welcome", changeType: "update")]
+        )
+    }
+
     func testServerChangeTokenRoundTripsByScope() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -109,6 +160,33 @@ final class SyncRepositoryTests: XCTestCase {
             try repository.serverChangeTokenData(scope: "privateDatabase"),
             tokenData
         )
+    }
+
+    func testRuntimeDiagnosticsPersistRecentEventsNewestFirst() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = RuntimeDiagnosticRepository(database: database)
+
+        try repository.record(
+            eventName: "remote_notification_registration_succeeded",
+            payloadJSON: #"{"token_length":32}"#,
+            createdAt: Date(timeIntervalSince1970: 100)
+        )
+        try repository.record(
+            eventName: "cloudkit_sync_diagnostic_completed",
+            payloadJSON: #"{"pending_change_count":0}"#,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let events = try repository.recentEvents(limit: 10)
+
+        XCTAssertEqual(events.map(\.eventName), [
+            "cloudkit_sync_diagnostic_completed",
+            "remote_notification_registration_succeeded"
+        ])
+        XCTAssertEqual(events.first?.payloadJSON, #"{"pending_change_count":0}"#)
+        XCTAssertTrue(events.allSatisfy { $0.id.hasPrefix("runtime-diagnostic-") })
     }
 
     private func migratedDatabase() throws -> SQLiteDatabase {
@@ -133,5 +211,36 @@ final class SyncRepositoryTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory
+    }
+
+    private func insertSyncChange(
+        database: SQLiteDatabase,
+        id: String,
+        entityType: String,
+        entityID: String,
+        changeType: String,
+        createdAt: String
+    ) throws {
+        try database.execute(
+            """
+            INSERT INTO sync_changes (
+                id,
+                entity_type,
+                entity_id,
+                change_type,
+                attempt_count,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(id),
+                .text(entityType),
+                .text(entityID),
+                .text(changeType),
+                .integer(0),
+                .text(createdAt)
+            ]
+        )
     }
 }

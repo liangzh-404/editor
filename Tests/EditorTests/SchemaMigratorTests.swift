@@ -32,8 +32,30 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(tableNames.contains("sync_changes"))
         XCTAssertTrue(tableNames.contains("sync_records"))
         XCTAssertTrue(tableNames.contains("sync_server_change_tokens"))
+        XCTAssertTrue(tableNames.contains("runtime_diagnostics"))
         XCTAssertTrue(tableNames.contains("conflict_versions"))
         XCTAssertTrue(tableNames.contains("search_index"))
+    }
+
+    func testRuntimeDiagnosticsTableCapturesObservableSyncEvents() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let columns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('runtime_diagnostics')"))
+
+        XCTAssertTrue(columns.contains("id"))
+        XCTAssertTrue(columns.contains("event_name"))
+        XCTAssertTrue(columns.contains("payload_json"))
+        XCTAssertTrue(columns.contains("created_at"))
+    }
+
+    func testDatabaseConfiguresBusyTimeoutForStartupDiagnostics() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        XCTAssertEqual(try database.queryInt("PRAGMA busy_timeout"), 1_000)
     }
 
     func testSyncChangesTableTracksRetryState() throws {
@@ -47,6 +69,86 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(columns.contains("attempt_count"))
         XCTAssertTrue(columns.contains("last_error"))
         XCTAssertTrue(columns.contains("next_attempt_at"))
+    }
+
+    func testSyncChangesTablePreventsDuplicateEntityChangeRows() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+        try insertSyncChange(
+            database: database,
+            id: "sync-one",
+            entityType: "page",
+            entityID: "page-welcome",
+            changeType: "update",
+            attemptCount: 0,
+            createdAt: "2026-05-20T02:00:00Z"
+        )
+
+        XCTAssertThrowsError(
+            try insertSyncChange(
+                database: database,
+                id: "sync-two",
+                entityType: "page",
+                entityID: "page-welcome",
+                changeType: "update",
+                attemptCount: 0,
+                createdAt: "2026-05-20T02:01:00Z"
+            )
+        )
+    }
+
+    func testMigrationCompactsDuplicateSyncChangesBeforeAddingUniqueIndex() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+        try database.execute("DROP INDEX IF EXISTS idx_sync_changes_entity_change")
+        try insertSyncChange(
+            database: database,
+            id: "sync-old",
+            entityType: "page",
+            entityID: "page-welcome",
+            changeType: "update",
+            attemptCount: 2,
+            createdAt: "2026-05-20T02:00:00Z"
+        )
+        try insertSyncChange(
+            database: database,
+            id: "sync-new",
+            entityType: "page",
+            entityID: "page-welcome",
+            changeType: "update",
+            attemptCount: 0,
+            createdAt: "2026-05-20T02:01:00Z"
+        )
+
+        try SchemaMigrator.migrate(database: database)
+
+        let rows = try database.query(
+            """
+            SELECT id, attempt_count
+            FROM sync_changes
+            WHERE entity_type = 'page'
+              AND entity_id = 'page-welcome'
+              AND change_type = 'update'
+            """
+        )
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?["id"], "sync-new")
+        XCTAssertEqual(rows.first?["attempt_count"], "0")
+        XCTAssertThrowsError(
+            try insertSyncChange(
+                database: database,
+                id: "sync-later",
+                entityType: "page",
+                entityID: "page-welcome",
+                changeType: "update",
+                attemptCount: 0,
+                createdAt: "2026-05-20T02:02:00Z"
+            )
+        )
     }
 
     func testPagesCanBelongToNotebooks() throws {
@@ -169,6 +271,38 @@ final class SchemaMigratorTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory.appendingPathComponent("editor.sqlite").path
+    }
+
+    private func insertSyncChange(
+        database: SQLiteDatabase,
+        id: String,
+        entityType: String,
+        entityID: String,
+        changeType: String,
+        attemptCount: Int,
+        createdAt: String
+    ) throws {
+        try database.execute(
+            """
+            INSERT INTO sync_changes (
+                id,
+                entity_type,
+                entity_id,
+                change_type,
+                attempt_count,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(id),
+                .text(entityType),
+                .text(entityID),
+                .text(changeType),
+                .integer(attemptCount),
+                .text(createdAt)
+            ]
+        )
     }
 }
 

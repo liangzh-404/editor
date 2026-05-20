@@ -220,15 +220,22 @@ final class PageRepository {
     func updatePageTitle(pageID: String, title: String) throws {
         let rows = try database.query(
             """
-            SELECT id
+            SELECT id,
+                   title
             FROM pages
             WHERE id = ? AND is_archived = 0
             LIMIT 1
             """,
             bindings: [.text(pageID)]
         )
-        guard rows.first != nil else {
+        guard let row = rows.first else {
             throw PageRepositoryError.pageNotFound
+        }
+        if row["title"] == title {
+            EditorLog.store.debug(
+                "page_title_update_skipped_noop page_id=\(pageID, privacy: .public)"
+            )
+            return
         }
 
         let now = Self.timestamp()
@@ -813,6 +820,29 @@ final class PageRepository {
             blockReferenceTargetBlockID: referenceTargets.blockID,
             tableRows: explicitTableRows
         )
+
+        let currentRows = try database.query(
+            """
+            SELECT type,
+                   payload_json,
+                   text_plain
+            FROM blocks
+            WHERE id = ? AND is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        )
+        guard let currentRow = currentRows.first else {
+            throw PageRepositoryError.blockNotFound
+        }
+        if currentRow["type"] == type.rawValue,
+           currentRow["payload_json"] == payloadJSON,
+           currentRow["text_plain"] == text {
+            EditorLog.store.debug(
+                "block_update_skipped_noop block_id=\(blockID, privacy: .public) type=\(type.rawValue, privacy: .public)"
+            )
+            return
+        }
 
         try database.execute(
             """

@@ -49,6 +49,7 @@ final class SQLiteDatabase {
             throw SQLiteDatabaseError.openFailed(message)
         }
 
+        sqlite3_busy_timeout(handle, 1_000)
         return SQLiteDatabase(handle: handle)
     }
 

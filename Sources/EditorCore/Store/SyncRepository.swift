@@ -19,6 +19,13 @@ struct SyncRetryState: Equatable, Sendable {
     let nextAttemptAt: Date?
 }
 
+struct RuntimeDiagnosticEvent: Equatable, Sendable {
+    let id: String
+    let eventName: String
+    let payloadJSON: String
+    let createdAt: Date
+}
+
 final class SyncRepository {
     private let database: SQLiteDatabase
     private let dateFormatter = ISO8601DateFormatter()
@@ -28,6 +35,20 @@ final class SyncRepository {
     }
 
     func enqueue(entityType: String, entityID: String, changeType: String) throws {
+        try database.execute(
+            """
+            DELETE FROM sync_changes
+            WHERE entity_type = ?
+              AND entity_id = ?
+              AND change_type = ?
+            """,
+            bindings: [
+                .text(entityType),
+                .text(entityID),
+                .text(changeType)
+            ]
+        )
+
         try database.execute(
             """
             INSERT INTO sync_changes (
@@ -60,7 +81,8 @@ final class SyncRepository {
             """
             SELECT entity_type, entity_id, change_type
             FROM sync_changes
-            ORDER BY created_at ASC
+            GROUP BY entity_type, entity_id, change_type
+            ORDER BY MIN(created_at) ASC, MIN(rowid) ASC
             """
         ).map { row in
             SyncChange(
@@ -239,5 +261,67 @@ final class SyncRepository {
         }
 
         return Data(base64Encoded: tokenBase64)
+    }
+
+    func clearServerChangeTokenData(scope: String) throws {
+        try database.execute(
+            """
+            DELETE FROM sync_server_change_tokens
+            WHERE scope = ?
+            """,
+            bindings: [.text(scope)]
+        )
+    }
+}
+
+final class RuntimeDiagnosticRepository {
+    private let database: SQLiteDatabase
+    private let dateFormatter = ISO8601DateFormatter()
+
+    init(database: SQLiteDatabase) {
+        self.database = database
+    }
+
+    func record(
+        eventName: String,
+        payloadJSON: String,
+        createdAt: Date = Date()
+    ) throws {
+        try database.execute(
+            """
+            INSERT INTO runtime_diagnostics (
+                id,
+                event_name,
+                payload_json,
+                created_at
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            bindings: [
+                .text("runtime-diagnostic-\(UUID().uuidString.lowercased())"),
+                .text(eventName),
+                .text(payloadJSON),
+                .text(dateFormatter.string(from: createdAt))
+            ]
+        )
+    }
+
+    func recentEvents(limit: Int) throws -> [RuntimeDiagnosticEvent] {
+        try database.query(
+            """
+            SELECT id, event_name, payload_json, created_at
+            FROM runtime_diagnostics
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?
+            """,
+            bindings: [.integer(limit)]
+        ).map { row in
+            RuntimeDiagnosticEvent(
+                id: row["id"] ?? "",
+                eventName: row["event_name"] ?? "",
+                payloadJSON: row["payload_json"] ?? "",
+                createdAt: (row["created_at"] ?? nil).flatMap(dateFormatter.date(from:)) ?? Date(timeIntervalSince1970: 0)
+            )
+        }
     }
 }

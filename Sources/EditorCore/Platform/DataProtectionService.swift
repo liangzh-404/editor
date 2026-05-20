@@ -151,7 +151,7 @@ protocol CloudKitAccountStatusProviding {
 final class LiveCloudKitAccountStatusProvider: CloudKitAccountStatusProviding {
     private let container: CKContainer
 
-    init(container: CKContainer = .default()) {
+    init(container: CKContainer = CKContainer(identifier: CloudKitSyncConfiguration.containerIdentifier)) {
         self.container = container
     }
 

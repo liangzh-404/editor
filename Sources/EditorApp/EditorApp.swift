@@ -44,6 +44,7 @@ private struct EditorEditingCommands: Commands {
     @FocusedValue(\.showAllDocumentsAction) private var showAllDocumentsAction
     @FocusedValue(\.showFavoritesAction) private var showFavoritesAction
     @FocusedValue(\.quickOpenAction) private var quickOpenAction
+    @FocusedValue(\.syncNowAction) private var syncNowAction
 
     @AppStorage(EditorShortcutCommand.newDocument.userDefaultsKey) private var newDocumentShortcut = EditorShortcutCommand.newDocument.defaultShortcutRawValue
     @AppStorage(EditorShortcutCommand.openToday.userDefaultsKey) private var openTodayShortcut = EditorShortcutCommand.openToday.defaultShortcutRawValue
@@ -102,6 +103,13 @@ private struct EditorEditingCommands: Commands {
             }
             .editorKeyboardShortcut(showFavoritesShortcut, fallback: .showFavorites)
             .disabled(showFavoritesAction == nil)
+        }
+
+        CommandMenu("同步") {
+            Button("立即同步") {
+                syncNowAction?()
+            }
+            .disabled(syncNowAction == nil)
         }
 
         CommandGroup(after: .textEditing) {
@@ -301,12 +309,56 @@ final class EditorMacAppDelegate: NSObject, NSApplicationDelegate {
 final class EditorIOSAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        RemoteNotificationRegistrationPolicy.registerIfNeeded(
+            hasCloudKitContainers: CloudKitEntitlementInspector.currentProcessHasCloudKitContainers(),
+            registrar: application
+        )
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+        fetchCompletionHandler completionHandler: @escaping @Sendable (UIBackgroundFetchResult) -> Void
     ) {
-        completionHandler(AppEnvironment.handleRemoteNotificationSync().uiBackgroundFetchResult)
+        DispatchQueue.global(qos: .utility).async {
+            let result = AppEnvironment.handleRemoteNotificationSync()
+            DispatchQueue.main.async {
+                completionHandler(result.uiBackgroundFetchResult)
+            }
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        EditorLog.sync.debug(
+            "remote_notification_registration_succeeded token_length=\(deviceToken.count, privacy: .public)"
+        )
+        AppEnvironment.recordRuntimeDiagnostic(
+            eventName: "remote_notification_registration_succeeded",
+            payload: ["token_length": deviceToken.count]
+        )
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        EditorLog.sync.error(
+            "remote_notification_registration_failed error=\(String(describing: error), privacy: .public)"
+        )
+        AppEnvironment.recordRuntimeDiagnostic(
+            eventName: "remote_notification_registration_failed",
+            payload: ["error": String(describing: error)]
+        )
     }
 }
+
+extension UIApplication: RemoteNotificationRegistering {}
 
 private extension RemoteNotificationSyncResult {
     var uiBackgroundFetchResult: UIBackgroundFetchResult {

@@ -26,6 +26,39 @@ enum AttachmentPreviewGenerationStatus: Equatable, Sendable {
     case failed(String)
 }
 
+struct WorkspaceForegroundSyncSummary: Equatable, Sendable {
+    let uploadSummary: SyncUploadSummary
+    let fetchSummary: SyncFetchSummary
+}
+
+enum WorkspaceForegroundSyncResult: Sendable {
+    case success(WorkspaceForegroundSyncSummary)
+    case failure(String)
+}
+
+protocol WorkspaceSyncScheduling {
+    func scheduleForegroundSync(
+        operation: @escaping @Sendable () -> WorkspaceForegroundSyncResult,
+        completion: @escaping @MainActor @Sendable (WorkspaceForegroundSyncResult) -> Void
+    )
+}
+
+final class BackgroundWorkspaceSyncScheduler: WorkspaceSyncScheduling {
+    private let queue = DispatchQueue(label: "editor.foreground-sync", qos: .utility)
+
+    func scheduleForegroundSync(
+        operation: @escaping @Sendable () -> WorkspaceForegroundSyncResult,
+        completion: @escaping @MainActor @Sendable (WorkspaceForegroundSyncResult) -> Void
+    ) {
+        queue.async {
+            let result = operation()
+            Task { @MainActor in
+                completion(result)
+            }
+        }
+    }
+}
+
 private struct PageNavigationHistoryEntry: Equatable {
     let pageID: String
     let collection: WorkspaceCollection
@@ -80,6 +113,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let backlinkRepository: BacklinkRepository?
     private let conflictRepository: ConflictRepository?
     private let syncEngine: SyncEngine?
+    private let syncScheduler: WorkspaceSyncScheduling
     private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
     private let currentDateProvider: () -> Date
     private let diaryCalendar: Calendar
@@ -92,6 +126,9 @@ final class WorkspaceViewModel: ObservableObject {
     private var pageArchiveUndoStack: [PageArchiveUndoSnapshot] = []
     private var pageNavigationBackStack: [PageNavigationHistoryEntry] = []
     private var pageNavigationForwardStack: [PageNavigationHistoryEntry] = []
+    private var isForegroundSyncRunning = false
+    private var nextForegroundSyncAttemptAt: Date?
+    private static let foregroundSyncFailureCooldown: TimeInterval = 300
 
     var canNavigateBack: Bool {
         !pageNavigationBackStack.isEmpty || selectedPageParentLink != nil
@@ -216,6 +253,7 @@ final class WorkspaceViewModel: ObservableObject {
         backlinkRepository: BacklinkRepository? = nil,
         conflictRepository: ConflictRepository? = nil,
         syncEngine: SyncEngine? = nil,
+        syncScheduler: WorkspaceSyncScheduling = BackgroundWorkspaceSyncScheduler(),
         cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil,
         currentDateProvider: @escaping () -> Date = Date.init,
         diaryCalendar: Calendar = .current
@@ -229,6 +267,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.backlinkRepository = backlinkRepository
         self.conflictRepository = conflictRepository
         self.syncEngine = syncEngine
+        self.syncScheduler = syncScheduler
         self.cloudKitAccountMetadataService = cloudKitAccountMetadataService
         self.currentDateProvider = currentDateProvider
         self.diaryCalendar = diaryCalendar
@@ -256,6 +295,7 @@ final class WorkspaceViewModel: ObservableObject {
         backlinkRepository = nil
         conflictRepository = nil
         syncEngine = nil
+        syncScheduler = BackgroundWorkspaceSyncScheduler()
         cloudKitAccountMetadataService = nil
         currentDateProvider = Date.init
         diaryCalendar = .current
@@ -332,25 +372,22 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
-        ensureRemoteChangeSubscriptionForUI()
-
-        do {
-            let summary = try syncEngine.uploadPendingChanges()
-            let fetchSummary = try syncEngine.fetchRemoteChanges()
-            if summary.failedCount > 0 {
-                syncStatusText = "已安排同步重试"
-            } else if fetchSummary.appliedCount > 0 {
-                syncStatusText = "已同步 \(fetchSummary.appliedCount) 条远端变更"
-            } else {
-                syncStatusText = "已同步 \(summary.uploadedCount) 条变更"
-            }
-            try load()
-        } catch {
-            syncStatusText = "同步失败"
-            EditorLog.sync.error(
-                "sync_now_failed error=\(String(describing: error), privacy: .public)"
-            )
+        guard !isForegroundSyncRunning else {
+            EditorLog.sync.debug("foreground_sync_skipped reason=already_running")
+            return
         }
+
+        isForegroundSyncRunning = true
+        syncStatusText = "同步中..."
+        syncScheduler.scheduleForegroundSync(
+            operation: {
+                Self.runForegroundSync(syncEngine: syncEngine)
+            },
+            completion: { [weak self] result in
+                self?.isForegroundSyncRunning = false
+                self?.completeForegroundSync(result)
+            }
+        )
     }
 
     func syncAfterActivation() {
@@ -361,7 +398,31 @@ final class WorkspaceViewModel: ObservableObject {
         guard syncEngine != nil else {
             return
         }
-        syncNow()
+        if let nextForegroundSyncAttemptAt,
+           nextForegroundSyncAttemptAt > currentDateProvider() {
+            syncStatusText = "同步暂缓，稍后自动重试"
+            EditorLog.sync.debug(
+                "foreground_sync_skipped reason=failure_cooldown next_attempt_at=\(nextForegroundSyncAttemptAt.timeIntervalSince1970, privacy: .public)"
+            )
+            return
+        }
+        guard !isForegroundSyncRunning else {
+            EditorLog.sync.debug("foreground_sync_skipped reason=already_running")
+            return
+        }
+
+        isForegroundSyncRunning = true
+        syncStatusText = "同步中..."
+        let syncEngine = syncEngine!
+        syncScheduler.scheduleForegroundSync(
+            operation: {
+                Self.runForegroundSync(syncEngine: syncEngine)
+            },
+            completion: { [weak self] result in
+                self?.isForegroundSyncRunning = false
+                self?.completeForegroundSync(result)
+            }
+        )
     }
 
     func selectPage(id: String) {
@@ -2964,14 +3025,64 @@ final class WorkspaceViewModel: ObservableObject {
         )
     }
 
-    private func ensureRemoteChangeSubscriptionForUI() {
+    nonisolated private static func runForegroundSync(syncEngine: SyncEngine) -> WorkspaceForegroundSyncResult {
         do {
-            try syncEngine?.ensureRemoteChangeSubscription()
+            do {
+                try syncEngine.ensureRemoteChangeSubscription()
+            } catch {
+                EditorLog.sync.error(
+                    "cloudkit_subscription_ensure_failed error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
+                )
+            }
+
+            let uploadSummary = try syncEngine.uploadPendingChanges()
+            let fetchSummary = try syncEngine.fetchRemoteChanges()
+            return .success(
+                WorkspaceForegroundSyncSummary(
+                    uploadSummary: uploadSummary,
+                    fetchSummary: fetchSummary
+                )
+            )
         } catch {
+            return .failure(CloudKitErrorDiagnostic.describe(error))
+        }
+    }
+
+    private func completeForegroundSync(_ result: WorkspaceForegroundSyncResult) {
+        switch result {
+        case .success(let summary):
+            if summary.uploadSummary.failedCount > 0 {
+                syncStatusText = "已安排同步重试"
+                scheduleForegroundSyncFailureCooldown()
+            } else if summary.fetchSummary.appliedCount > 0 {
+                syncStatusText = "已同步 \(summary.fetchSummary.appliedCount) 条远端变更"
+                nextForegroundSyncAttemptAt = nil
+            } else {
+                syncStatusText = "已同步 \(summary.uploadSummary.uploadedCount) 条变更"
+                nextForegroundSyncAttemptAt = nil
+            }
+
+            do {
+                try load()
+            } catch {
+                syncStatusText = "同步失败"
+                scheduleForegroundSyncFailureCooldown()
+                EditorLog.sync.error(
+                    "sync_now_failed error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
+                )
+            }
+        case .failure(let errorDescription):
+            syncStatusText = "同步失败"
+            scheduleForegroundSyncFailureCooldown()
             EditorLog.sync.error(
-                "cloudkit_subscription_ensure_failed error=\(String(describing: error), privacy: .public)"
+                "sync_now_failed error=\(errorDescription, privacy: .public)"
             )
         }
+    }
+
+    private func scheduleForegroundSyncFailureCooldown() {
+        nextForegroundSyncAttemptAt = currentDateProvider()
+            .addingTimeInterval(Self.foregroundSyncFailureCooldown)
     }
 
     private func refreshDerivedState(

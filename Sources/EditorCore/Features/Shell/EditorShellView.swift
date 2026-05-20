@@ -214,6 +214,10 @@ struct EditorQuickOpenActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct EditorSyncNowActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var insertMarkdownLinkAction: (() -> Void)? {
         get { self[EditorInsertMarkdownLinkActionKey.self] }
@@ -264,12 +268,23 @@ extension FocusedValues {
         get { self[EditorQuickOpenActionKey.self] }
         set { self[EditorQuickOpenActionKey.self] = newValue }
     }
+
+    var syncNowAction: (() -> Void)? {
+        get { self[EditorSyncNowActionKey.self] }
+        set { self[EditorSyncNowActionKey.self] = newValue }
+    }
+}
+
+struct ForegroundSyncActivationPolicy {
+    mutating func shouldSync(for phase: ScenePhase) -> Bool {
+        phase == .active
+    }
 }
 
 struct EditorShellView: View {
     @StateObject private var viewModel: WorkspaceViewModel
     @Environment(\.scenePhase) private var scenePhase
-    @State private var didSkipInitialActivationSync = false
+    @State private var foregroundSyncActivationPolicy = ForegroundSyncActivationPolicy()
 
     init(viewModel: WorkspaceViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -281,13 +296,13 @@ struct EditorShellView: View {
             .background(EditorDesignTokens.Colors.appBackground.color.ignoresSafeArea())
             .containerBackground(EditorDesignTokens.Colors.appBackground.color, for: .window)
 #endif
+            .onAppear {
+                if foregroundSyncActivationPolicy.shouldSync(for: scenePhase) {
+                    viewModel.syncAfterActivation()
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active {
-                    guard didSkipInitialActivationSync else {
-                        didSkipInitialActivationSync = true
-                        EditorLog.sync.debug("foreground_sync_skipped reason=initial_activation")
-                        return
-                    }
+                if foregroundSyncActivationPolicy.shouldSync(for: phase) {
                     viewModel.syncAfterActivation()
                 }
             }
@@ -566,6 +581,9 @@ private struct ThreeColumnEditorShell: View {
         })
         .focusedValue(\.quickOpenAction, {
             viewModel.selectCollection(.search)
+        })
+        .focusedValue(\.syncNowAction, {
+            viewModel.syncNow()
         })
     }
 
@@ -961,6 +979,9 @@ private struct CompactEditorShell: View {
                 pushPageIfNeeded(pageID)
             }
         }
+        .focusedValue(\.syncNowAction, {
+            viewModel.syncNow()
+        })
     }
 
     private func pushInitialPageIfNeeded() {
@@ -1029,6 +1050,18 @@ private struct CompactHomeView: View {
                 .foregroundStyle(Color.white.opacity(0.92))
 
             Spacer()
+
+            Button {
+                viewModel.syncNow()
+            } label: {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.86))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("立即同步")
+            .accessibilityValue(viewModel.syncStatusText)
+            .accessibilityIdentifier("editor.compact.sync-now")
 
             Button {
                 _ = viewModel.createNewDocumentForCompactUI()

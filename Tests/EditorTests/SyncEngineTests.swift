@@ -73,6 +73,176 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try syncRepository.syncRecords().map(\.entityID), ["block-success"])
     }
 
+    func testLocalBlockEditRemainsReadableAndPendingWhenCloudKitUploadFails() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Offline edit survives")
+        let syncRepository = SyncRepository(database: database)
+        let adapter = FailingOnceCloudKitSyncAdapter(failingEntityID: blockID)
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: adapter,
+            retryPolicy: SyncRetryPolicy(baseDelay: 60, maximumDelay: 300),
+            now: { Date(timeIntervalSince1970: 1_000) }
+        ).uploadPendingChanges()
+
+        let reloadedBlock = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().blocks.first { $0.id == blockID }
+        )
+        XCTAssertEqual(reloadedBlock.textPlain, "Offline edit survives")
+        XCTAssertEqual(result.uploadedCount, 0)
+        XCTAssertEqual(result.failedCount, 1)
+        XCTAssertEqual(try syncRepository.pendingChanges(), [
+            SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+        ])
+        XCTAssertEqual(try syncRepository.syncRecords(), [])
+        XCTAssertEqual(
+            try syncRepository.retryState(change: SyncChange(entityType: "block", entityID: blockID, changeType: "update")),
+            SyncRetryState(
+                attemptCount: 1,
+                lastError: "temporaryUnavailable",
+                nextAttemptAt: Date(timeIntervalSince1970: 1_060)
+            )
+        )
+    }
+
+    func testCloudKitErrorDiagnosticIncludesNSErrorUserInfo() {
+        let error = NSError(
+            domain: CKErrorDomain,
+            code: CKError.serverRejectedRequest.rawValue,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Server Rejected Request",
+                "CKErrorServerDescription": "Field syncGeneration is not defined",
+                "RequestUUID": "F754BFF0",
+                "ContainerID": CloudKitSyncConfiguration.containerIdentifier
+            ]
+        )
+
+        let description = CloudKitErrorDiagnostic.describe(error)
+
+        XCTAssertTrue(description.contains("domain=CKErrorDomain"))
+        XCTAssertTrue(description.contains("code=15"))
+        XCTAssertTrue(description.contains("CKErrorServerDescription=Field syncGeneration is not defined"))
+        XCTAssertTrue(description.contains("RequestUUID=F754BFF0"))
+        XCTAssertTrue(description.contains("ContainerID=iCloud.com.liangzhang.editor.sync"))
+    }
+
+    func testCloudKitErrorDiagnosticPrioritizesUnderlyingErrorOverHTTPHeaders() {
+        let underlyingError = NSError(
+            domain: "CKInternalErrorDomain",
+            code: 2000,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Field payloadJSON is not queryable"
+            ]
+        )
+        let error = NSError(
+            domain: CKErrorDomain,
+            code: CKError.serverRejectedRequest.rawValue,
+            userInfo: [
+                "CKDHTTPHeaders": [
+                    "x-apple-request-uuid": "55EBCECA",
+                    "Date": "Tue, 19 May 2026 16:41:09 GMT",
+                    "Via": "very-long-header-value"
+                ],
+                "CKHTTPStatus": 500,
+                "ContainerID": CloudKitSyncConfiguration.containerIdentifier,
+                "NSDebugDescription": "CKInternalErrorDomain: 2000",
+                NSUnderlyingErrorKey: underlyingError
+            ]
+        )
+
+        let description = CloudKitErrorDiagnostic.describe(error)
+
+        XCTAssertTrue(description.contains("CKHTTPStatus=500"))
+        XCTAssertTrue(description.contains("ContainerID=iCloud.com.liangzhang.editor.sync"))
+        XCTAssertTrue(description.contains("NSDebugDescription=CKInternalErrorDomain: 2000"))
+        XCTAssertTrue(description.contains("NSUnderlyingError=[domain=CKInternalErrorDomain code=2000"))
+        XCTAssertTrue(description.contains("x-apple-request-uuid=55EBCECA"))
+        XCTAssertFalse(description.contains("very-long-header-value"))
+    }
+
+    func testCloudKitRuntimeProbeRunsOnlyWhenRequested() {
+        XCTAssertFalse(CloudKitRuntimeProbe.isEnabled(environment: [:]))
+        XCTAssertFalse(CloudKitRuntimeProbe.isEnabled(environment: ["EDITOR_CLOUDKIT_PROBE": "0"]))
+        XCTAssertTrue(CloudKitRuntimeProbe.isEnabled(environment: ["EDITOR_CLOUDKIT_PROBE": "1"]))
+    }
+
+    func testCloudKitRuntimeProbeRunsAccountSaveFetchAndDeleteMinimalRecord() throws {
+        let recorder = RuntimeProbeCallRecorder()
+        let accountStatusProvider = RecordingCloudKitAccountStatusProvider(recorder: recorder)
+        let zoneEnsurer = CapturingCloudKitRecordZoneEnsurer(recorder: recorder)
+        let databaseInspector = CapturingCloudKitDatabaseInspector(recorder: recorder)
+        let saver = CapturingCloudKitRecordSaver(recorder: recorder)
+        let reader = CapturingCloudKitRecordReader(recorder: recorder)
+        let deleter = CapturingCloudKitRecordDeleter(recorder: recorder)
+
+        let result = CloudKitRuntimeProbe.run(
+            recordName: "runtime-probe-test",
+            accountStatusProvider: accountStatusProvider,
+            zoneEnsurer: zoneEnsurer,
+            databaseInspector: databaseInspector,
+            saver: saver,
+            reader: reader,
+            deleter: deleter
+        )
+
+        XCTAssertTrue(result.isSuccess)
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        XCTAssertEqual(record.recordType, "EditorRuntimeProbeRecord")
+        XCTAssertEqual(record.recordID.recordName, "runtime-probe-test")
+        XCTAssertEqual(record.recordID.zoneID.zoneName, CloudKitSyncConfiguration.recordZoneName)
+        XCTAssertEqual(record["probeVersion"] as? String, "1")
+        XCTAssertNotNil(record["createdAt"] as? Date)
+        XCTAssertEqual(reader.fetchedRecordIDs.map(\.recordName), ["runtime-probe-test"])
+        XCTAssertEqual(deleter.deletedRecordIDs.map(\.recordName), ["runtime-probe-test"])
+        XCTAssertEqual(recorder.calls, [
+            "accountStatus",
+            "ensureRecordZoneExists",
+            "fetchAllRecordZones",
+            "fetchAllSubscriptions",
+            "save:runtime-probe-test",
+            "fetch:runtime-probe-test",
+            "delete:runtime-probe-test"
+        ])
+    }
+
+    func testCloudKitRuntimeProbeReturnsDiagnosticAndSkipsCleanupWhenSaveFails() {
+        let accountStatusProvider = RecordingCloudKitAccountStatusProvider()
+        let zoneEnsurer = CapturingCloudKitRecordZoneEnsurer()
+        let databaseInspector = CapturingCloudKitDatabaseInspector()
+        let saver = FailingCloudKitRecordSaver(error: NSError(
+            domain: CKErrorDomain,
+            code: CKError.serverRejectedRequest.rawValue,
+            userInfo: [
+                "CKHTTPStatus": 500,
+                "ContainerID": CloudKitSyncConfiguration.containerIdentifier
+            ]
+        ))
+        let reader = CapturingCloudKitRecordReader()
+        let deleter = CapturingCloudKitRecordDeleter()
+
+        let result = CloudKitRuntimeProbe.run(
+            recordName: "runtime-probe-failing",
+            accountStatusProvider: accountStatusProvider,
+            zoneEnsurer: zoneEnsurer,
+            databaseInspector: databaseInspector,
+            saver: saver,
+            reader: reader,
+            deleter: deleter
+        )
+
+        XCTAssertFalse(result.isSuccess)
+        XCTAssertEqual(result.recordName, "runtime-probe-failing")
+        XCTAssertTrue(result.errorDescription?.contains("CKHTTPStatus=500") == true)
+        XCTAssertEqual(reader.fetchedRecordIDs, [])
+        XCTAssertEqual(deleter.deletedRecordIDs, [])
+    }
+
     func testUploadSkipsChangesUntilRetryDate() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -97,6 +267,40 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(result.failedCount, 0)
         XCTAssertEqual(adapter.uploadedChanges, [])
         XCTAssertEqual(try syncRepository.pendingChanges(), [change])
+    }
+
+    func testRetryAfterBackoffUploadsAndClearsQueuedChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        try syncRepository.enqueue(entityType: "block", entityID: "block-recovered", changeType: "update")
+        let change = try XCTUnwrap(syncRepository.pendingChanges().first)
+        try syncRepository.recordFailure(
+            change: change,
+            errorDescription: "temporaryUnavailable",
+            nextAttemptAt: Date(timeIntervalSince1970: 1_500)
+        )
+        let adapter = RecordingCloudKitSyncAdapter()
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: adapter,
+            now: { Date(timeIntervalSince1970: 1_501) }
+        ).uploadPendingChanges()
+
+        XCTAssertEqual(result.uploadedCount, 1)
+        XCTAssertEqual(result.failedCount, 0)
+        XCTAssertEqual(adapter.uploadedChanges, [change])
+        XCTAssertEqual(try syncRepository.pendingChanges(), [])
+        XCTAssertEqual(try syncRepository.syncRecords(), [
+            SyncRecord(
+                entityType: "block",
+                entityID: "block-recovered",
+                recordName: "block-block-recovered",
+                changeTag: "tag-block-recovered"
+            )
+        ])
     }
 
     func testFetchRemoteChangesAppliesRemoteBlockUpdates() throws {
@@ -159,14 +363,72 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
-    func testEnsureRemoteChangeSubscriptionCreatesSilentDatabaseSubscription() throws {
+    func testFetchRemoteChangesResetsExpiredServerChangeTokenAndRetriesFromScratch() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        let previousToken = Data("previous-token".utf8)
+        let nextToken = Data("next-token".utf8)
+        try syncRepository.saveServerChangeTokenData(previousToken, scope: "privateDatabase")
+        let fetcher = ExpiringThenSucceedingRemoteChangeFetcher(
+            serverChangeTokenDataAfterRetry: nextToken
+        )
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+
+        XCTAssertEqual(result.appliedCount, 0)
+        XCTAssertEqual(fetcher.receivedServerChangeTokenData, [previousToken, nil])
+        XCTAssertEqual(
+            try syncRepository.serverChangeTokenData(scope: "privateDatabase"),
+            nextToken
+        )
+    }
+
+    func testFetchRemoteChangesDoesNotResetTokenForNonExpiryFetchFailure() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        let previousToken = Data("previous-token".utf8)
+        try syncRepository.saveServerChangeTokenData(previousToken, scope: "privateDatabase")
+        let fetcher = AlwaysFailingRemoteChangeFetcher(error: SyncEngineTestError.temporaryUnavailable)
+
+        XCTAssertThrowsError(
+            try SyncEngine(
+                syncRepository: syncRepository,
+                adapter: RecordingCloudKitSyncAdapter(),
+                remoteChangeFetcher: fetcher,
+                mergeEngine: SyncMergeEngine(database: database)
+            ).fetchRemoteChanges()
+        )
+
+        XCTAssertEqual(fetcher.receivedServerChangeTokenData, [previousToken])
+        XCTAssertEqual(
+            try syncRepository.serverChangeTokenData(scope: "privateDatabase"),
+            previousToken
+        )
+    }
+
+    func testEnsureRemoteChangeSubscriptionCreatesSilentRecordZoneSubscription() throws {
         let saver = CapturingCloudKitSubscriptionSaver()
-        let ensurer = CloudKitPrivateDatabaseSubscriptionEnsurer(subscriptionSaver: saver)
+        let zoneEnsurer = CapturingCloudKitRecordZoneEnsurer()
+        let ensurer = CloudKitPrivateDatabaseSubscriptionEnsurer(
+            subscriptionSaver: saver,
+            zoneEnsurer: zoneEnsurer
+        )
 
         try ensurer.ensureRemoteChangeSubscription()
 
-        let subscription = try XCTUnwrap(saver.savedSubscriptions.first as? CKDatabaseSubscription)
+        XCTAssertEqual(zoneEnsurer.ensureCallCount, 1)
+        let subscription = try XCTUnwrap(saver.savedSubscriptions.first as? CKRecordZoneSubscription)
         XCTAssertEqual(subscription.subscriptionID, "editor-private-database-changes")
+        XCTAssertEqual(subscription.zoneID.zoneName, CloudKitSyncConfiguration.recordZoneName)
         XCTAssertEqual(subscription.notificationInfo?.shouldSendContentAvailable, true)
         XCTAssertNil(subscription.notificationInfo?.alertBody)
     }
@@ -198,6 +460,22 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
     }
 
+    func testRemoteNotificationSyncHandlerReportIncludesUploadAndFetchCounts() {
+        let syncer = RecordingRemoteNotificationSyncer(
+            uploadSummary: SyncUploadSummary(uploadedCount: 1, failedCount: 0),
+            fetchSummary: SyncFetchSummary(appliedCount: 2)
+        )
+
+        let report = RemoteNotificationSyncHandler(syncer: syncer).handleRemoteNotificationReport()
+
+        XCTAssertEqual(report.result, .newData)
+        XCTAssertEqual(report.uploadedCount, 1)
+        XCTAssertEqual(report.failedUploadCount, 0)
+        XCTAssertEqual(report.fetchedCount, 2)
+        XCTAssertNil(report.errorDescription)
+        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
+    }
+
     func testRemoteNotificationSyncHandlerReturnsNoDataWithoutSyncEngine() {
         let result = RemoteNotificationSyncHandler(syncer: nil).handleRemoteNotification()
 
@@ -215,6 +493,61 @@ final class SyncEngineTests: XCTestCase {
 
         XCTAssertEqual(result, .failed)
         XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
+    }
+
+    func testRemoteNotificationSyncHandlerStillFetchesWhenLocalUploadFails() {
+        let syncer = RecordingRemoteNotificationSyncer(
+            uploadSummary: SyncUploadSummary(uploadedCount: 0, failedCount: 1),
+            fetchSummary: SyncFetchSummary(appliedCount: 2)
+        )
+
+        let result = RemoteNotificationSyncHandler(syncer: syncer).handleRemoteNotification()
+
+        XCTAssertEqual(result, .newData)
+        XCTAssertEqual(syncer.calls, [.ensureRemoteChangeSubscription, .uploadPendingChanges, .fetchRemoteChanges])
+    }
+
+    @MainActor
+    func testRemoteNotificationRegistrationPolicyRegistersOnlyWhenCloudKitIsAvailable() {
+        let registrar = RecordingRemoteNotificationRegistrar()
+
+        RemoteNotificationRegistrationPolicy.registerIfNeeded(
+            hasCloudKitContainers: false,
+            registrar: registrar
+        )
+        XCTAssertEqual(registrar.registerCallCount, 0)
+
+        RemoteNotificationRegistrationPolicy.registerIfNeeded(
+            hasCloudKitContainers: true,
+            registrar: registrar
+        )
+        XCTAssertEqual(registrar.registerCallCount, 1)
+    }
+
+    @MainActor
+    func testRemoteNotificationRegistrationPolicySkipsDuringHeadlessSyncDiagnostic() {
+        let registrar = RecordingRemoteNotificationRegistrar()
+
+        RemoteNotificationRegistrationPolicy.registerIfNeeded(
+            hasCloudKitContainers: true,
+            environment: [CloudKitSyncDiagnosticRequest.enabledKey: "1"],
+            registrar: registrar
+        )
+
+        XCTAssertEqual(registrar.registerCallCount, 0)
+    }
+
+    @MainActor
+    func testRemoteNotificationRegistrationPolicySkipsDuringRemoteNotificationSyncDiagnostic() {
+        let registrar = RecordingRemoteNotificationRegistrar()
+
+        RemoteNotificationRegistrationPolicy.registerIfNeeded(
+            hasCloudKitContainers: true,
+            environment: [RemoteNotificationSyncDiagnosticRequest.enabledKey: "1"],
+            registrar: registrar
+        )
+
+        XCTAssertEqual(registrar.registerCallCount, 0)
     }
 
     func testFetchRemoteChangesAppliesRemoteBlockDeletion() throws {
@@ -454,15 +787,14 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(snapshot.notebooks, [
             NotebookSummary(id: "notebook-remote", workspaceID: "workspace-remote", name: "Projects")
         ])
-        XCTAssertEqual(snapshot.pages, [
-            PageSummary(
-                id: "page-remote",
-                workspaceID: "workspace-remote",
-                notebookID: "notebook-remote",
-                title: "Roadmap",
-                isFavorite: true
-            )
-        ])
+        let page = try XCTUnwrap(snapshot.pages.first)
+        XCTAssertEqual(snapshot.pages.count, 1)
+        XCTAssertEqual(page.id, "page-remote")
+        XCTAssertEqual(page.workspaceID, "workspace-remote")
+        XCTAssertEqual(page.notebookID, "notebook-remote")
+        XCTAssertEqual(page.title, "Roadmap")
+        XCTAssertEqual(page.isFavorite, true)
+        XCTAssertNotNil(page.updatedAt)
         XCTAssertEqual(snapshot.favoritePages.map(\.id), ["page-remote"])
         XCTAssertEqual(snapshot.blocks.map(\.textPlain), ["Remote body"])
         XCTAssertEqual(snapshot.attachments.map(\.originalFilename), ["brief.pdf"])
@@ -568,6 +900,47 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.pageChanges.first?.isFavorite, true)
         XCTAssertEqual(changeSet.attachmentChanges.map(\.attachmentID), ["attachment-remote"])
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
+    }
+
+    func testCloudKitPrivateDatabaseAdapterIgnoresRecordsFromPreviousSyncGeneration() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = StaticCloudKitRecordFetcher(recordsByType: [
+            "WorkspaceRecord": [
+                makeRecord(
+                    type: "WorkspaceRecord",
+                    entityType: "workspace",
+                    entityID: "workspace-old",
+                    syncGeneration: nil
+                ) {
+                    $0["name"] = "Old Missing Generation" as CKRecordValue
+                },
+                makeRecord(
+                    type: "WorkspaceRecord",
+                    entityType: "workspace",
+                    entityID: "workspace-previous",
+                    syncGeneration: "editor-cloudkit-previous"
+                ) {
+                    $0["name"] = "Old Explicit Generation" as CKRecordValue
+                },
+                makeRecord(
+                    type: "WorkspaceRecord",
+                    entityType: "workspace",
+                    entityID: "workspace-v1",
+                    syncGeneration: "editor-cloudkit-v1"
+                ) {
+                    $0["name"] = "Old v1 Generation" as CKRecordValue
+                }
+            ]
+        ])
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+
+        XCTAssertEqual(changeSet.workspaceChanges, [])
     }
 
     func testCloudKitPrivateDatabaseAdapterMapsRemoteNotebookParentFromRecord() throws {
@@ -677,16 +1050,16 @@ final class SyncEngineTests: XCTestCase {
             recordsByType: [:],
             deletedRecordIDsByType: [
                 "NotebookRecord": [
-                    CKRecord.ID(recordName: "notebook-notebook-remote")
+                    CKRecord.ID(recordName: "editor-cloudkit-v2.notebook.notebook-remote")
                 ],
                 "PageRecord": [
-                    CKRecord.ID(recordName: "page-page-remote")
+                    CKRecord.ID(recordName: "editor-cloudkit-v2.page.page-remote")
                 ],
                 "AttachmentRecord": [
-                    CKRecord.ID(recordName: "attachment-attachment-remote")
+                    CKRecord.ID(recordName: "editor-cloudkit-v2.attachment.attachment-remote")
                 ],
                 "BlockRecord": [
-                    CKRecord.ID(recordName: "block-block-remote")
+                    CKRecord.ID(recordName: "editor-cloudkit-v2.block.block-remote")
                 ]
             ],
             nextServerChangeTokenData: nextToken
@@ -704,6 +1077,66 @@ final class SyncEngineTests: XCTestCase {
             RemoteDeletedRecord(entityType: "block", entityID: "block-remote")
         ])
         XCTAssertEqual(changeSet.serverChangeTokenData, nextToken)
+    }
+
+    func testCloudKitPrivateDatabaseAdapterIgnoresDeletedRecordIDsFromPreviousSyncGeneration() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let fetcher = TokenAwareCloudKitRecordFetcher(
+            recordsByType: [:],
+            deletedRecordIDsByType: [
+                "PageRecord": [CKRecord.ID(recordName: "page-page-old")]
+            ],
+            nextServerChangeTokenData: Data("token-v2".utf8)
+        )
+
+        let changeSet = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher
+        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+
+        XCTAssertEqual(changeSet.deletedRecords, [])
+    }
+
+    func testCloudKitPrivateDatabaseAdapterDeletesAllKnownRecordTypesForFreshStart() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let workspaceRecord = makeRecord(
+            type: "WorkspaceRecord",
+            entityType: "workspace",
+            entityID: "workspace-old",
+            syncGeneration: nil
+        ) {
+            $0["name"] = "Old" as CKRecordValue
+        }
+        let pageRecord = makeRecord(type: "PageRecord", entityType: "page", entityID: "page-current") {
+            $0["workspaceID"] = "workspace-old" as CKRecordValue
+            $0["title"] = "Current" as CKRecordValue
+            $0["orderKey"] = "000001" as CKRecordValue
+            $0["isArchived"] = NSNumber(value: false)
+        }
+        let fetcher = StaticCloudKitRecordFetcher(recordsByType: [
+            "WorkspaceRecord": [workspaceRecord],
+            "PageRecord": [pageRecord]
+        ])
+        let deleter = CapturingCloudKitRecordDeleter()
+
+        let deletedCount = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordDeleter: deleter,
+            recordFetcher: fetcher
+        ).resetRemoteDataForFreshStart()
+
+        XCTAssertEqual(deletedCount, 2)
+        XCTAssertEqual(
+            deleter.deletedRecordIDs.map(\.recordName),
+            [
+                workspaceRecord.recordID.recordName,
+                pageRecord.recordID.recordName
+            ]
+        )
     }
 
     func testCloudKitPrivateDatabaseAdapterUsesTokenAwareRecordChangeFetcher() throws {
@@ -753,11 +1186,30 @@ final class SyncEngineTests: XCTestCase {
 
         let record = try XCTUnwrap(saver.savedRecords.first)
         XCTAssertEqual(record.recordType, "BlockRecord")
-        XCTAssertEqual(record.recordID.recordName, "block-\(blockID)")
+        XCTAssertEqual(record.recordID.recordName, "editor-cloudkit-v2.block.\(blockID)")
+        XCTAssertEqual(record.recordID.zoneID.zoneName, CloudKitSyncConfiguration.recordZoneName)
         XCTAssertEqual(record["entityID"] as? String, blockID)
+        XCTAssertEqual(record["syncGeneration"] as? String, "editor-cloudkit-v2")
         XCTAssertEqual(record["textPlain"] as? String, "Cloud text")
         XCTAssertEqual(record["type"] as? String, BlockType.paragraph.rawValue)
-        XCTAssertEqual(result.recordName, "block-\(blockID)")
+        XCTAssertEqual(result.recordName, "editor-cloudkit-v2.block.\(blockID)")
+    }
+
+    func testLiveCloudKitRecordSaverUsesOverwriteSavePolicyForIdempotentUploads() {
+        let record = CKRecord(
+            recordType: "PageRecord",
+            recordID: CKRecord.ID(
+                recordName: "editor-cloudkit-v2.page.page-existing",
+                zoneID: CloudKitSyncConfiguration.recordZoneID
+            )
+        )
+
+        let operation = LiveCloudKitRecordSaver.makeSaveOperation(record: record)
+
+        XCTAssertEqual(operation.recordsToSave?.count, 1)
+        XCTAssertEqual(operation.recordsToSave?.first?.recordID.recordName, record.recordID.recordName)
+        XCTAssertEqual(operation.savePolicy, .allKeys)
+        XCTAssertFalse(operation.isAtomic)
     }
 
     func testCloudKitPrivateDatabaseAdapterMapsNotebookChangeToRecord() throws {
@@ -777,11 +1229,12 @@ final class SyncEngineTests: XCTestCase {
 
         let record = try XCTUnwrap(saver.savedRecords.first)
         XCTAssertEqual(record.recordType, "NotebookRecord")
-        XCTAssertEqual(record.recordID.recordName, "notebook-\(notebook.id)")
+        XCTAssertEqual(record.recordID.recordName, "editor-cloudkit-v2.notebook.\(notebook.id)")
         XCTAssertEqual(record["entityID"] as? String, notebook.id)
+        XCTAssertEqual(record["syncGeneration"] as? String, "editor-cloudkit-v2")
         XCTAssertEqual(record["workspaceID"] as? String, workspaceID)
         XCTAssertEqual(record["name"] as? String, "Projects")
-        XCTAssertEqual(result.recordName, "notebook-\(notebook.id)")
+        XCTAssertEqual(result.recordName, "editor-cloudkit-v2.notebook.\(notebook.id)")
     }
 
     func testCloudKitPrivateDatabaseAdapterMapsNestedNotebookParentToRecord() throws {
@@ -886,8 +1339,29 @@ final class SyncEngineTests: XCTestCase {
             recordDeleter: deleter
         ).upload(change: SyncChange(entityType: "page", entityID: "page-old", changeType: "delete"))
 
-        XCTAssertEqual(deleter.deletedRecordIDs.map(\.recordName), ["page-page-old"])
-        XCTAssertEqual(result.recordName, "page-page-old")
+        XCTAssertEqual(deleter.deletedRecordIDs.map(\.recordName), ["editor-cloudkit-v2.page.page-old"])
+        XCTAssertEqual(deleter.deletedRecordIDs.map(\.zoneID.zoneName), [CloudKitSyncConfiguration.recordZoneName])
+        XCTAssertEqual(result.recordName, "editor-cloudkit-v2.page.page-old")
+        XCTAssertNil(result.changeTag)
+    }
+
+    func testCloudKitPrivateDatabaseAdapterTreatsMissingRemoteRecordDeleteAsSuccess() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let deleter = FailingCloudKitRecordDeleter(error: NSError(
+            domain: CKErrorDomain,
+            code: CKError.unknownItem.rawValue
+        ))
+
+        let result = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordDeleter: deleter
+        ).upload(change: SyncChange(entityType: "page", entityID: "page-local-only", changeType: "delete"))
+
+        XCTAssertEqual(deleter.deletedRecordIDs.map(\.recordName), ["editor-cloudkit-v2.page.page-local-only"])
+        XCTAssertEqual(deleter.deletedRecordIDs.map(\.zoneID.zoneName), [CloudKitSyncConfiguration.recordZoneName])
+        XCTAssertEqual(result.recordName, "editor-cloudkit-v2.page.page-local-only")
         XCTAssertNil(result.changeTag)
     }
 
@@ -994,6 +1468,45 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
     }
 }
 
+final class ExpiringThenSucceedingRemoteChangeFetcher: CloudKitRemoteChangeFetching {
+    let serverChangeTokenDataAfterRetry: Data?
+    private(set) var receivedServerChangeTokenData: [Data?] = []
+
+    init(serverChangeTokenDataAfterRetry: Data?) {
+        self.serverChangeTokenDataAfterRetry = serverChangeTokenDataAfterRetry
+    }
+
+    func fetchRemoteChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitRemoteChangeSet {
+        receivedServerChangeTokenData.append(serverChangeTokenData)
+        if serverChangeTokenData != nil {
+            throw NSError(
+                domain: CKErrorDomain,
+                code: CKError.changeTokenExpired.rawValue
+            )
+        }
+
+        return CloudKitRemoteChangeSet(serverChangeTokenData: serverChangeTokenDataAfterRetry)
+    }
+}
+
+final class AlwaysFailingRemoteChangeFetcher: CloudKitRemoteChangeFetching {
+    let error: Error
+    private(set) var receivedServerChangeTokenData: [Data?] = []
+
+    init(error: Error) {
+        self.error = error
+    }
+
+    func fetchRemoteChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitRemoteChangeSet {
+        receivedServerChangeTokenData.append(serverChangeTokenData)
+        throw error
+    }
+}
+
 enum SyncEngineTestError: Error, CustomStringConvertible {
     case temporaryUnavailable
 
@@ -1002,20 +1515,131 @@ enum SyncEngineTestError: Error, CustomStringConvertible {
     }
 }
 
+final class RuntimeProbeCallRecorder {
+    private(set) var calls: [String] = []
+
+    func append(_ call: String) {
+        calls.append(call)
+    }
+}
+
+final class RecordingCloudKitAccountStatusProvider: CloudKitAccountStatusProviding {
+    private let status: CKAccountStatus
+    private let recorder: RuntimeProbeCallRecorder?
+
+    init(
+        status: CKAccountStatus = .available,
+        recorder: RuntimeProbeCallRecorder? = nil
+    ) {
+        self.status = status
+        self.recorder = recorder
+    }
+
+    func accountStatus() throws -> CKAccountStatus {
+        recorder?.append("accountStatus")
+        return status
+    }
+}
+
+final class CapturingCloudKitDatabaseInspector: CloudKitDatabaseInspecting {
+    private let recorder: RuntimeProbeCallRecorder?
+
+    init(recorder: RuntimeProbeCallRecorder? = nil) {
+        self.recorder = recorder
+    }
+
+    func fetchAllRecordZones() throws -> [CKRecordZone] {
+        recorder?.append("fetchAllRecordZones")
+        return [CKRecordZone.default()]
+    }
+
+    func fetchAllSubscriptions() throws -> [CKSubscription] {
+        recorder?.append("fetchAllSubscriptions")
+        return []
+    }
+}
+
+final class CapturingCloudKitRecordZoneEnsurer: CloudKitRecordZoneEnsuring {
+    private let recorder: RuntimeProbeCallRecorder?
+    private(set) var ensureCallCount = 0
+
+    init(recorder: RuntimeProbeCallRecorder? = nil) {
+        self.recorder = recorder
+    }
+
+    func ensureRecordZoneExists() throws {
+        recorder?.append("ensureRecordZoneExists")
+        ensureCallCount += 1
+    }
+}
+
 final class CapturingCloudKitRecordSaver: CloudKitRecordSaving {
     private(set) var savedRecords: [CKRecord] = []
+    private let recorder: RuntimeProbeCallRecorder?
+
+    init(recorder: RuntimeProbeCallRecorder? = nil) {
+        self.recorder = recorder
+    }
 
     func save(record: CKRecord) throws -> CKRecord {
+        recorder?.append("save:\(record.recordID.recordName)")
         savedRecords.append(record)
         return record
     }
 }
 
+final class FailingCloudKitRecordSaver: CloudKitRecordSaving {
+    private let error: Error
+
+    init(error: Error) {
+        self.error = error
+    }
+
+    func save(record: CKRecord) throws -> CKRecord {
+        throw error
+    }
+}
+
+final class CapturingCloudKitRecordReader: CloudKitRecordReading {
+    private(set) var fetchedRecordIDs: [CKRecord.ID] = []
+    private let recorder: RuntimeProbeCallRecorder?
+
+    init(recorder: RuntimeProbeCallRecorder? = nil) {
+        self.recorder = recorder
+    }
+
+    func fetch(recordID: CKRecord.ID) throws -> CKRecord {
+        recorder?.append("fetch:\(recordID.recordName)")
+        fetchedRecordIDs.append(recordID)
+        return CKRecord(recordType: "EditorRuntimeProbeRecord", recordID: recordID)
+    }
+}
+
 final class CapturingCloudKitRecordDeleter: CloudKitRecordDeleting {
     private(set) var deletedRecordIDs: [CKRecord.ID] = []
+    private let recorder: RuntimeProbeCallRecorder?
+
+    init(recorder: RuntimeProbeCallRecorder? = nil) {
+        self.recorder = recorder
+    }
+
+    func delete(recordID: CKRecord.ID) throws {
+        recorder?.append("delete:\(recordID.recordName)")
+        deletedRecordIDs.append(recordID)
+    }
+}
+
+final class FailingCloudKitRecordDeleter: CloudKitRecordDeleting {
+    private let error: Error
+    private(set) var deletedRecordIDs: [CKRecord.ID] = []
+
+    init(error: Error) {
+        self.error = error
+    }
 
     func delete(recordID: CKRecord.ID) throws {
         deletedRecordIDs.append(recordID)
+        throw error
     }
 }
 
@@ -1033,6 +1657,14 @@ final class RecordingCloudKitSubscriptionEnsurer: CloudKitSubscriptionEnsuring {
 
     func ensureRemoteChangeSubscription() throws {
         ensureCallCount += 1
+    }
+}
+
+final class RecordingRemoteNotificationRegistrar: RemoteNotificationRegistering {
+    private(set) var registerCallCount = 0
+
+    func registerForRemoteNotifications() {
+        registerCallCount += 1
     }
 }
 
@@ -1132,14 +1764,21 @@ private func makeRecord(
     type: String,
     entityType: String,
     entityID: String,
+    syncGeneration: String? = "editor-cloudkit-v2",
     configure: (CKRecord) -> Void
 ) -> CKRecord {
     let record = CKRecord(
         recordType: type,
-        recordID: CKRecord.ID(recordName: "\(entityType)-\(entityID)")
+        recordID: CKRecord.ID(
+            recordName: "editor-cloudkit-v2.\(entityType).\(entityID)",
+            zoneID: CloudKitSyncConfiguration.recordZoneID
+        )
     )
     record["entityType"] = entityType as CKRecordValue
     record["entityID"] = entityID as CKRecordValue
+    if let syncGeneration {
+        record["syncGeneration"] = syncGeneration as CKRecordValue
+    }
     configure(record)
     return record
 }

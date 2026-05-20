@@ -58,6 +58,34 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.blocks.first?.textPlain, "Edited locally")
     }
 
+    func testUpdateBlockTextWithSameContentDoesNotMarkBlockDirty() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let block = try XCTUnwrap(initialSnapshot.blocks.first)
+        let initialRow = try XCTUnwrap(
+            try database.query(
+                "SELECT revision, updated_at, sync_state FROM blocks WHERE id = ? LIMIT 1",
+                bindings: [.text(block.id)]
+            ).first
+        )
+
+        try repository.updateBlockText(blockID: block.id, text: block.textPlain)
+
+        let finalRow = try XCTUnwrap(
+            try database.query(
+                "SELECT revision, updated_at, sync_state FROM blocks WHERE id = ? LIMIT 1",
+                bindings: [.text(block.id)]
+            ).first
+        )
+        XCTAssertEqual(finalRow["revision"], initialRow["revision"])
+        XCTAssertEqual(finalRow["updated_at"], initialRow["updated_at"])
+        XCTAssertEqual(finalRow["sync_state"], initialRow["sync_state"])
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
+    }
+
     func testTableBlockPersistsStructuredRowsInPayload() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -107,6 +135,32 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedSnapshot.pages.first?.title, "Editable Title")
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityType, "page")
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().last?.entityID, pageID)
+    }
+
+    func testUpdatePageTitleWithSameTitleDoesNotQueueSyncChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let page = try XCTUnwrap(initialSnapshot.pages.first)
+        let initialUpdatedAt = try XCTUnwrap(
+            try database.query(
+                "SELECT updated_at FROM pages WHERE id = ? LIMIT 1",
+                bindings: [.text(page.id)]
+            ).first?["updated_at"]
+        )
+
+        try repository.updatePageTitle(pageID: page.id, title: page.title)
+
+        let finalUpdatedAt = try XCTUnwrap(
+            try database.query(
+                "SELECT updated_at FROM pages WHERE id = ? LIMIT 1",
+                bindings: [.text(page.id)]
+            ).first?["updated_at"]
+        )
+        XCTAssertEqual(finalUpdatedAt, initialUpdatedAt)
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
     }
 
     func testUpdatePageFavoritePersistsReloadsAndQueuesSyncChange() throws {

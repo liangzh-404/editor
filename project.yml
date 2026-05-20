@@ -30,6 +30,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Editor
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: H52N5N7WQ7
         CODE_SIGN_ENTITLEMENTS: Sources/EditorApp/EditorMac.entitlements
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
   EditorIOS:
@@ -54,6 +55,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: "NO"
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: H52N5N7WQ7
         CODE_SIGN_ENTITLEMENTS: Sources/EditorApp/EditorIOS.entitlements
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
   EditorTests:

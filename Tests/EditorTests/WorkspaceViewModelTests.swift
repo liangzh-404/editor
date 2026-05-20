@@ -1,5 +1,6 @@
 import Foundation
 import CloudKit
+import SwiftUI
 import XCTest
 
 final class WorkspaceViewModelTests: XCTestCase {
@@ -3293,17 +3294,20 @@ final class WorkspaceViewModelTests: XCTestCase {
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Sync from UI")
         let syncRepository = SyncRepository(database: database)
+        let scheduler = DeferredWorkspaceSyncScheduler()
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
             syncEngine: SyncEngine(
                 syncRepository: syncRepository,
                 adapter: RecordingCloudKitSyncAdapter()
-            )
+            ),
+            syncScheduler: scheduler
         )
         try viewModel.load()
 
         viewModel.syncNow()
+        try scheduler.runNextScheduledOperation()
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
         XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
@@ -3319,16 +3323,21 @@ final class WorkspaceViewModelTests: XCTestCase {
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Foreground sync")
         let syncRepository = SyncRepository(database: database)
+        let scheduler = DeferredWorkspaceSyncScheduler()
         let viewModel = WorkspaceViewModel(
             repository: repository,
             syncEngine: SyncEngine(
                 syncRepository: syncRepository,
                 adapter: RecordingCloudKitSyncAdapter()
-            )
+            ),
+            syncScheduler: scheduler
         )
         try viewModel.load()
 
         viewModel.syncAfterActivation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+        try scheduler.runNextScheduledOperation()
 
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
         XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
@@ -3342,19 +3351,163 @@ final class WorkspaceViewModelTests: XCTestCase {
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
         let subscriptionEnsurer = RecordingCloudKitSubscriptionEnsurer()
+        let scheduler = DeferredWorkspaceSyncScheduler()
         let viewModel = WorkspaceViewModel(
             repository: repository,
             syncEngine: SyncEngine(
                 syncRepository: SyncRepository(database: database),
                 adapter: RecordingCloudKitSyncAdapter(),
                 subscriptionEnsurer: subscriptionEnsurer
-            )
+            ),
+            syncScheduler: scheduler
         )
         try viewModel.load()
 
         viewModel.syncAfterActivation()
 
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+        try scheduler.runNextScheduledOperation()
+
         XCTAssertEqual(subscriptionEnsurer.ensureCallCount, 1)
+    }
+
+    @MainActor
+    func testSyncAfterActivationSchedulesForegroundSyncWithoutRunningItInline() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Foreground queued sync")
+        let syncRepository = SyncRepository(database: database)
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: RecordingCloudKitSyncAdapter()
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+        XCTAssertEqual(try syncRepository.pendingChanges().count, 1)
+        XCTAssertEqual(viewModel.syncStatusText, "同步中...")
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(try syncRepository.pendingChanges(), [])
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
+    }
+
+    @MainActor
+    func testSyncNowSchedulesForegroundSyncWithoutRunningItInline() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Manual queued sync")
+        let syncRepository = SyncRepository(database: database)
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: RecordingCloudKitSyncAdapter()
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncNow()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+        XCTAssertEqual(try syncRepository.pendingChanges().count, 1)
+        XCTAssertEqual(viewModel.syncStatusText, "同步中...")
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(try syncRepository.pendingChanges(), [])
+        XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条变更")
+    }
+
+    @MainActor
+    func testSyncAfterActivationIgnoresDuplicateRequestsWhileForegroundSyncIsRunning() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Foreground duplicate sync")
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: SyncRepository(database: database),
+                adapter: RecordingCloudKitSyncAdapter()
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        viewModel.syncAfterActivation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+    }
+
+    @MainActor
+    func testSyncAfterActivationSkipsDuringFailureCooldownAndRetriesAfterward() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        var currentDate = Date(timeIntervalSince1970: 1_000)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: SyncRepository(database: database),
+                adapter: RecordingCloudKitSyncAdapter(),
+                remoteChangeFetcher: FailingWorkspaceRemoteChangeFetcher(),
+                mergeEngine: SyncMergeEngine(database: database)
+            ),
+            syncScheduler: scheduler,
+            currentDateProvider: { currentDate }
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+        try scheduler.runNextScheduledOperation()
+        XCTAssertEqual(viewModel.syncStatusText, "同步失败")
+
+        viewModel.syncAfterActivation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
+        XCTAssertEqual(viewModel.syncStatusText, "同步暂缓，稍后自动重试")
+
+        currentDate = Date(timeIntervalSince1970: 1_301)
+        viewModel.syncAfterActivation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+    }
+
+    func testForegroundSyncActivationPolicySyncsOnInitialAndLaterActivePhasesOnly() {
+        var policy = ForegroundSyncActivationPolicy()
+
+        XCTAssertTrue(policy.shouldSync(for: .active))
+        XCTAssertFalse(policy.shouldSync(for: .inactive))
+        XCTAssertFalse(policy.shouldSync(for: .background))
+        XCTAssertTrue(policy.shouldSync(for: .active))
     }
 
     @MainActor
@@ -3367,6 +3520,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         let syncRepository = SyncRepository(database: database)
+        let scheduler = DeferredWorkspaceSyncScheduler()
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
@@ -3386,11 +3540,13 @@ final class WorkspaceViewModelTests: XCTestCase {
                     ]
                 ),
                 mergeEngine: SyncMergeEngine(database: database)
-            )
+            ),
+            syncScheduler: scheduler
         )
         try viewModel.load()
 
         viewModel.syncNow()
+        try scheduler.runNextScheduledOperation()
 
         XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Fetched into UI")
         XCTAssertEqual(viewModel.syncStatusText, "已同步 1 条远端变更")
@@ -3524,13 +3680,62 @@ private final class CapturingAttachmentThumbnailScheduler: AttachmentThumbnailSc
     }
 }
 
+private final class DeferredWorkspaceSyncScheduler: WorkspaceSyncScheduling {
+    private struct ScheduledForegroundSync {
+        let operation: @Sendable () -> WorkspaceForegroundSyncResult
+        let completion: @MainActor @Sendable (WorkspaceForegroundSyncResult) -> Void
+    }
+
+    private var scheduledForegroundSyncs: [ScheduledForegroundSync] = []
+
+    var scheduledOperationCount: Int {
+        scheduledForegroundSyncs.count
+    }
+
+    func scheduleForegroundSync(
+        operation: @escaping @Sendable () -> WorkspaceForegroundSyncResult,
+        completion: @escaping @MainActor @Sendable (WorkspaceForegroundSyncResult) -> Void
+    ) {
+        scheduledForegroundSyncs.append(
+            ScheduledForegroundSync(
+                operation: operation,
+                completion: completion
+            )
+        )
+    }
+
+    @MainActor
+    func runNextScheduledOperation() throws {
+        guard !scheduledForegroundSyncs.isEmpty else {
+            throw WorkspaceViewModelTestError.noScheduledForegroundSync
+        }
+
+        let scheduledForegroundSync = scheduledForegroundSyncs.removeFirst()
+        scheduledForegroundSync.completion(scheduledForegroundSync.operation())
+    }
+}
+
+private struct FailingWorkspaceRemoteChangeFetcher: CloudKitRemoteChangeFetching {
+    func fetchRemoteChanges(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitRemoteChangeSet {
+        throw WorkspaceViewModelTestError.remoteFetchFailed
+    }
+}
+
 private enum WorkspaceViewModelTestError: Error, CustomStringConvertible {
     case thumbnailGenerationFailed
+    case noScheduledForegroundSync
+    case remoteFetchFailed
 
     var description: String {
         switch self {
         case .thumbnailGenerationFailed:
             return "thumbnailGenerationFailed"
+        case .noScheduledForegroundSync:
+            return "noScheduledForegroundSync"
+        case .remoteFetchFailed:
+            return "remoteFetchFailed"
         }
     }
 }

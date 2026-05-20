@@ -154,6 +154,43 @@ final class SyncMergeEngineTests: XCTestCase {
         )
     }
 
+    func testRemotePageReferenceBlockRebuildsPageParentLink() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let childPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Remote child")
+        try database.execute("DELETE FROM sync_changes")
+
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: sourceBlockID,
+                pageID: sourcePageID,
+                type: .pageReference,
+                textPlain: "Remote child",
+                payloadJSON: "{\"text\":\"Remote child\",\"target_page_id\":\"\(childPage.id)\"}",
+                revision: 2,
+                orderKey: "000001"
+            )
+        )
+
+        XCTAssertEqual(
+            try pageRepository.loadWorkspaceSnapshot().pageParentLinks,
+            [
+                PageParentLink(
+                    parentPageID: sourcePageID,
+                    childPageID: childPage.id,
+                    sourceBlockID: sourceBlockID,
+                    orderKey: "000001"
+                )
+            ]
+        )
+    }
+
     func testConflictTextDiffHighlightsChangedMiddleLine() {
         XCTAssertEqual(
             ConflictTextDiff.segments(

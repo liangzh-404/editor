@@ -1,0 +1,129 @@
+DEFINE SCHEMA
+
+    RECORD TYPE Users (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        roles           LIST<INT64>,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE EditorRuntimeProbeRecord (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        createdAt       TIMESTAMP,
+        probeVersion    STRING,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_creator"
+    );
+
+    RECORD TYPE WorkspaceRecord (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        entityID        STRING,
+        entityType      STRING,
+        name            STRING,
+        syncGeneration  STRING,
+        updatedAt       STRING,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_creator"
+    );
+
+    RECORD TYPE NotebookRecord (
+        "___createTime"    TIMESTAMP,
+        "___createdBy"     REFERENCE,
+        "___etag"          STRING,
+        "___modTime"       TIMESTAMP,
+        "___modifiedBy"    REFERENCE,
+        "___recordID"      REFERENCE,
+        entityID           STRING,
+        entityType         STRING,
+        name               STRING,
+        orderKey           STRING,
+        parentNotebookID   STRING,
+        syncGeneration     STRING,
+        updatedAt          STRING,
+        workspaceID        STRING,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_creator"
+    );
+
+    RECORD TYPE PageRecord (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        entityID        STRING,
+        entityType      STRING,
+        isArchived      INT64,
+        isFavorite      INT64,
+        notebookID      STRING,
+        orderKey        STRING,
+        syncGeneration  STRING,
+        title           STRING,
+        updatedAt       STRING,
+        workspaceID     STRING,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_creator"
+    );
+
+    RECORD TYPE BlockRecord (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        entityID        STRING,
+        entityType      STRING,
+        isDeleted       INT64,
+        orderKey        STRING,
+        pageID          STRING,
+        parentBlockID   STRING,
+        payloadJSON     STRING,
+        revision        INT64,
+        syncGeneration  STRING,
+        textPlain       STRING,
+        type            STRING,
+        updatedAt       STRING,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_creator"
+    );
+
+    RECORD TYPE AttachmentRecord (
+        "___createTime"   TIMESTAMP,
+        "___createdBy"    REFERENCE,
+        "___etag"         STRING,
+        "___modTime"      TIMESTAMP,
+        "___modifiedBy"   REFERENCE,
+        "___recordID"     REFERENCE,
+        asset             ASSET,
+        byteSize          INT64,
+        contentHash       STRING,
+        entityID          STRING,
+        entityType        STRING,
+        localPath         STRING,
+        originalFilename  STRING,
+        syncGeneration    STRING,
+        thumbnailAsset    ASSET,
+        thumbnailPath     STRING,
+        updatedAt         STRING,
+        utiType           STRING,
+        workspaceID       STRING,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_creator"
+    );

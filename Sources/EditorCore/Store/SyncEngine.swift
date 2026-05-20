@@ -1,6 +1,407 @@
 import Foundation
 import CloudKit
 
+enum CloudKitSyncConfiguration {
+    static let containerIdentifier = "iCloud.com.liangzhang.editor.sync"
+    static let recordZoneName = "EditorSyncZone"
+    static let recordZoneID = CKRecordZone.ID(
+        zoneName: recordZoneName,
+        ownerName: CKCurrentUserDefaultName
+    )
+
+    static var privateDatabase: CKDatabase {
+        CKContainer(identifier: containerIdentifier).privateCloudDatabase
+    }
+
+    static func recordID(recordName: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: recordName, zoneID: recordZoneID)
+    }
+}
+
+enum CloudKitErrorDiagnostic {
+    static func describe(_ error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain != CKErrorDomain, nsError.userInfo.isEmpty {
+            return String(describing: error)
+        }
+
+        var components = [
+            "domain=\(nsError.domain)",
+            "code=\(nsError.code)",
+            "localizedDescription=\(nsError.localizedDescription)"
+        ]
+        let userInfoDescription = describeUserInfo(nsError.userInfo)
+        if !userInfoDescription.isEmpty {
+            components.append("userInfo={\(userInfoDescription)}")
+        }
+        return components.joined(separator: " ")
+    }
+
+    private static func describeUserInfo(_ userInfo: [String: Any]) -> String {
+        let prioritizedKeys = [
+            "CKHTTPStatus",
+            "ContainerID",
+            "CKErrorServerDescription",
+            "NSDebugDescription",
+            NSUnderlyingErrorKey
+        ]
+        var descriptions = prioritizedKeys.compactMap { key -> String? in
+            guard let value = userInfo[key] else {
+                return nil
+            }
+            return "\(key)=\(describeUserInfoValue(value))"
+        }
+
+        if let headers = userInfo["CKDHTTPHeaders"],
+           let requestUUID = headerValue("x-apple-request-uuid", from: headers) {
+            descriptions.append("x-apple-request-uuid=\(describeUserInfoValue(requestUUID))")
+        }
+
+        let omittedKeys = Set(prioritizedKeys + ["CKDHTTPHeaders", NSLocalizedDescriptionKey])
+        descriptions.append(contentsOf: userInfo
+            .filter { key, _ in !omittedKeys.contains(key) }
+            .map { key, value in "\(key)=\(describeUserInfoValue(value))" }
+            .sorted()
+        )
+        return descriptions.joined(separator: ", ")
+    }
+
+    private static func describeUserInfoValue(_ value: Any) -> String {
+        if let error = value as? Error {
+            return "[\(describe(error))]"
+        }
+        if let dictionary = value as? [AnyHashable: Any] {
+            return describeDictionary(dictionary)
+        }
+        if let array = value as? [Any] {
+            return "[" + array.map(describeUserInfoValue).joined(separator: ", ") + "]"
+        }
+        return String(describing: value)
+    }
+
+    private static func describeDictionary(_ dictionary: [AnyHashable: Any]) -> String {
+        let values = dictionary
+            .map { key, value in "\(String(describing: key))=\(describeUserInfoValue(value))" }
+            .sorted()
+            .joined(separator: ", ")
+        return "{\(values)}"
+    }
+
+    private static func headerValue(_ key: String, from headers: Any) -> Any? {
+        if let dictionary = headers as? [AnyHashable: Any] {
+            return dictionary[key] ?? dictionary[key.capitalized]
+        }
+        if let dictionary = headers as? NSDictionary {
+            return dictionary[key] ?? dictionary[key.capitalized]
+        }
+        return nil
+    }
+}
+
+enum CloudKitRuntimeProbe {
+    static let environmentKey = "EDITOR_CLOUDKIT_PROBE"
+    private static let recordType = "EditorRuntimeProbeRecord"
+
+    struct Result: Equatable, Sendable {
+        let recordName: String
+        let errorDescription: String?
+
+        var isSuccess: Bool {
+            errorDescription == nil
+        }
+    }
+
+    static func isEnabled(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environment[environmentKey] == "1"
+    }
+
+    static func runIfEnabled(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        guard isEnabled(environment: environment) else {
+            return
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            _ = run(
+                accountStatusProvider: LiveCloudKitAccountStatusProvider(),
+                zoneEnsurer: LiveCloudKitRecordZoneEnsurer.shared,
+                databaseInspector: LiveCloudKitDatabaseInspector(),
+                saver: LiveCloudKitRecordSaver(),
+                reader: LiveCloudKitRecordFetcher(),
+                deleter: LiveCloudKitRecordDeleter()
+            )
+        }
+    }
+
+    @discardableResult
+    static func run(
+        recordName: String = "runtime-probe-\(UUID().uuidString)",
+        accountStatusProvider: CloudKitAccountStatusProviding,
+        zoneEnsurer: CloudKitRecordZoneEnsuring,
+        databaseInspector: CloudKitDatabaseInspecting,
+        saver: CloudKitRecordSaving,
+        reader: CloudKitRecordReading,
+        deleter: CloudKitRecordDeleting
+    ) -> Result {
+        let record = makeRecord(recordName: recordName)
+
+        do {
+            let accountStatus = try accountStatusProvider.accountStatus()
+            EditorLog.sync.debug(
+                "cloudkit_runtime_probe_account_status_succeeded status=\(accountStatusDescription(accountStatus), privacy: .public)"
+            )
+            guard accountStatus == .available else {
+                throw CloudKitRuntimeProbeError.accountUnavailable(accountStatus)
+            }
+        } catch {
+            let errorDescription = CloudKitErrorDiagnostic.describe(error)
+            EditorLog.sync.error(
+                "cloudkit_runtime_probe_account_status_failed error=\(errorDescription, privacy: .public)"
+            )
+            return Result(recordName: record.recordID.recordName, errorDescription: errorDescription)
+        }
+
+        do {
+            try zoneEnsurer.ensureRecordZoneExists()
+            EditorLog.sync.debug(
+                "cloudkit_runtime_probe_zone_ensure_succeeded zone=\(record.recordID.zoneID.zoneName, privacy: .public)"
+            )
+        } catch {
+            let errorDescription = CloudKitErrorDiagnostic.describe(error)
+            EditorLog.sync.error(
+                "cloudkit_runtime_probe_zone_ensure_failed error=\(errorDescription, privacy: .public)"
+            )
+            return Result(recordName: record.recordID.recordName, errorDescription: errorDescription)
+        }
+
+        do {
+            let zones = try databaseInspector.fetchAllRecordZones()
+            EditorLog.sync.debug(
+                "cloudkit_runtime_probe_zones_succeeded count=\(zones.count, privacy: .public) names=\(zoneNamesDescription(zones), privacy: .public)"
+            )
+        } catch {
+            EditorLog.sync.error(
+                "cloudkit_runtime_probe_zones_failed error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
+            )
+        }
+
+        do {
+            let subscriptions = try databaseInspector.fetchAllSubscriptions()
+            EditorLog.sync.debug(
+                "cloudkit_runtime_probe_subscriptions_succeeded count=\(subscriptions.count, privacy: .public) ids=\(subscriptionIDsDescription(subscriptions), privacy: .public)"
+            )
+        } catch {
+            EditorLog.sync.error(
+                "cloudkit_runtime_probe_subscriptions_failed error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
+            )
+        }
+
+        EditorLog.sync.debug(
+            "cloudkit_runtime_probe_save_started container=\(CloudKitSyncConfiguration.containerIdentifier, privacy: .public) zone=\(record.recordID.zoneID.zoneName, privacy: .public) record_type=\(record.recordType, privacy: .public) record_name=\(record.recordID.recordName, privacy: .public)"
+        )
+
+        let savedRecord: CKRecord
+        do {
+            savedRecord = try saver.save(record: record)
+            EditorLog.sync.debug(
+                "cloudkit_runtime_probe_save_succeeded record_name=\(savedRecord.recordID.recordName, privacy: .public) change_tag=\(savedRecord.recordChangeTag ?? "nil", privacy: .public)"
+            )
+        } catch {
+            let errorDescription = CloudKitErrorDiagnostic.describe(error)
+            EditorLog.sync.error(
+                "cloudkit_runtime_probe_save_failed error=\(errorDescription, privacy: .public)"
+            )
+            return Result(recordName: record.recordID.recordName, errorDescription: errorDescription)
+        }
+
+        do {
+            let fetchedRecord = try reader.fetch(recordID: savedRecord.recordID)
+            EditorLog.sync.debug(
+                "cloudkit_runtime_probe_fetch_succeeded record_name=\(fetchedRecord.recordID.recordName, privacy: .public)"
+            )
+        } catch {
+            let errorDescription = CloudKitErrorDiagnostic.describe(error)
+            EditorLog.sync.error(
+                "cloudkit_runtime_probe_fetch_failed record_name=\(savedRecord.recordID.recordName, privacy: .public) error=\(errorDescription, privacy: .public)"
+            )
+            try? cleanup(savedRecord: savedRecord, deleter: deleter)
+            return Result(recordName: savedRecord.recordID.recordName, errorDescription: errorDescription)
+        }
+
+        do {
+            try cleanup(savedRecord: savedRecord, deleter: deleter)
+            return Result(recordName: savedRecord.recordID.recordName, errorDescription: nil)
+        } catch {
+            let errorDescription = CloudKitErrorDiagnostic.describe(error)
+            return Result(recordName: savedRecord.recordID.recordName, errorDescription: errorDescription)
+        }
+    }
+
+    private static func makeRecord(recordName: String) -> CKRecord {
+        let record = CKRecord(
+            recordType: recordType,
+            recordID: CloudKitSyncConfiguration.recordID(recordName: recordName)
+        )
+        record["probeVersion"] = "1" as CKRecordValue
+        record["createdAt"] = Date() as CKRecordValue
+        return record
+    }
+
+    private static func cleanup(
+        savedRecord: CKRecord,
+        deleter: CloudKitRecordDeleting
+    ) throws {
+        do {
+            try deleter.delete(recordID: savedRecord.recordID)
+            EditorLog.sync.debug(
+                "cloudkit_runtime_probe_cleanup_succeeded record_name=\(savedRecord.recordID.recordName, privacy: .public)"
+            )
+        } catch {
+            EditorLog.sync.error(
+                "cloudkit_runtime_probe_cleanup_failed record_name=\(savedRecord.recordID.recordName, privacy: .public) error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
+            )
+            throw error
+        }
+    }
+
+    private static func accountStatusDescription(_ status: CKAccountStatus) -> String {
+        switch status {
+        case .available:
+            return "available"
+        case .noAccount:
+            return "noAccount"
+        case .restricted:
+            return "restricted"
+        case .couldNotDetermine:
+            return "couldNotDetermine"
+        case .temporarilyUnavailable:
+            return "temporarilyUnavailable"
+        @unknown default:
+            return "unknown(\(status.rawValue))"
+        }
+    }
+
+    private static func zoneNamesDescription(_ zones: [CKRecordZone]) -> String {
+        zones
+            .map(\.zoneID.zoneName)
+            .sorted()
+            .joined(separator: ",")
+    }
+
+    private static func subscriptionIDsDescription(_ subscriptions: [CKSubscription]) -> String {
+        subscriptions
+            .map(\.subscriptionID)
+            .sorted()
+            .joined(separator: ",")
+    }
+}
+
+enum CloudKitRuntimeProbeError: Error, CustomStringConvertible {
+    case accountUnavailable(CKAccountStatus)
+
+    var description: String {
+        switch self {
+        case .accountUnavailable(let status):
+            return "CloudKit account unavailable: \(status.rawValue)"
+        }
+    }
+}
+
+#if DEBUG
+struct CloudKitRuntimeProbeDiagnosticRequest: Equatable {
+    static let enabledKey = "EDITOR_CLOUDKIT_RUNTIME_PROBE_DIAGNOSTIC"
+
+    init?(environment: [String: String]) {
+        guard environment[Self.enabledKey] == "1" else {
+            return nil
+        }
+    }
+}
+
+struct CloudKitSyncDiagnosticRequest: Equatable {
+    static let enabledKey = "EDITOR_CLOUDKIT_SYNC_DIAGNOSTIC"
+    static let appendTextKey = "EDITOR_CLOUDKIT_SYNC_DIAGNOSTIC_APPEND_TEXT"
+    static let pageIDKey = "EDITOR_CLOUDKIT_SYNC_DIAGNOSTIC_PAGE_ID"
+
+    let appendText: String?
+    let pageID: String?
+
+    init?(environment: [String: String]) {
+        guard environment[Self.enabledKey] == "1" else {
+            return nil
+        }
+
+        appendText = Self.nonEmptyValue(environment[Self.appendTextKey])
+        pageID = Self.nonEmptyValue(environment[Self.pageIDKey])
+    }
+
+    private static func nonEmptyValue(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+}
+
+struct RemoteNotificationSyncDiagnosticRequest: Equatable {
+    static let enabledKey = "EDITOR_REMOTE_NOTIFICATION_SYNC_DIAGNOSTIC"
+
+    init?(environment: [String: String]) {
+        guard environment[Self.enabledKey] == "1" else {
+            return nil
+        }
+    }
+}
+
+struct CloudKitSyncDiagnosticResult: Equatable {
+    enum Status: Equatable {
+        case skipped
+        case completed
+        case failed
+    }
+
+    let status: Status
+    let appendedBlockID: String?
+    let uploadedCount: Int
+    let failedUploadCount: Int
+    let fetchedCount: Int
+    let pendingChangeCount: Int
+    let errorDescription: String?
+
+    var displayText: String {
+        switch status {
+        case .skipped:
+            return "CloudKit diagnostic skipped"
+        case .completed:
+            return [
+                "CloudKit diagnostic completed",
+                "appended=\(appendedBlockID ?? "nil")",
+                "uploaded=\(uploadedCount)",
+                "failed=\(failedUploadCount)",
+                "fetched=\(fetchedCount)",
+                "pending=\(pendingChangeCount)"
+            ].joined(separator: " ")
+        case .failed:
+            return "CloudKit diagnostic failed \(errorDescription ?? "unknown")"
+        }
+    }
+}
+
+enum CloudKitSyncDiagnosticError: Error, CustomStringConvertible {
+    case missingSyncEngine
+
+    var description: String {
+        switch self {
+        case .missingSyncEngine:
+            return "missing CloudKit sync engine"
+        }
+    }
+}
+#endif
+
 struct CloudKitUploadResult: Equatable, Sendable {
     let recordName: String
     let changeTag: String?
@@ -50,6 +451,19 @@ protocol CloudKitRecordSaving {
 
 protocol CloudKitRecordDeleting {
     func delete(recordID: CKRecord.ID) throws
+}
+
+protocol CloudKitRecordZoneEnsuring {
+    func ensureRecordZoneExists() throws
+}
+
+protocol CloudKitDatabaseInspecting {
+    func fetchAllRecordZones() throws -> [CKRecordZone]
+    func fetchAllSubscriptions() throws -> [CKSubscription]
+}
+
+protocol CloudKitRecordReading {
+    func fetch(recordID: CKRecord.ID) throws -> CKRecord
 }
 
 protocol CloudKitSubscriptionSaving {
@@ -120,30 +534,158 @@ extension CloudKitRecordFetching {
     }
 }
 
+final class LiveCloudKitRecordZoneEnsurer: CloudKitRecordZoneEnsuring, @unchecked Sendable {
+    static let shared = LiveCloudKitRecordZoneEnsurer()
+
+    private let database: CKDatabase
+    private let zoneID: CKRecordZone.ID
+    private let lock = NSLock()
+    private var didEnsure = false
+
+    init(
+        database: CKDatabase = CloudKitSyncConfiguration.privateDatabase,
+        zoneID: CKRecordZone.ID = CloudKitSyncConfiguration.recordZoneID
+    ) {
+        self.database = database
+        self.zoneID = zoneID
+    }
+
+    func ensureRecordZoneExists() throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !didEnsure else {
+            return
+        }
+
+        do {
+            _ = try fetchRecordZone()
+            didEnsure = true
+            return
+        } catch {
+            guard Self.isMissingRecordZoneError(error) else {
+                throw error
+            }
+        }
+
+        _ = try saveRecordZone()
+        didEnsure = true
+        EditorLog.sync.debug(
+            "cloudkit_record_zone_created zone=\(self.zoneID.zoneName, privacy: .public)"
+        )
+    }
+
+    private func fetchRecordZone() throws -> CKRecordZone {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class ZoneBox: @unchecked Sendable {
+            var result: Result<CKRecordZone, Error>?
+        }
+        let zoneBox = ZoneBox()
+
+        database.fetch(withRecordZoneID: zoneID) { zone, error in
+            if let error {
+                zoneBox.result = .failure(error)
+            } else if let zone {
+                zoneBox.result = .success(zone)
+            } else {
+                zoneBox.result = .failure(CloudKitPrivateDatabaseAdapterError.missingSavedRecord)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        return try zoneBox.result?.get() ?? {
+            throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
+        }()
+    }
+
+    private func saveRecordZone() throws -> CKRecordZone {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class ZoneBox: @unchecked Sendable {
+            var result: Result<CKRecordZone, Error>?
+        }
+        let zoneBox = ZoneBox()
+        let zone = CKRecordZone(zoneID: zoneID)
+
+        database.save(zone) { savedZone, error in
+            if let error {
+                zoneBox.result = .failure(error)
+            } else if let savedZone {
+                zoneBox.result = .success(savedZone)
+            } else {
+                zoneBox.result = .failure(CloudKitPrivateDatabaseAdapterError.missingSavedRecord)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        return try zoneBox.result?.get() ?? {
+            throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
+        }()
+    }
+
+    private static func isMissingRecordZoneError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == CKErrorDomain
+            && nsError.code == CKError.zoneNotFound.rawValue
+    }
+}
+
 final class LiveCloudKitRecordSaver: CloudKitRecordSaving {
     private let database: CKDatabase
+    private let zoneEnsurer: CloudKitRecordZoneEnsuring
 
-    init(database: CKDatabase = CKContainer.default().privateCloudDatabase) {
+    init(
+        database: CKDatabase = CloudKitSyncConfiguration.privateDatabase,
+        zoneEnsurer: CloudKitRecordZoneEnsuring = LiveCloudKitRecordZoneEnsurer.shared
+    ) {
         self.database = database
+        self.zoneEnsurer = zoneEnsurer
+    }
+
+    static func makeSaveOperation(record: CKRecord) -> CKModifyRecordsOperation {
+        let operation = CKModifyRecordsOperation(
+            recordsToSave: [record],
+            recordIDsToDelete: nil
+        )
+        operation.savePolicy = .allKeys
+        operation.isAtomic = false
+        return operation
     }
 
     func save(record: CKRecord) throws -> CKRecord {
+        try zoneEnsurer.ensureRecordZoneExists()
+
         let semaphore = DispatchSemaphore(value: 0)
         final class SaveBox: @unchecked Sendable {
             var result: Result<CKRecord, Error>?
+            var savedRecord: CKRecord?
+            var recordError: Error?
         }
         let saveBox = SaveBox()
+        let operation = Self.makeSaveOperation(record: record)
 
-        database.save(record) { savedRecord, error in
-            if let error {
-                saveBox.result = .failure(error)
-            } else if let savedRecord {
+        operation.perRecordSaveBlock = { _, recordResult in
+            switch recordResult {
+            case .success(let savedRecord):
+                saveBox.savedRecord = savedRecord
+            case .failure(let error):
+                saveBox.recordError = error
+            }
+        }
+        operation.modifyRecordsResultBlock = { result in
+            if let recordError = saveBox.recordError {
+                saveBox.result = .failure(recordError)
+            } else if let savedRecord = saveBox.savedRecord {
                 saveBox.result = .success(savedRecord)
+            } else if case .failure(let error) = result {
+                saveBox.result = .failure(error)
             } else {
                 saveBox.result = .failure(CloudKitPrivateDatabaseAdapterError.missingSavedRecord)
             }
             semaphore.signal()
         }
+        database.add(operation)
         semaphore.wait()
 
         return try saveBox.result?.get() ?? {
@@ -154,12 +696,19 @@ final class LiveCloudKitRecordSaver: CloudKitRecordSaving {
 
 final class LiveCloudKitRecordDeleter: CloudKitRecordDeleting {
     private let database: CKDatabase
+    private let zoneEnsurer: CloudKitRecordZoneEnsuring
 
-    init(database: CKDatabase = CKContainer.default().privateCloudDatabase) {
+    init(
+        database: CKDatabase = CloudKitSyncConfiguration.privateDatabase,
+        zoneEnsurer: CloudKitRecordZoneEnsuring = LiveCloudKitRecordZoneEnsurer.shared
+    ) {
         self.database = database
+        self.zoneEnsurer = zoneEnsurer
     }
 
     func delete(recordID: CKRecord.ID) throws {
+        try zoneEnsurer.ensureRecordZoneExists()
+
         let semaphore = DispatchSemaphore(value: 0)
         final class DeleteBox: @unchecked Sendable {
             var result: Result<Void, Error>?
@@ -183,10 +732,62 @@ final class LiveCloudKitRecordDeleter: CloudKitRecordDeleting {
     }
 }
 
+final class LiveCloudKitDatabaseInspector: CloudKitDatabaseInspecting {
+    private let database: CKDatabase
+
+    init(database: CKDatabase = CloudKitSyncConfiguration.privateDatabase) {
+        self.database = database
+    }
+
+    func fetchAllRecordZones() throws -> [CKRecordZone] {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class ZoneBox: @unchecked Sendable {
+            var result: Result<[CKRecordZone], Error>?
+        }
+        let zoneBox = ZoneBox()
+
+        database.fetchAllRecordZones { zones, error in
+            if let error {
+                zoneBox.result = .failure(error)
+            } else {
+                zoneBox.result = .success(zones ?? [])
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        return try zoneBox.result?.get() ?? {
+            throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
+        }()
+    }
+
+    func fetchAllSubscriptions() throws -> [CKSubscription] {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class SubscriptionBox: @unchecked Sendable {
+            var result: Result<[CKSubscription], Error>?
+        }
+        let subscriptionBox = SubscriptionBox()
+
+        database.fetchAllSubscriptions { subscriptions, error in
+            if let error {
+                subscriptionBox.result = .failure(error)
+            } else {
+                subscriptionBox.result = .success(subscriptions ?? [])
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        return try subscriptionBox.result?.get() ?? {
+            throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
+        }()
+    }
+}
+
 final class LiveCloudKitSubscriptionSaver: CloudKitSubscriptionSaving {
     private let database: CKDatabase
 
-    init(database: CKDatabase = CKContainer.default().privateCloudDatabase) {
+    init(database: CKDatabase = CloudKitSyncConfiguration.privateDatabase) {
         self.database = database
     }
 
@@ -219,13 +820,23 @@ final class CloudKitPrivateDatabaseSubscriptionEnsurer: CloudKitSubscriptionEnsu
     static let subscriptionID = "editor-private-database-changes"
 
     private let subscriptionSaver: CloudKitSubscriptionSaving
+    private let zoneEnsurer: CloudKitRecordZoneEnsuring
 
-    init(subscriptionSaver: CloudKitSubscriptionSaving = LiveCloudKitSubscriptionSaver()) {
+    init(
+        subscriptionSaver: CloudKitSubscriptionSaving = LiveCloudKitSubscriptionSaver(),
+        zoneEnsurer: CloudKitRecordZoneEnsuring = LiveCloudKitRecordZoneEnsurer.shared
+    ) {
         self.subscriptionSaver = subscriptionSaver
+        self.zoneEnsurer = zoneEnsurer
     }
 
     func ensureRemoteChangeSubscription() throws {
-        let subscription = CKDatabaseSubscription(subscriptionID: Self.subscriptionID)
+        try zoneEnsurer.ensureRecordZoneExists()
+
+        let subscription = CKRecordZoneSubscription(
+            zoneID: CloudKitSyncConfiguration.recordZoneID,
+            subscriptionID: Self.subscriptionID
+        )
         let notificationInfo = CKSubscription.NotificationInfo()
         notificationInfo.shouldSendContentAvailable = true
         subscription.notificationInfo = notificationInfo
@@ -234,53 +845,115 @@ final class CloudKitPrivateDatabaseSubscriptionEnsurer: CloudKitSubscriptionEnsu
     }
 }
 
-final class LiveCloudKitRecordFetcher: CloudKitRecordFetching {
+final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordReading {
     private let database: CKDatabase
+    private let zoneEnsurer: CloudKitRecordZoneEnsuring
 
-    init(database: CKDatabase = CKContainer.default().privateCloudDatabase) {
+    private typealias QueryFetchResponse = (
+        matchResults: [(CKRecord.ID, Result<CKRecord, Error>)],
+        queryCursor: CKQueryOperation.Cursor?
+    )
+
+    init(
+        database: CKDatabase = CloudKitSyncConfiguration.privateDatabase,
+        zoneEnsurer: CloudKitRecordZoneEnsuring = LiveCloudKitRecordZoneEnsurer.shared
+    ) {
         self.database = database
+        self.zoneEnsurer = zoneEnsurer
     }
 
-    func fetchRecords(recordType: String) throws -> [CKRecord] {
-        let semaphore = DispatchSemaphore(value: 0)
-        final class FetchBox: @unchecked Sendable {
-            var result: Result<[CKRecord], Error>?
-        }
-        let fetchBox = FetchBox()
-        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+    func fetch(recordID: CKRecord.ID) throws -> CKRecord {
+        try zoneEnsurer.ensureRecordZoneExists()
 
-        database.fetch(withQuery: query, inZoneWith: nil) { result in
-            switch result {
-            case .success(let response):
-                var records: [CKRecord] = []
-                for (_, recordResult) in response.matchResults {
-                    switch recordResult {
-                    case .success(let record):
-                        records.append(record)
-                    case .failure(let error):
-                        fetchBox.result = .failure(error)
-                        semaphore.signal()
-                        return
-                    }
-                }
-                fetchBox.result = .success(records)
-            case .failure(let error):
+        let semaphore = DispatchSemaphore(value: 0)
+        final class FetchRecordBox: @unchecked Sendable {
+            var result: Result<CKRecord, Error>?
+        }
+        let fetchBox = FetchRecordBox()
+
+        database.fetch(withRecordID: recordID) { record, error in
+            if let error {
                 fetchBox.result = .failure(error)
+            } else if let record {
+                fetchBox.result = .success(record)
+            } else {
+                fetchBox.result = .failure(CloudKitPrivateDatabaseAdapterError.missingSavedRecord)
             }
             semaphore.signal()
         }
         semaphore.wait()
 
-        return try fetchBox.result?.get() ?? []
+        return try fetchBox.result?.get() ?? {
+            throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
+        }()
+    }
+
+    func fetchRecords(recordType: String) throws -> [CKRecord] {
+        try zoneEnsurer.ensureRecordZoneExists()
+
+        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+        var response = try fetch(query: query)
+        var records = try Self.records(from: response.matchResults)
+
+        while let cursor = response.queryCursor {
+            response = try fetch(cursor: cursor)
+            records.append(contentsOf: try Self.records(from: response.matchResults))
+        }
+
+        return records
+    }
+
+    private func fetch(query: CKQuery) throws -> QueryFetchResponse {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class FetchBox: @unchecked Sendable {
+            var result: Result<QueryFetchResponse, Error>?
+        }
+        let fetchBox = FetchBox()
+
+        database.fetch(withQuery: query, inZoneWith: CloudKitSyncConfiguration.recordZoneID) { result in
+            fetchBox.result = result
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        return try fetchBox.result?.get() ?? (matchResults: [], queryCursor: nil)
+    }
+
+    private func fetch(cursor: CKQueryOperation.Cursor) throws -> QueryFetchResponse {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class FetchBox: @unchecked Sendable {
+            var result: Result<QueryFetchResponse, Error>?
+        }
+        let fetchBox = FetchBox()
+
+        database.fetch(withCursor: cursor) { result in
+            fetchBox.result = result
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        return try fetchBox.result?.get() ?? (matchResults: [], queryCursor: nil)
+    }
+
+    private static func records(
+        from matchResults: [(CKRecord.ID, Result<CKRecord, Error>)]
+    ) throws -> [CKRecord] {
+        var records: [CKRecord] = []
+        for (_, recordResult) in matchResults {
+            records.append(try recordResult.get())
+        }
+        return records
     }
 
     func fetchRecordChanges(
         sinceServerChangeTokenData serverChangeTokenData: Data?
     ) throws -> CloudKitFetchedRecordChangeSet {
+        try zoneEnsurer.ensureRecordZoneExists()
+
         let previousToken = try CloudKitServerChangeTokenCodec.serverChangeToken(
             from: serverChangeTokenData
         )
-        let zoneID = CKRecordZone.default().zoneID
+        let zoneID = CloudKitSyncConfiguration.recordZoneID
         let configuration = CKFetchRecordZoneChangesOperation.ZoneConfiguration(
             previousServerChangeToken: previousToken
         )
@@ -380,9 +1053,18 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
     func upload(change: SyncChange) throws -> CloudKitUploadResult {
         if change.changeType == "delete" {
             let recordName = Self.recordName(entityType: change.entityType, entityID: change.entityID)
-            try (recordDeleter ?? LiveCloudKitRecordDeleter()).delete(
-                recordID: CKRecord.ID(recordName: recordName)
-            )
+            do {
+                try (recordDeleter ?? LiveCloudKitRecordDeleter()).delete(
+                    recordID: CloudKitSyncConfiguration.recordID(recordName: recordName)
+                )
+            } catch {
+                guard Self.isMissingRemoteRecordError(error) else {
+                    throw error
+                }
+                EditorLog.sync.debug(
+                    "cloudkit_delete_missing_remote_record_treated_as_synced record_name=\(recordName, privacy: .public)"
+                )
+            }
             return CloudKitUploadResult(recordName: recordName, changeTag: nil)
         }
 
@@ -411,16 +1093,34 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         }
 
         return CloudKitRemoteChangeSet(
-            workspaceChanges: (recordsByType["WorkspaceRecord"] ?? []).compactMap(remoteWorkspaceChange),
-            notebookChanges: (recordsByType["NotebookRecord"] ?? []).compactMap(remoteNotebookChange),
-            pageChanges: (recordsByType["PageRecord"] ?? []).compactMap(remotePageChange),
-            attachmentChanges: try (recordsByType["AttachmentRecord"] ?? []).compactMap { record in
+            workspaceChanges: currentGenerationRecords(recordsByType["WorkspaceRecord"] ?? []).compactMap(remoteWorkspaceChange),
+            notebookChanges: currentGenerationRecords(recordsByType["NotebookRecord"] ?? []).compactMap(remoteNotebookChange),
+            pageChanges: currentGenerationRecords(recordsByType["PageRecord"] ?? []).compactMap(remotePageChange),
+            attachmentChanges: try currentGenerationRecords(recordsByType["AttachmentRecord"] ?? []).compactMap { record in
                 try remoteAttachmentChange(record: record)
             },
-            blockChanges: (recordsByType["BlockRecord"] ?? []).compactMap(remoteBlockChange),
+            blockChanges: currentGenerationRecords(recordsByType["BlockRecord"] ?? []).compactMap(remoteBlockChange),
             deletedRecords: deletedRecords,
             serverChangeTokenData: fetchedChanges.serverChangeTokenData
         )
+    }
+
+    func resetRemoteDataForFreshStart() throws -> Int {
+        let fetcher = recordFetcher ?? LiveCloudKitRecordFetcher()
+        let deleter = recordDeleter ?? LiveCloudKitRecordDeleter()
+        var deletedCount = 0
+
+        for recordType in Self.recordTypes {
+            for record in try fetcher.fetchRecords(recordType: recordType) {
+                try deleter.delete(recordID: record.recordID)
+                deletedCount += 1
+            }
+        }
+
+        EditorLog.sync.debug(
+            "cloudkit_remote_reset_completed deleted_count=\(deletedCount, privacy: .public)"
+        )
+        return deletedCount
     }
 
     private func record(for change: SyncChange) throws -> CKRecord {
@@ -755,32 +1455,53 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
     }
 
     private static func entityReference(recordName: String) -> (entityType: String, entityID: String)? {
-        guard let separator = recordName.firstIndex(of: "-") else {
+        let prefix = "\(CloudKitSyncGeneration.current)."
+        guard recordName.hasPrefix(prefix) else {
             return nil
         }
 
-        let entityType = String(recordName[..<separator])
-        let entityIDStart = recordName.index(after: separator)
-        guard entityIDStart < recordName.endIndex else {
+        let reference = String(recordName.dropFirst(prefix.count))
+        guard let separator = reference.firstIndex(of: ".") else {
+            return nil
+        }
+
+        let entityType = String(reference[..<separator])
+        let entityIDStart = reference.index(after: separator)
+        guard entityIDStart < reference.endIndex else {
             return nil
         }
 
         return (
             entityType: entityType,
-            entityID: String(recordName[entityIDStart...])
+            entityID: String(reference[entityIDStart...])
         )
     }
 
     private func makeRecord(type: String, entityType: String, entityID: String) -> CKRecord {
-        let recordID = CKRecord.ID(recordName: Self.recordName(entityType: entityType, entityID: entityID))
+        let recordID = CloudKitSyncConfiguration.recordID(
+            recordName: Self.recordName(entityType: entityType, entityID: entityID)
+        )
         let record = CKRecord(recordType: type, recordID: recordID)
         record["entityID"] = entityID as CKRecordValue
         record["entityType"] = entityType as CKRecordValue
+        record["syncGeneration"] = CloudKitSyncGeneration.current as CKRecordValue
         return record
     }
 
     private static func recordName(entityType: String, entityID: String) -> String {
-        "\(entityType)-\(entityID)"
+        "\(CloudKitSyncGeneration.current).\(entityType).\(entityID)"
+    }
+
+    private static func isMissingRemoteRecordError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == CKErrorDomain
+            && nsError.code == CKError.unknownItem.rawValue
+    }
+
+    private func currentGenerationRecords(_ records: [CKRecord]) -> [CKRecord] {
+        records.filter { record in
+            record["syncGeneration"] as? String == CloudKitSyncGeneration.current
+        }
     }
 
     private func requiredRow(_ sql: String, entityID: String) throws -> SQLiteRow {
@@ -823,6 +1544,38 @@ struct SyncFetchSummary: Equatable, Sendable {
     let appliedCount: Int
 }
 
+@MainActor
+protocol RemoteNotificationRegistering: AnyObject {
+    func registerForRemoteNotifications()
+}
+
+@MainActor
+enum RemoteNotificationRegistrationPolicy {
+    static func registerIfNeeded(
+        hasCloudKitContainers: Bool,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        registrar: RemoteNotificationRegistering
+    ) {
+        guard hasCloudKitContainers else {
+            EditorLog.sync.debug("remote_notification_registration_skipped reason=missing_cloudkit_entitlement")
+            return
+        }
+
+        guard CloudKitSyncDiagnosticRequest(environment: environment) == nil else {
+            EditorLog.sync.debug("remote_notification_registration_skipped reason=headless_sync_diagnostic")
+            return
+        }
+
+        guard RemoteNotificationSyncDiagnosticRequest(environment: environment) == nil else {
+            EditorLog.sync.debug("remote_notification_registration_skipped reason=remote_notification_sync_diagnostic")
+            return
+        }
+
+        registrar.registerForRemoteNotifications()
+        EditorLog.sync.debug("remote_notification_registration_requested")
+    }
+}
+
 protocol RemoteNotificationSyncing {
     func ensureRemoteChangeSubscription() throws
     func uploadPendingChanges() throws -> SyncUploadSummary
@@ -835,36 +1588,78 @@ enum RemoteNotificationSyncResult: Equatable, Sendable {
     case failed
 }
 
+struct RemoteNotificationSyncReport: Equatable, Sendable {
+    let result: RemoteNotificationSyncResult
+    let uploadedCount: Int
+    let failedUploadCount: Int
+    let fetchedCount: Int
+    let errorDescription: String?
+}
+
 struct RemoteNotificationSyncHandler {
     let syncer: RemoteNotificationSyncing?
 
     func handleRemoteNotification() -> RemoteNotificationSyncResult {
+        handleRemoteNotificationReport().result
+    }
+
+    func handleRemoteNotificationReport() -> RemoteNotificationSyncReport {
         guard let syncer else {
             EditorLog.sync.debug("remote_notification_sync_unavailable")
-            return .noData
+            return RemoteNotificationSyncReport(
+                result: .noData,
+                uploadedCount: 0,
+                failedUploadCount: 0,
+                fetchedCount: 0,
+                errorDescription: nil
+            )
         }
 
+        var uploadSummary = SyncUploadSummary(uploadedCount: 0, failedCount: 0)
+        var fetchSummary = SyncFetchSummary(appliedCount: 0)
         do {
             try syncer.ensureRemoteChangeSubscription()
-            let uploadSummary = try syncer.uploadPendingChanges()
-            guard uploadSummary.failedCount == 0 else {
+            uploadSummary = try syncer.uploadPendingChanges()
+            if uploadSummary.failedCount > 0 {
                 EditorLog.sync.error(
                     "remote_notification_sync_failed failed_uploads=\(uploadSummary.failedCount, privacy: .public)"
                 )
-                return .failed
             }
 
-            let fetchSummary = try syncer.fetchRemoteChanges()
+            fetchSummary = try syncer.fetchRemoteChanges()
+            if uploadSummary.failedCount > 0 {
+                return RemoteNotificationSyncReport(
+                    result: fetchSummary.appliedCount > 0 ? .newData : .failed,
+                    uploadedCount: uploadSummary.uploadedCount,
+                    failedUploadCount: uploadSummary.failedCount,
+                    fetchedCount: fetchSummary.appliedCount,
+                    errorDescription: nil
+                )
+            }
+
             let hasChanges = uploadSummary.uploadedCount > 0 || fetchSummary.appliedCount > 0
             EditorLog.sync.debug(
                 "remote_notification_sync_completed uploaded=\(uploadSummary.uploadedCount, privacy: .public) fetched=\(fetchSummary.appliedCount, privacy: .public)"
             )
-            return hasChanges ? .newData : .noData
-        } catch {
-            EditorLog.sync.error(
-                "remote_notification_sync_failed error=\(String(describing: error), privacy: .public)"
+            return RemoteNotificationSyncReport(
+                result: hasChanges ? .newData : .noData,
+                uploadedCount: uploadSummary.uploadedCount,
+                failedUploadCount: uploadSummary.failedCount,
+                fetchedCount: fetchSummary.appliedCount,
+                errorDescription: nil
             )
-            return .failed
+        } catch {
+            let errorDescription = String(describing: error)
+            EditorLog.sync.error(
+                "remote_notification_sync_failed error=\(errorDescription, privacy: .public)"
+            )
+            return RemoteNotificationSyncReport(
+                result: .failed,
+                uploadedCount: uploadSummary.uploadedCount,
+                failedUploadCount: uploadSummary.failedCount,
+                fetchedCount: fetchSummary.appliedCount,
+                errorDescription: errorDescription
+            )
         }
     }
 }
@@ -907,11 +1702,24 @@ final class SyncEngine {
             return SyncFetchSummary(appliedCount: 0)
         }
 
-        let changeSet = try remoteChangeFetcher.fetchRemoteChanges(
-            sinceServerChangeTokenData: syncRepository.serverChangeTokenData(
-                scope: Self.serverChangeTokenScope
-            )
+        let previousServerChangeTokenData = try syncRepository.serverChangeTokenData(
+            scope: Self.serverChangeTokenScope
         )
+        let changeSet: CloudKitRemoteChangeSet
+        do {
+            changeSet = try remoteChangeFetcher.fetchRemoteChanges(
+                sinceServerChangeTokenData: previousServerChangeTokenData
+            )
+        } catch {
+            guard previousServerChangeTokenData != nil,
+                  Self.isServerChangeTokenExpiredError(error) else {
+                throw error
+            }
+
+            try syncRepository.clearServerChangeTokenData(scope: Self.serverChangeTokenScope)
+            EditorLog.sync.error("cloudkit_server_change_token_expired action=retry_from_scratch")
+            changeSet = try remoteChangeFetcher.fetchRemoteChanges(sinceServerChangeTokenData: nil)
+        }
         for change in changeSet.workspaceChanges {
             try mergeEngine.applyRemoteWorkspace(change)
         }
@@ -946,6 +1754,12 @@ final class SyncEngine {
         )
     }
 
+    private static func isServerChangeTokenExpiredError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == CKErrorDomain
+            && nsError.code == CKError.changeTokenExpired.rawValue
+    }
+
     @discardableResult
     func uploadPendingChanges() throws -> SyncUploadSummary {
         let changes = try syncRepository.pendingChanges()
@@ -971,19 +1785,22 @@ final class SyncEngine {
                 )
             } catch {
                 let failureCount = retryState.attemptCount + 1
+                let errorDescription = CloudKitErrorDiagnostic.describe(error)
                 try syncRepository.recordFailure(
                     change: change,
-                    errorDescription: String(describing: error),
+                    errorDescription: errorDescription,
                     nextAttemptAt: retryPolicy.nextAttemptDate(afterFailureCount: failureCount, now: currentDate)
                 )
                 failedCount += 1
                 EditorLog.sync.error(
-                    "sync_change_upload_failed entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    "sync_change_upload_failed entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public) error=\(errorDescription, privacy: .public)"
                 )
             }
         }
         return SyncUploadSummary(uploadedCount: uploadedCount, failedCount: failedCount)
     }
 }
+
+extension SyncEngine: @unchecked Sendable {}
 
 extension SyncEngine: RemoteNotificationSyncing {}
