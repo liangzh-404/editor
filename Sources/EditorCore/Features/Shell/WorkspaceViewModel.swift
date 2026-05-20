@@ -124,6 +124,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let searchRepository: SearchRepository?
     private let backlinkRepository: BacklinkRepository?
     private let conflictRepository: ConflictRepository?
+    private let automaticallyResolveConflicts: Bool
     private let syncEngine: SyncEngine?
     private let syncScheduler: WorkspaceSyncScheduling
     private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
@@ -280,6 +281,7 @@ final class WorkspaceViewModel: ObservableObject {
         searchRepository: SearchRepository? = nil,
         backlinkRepository: BacklinkRepository? = nil,
         conflictRepository: ConflictRepository? = nil,
+        automaticallyResolveConflicts: Bool = true,
         syncEngine: SyncEngine? = nil,
         syncScheduler: WorkspaceSyncScheduling = BackgroundWorkspaceSyncScheduler(),
         cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil,
@@ -294,6 +296,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.searchRepository = searchRepository
         self.backlinkRepository = backlinkRepository
         self.conflictRepository = conflictRepository
+        self.automaticallyResolveConflicts = automaticallyResolveConflicts
         self.syncEngine = syncEngine
         self.syncScheduler = syncScheduler
         self.cloudKitAccountMetadataService = cloudKitAccountMetadataService
@@ -323,6 +326,7 @@ final class WorkspaceViewModel: ObservableObject {
         searchRepository = nil
         backlinkRepository = nil
         conflictRepository = nil
+        automaticallyResolveConflicts = true
         syncEngine = nil
         syncScheduler = BackgroundWorkspaceSyncScheduler()
         cloudKitAccountMetadataService = nil
@@ -3402,6 +3406,18 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         do {
+            if automaticallyResolveConflicts {
+                let resolved = try conflictRepository.resolveAutomatically(pageID: selectedPageID)
+                selectedPageConflicts = []
+                guard !resolved.isEmpty else {
+                    return
+                }
+                try reloadSnapshotAfterAutomaticConflictMerge()
+                EditorLog.sync.debug(
+                    "sync_conflicts_auto_resolved page_id=\(selectedPageID, privacy: .public) count=\(resolved.count, privacy: .public)"
+                )
+                return
+            }
             selectedPageConflicts = try conflictRepository.conflicts(pageID: selectedPageID)
         } catch {
             selectedPageConflicts = []
@@ -3409,6 +3425,24 @@ final class WorkspaceViewModel: ObservableObject {
                 "conflicts_failed page_id=\(selectedPageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
+    }
+
+    private func reloadSnapshotAfterAutomaticConflictMerge() throws {
+        guard let repository else {
+            return
+        }
+
+        let previousSelectedCollection = selectedCollection
+        let previousSelectedPageID = selectedPageID
+        let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+        apply(snapshot: loadedSnapshot)
+        restoreSelectionAfterReload(
+            collection: previousSelectedCollection,
+            pageID: previousSelectedPageID
+        )
+        refreshSearchResults()
+        refreshBacklinksForSelectedPage()
+        refreshExternalLinksForSelectedPage()
     }
 
     private func archiveBackgroundPage(id pageID: String) throws {

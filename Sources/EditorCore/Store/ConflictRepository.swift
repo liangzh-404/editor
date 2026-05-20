@@ -120,6 +120,138 @@ enum ConflictTextDiff {
     }
 }
 
+enum AutomaticTextMerge {
+    static func merge(local: String, remote: String) -> String {
+        if local == remote {
+            return local
+        }
+        if local.isEmpty {
+            return remote
+        }
+        if remote.isEmpty {
+            return local
+        }
+        if local.contains(remote) {
+            return local
+        }
+        if remote.contains(local) {
+            return remote
+        }
+
+        return mergeLines(
+            local.components(separatedBy: "\n"),
+            remote.components(separatedBy: "\n")
+        ).joined(separator: "\n")
+    }
+
+    static func payloadJSON(updating payloadJSON: String, text: String) throws -> String {
+        let data = payloadJSON.data(using: .utf8) ?? Data()
+        var payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        if payload["filename"] != nil && payload["text"] == nil {
+            payload["filename"] = text
+        } else {
+            payload["text"] = text
+        }
+
+        let updatedData = try JSONSerialization.data(
+            withJSONObject: payload,
+            options: [.sortedKeys]
+        )
+        guard let updatedPayload = String(data: updatedData, encoding: .utf8) else {
+            throw PageRepositoryError.invalidPayloadEncoding
+        }
+        return updatedPayload
+    }
+
+    private static func mergeLines(_ localLines: [String], _ remoteLines: [String]) -> [String] {
+        let commonPairs = longestCommonSubsequencePairs(localLines, remoteLines)
+        var merged: [String] = []
+        var localCursor = 0
+        var remoteCursor = 0
+
+        for pair in commonPairs {
+            merged.append(
+                contentsOf: mergeSegment(
+                    Array(localLines[localCursor..<pair.localIndex]),
+                    Array(remoteLines[remoteCursor..<pair.remoteIndex])
+                )
+            )
+            merged.append(localLines[pair.localIndex])
+            localCursor = pair.localIndex + 1
+            remoteCursor = pair.remoteIndex + 1
+        }
+
+        merged.append(
+            contentsOf: mergeSegment(
+                Array(localLines[localCursor...]),
+                Array(remoteLines[remoteCursor...])
+            )
+        )
+        return merged
+    }
+
+    private static func mergeSegment(_ localLines: [String], _ remoteLines: [String]) -> [String] {
+        if localLines == remoteLines {
+            return localLines
+        }
+        if localLines.isEmpty {
+            return remoteLines
+        }
+        if remoteLines.isEmpty {
+            return localLines
+        }
+
+        var merged = localLines
+        for line in remoteLines where !merged.contains(line) {
+            merged.append(line)
+        }
+        return merged
+    }
+
+    private static func longestCommonSubsequencePairs(
+        _ localLines: [String],
+        _ remoteLines: [String]
+    ) -> [(localIndex: Int, remoteIndex: Int)] {
+        let localCount = localLines.count
+        let remoteCount = remoteLines.count
+        var lengths = Array(
+            repeating: Array(repeating: 0, count: remoteCount + 1),
+            count: localCount + 1
+        )
+
+        if localCount > 0 && remoteCount > 0 {
+            for localIndex in stride(from: localCount - 1, through: 0, by: -1) {
+                for remoteIndex in stride(from: remoteCount - 1, through: 0, by: -1) {
+                    if localLines[localIndex] == remoteLines[remoteIndex] {
+                        lengths[localIndex][remoteIndex] = lengths[localIndex + 1][remoteIndex + 1] + 1
+                    } else {
+                        lengths[localIndex][remoteIndex] = max(
+                            lengths[localIndex + 1][remoteIndex],
+                            lengths[localIndex][remoteIndex + 1]
+                        )
+                    }
+                }
+            }
+        }
+
+        var pairs: [(localIndex: Int, remoteIndex: Int)] = []
+        var localIndex = 0
+        var remoteIndex = 0
+        while localIndex < localCount && remoteIndex < remoteCount {
+            if localLines[localIndex] == remoteLines[remoteIndex] {
+                pairs.append((localIndex, remoteIndex))
+                localIndex += 1
+                remoteIndex += 1
+            } else if lengths[localIndex + 1][remoteIndex] >= lengths[localIndex][remoteIndex + 1] {
+                localIndex += 1
+            } else {
+                remoteIndex += 1
+            }
+        }
+        return pairs
+    }
+}
+
 final class ConflictRepository {
     private let database: SQLiteDatabase
 
@@ -412,6 +544,100 @@ final class ConflictRepository {
         }
 
         return resolved
+    }
+
+    func resolveAutomatically(pageID: String) throws -> [ConflictSnapshot] {
+        let pageConflicts = try conflicts(pageID: pageID)
+        var resolved: [ConflictSnapshot] = []
+        var resolvedBlockIDs: Set<String> = []
+
+        for conflict in pageConflicts where !resolvedBlockIDs.contains(conflict.blockID) {
+            resolved.append(try resolveAutomatically(conflictID: conflict.id))
+            resolvedBlockIDs.insert(conflict.blockID)
+        }
+        return resolved
+    }
+
+    func resolveAutomatically(conflictID: String) throws -> ConflictSnapshot {
+        guard let row = try database.query(
+            """
+            SELECT conflict_versions.id,
+                   conflict_versions.block_id,
+                   blocks.text_plain AS local_text_plain,
+                   blocks.payload_json AS local_payload_json,
+                   blocks.revision AS local_revision,
+                   conflict_versions.text_plain,
+                   conflict_versions.remote_revision
+            FROM conflict_versions
+            INNER JOIN blocks ON blocks.id = conflict_versions.block_id
+            WHERE conflict_versions.id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(conflictID)]
+        ).first else {
+            throw ConflictRepositoryError.conflictNotFound
+        }
+
+        let snapshot = ConflictSnapshot(
+            id: row["id"] ?? "",
+            blockID: row["block_id"] ?? "",
+            localTextPlain: row["local_text_plain"] ?? "",
+            remoteTextPlain: row["text_plain"] ?? "",
+            remoteRevision: Int(row["remote_revision"] ?? "") ?? 0
+        )
+        let mergedText = AutomaticTextMerge.merge(
+            local: snapshot.localTextPlain,
+            remote: snapshot.remoteTextPlain
+        )
+        let payloadJSON = try AutomaticTextMerge.payloadJSON(
+            updating: row["local_payload_json"] ?? "",
+            text: mergedText
+        )
+        let localRevision = Int(row["local_revision"] ?? "") ?? 0
+        let mergedRevision = max(localRevision, snapshot.remoteRevision) + 1
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        try database.withImmediateTransaction("resolve_automatic_conflict") {
+            try database.execute(
+                """
+                UPDATE blocks
+                SET payload_json = ?,
+                    text_plain = ?,
+                    revision = ?,
+                    sync_state = ?,
+                    updated_at = ?
+                WHERE id = ? AND is_deleted = 0
+                """,
+                bindings: [
+                    .text(payloadJSON),
+                    .text(mergedText),
+                    .integer(mergedRevision),
+                    .text("local"),
+                    .text(now),
+                    .text(snapshot.blockID)
+                ]
+            )
+            try database.execute(
+                """
+                DELETE FROM conflict_versions
+                WHERE block_id = ?
+                """,
+                bindings: [.text(snapshot.blockID)]
+            )
+            try BacklinkRepository(database: database).rebuildLinksForBlock(
+                blockID: snapshot.blockID,
+                text: mergedText
+            )
+            if try !hasPendingBlockUpdate(blockID: snapshot.blockID) {
+                try SyncRepository(database: database).enqueue(
+                    entityType: "block",
+                    entityID: snapshot.blockID,
+                    changeType: "update"
+                )
+            }
+        }
+
+        return snapshot
     }
 
     func conflicts(blockID: String) throws -> [ConflictVersion] {

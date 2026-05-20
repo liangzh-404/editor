@@ -2508,7 +2508,7 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSelectedPageConflictsRefreshAndAcceptRemoteVersion() throws {
+    func testSelectedPageConflictsAutoResolveOnLoad() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -2517,29 +2517,23 @@ final class WorkspaceViewModelTests: XCTestCase {
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Local edit")
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: blockID,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote edit",
-                payloadJSON: "{\"text\":\"Remote edit\"}",
-                revision: 2
-            )
-        )
+        try storeConflict(database: database, blockID: blockID, text: "Remote edit")
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
             conflictRepository: ConflictRepository(database: database)
         )
         try viewModel.load()
-        let conflict = try XCTUnwrap(viewModel.selectedPageConflicts.first)
 
-        try viewModel.acceptRemoteConflict(id: conflict.id)
-
-        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Remote edit")
+        XCTAssertEqual(pageID, viewModel.selectedPageID)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Local edit\nRemote edit")
         XCTAssertEqual(viewModel.selectedPageConflicts, [])
-        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertEqual(try ConflictRepository(database: database).conflicts(blockID: blockID), [])
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "block", entityID: blockID, changeType: "update")
+            )
+        )
     }
 
     @MainActor
@@ -2558,30 +2552,13 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
         try repository.updateBlockText(blockID: firstBlockID, text: "Local one")
         try repository.updateBlockText(blockID: secondBlock.id, text: "Local two")
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: firstBlockID,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote one",
-                payloadJSON: "{\"text\":\"Remote one\"}",
-                revision: 2
-            )
-        )
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: secondBlock.id,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote two",
-                payloadJSON: "{\"text\":\"Remote two\"}",
-                revision: 2
-            )
-        )
+        try storeConflict(database: database, blockID: firstBlockID, text: "Remote one")
+        try storeConflict(database: database, blockID: secondBlock.id, text: "Remote two")
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
-            conflictRepository: ConflictRepository(database: database)
+            conflictRepository: ConflictRepository(database: database),
+            automaticallyResolveConflicts: false
         )
         try viewModel.load()
         XCTAssertEqual(viewModel.selectedPageConflicts.count, 2)
@@ -2609,30 +2586,13 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
         try repository.updateBlockText(blockID: firstBlockID, text: "Local one")
         try repository.updateBlockText(blockID: secondBlock.id, text: "Local two")
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: firstBlockID,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote one",
-                payloadJSON: "{\"text\":\"Remote one\"}",
-                revision: 2
-            )
-        )
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: secondBlock.id,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote two",
-                payloadJSON: "{\"text\":\"Remote two\"}",
-                revision: 2
-            )
-        )
+        try storeConflict(database: database, blockID: firstBlockID, text: "Remote one")
+        try storeConflict(database: database, blockID: secondBlock.id, text: "Remote two")
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
-            conflictRepository: ConflictRepository(database: database)
+            conflictRepository: ConflictRepository(database: database),
+            automaticallyResolveConflicts: false
         )
         try viewModel.load()
         XCTAssertEqual(viewModel.selectedPageConflicts.count, 2)
@@ -2655,23 +2615,14 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
-        let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Local edit")
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: blockID,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote edit",
-                payloadJSON: "{\"text\":\"Remote edit\"}",
-                revision: 2
-            )
-        )
+        try storeConflict(database: database, blockID: blockID, text: "Remote edit")
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
-            conflictRepository: ConflictRepository(database: database)
+            conflictRepository: ConflictRepository(database: database),
+            automaticallyResolveConflicts: false
         )
         try viewModel.load()
         let conflict = try XCTUnwrap(viewModel.selectedPageConflicts.first)
@@ -2707,30 +2658,13 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
         try repository.updateBlockText(blockID: firstBlockID, text: "Local one")
         try repository.updateBlockText(blockID: secondBlock.id, text: "Local two")
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: firstBlockID,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote one",
-                payloadJSON: "{\"text\":\"Remote one\"}",
-                revision: 2
-            )
-        )
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: secondBlock.id,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote two",
-                payloadJSON: "{\"text\":\"Remote two\"}",
-                revision: 2
-            )
-        )
+        try storeConflict(database: database, blockID: firstBlockID, text: "Remote one")
+        try storeConflict(database: database, blockID: secondBlock.id, text: "Remote two")
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
-            conflictRepository: ConflictRepository(database: database)
+            conflictRepository: ConflictRepository(database: database),
+            automaticallyResolveConflicts: false
         )
         try viewModel.load()
         let conflicts = viewModel.selectedPageConflicts
@@ -3791,6 +3725,22 @@ final class WorkspaceViewModelTests: XCTestCase {
                 .text(now),
                 .text(now)
             ]
+        )
+    }
+
+    private func storeConflict(
+        database: SQLiteDatabase,
+        blockID: String,
+        text: String,
+        revision: Int = 2
+    ) throws {
+        try ConflictRepository(database: database).storeConflict(
+            ConflictVersion(
+                blockID: blockID,
+                payloadJSON: "{\"text\":\"\(text)\"}",
+                textPlain: text,
+                remoteRevision: revision
+            )
         )
     }
 

@@ -12,7 +12,7 @@ final class SyncMergeEngineTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testRemoteSameBlockConflictKeepsLocalTextAndStoresRemoteVersion() throws {
+    func testRemoteSameBlockConflictAutoMergesAndKeepsPendingUpdate() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -33,17 +33,23 @@ final class SyncMergeEngineTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(try pageRepository.loadWorkspaceSnapshot().blocks.first?.textPlain, "Local edit")
+        XCTAssertEqual(try pageRepository.loadWorkspaceSnapshot().blocks.first?.textPlain, "Local edit\nRemote edit")
+        XCTAssertEqual(try ConflictRepository(database: database).conflicts(blockID: blockID), [])
         XCTAssertEqual(
-            try ConflictRepository(database: database).conflicts(blockID: blockID),
+            try SyncRepository(database: database).pendingChanges(),
             [
-                ConflictVersion(
-                    blockID: blockID,
-                    payloadJSON: "{\"text\":\"Remote edit\"}",
-                    textPlain: "Remote edit",
-                    remoteRevision: 2
-                )
+                SyncChange(entityType: "block", entityID: blockID, changeType: "update")
             ]
+        )
+    }
+
+    func testAutomaticConflictMergePreservesSharedPrefixAndSuffix() {
+        XCTAssertEqual(
+            AutomaticTextMerge.merge(
+                local: "Title\nLocal body\nShared",
+                remote: "Title\nRemote body\nShared"
+            ),
+            "Title\nLocal body\nRemote body\nShared"
         )
     }
 
@@ -56,16 +62,7 @@ final class SyncMergeEngineTests: XCTestCase {
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try pageRepository.updateBlockText(blockID: blockID, text: "Local edit")
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: blockID,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote edit",
-                payloadJSON: "{\"text\":\"Remote edit\"}",
-                revision: 2
-            )
-        )
+        try storeConflict(database: database, blockID: blockID, text: "Remote edit")
         let conflictRepository = ConflictRepository(database: database)
         let conflict = try XCTUnwrap(try conflictRepository.conflicts(pageID: pageID).first)
 
@@ -86,16 +83,7 @@ final class SyncMergeEngineTests: XCTestCase {
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try pageRepository.updateBlockText(blockID: blockID, text: "Local edit")
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: blockID,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote edit",
-                payloadJSON: "{\"text\":\"Remote edit\"}",
-                revision: 2
-            )
-        )
+        try storeConflict(database: database, blockID: blockID, text: "Remote edit")
         let conflictRepository = ConflictRepository(database: database)
         let conflict = try XCTUnwrap(try conflictRepository.conflicts(pageID: pageID).first)
 
@@ -122,16 +110,7 @@ final class SyncMergeEngineTests: XCTestCase {
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try pageRepository.updateBlockText(blockID: blockID, text: "Local edit")
-        try SyncMergeEngine(database: database).applyRemoteBlock(
-            RemoteBlockChange(
-                blockID: blockID,
-                pageID: pageID,
-                type: .paragraph,
-                textPlain: "Remote edit",
-                payloadJSON: "{\"text\":\"Remote edit\"}",
-                revision: 2
-            )
-        )
+        try storeConflict(database: database, blockID: blockID, text: "Remote edit")
         let conflictRepository = ConflictRepository(database: database)
         let conflict = try XCTUnwrap(try conflictRepository.conflicts(pageID: pageID).first)
 
@@ -312,5 +291,21 @@ final class SyncMergeEngineTests: XCTestCase {
         )
         temporaryFiles.append(directory)
         return directory
+    }
+
+    private func storeConflict(
+        database: SQLiteDatabase,
+        blockID: String,
+        text: String,
+        revision: Int = 2
+    ) throws {
+        try ConflictRepository(database: database).storeConflict(
+            ConflictVersion(
+                blockID: blockID,
+                payloadJSON: "{\"text\":\"\(text)\"}",
+                textPlain: text,
+                remoteRevision: revision
+            )
+        )
     }
 }
