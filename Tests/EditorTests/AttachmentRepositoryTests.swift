@@ -300,7 +300,7 @@ final class AttachmentRepositoryTests: XCTestCase {
                 type: .attachmentImage,
                 textPlain: "photo.png"
             )),
-            "/tmp/photo-thumbnail.jpg"
+            "/tmp/photo.png"
         )
         XCTAssertEqual(
             videoAttachment.previewPath(for: BlockSnapshot(

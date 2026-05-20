@@ -415,11 +415,11 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
         switch kind {
         case .image:
             var paths: [String] = []
-            if let thumbnailPath {
-                paths.append(thumbnailPath)
-            }
             if !localPath.isEmpty, !paths.contains(localPath) {
                 paths.append(localPath)
+            }
+            if let thumbnailPath, !paths.contains(thumbnailPath) {
+                paths.append(thumbnailPath)
             }
             return paths
         case .video:
@@ -439,9 +439,6 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
 
         switch kind {
         case .image:
-            if let thumbnailPath {
-                return .thumbnail(thumbnailPath)
-            }
             return localPath.isEmpty ? .pending : .thumbnail(localPath)
         case .video:
             if let thumbnailPath {

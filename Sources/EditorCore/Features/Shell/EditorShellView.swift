@@ -5714,20 +5714,33 @@ private struct PageRowImageAttachmentThumbnail: View {
     }
 
     private var thumbnailImage: Image? {
-        let path = attachment.thumbnailPath ?? attachment.localPath
+        for path in imageCandidatePaths {
 #if os(macOS)
-        guard let image = NSImage(contentsOfFile: path) else {
-            return nil
-        }
-        return Image(nsImage: image)
+            if let image = NSImage(contentsOfFile: path) {
+                return Image(nsImage: image)
+            }
 #elseif os(iOS)
-        guard let image = UIImage(contentsOfFile: path) else {
-            return nil
-        }
-        return Image(uiImage: image)
+            if let image = UIImage(contentsOfFile: path) {
+                return Image(uiImage: image)
+            }
 #else
-        return nil
+            return nil
 #endif
+        }
+        return nil
+    }
+
+    private var imageCandidatePaths: [String] {
+        var paths: [String] = []
+        if !attachment.localPath.isEmpty {
+            paths.append(attachment.localPath)
+        }
+        if let thumbnailPath = attachment.thumbnailPath,
+           !thumbnailPath.isEmpty,
+           !paths.contains(thumbnailPath) {
+            paths.append(thumbnailPath)
+        }
+        return paths
     }
 }
 

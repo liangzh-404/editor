@@ -1343,8 +1343,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
               let workspaceID = record["workspaceID"] as? String,
               let originalFilename = record["originalFilename"] as? String,
               let utiType = record["utiType"] as? String,
-              let contentHash = record["contentHash"] as? String,
-              let localPath = record["localPath"] as? String else {
+              let contentHash = record["contentHash"] as? String else {
             return nil
         }
 
@@ -1360,12 +1359,12 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
                 workspaceID: workspaceID,
                 attachmentID: attachmentID,
                 originalFilename: originalFilename
-            ) ?? localPath,
+            ) ?? "",
             thumbnailPath: try downloadedAttachmentThumbnailPath(
                 record: record,
                 workspaceID: workspaceID,
                 attachmentID: attachmentID
-            ) ?? (record["thumbnailPath"] as? String)
+            )
         )
     }
 
