@@ -22,7 +22,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(editor.blockID, "block-1")
         XCTAssertEqual(editor.text, "Hello")
         XCTAssertEqual(editor.blockType, .paragraph)
-        XCTAssertEqual(editor.contentFont, .system)
+        XCTAssertEqual(editor.contentFont, EditorContentFont.defaultFont)
     }
 
     @MainActor
@@ -152,6 +152,28 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
         XCTAssertNil(EditorContentFont.lxgwWenKai.postScriptName(for: .codeBlock))
         XCTAssertNil(EditorContentFont.lxgwWenKai.postScriptName(for: .table))
+    }
+
+    func testEditorContentFontDefaultsToBundledLXGWWenKaiAndUsesStableStorageKey() {
+        XCTAssertEqual(EditorContentFont.defaultFont, .lxgwWenKai)
+        XCTAssertEqual(EditorContentFont.defaultRawValue, "lxgwWenKai")
+        XCTAssertEqual(EditorContentFont.appStorageKey, "editor.content-font")
+        XCTAssertEqual(EditorContentFont.lxgwWenKaiResourceName, "LXGWWenKai-Regular")
+        XCTAssertEqual(EditorContentFont.lxgwWenKaiPostScriptName, "LXGWWenKai-Regular")
+    }
+
+    func testMobileNativeTextDragUsesExplicitBlockPayloadWhenTextViewConsumesLongPress() {
+        XCTAssertEqual(
+            MobileNativeTextBlockDragPolicy.payloadText(blockID: "block-a", explicitPayloadText: "block-a\nblock-b"),
+            "block-a\nblock-b"
+        )
+        XCTAssertEqual(
+            MobileNativeTextBlockDragPolicy.payloadText(blockID: "block-a", explicitPayloadText: nil),
+            "block-a"
+        )
+        XCTAssertTrue(MobileNativeTextBlockDragPolicy.installsUIDragInteraction)
+        XCTAssertTrue(MobileNativeTextBlockDragPolicy.disablesSystemTextDragInteraction)
+        XCTAssertTrue(MobileNativeTextBlockDragPolicy.disablesSystemTextDropInteraction)
     }
 
     func testNativeTextInsertionPointRectResolverClampsTallCaretToFontLineHeight() {

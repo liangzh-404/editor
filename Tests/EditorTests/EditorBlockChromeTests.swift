@@ -2,13 +2,14 @@ import XCTest
 
 final class EditorBlockChromeTests: XCTestCase {
     func testCraftThingsDesignTokensMatchDesktopEditorialPalette() {
-        assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF1, green: 0xEE, blue: 0xE8)
-        assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF6, green: 0xF2, blue: 0xEA)
-        assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFA, green: 0xF6, blue: 0xEE)
+        assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF7, green: 0xF7, blue: 0xF5)
+        assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF2, green: 0xF2, blue: 0xEF)
+        assertColor(EditorDesignTokens.Colors.documentListBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
+        assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
         assertColor(EditorDesignTokens.Colors.primaryText, red: 0x22, green: 0x21, blue: 0x1F)
-        assertColor(EditorDesignTokens.Colors.secondaryText, red: 0x62, green: 0x5F, blue: 0x59)
-        assertColor(EditorDesignTokens.Colors.tertiaryText, red: 0x8A, green: 0x86, blue: 0x7E)
-        assertColor(EditorDesignTokens.Colors.border, red: 0xEB, green: 0xE7, blue: 0xDF)
+        assertColor(EditorDesignTokens.Colors.secondaryText, red: 0x5F, green: 0x61, blue: 0x66)
+        assertColor(EditorDesignTokens.Colors.tertiaryText, red: 0x8B, green: 0x8D, blue: 0x91)
+        assertColor(EditorDesignTokens.Colors.border, red: 0xE6, green: 0xE5, blue: 0xE1)
         assertColor(EditorDesignTokens.Colors.accent, red: 0xE5, green: 0x45, blue: 0x4F)
     }
 
@@ -59,9 +60,9 @@ final class EditorBlockChromeTests: XCTestCase {
 #endif
     }
 
-    func testMobileNavigationBarChromeKeepsCollapsedTitlePinnedHigh() {
+    func testMobileNavigationBarChromeKeepsCollapsedTitleVerticallyCentered() {
         XCTAssertEqual(MobileNavigationBarChrome.topMaskHeight, 72)
-        XCTAssertEqual(MobileNavigationBarChrome.collapsedTitleVerticalOffset, -12)
+        XCTAssertEqual(MobileNavigationBarChrome.collapsedTitleVerticalOffset, 0)
     }
 
     func testMobileNavigationTitleAppearsOnlyAfterBodyTitleEntersTopMask() {
@@ -331,16 +332,36 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(BlockDragHandleVisibilityPolicy.opacity(isHovered: true), 1)
     }
 
-    func testMobileBlockDragHandleStaysVisibleForLongPressReordering() {
+    func testMobileBlockDragHandleStaysHiddenWhileRowSupportsLongPressReordering() {
         XCTAssertEqual(
             MobileBlockDragHandleVisibilityPolicy.opacity(isSelectionModeActive: false),
-            1
+            0
         )
         XCTAssertEqual(
             MobileBlockDragHandleVisibilityPolicy.opacity(isSelectionModeActive: true),
             0
         )
-        XCTAssertTrue(MobileBlockDragActivationPolicy.usesLongPressDraggableHandle)
+        XCTAssertFalse(MobileBlockDragActivationPolicy.usesVisibleDragHandle)
+        XCTAssertTrue(MobileBlockDragActivationPolicy.usesLongPressDraggableRow)
+        XCTAssertTrue(MobileBlockDragActivationPolicy.usesWholeRowDropTarget)
+        XCTAssertTrue(MobileBlockDragActivationPolicy.usesNativeTextViewDragInteraction)
+    }
+
+    func testMobileNativeTextRowsKeepUIKitTextMenuInsteadOfRowContextMenu() {
+        XCTAssertFalse(MobileBlockContextMenuPolicy.enablesRowContextMenu(usesNativeTextEditor: true))
+        XCTAssertTrue(MobileBlockContextMenuPolicy.enablesRowContextMenu(usesNativeTextEditor: false))
+    }
+
+    func testMobileWholeRowDropTargetKeepsReorderTouchableWithoutVisibleHandle() {
+        XCTAssertEqual(MobileBlockDropTargetPolicy.estimatedRowDropSize.height, 44)
+        XCTAssertEqual(MobileBlockDropTargetPolicy.placement(
+            location: CGPoint(x: 72, y: 6),
+            destinationLevel: 1
+        ), .before)
+        XCTAssertEqual(MobileBlockDropTargetPolicy.placement(
+            location: CGPoint(x: 72, y: 28),
+            destinationLevel: 1
+        ), .after)
     }
 
     func testMobileQuickCreateLongPressMenuKeepsDiaryBeforeNewDocument() {
@@ -502,6 +523,46 @@ final class EditorBlockChromeTests: XCTestCase {
             .stableGlobal,
             "The resize handle moves as the image width changes, so the drag delta must be measured in a stable coordinate space."
         )
+    }
+
+    func testAttachmentImageResizeSuppressesSelectedRowRedChromeDuringDrag() {
+        XCTAssertEqual(
+            BlockRowBackgroundPolicy.opacity(
+                blockType: .attachmentImage,
+                isSelected: true,
+                isFocused: false,
+                isSlashCommandMenuVisible: false,
+                suppressesSelectionChrome: true
+            ),
+            0
+        )
+        XCTAssertEqual(
+            BlockRowBackgroundPolicy.opacity(
+                blockType: .attachmentImage,
+                isSelected: true,
+                isFocused: false,
+                isSlashCommandMenuVisible: false,
+                suppressesSelectionChrome: false
+            ),
+            0
+        )
+        XCTAssertEqual(
+            BlockRowSelectionBorderPolicy.opacity(
+                blockType: .attachmentImage,
+                isSelected: true,
+                suppressesSelectionChrome: false
+            ),
+            0
+        )
+    }
+
+    func testAttachmentImageSelectionChromeUsesNeutralImageFrameInsteadOfRedRowBox() {
+        XCTAssertEqual(AttachmentImageSelectionChrome.rowBackgroundOpacity(isSelected: true), 0)
+        XCTAssertEqual(AttachmentImageSelectionChrome.rowBorderOpacity(isSelected: true), 0)
+        XCTAssertGreaterThan(AttachmentImageSelectionChrome.imageBorderOpacity(isSelected: true), 0)
+        XCTAssertEqual(AttachmentImageSelectionChrome.imageBorderRed, EditorDesignTokens.Colors.border.red)
+        XCTAssertEqual(AttachmentImageSelectionChrome.imageBorderGreen, EditorDesignTokens.Colors.border.green)
+        XCTAssertEqual(AttachmentImageSelectionChrome.imageBorderBlue, EditorDesignTokens.Colors.border.blue)
     }
 
     func testAttachmentImagePreviewDiagnosticExplainsMissingOrUnreadableImages() {
@@ -683,18 +744,35 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertGreaterThan(BlockDropIndicatorChrome.emphasizedOpacity, BlockDropIndicatorChrome.standardOpacity)
     }
 
-    func testCompactChromeUsesWarmAppBackgroundTokenAcrossMobileLists() {
-        XCTAssertEqual(CompactChrome.backgroundRed, EditorDesignTokens.Colors.appBackground.red)
-        XCTAssertEqual(CompactChrome.backgroundGreen, EditorDesignTokens.Colors.appBackground.green)
-        XCTAssertEqual(CompactChrome.backgroundBlue, EditorDesignTokens.Colors.appBackground.blue)
+    func testPageListChromeUsesWhiteBearLikeSurface() {
+        XCTAssertEqual(PageListChrome.backgroundRed, EditorDesignTokens.Colors.documentListBackground.red)
+        XCTAssertEqual(PageListChrome.backgroundGreen, EditorDesignTokens.Colors.documentListBackground.green)
+        XCTAssertEqual(PageListChrome.backgroundBlue, EditorDesignTokens.Colors.documentListBackground.blue)
+        XCTAssertGreaterThan(PageListChrome.rowDividerOpacity, 0)
+        XCTAssertLessThan(PageListChrome.selectedFillOpacity, 0.08)
+    }
+
+    func testCompactChromeUsesDocumentListBackgroundAcrossMobileLists() {
+        XCTAssertEqual(CompactChrome.backgroundRed, PageListChrome.backgroundRed)
+        XCTAssertEqual(CompactChrome.backgroundGreen, PageListChrome.backgroundGreen)
+        XCTAssertEqual(CompactChrome.backgroundBlue, PageListChrome.backgroundBlue)
     }
 
     func testCompactLibraryChromeUsesLightAppSurface() {
-        assertColor(CompactLibraryChrome.backgroundToken, red: 0xF1, green: 0xEE, blue: 0xE8)
+        assertColor(CompactLibraryChrome.backgroundToken, red: 0xF7, green: 0xF7, blue: 0xF5)
         assertColor(CompactLibraryChrome.primaryForegroundToken, red: 0x22, green: 0x21, blue: 0x1F)
-        assertColor(CompactLibraryChrome.mutedForegroundToken, red: 0x62, green: 0x5F, blue: 0x59)
+        assertColor(CompactLibraryChrome.mutedForegroundToken, red: 0x5F, green: 0x61, blue: 0x66)
         XCTAssertEqual(CompactLibraryChrome.rowCornerRadius, 13)
         XCTAssertEqual(CompactLibraryChrome.selectedRowOpacity, 0.08)
+    }
+
+    func testBearLikeLightThemeUsesNeutralWhiteWritingSurfaces() {
+        assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF7, green: 0xF7, blue: 0xF5)
+        assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF2, green: 0xF2, blue: 0xEF)
+        assertColor(EditorDesignTokens.Colors.documentListBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
+        assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
+        XCTAssertLessThan(SidebarChrome.backgroundYellowBias, 0.015)
+        XCTAssertLessThan(CompactChrome.backgroundYellowBias, 0.015)
     }
 
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {

@@ -51,13 +51,14 @@ struct EditorShadowToken: Equatable, Sendable {
 
 enum EditorDesignTokens {
     enum Colors {
-        static let appBackground = EditorColorToken.hex(0xF1, 0xEE, 0xE8)
-        static let sidebarBackground = EditorColorToken.hex(0xF6, 0xF2, 0xEA)
-        static let editorBackground = EditorColorToken.hex(0xFA, 0xF6, 0xEE)
+        static let appBackground = EditorColorToken.hex(0xF7, 0xF7, 0xF5)
+        static let sidebarBackground = EditorColorToken.hex(0xF2, 0xF2, 0xEF)
+        static let documentListBackground = EditorColorToken.hex(0xFF, 0xFF, 0xFF)
+        static let editorBackground = EditorColorToken.hex(0xFF, 0xFF, 0xFF)
         static let primaryText = EditorColorToken.hex(0x22, 0x21, 0x1F)
-        static let secondaryText = EditorColorToken.hex(0x62, 0x5F, 0x59)
-        static let tertiaryText = EditorColorToken.hex(0x8A, 0x86, 0x7E)
-        static let border = EditorColorToken.hex(0xEB, 0xE7, 0xDF)
+        static let secondaryText = EditorColorToken.hex(0x5F, 0x61, 0x66)
+        static let tertiaryText = EditorColorToken.hex(0x8B, 0x8D, 0x91)
+        static let border = EditorColorToken.hex(0xE6, 0xE5, 0xE1)
         static let accent = EditorColorToken.hex(0xE5, 0x45, 0x4F)
         static let shadow = EditorColorToken.hex(0x1E, 0x19, 0x12)
     }
@@ -1423,39 +1424,43 @@ private struct CompactRecentPageCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(page.title)
-                    .font(.headline.weight(.bold))
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
                     .lineLimit(1)
                 PageRowStatusBadges(page: page, font: .caption.weight(.semibold))
                 Spacer()
             }
 
             Text(page.isEncrypted ? "加密内容" : preview.excerpt?.isEmpty == false ? preview.excerpt ?? "" : "空白文档")
-                .font(.body)
-                .foregroundStyle(.secondary)
+                .font(.callout)
+                .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
                 .lineLimit(2)
 
             if !tagNames.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(tagNames.prefix(3), id: \.self) { tagName in
                         Text("#\(tagName)")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color(red: 0.32, green: 0.43, blue: 0.74))
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(
                                 Capsule()
-                                    .fill(Color(red: 0.89, green: 0.92, blue: 0.98))
+                                    .fill(EditorDesignTokens.Colors.border.color.opacity(0.42))
                             )
                     }
                 }
             }
         }
-        .padding(14)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.72))
-        )
+        .background(PageListChrome.backgroundColor)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(PageListChrome.dividerColor)
+                .frame(height: 1)
+        }
     }
 }
 
@@ -1619,12 +1624,43 @@ enum BlockDragHandleVisibilityPolicy {
 
 enum MobileBlockDragHandleVisibilityPolicy {
     static func opacity(isSelectionModeActive: Bool) -> Double {
-        isSelectionModeActive ? 0 : 1
+        0
     }
 }
 
 enum MobileBlockDragActivationPolicy {
-    static let usesLongPressDraggableHandle = true
+    static let usesVisibleDragHandle = false
+    static let usesLongPressDraggableRow = true
+    static let usesWholeRowDropTarget = true
+    static let usesNativeTextViewDragInteraction = true
+}
+
+enum MobileBlockContextMenuPolicy {
+    static func enablesRowContextMenu(usesNativeTextEditor: Bool) -> Bool {
+        !usesNativeTextEditor
+    }
+}
+
+enum MobileBlockDropTargetPolicy {
+    static let estimatedRowDropSize = CGSize(width: 1, height: 44)
+
+    static func resolution(
+        location: CGPoint,
+        destinationLevel: Int
+    ) -> BlockDropPlacementResolution {
+        BlockDropPlacementResolver.resolution(
+            location: location,
+            rowSize: estimatedRowDropSize,
+            destinationLevel: destinationLevel
+        )
+    }
+
+    static func placement(
+        location: CGPoint,
+        destinationLevel: Int
+    ) -> BlockDropPlacement {
+        resolution(location: location, destinationLevel: destinationLevel).placement
+    }
 }
 
 enum MobileQuickCreateAction: Equatable, Hashable, Sendable {
@@ -1797,6 +1833,31 @@ enum AttachmentImageResizeGesturePolicy {
     }
 }
 
+enum AttachmentImageSelectionChrome {
+    static func rowBackgroundOpacity(isSelected: Bool) -> Double {
+        0
+    }
+
+    static func rowBorderOpacity(isSelected: Bool) -> Double {
+        0
+    }
+
+    static func imageBorderOpacity(isSelected: Bool) -> Double {
+        isSelected ? 0.85 : 0.06
+    }
+
+    static let imageBorderRed = EditorDesignTokens.Colors.border.red
+    static let imageBorderGreen = EditorDesignTokens.Colors.border.green
+    static let imageBorderBlue = EditorDesignTokens.Colors.border.blue
+
+    static func imageBorderColor(isSelected: Bool) -> Color {
+        if isSelected {
+            return EditorDesignTokens.Colors.border.color.opacity(imageBorderOpacity(isSelected: true))
+        }
+        return Color.black.opacity(imageBorderOpacity(isSelected: false))
+    }
+}
+
 enum ListMarkerHorizontalAlignment: Equatable, Sendable {
     case leading
 
@@ -1890,12 +1951,16 @@ enum BlockRowBackgroundPolicy {
         blockType: BlockType,
         isSelected: Bool,
         isFocused: Bool,
-        isSlashCommandMenuVisible: Bool
+        isSlashCommandMenuVisible: Bool,
+        suppressesSelectionChrome: Bool = false
     ) -> Double {
         if blockType == .table || blockType == .divider || isSlashCommandMenuVisible {
             return 0
         }
-        if isSelected {
+        if blockType == .attachmentImage {
+            return AttachmentImageSelectionChrome.rowBackgroundOpacity(isSelected: isSelected)
+        }
+        if isSelected && !suppressesSelectionChrome {
             return 0.08
         }
         if isFocused {
@@ -1906,8 +1971,15 @@ enum BlockRowBackgroundPolicy {
 }
 
 enum BlockRowSelectionBorderPolicy {
-    static func opacity(blockType: BlockType, isSelected: Bool) -> Double {
-        guard isSelected, blockType != .divider else {
+    static func opacity(
+        blockType: BlockType,
+        isSelected: Bool,
+        suppressesSelectionChrome: Bool = false
+    ) -> Double {
+        if blockType == .attachmentImage {
+            return AttachmentImageSelectionChrome.rowBorderOpacity(isSelected: isSelected)
+        }
+        guard isSelected, !suppressesSelectionChrome, blockType != .divider else {
             return 0
         }
         return 0.28
@@ -2315,9 +2387,9 @@ enum MobileFormatPaletteActionResolver {
 }
 
 enum CompactChrome {
-    static let backgroundRed: Double = EditorDesignTokens.Colors.appBackground.red
-    static let backgroundGreen: Double = EditorDesignTokens.Colors.appBackground.green
-    static let backgroundBlue: Double = EditorDesignTokens.Colors.appBackground.blue
+    static let backgroundRed: Double = PageListChrome.backgroundRed
+    static let backgroundGreen: Double = PageListChrome.backgroundGreen
+    static let backgroundBlue: Double = PageListChrome.backgroundBlue
 
     static var backgroundYellowBias: Double {
         max(0, ((backgroundRed + backgroundGreen) / 2) - backgroundBlue)
@@ -2325,6 +2397,36 @@ enum CompactChrome {
 
     static var backgroundColor: Color {
         Color(red: backgroundRed, green: backgroundGreen, blue: backgroundBlue)
+    }
+}
+
+enum PageListChrome {
+    static let backgroundRed: Double = EditorDesignTokens.Colors.documentListBackground.red
+    static let backgroundGreen: Double = EditorDesignTokens.Colors.documentListBackground.green
+    static let backgroundBlue: Double = EditorDesignTokens.Colors.documentListBackground.blue
+    static let rowDividerOpacity: Double = 0.82
+    static let selectedFillOpacity: Double = 0.055
+    static let batchFillOpacity: Double = 0.10
+    static let batchBorderOpacity: Double = 0.28
+
+    static var backgroundColor: Color {
+        Color(red: backgroundRed, green: backgroundGreen, blue: backgroundBlue)
+    }
+
+    static var dividerColor: Color {
+        EditorDesignTokens.Colors.border.color.opacity(rowDividerOpacity)
+    }
+
+    static var selectedFillColor: Color {
+        EditorDesignTokens.Colors.primaryText.color.opacity(selectedFillOpacity)
+    }
+
+    static var batchFillColor: Color {
+        EditorDesignTokens.Colors.accent.color.opacity(batchFillOpacity)
+    }
+
+    static var batchBorderColor: Color {
+        EditorDesignTokens.Colors.accent.color.opacity(batchBorderOpacity)
     }
 }
 
@@ -5050,13 +5152,13 @@ private struct PageListView: View {
             .padding(.horizontal, 28)
             .frame(height: 74)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(EditorDesignTokens.Colors.appBackground.color)
+            .background(PageListChrome.backgroundColor)
 
             pageListScroll
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationSplitViewColumnWidth(CGFloat(EditorDesignTokens.Layout.documentListIdealWidth))
-        .background(EditorDesignTokens.Colors.appBackground.color.ignoresSafeArea(edges: .top))
+        .background(PageListChrome.backgroundColor.ignoresSafeArea(edges: .top))
         .background(
             DropTargetCleanupEventBridge(isEnabled: !activePageDragIDs.isEmpty) {
                 activePageDragIDs = []
@@ -5067,13 +5169,13 @@ private struct PageListView: View {
         pageListScroll
             .navigationTitle(navigationTitle)
             .navigationSplitViewColumnWidth(CGFloat(EditorDesignTokens.Layout.documentListIdealWidth))
-            .background(EditorDesignTokens.Colors.appBackground.color)
+            .background(PageListChrome.backgroundColor)
 #endif
     }
 
     private var pageListScroll: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 18) {
+            LazyVStack(alignment: .leading, spacing: 14) {
                 switch viewModel.selectedCollection {
                 case .recent:
                     ForEach(PageListDateSectionModel.sections(pages: viewModel.visibleDocumentPages)) { section in
@@ -5105,6 +5207,7 @@ private struct PageListView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 22)
         }
+        .background(PageListChrome.backgroundColor)
         .coordinateSpace(name: PageListCoordinateSpace.selection)
         .onPreferenceChange(PageRowFramePreferenceKey.self) { frames in
             pageRowFrames = frames
@@ -5902,7 +6005,7 @@ private struct CompactCollectionPageListView: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 10) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 collectionContent
             }
             .padding(.horizontal, 18)
@@ -6708,32 +6811,37 @@ private struct PageRow: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(richBorderColor, lineWidth: 1)
         )
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(PageListChrome.dividerColor)
+                .frame(height: 1)
+        }
         .accessibilityElement(children: .contain)
     }
 
     private var compactBackgroundColor: Color {
         if isMarkedForBatch {
-            return EditorDesignTokens.Colors.accent.color.opacity(0.10)
+            return PageListChrome.batchFillColor
         }
-        return isSelected ? Color.primary.opacity(0.09) : Color.clear
+        return isSelected ? PageListChrome.selectedFillColor : Color.clear
     }
 
     private var compactBorderColor: Color {
-        isMarkedForBatch ? EditorDesignTokens.Colors.accent.color.opacity(0.30) : Color.clear
+        isMarkedForBatch ? PageListChrome.batchBorderColor : Color.clear
     }
 
     private var richBackgroundColor: Color {
         if isMarkedForBatch {
-            return EditorDesignTokens.Colors.accent.color.opacity(0.10)
+            return PageListChrome.batchFillColor
         }
-        return isSelected ? EditorDesignTokens.Colors.border.color.opacity(0.44) : Color.clear
+        return isSelected ? PageListChrome.selectedFillColor : Color.clear
     }
 
     private var richBorderColor: Color {
         if isMarkedForBatch {
-            return EditorDesignTokens.Colors.accent.color.opacity(0.32)
+            return PageListChrome.batchBorderColor
         }
-        return isSelected ? Color.white.opacity(0.28) : Color.clear
+        return Color.clear
     }
 
     @ViewBuilder
@@ -7043,7 +7151,7 @@ private enum PageListCoordinateSpace {
 
 enum MobileNavigationBarChrome {
     static let topMaskHeight: CGFloat = 72
-    static let collapsedTitleVerticalOffset: CGFloat = -12
+    static let collapsedTitleVerticalOffset: CGFloat = 0
 }
 
 private struct MobilePageTitleFramePreferenceKey: PreferenceKey {
@@ -7411,7 +7519,7 @@ private struct EditorCanvasView: View {
     @State private var scheduledPageTitleFocusPageID: String?
     @State private var pageTitleFocusRequestID: UUID?
     @FocusState private var isPageTitleFocused: Bool
-    @AppStorage(EditorContentFont.appStorageKey) private var contentFontRawValue = EditorContentFont.system.rawValue
+    @AppStorage(EditorContentFont.appStorageKey) private var contentFontRawValue = EditorContentFont.defaultRawValue
 #if os(iOS)
     @State private var mobileNavigationTitleState = MobileNavigationTitleVisibilityState()
 #endif
@@ -7744,6 +7852,17 @@ private struct EditorCanvasView: View {
                     .onDisappear {
                         scheduleVisibleBlockDisappeared(block.id)
                     }
+#if os(iOS)
+                    .modifier(
+                        MobileBlockRowDropTargetModifier(
+                            isEnabled: MobileBlockDragActivationPolicy.usesWholeRowDropTarget,
+                            destinationBlockID: block.id,
+                            activeDropTarget: $activeBlockDropTarget,
+                            destinationLevel: nestingLevel(for: block),
+                            moveDroppedBlocks: moveDroppedBlocks
+                        )
+                    )
+#endif
 
                     BlockDropSlot(
                         destinationBlockID: block.id,
@@ -8179,7 +8298,7 @@ private struct EditorCanvasView: View {
     }
 
     private var contentFont: EditorContentFont {
-        EditorContentFont(rawValue: contentFontRawValue) ?? .system
+        EditorContentFont(rawValue: contentFontRawValue) ?? EditorContentFont.defaultFont
     }
 
 #if os(iOS)
@@ -10814,6 +10933,63 @@ private struct MobileBlockRowSwipeGestureModifier: ViewModifier {
         }
     }
 }
+
+private struct MobileBlockRowDraggableModifier: ViewModifier {
+    let isEnabled: Bool
+    let dragPayloadText: String
+    let block: BlockSnapshot
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.draggable(dragPayloadText) {
+                DragPreviewBlock(block: block)
+            }
+        } else {
+            content
+        }
+    }
+}
+
+private struct BlockRowContextMenuModifier<MenuContent: View>: ViewModifier {
+    let isEnabled: Bool
+    @ViewBuilder let menuContent: () -> MenuContent
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.contextMenu(menuItems: menuContent)
+        } else {
+            content
+        }
+    }
+}
+
+private struct MobileBlockRowDropTargetModifier: ViewModifier {
+    let isEnabled: Bool
+    let destinationBlockID: String
+    @Binding var activeDropTarget: BlockDropTarget?
+    let destinationLevel: Int
+    let moveDroppedBlocks: ([String], String, BlockDropPlacement, Int?) -> Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.onDrop(
+                of: [UTType.plainText.identifier, UTType.text.identifier],
+                delegate: EditorBlockDropDelegate(
+                    destinationBlockID: destinationBlockID,
+                    slotKind: .body,
+                    activeDropTarget: $activeDropTarget,
+                    destinationLevel: destinationLevel,
+                    moveDroppedBlocks: moveDroppedBlocks
+                )
+            )
+        } else {
+            content
+        }
+    }
+}
 #endif
 
 private struct BlockRowView: View {
@@ -10882,6 +11058,7 @@ private struct BlockRowView: View {
     @State private var slashCommandSelectionSource: SlashCommandSelectionSource = .keyboard
     @State private var isAttachmentRenameAlertPresented = false
     @State private var attachmentRenameText = ""
+    @State private var isAttachmentResizeActive = false
 #if os(iOS)
     @State private var mobileFormatPaletteTab: MobileFormatPaletteTab = .more
     @State private var isMobileFormatPanelPresented = false
@@ -10892,7 +11069,7 @@ private struct BlockRowView: View {
         attachment: AttachmentSnapshot? = nil,
         attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus = .idle,
         pageReferencePreviewText: String? = nil,
-        contentFont: EditorContentFont = .system,
+        contentFont: EditorContentFont = EditorContentFont.defaultFont,
         editorSession: EditorSession,
         nestingLevel: Int = 0,
         listOrdinal: Int? = nil,
@@ -11027,9 +11204,30 @@ private struct BlockRowView: View {
         .background(rowBackground)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .contentShape(Rectangle())
+#if os(iOS)
+        .modifier(
+            BlockRowContextMenuModifier(
+                isEnabled: MobileBlockContextMenuPolicy.enablesRowContextMenu(
+                    usesNativeTextEditor: usesNativeTextEditor
+                )
+            ) {
+                blockContextCommands
+            }
+        )
+#else
         .contextMenu {
             blockContextCommands
         }
+#endif
+#if os(iOS)
+        .modifier(
+            MobileBlockRowDraggableModifier(
+                isEnabled: MobileBlockDragActivationPolicy.usesLongPressDraggableRow,
+                dragPayloadText: dragPayloadText,
+                block: block
+            )
+        )
+#endif
         .alert("修改图片名字", isPresented: $isAttachmentRenameAlertPresented) {
             TextField("图片名字", text: $attachmentRenameText)
             Button("保存") {
@@ -11140,7 +11338,11 @@ private struct BlockRowView: View {
                 block: block,
                 attachment: attachment,
                 generationStatus: attachmentPreviewGenerationStatus,
+                isBlockSelected: isBlockSelected,
                 onRetryPreview: onRetryAttachmentPreview,
+                onImageResizeActiveChange: { isActive in
+                    isAttachmentResizeActive = isActive
+                },
                 onImageDisplayWidthChange: onAttachmentImageDisplayWidthChange
             )
         }
@@ -11149,7 +11351,8 @@ private struct BlockRowView: View {
     private var rowBackground: some View {
         let borderOpacity = BlockRowSelectionBorderPolicy.opacity(
             blockType: block.type,
-            isSelected: isBlockSelected
+            isSelected: isBlockSelected,
+            suppressesSelectionChrome: suppressesSelectionChrome
         )
         return RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
             .fill(rowBackgroundColor)
@@ -11164,7 +11367,8 @@ private struct BlockRowView: View {
             blockType: block.type,
             isSelected: isBlockSelected,
             isFocused: editorSession.focusedBlockID == block.id,
-            isSlashCommandMenuVisible: isSlashCommandMenuVisible
+            isSlashCommandMenuVisible: isSlashCommandMenuVisible,
+            suppressesSelectionChrome: suppressesSelectionChrome
         )
         guard opacity > 0 else {
             return Color.clear
@@ -11173,6 +11377,10 @@ private struct BlockRowView: View {
             return EditorDesignTokens.Colors.accent.color.opacity(opacity)
         }
         return EditorDesignTokens.Colors.border.color.opacity(opacity)
+    }
+
+    private var suppressesSelectionChrome: Bool {
+        block.type == .attachmentImage && isAttachmentResizeActive
     }
 
     private var isRowActive: Bool {
@@ -11682,6 +11890,7 @@ private struct BlockRowView: View {
                 return false
 #endif
             },
+            dragPayloadText: dragPayloadText,
             keyboardAccessory: keyboardAccessoryView,
             keyboardAccessoryHeight: keyboardAccessoryHeight,
             keyboardAccessoryReplacesKeyboard: keyboardAccessoryReplacesKeyboard,
@@ -12130,6 +12339,7 @@ private struct BlockRowView: View {
 private enum BlockDropSlotKind: Equatable {
     case before
     case after
+    case body
 }
 
 private struct BlockDropSlot: View {
@@ -12303,6 +12513,11 @@ private struct EditorBlockDropDelegate: DropDelegate {
         case .after:
             return BlockDropPlacementResolver.afterResolution(
                 locationX: info.location.x,
+                destinationLevel: destinationLevel
+            )
+        case .body:
+            return MobileBlockDropTargetPolicy.resolution(
+                location: info.location,
                 destinationLevel: destinationLevel
             )
         }
@@ -13735,7 +13950,9 @@ private struct AttachmentBlockRow: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
     let generationStatus: AttachmentPreviewGenerationStatus
+    let isBlockSelected: Bool
     let onRetryPreview: (String) -> Void
+    let onImageResizeActiveChange: (Bool) -> Void
     let onImageDisplayWidthChange: (Double) -> Void
 
     @State private var transientImageWidth: CGFloat?
@@ -13805,7 +14022,10 @@ private struct AttachmentBlockRow: View {
                             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                                    .stroke(
+                                        AttachmentImageSelectionChrome.imageBorderColor(isSelected: isBlockSelected),
+                                        lineWidth: 1
+                                    )
                             )
                     }
                     .buttonStyle(.plain)
@@ -13833,6 +14053,9 @@ private struct AttachmentBlockRow: View {
             }
             .onChange(of: availableWidth) { _, newWidth in
                 measuredImageAvailableWidth = newWidth
+            }
+            .onDisappear {
+                onImageResizeActiveChange(false)
             }
         }
         .frame(height: imageBodyHeight(for: thumbnailImage))
@@ -13883,6 +14106,9 @@ private struct AttachmentBlockRow: View {
                 )
                     .onChanged { value in
                         let startWidth = resizeDragStartWidth ?? currentWidth
+                        if resizeDragStartWidth == nil {
+                            onImageResizeActiveChange(true)
+                        }
                         resizeDragStartWidth = startWidth
                         setTransientImageWidthDuringResize(
                             AttachmentImageDisplayWidthPolicy.widthAfterDrag(
@@ -13900,6 +14126,7 @@ private struct AttachmentBlockRow: View {
                             availableWidth: availableWidth
                         )
                         setTransientImageWidthDuringResize(nil)
+                        onImageResizeActiveChange(false)
                         onImageDisplayWidthChange(AttachmentImageDisplayWidthPolicy.storedWidth(finalWidth))
                     }
             )

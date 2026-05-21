@@ -8,6 +8,8 @@ enum EditorContentFont: String, CaseIterable, Identifiable, Sendable {
     case lxgwWenKai
 
     static let appStorageKey = "editor.content-font"
+    static let defaultFont: EditorContentFont = .lxgwWenKai
+    static let defaultRawValue = defaultFont.rawValue
     static let lxgwWenKaiPostScriptName = "LXGWWenKai-Regular"
     static let lxgwWenKaiResourceName = "LXGWWenKai-Regular"
 
@@ -873,6 +875,20 @@ enum NativeTextFocusSelection {
     }
 }
 
+enum MobileNativeTextBlockDragPolicy {
+    static let installsUIDragInteraction = true
+    static let disablesSystemTextDragInteraction = true
+    static let disablesSystemTextDropInteraction = true
+
+    static func payloadText(blockID: String, explicitPayloadText: String?) -> String {
+        guard let explicitPayloadText,
+              !explicitPayloadText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return blockID
+        }
+        return explicitPayloadText
+    }
+}
+
 struct NativeTextBlockEditor: View {
     static let acceptsInactiveWindowFirstMouse = true
 
@@ -902,6 +918,7 @@ struct NativeTextBlockEditor: View {
     let onCancelSelectionByKeyboard: () -> Bool
     let onPromoteBlockToPageByKeyboard: () -> Bool
     let onHorizontalSwipe: (CGFloat) -> Bool
+    let dragPayloadText: String?
     let keyboardAccessory: AnyView?
     let keyboardAccessoryHeight: CGFloat?
     let keyboardAccessoryReplacesKeyboard: Bool
@@ -912,7 +929,7 @@ struct NativeTextBlockEditor: View {
         blockID: String,
         text: String,
         blockType: BlockType,
-        contentFont: EditorContentFont = .system,
+        contentFont: EditorContentFont = EditorContentFont.defaultFont,
         session: EditorSession,
         lineWrapping: Bool = true,
         focusRequestID: UUID? = nil,
@@ -935,6 +952,7 @@ struct NativeTextBlockEditor: View {
         onCancelSelectionByKeyboard: @escaping () -> Bool = { false },
         onPromoteBlockToPageByKeyboard: @escaping () -> Bool = { false },
         onHorizontalSwipe: @escaping (CGFloat) -> Bool = { _ in false },
+        dragPayloadText: String? = nil,
         keyboardAccessory: AnyView? = nil,
         keyboardAccessoryHeight: CGFloat? = nil,
         keyboardAccessoryReplacesKeyboard: Bool = false,
@@ -966,6 +984,7 @@ struct NativeTextBlockEditor: View {
         self.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
         self.onPromoteBlockToPageByKeyboard = onPromoteBlockToPageByKeyboard
         self.onHorizontalSwipe = onHorizontalSwipe
+        self.dragPayloadText = dragPayloadText
         self.keyboardAccessory = keyboardAccessory
         self.keyboardAccessoryHeight = keyboardAccessoryHeight
         self.keyboardAccessoryReplacesKeyboard = keyboardAccessoryReplacesKeyboard
@@ -1001,6 +1020,7 @@ struct NativeTextBlockEditor: View {
                 onCancelSelectionByKeyboard: onCancelSelectionByKeyboard,
                 onPromoteBlockToPageByKeyboard: onPromoteBlockToPageByKeyboard,
                 onHorizontalSwipe: onHorizontalSwipe,
+                dragPayloadText: dragPayloadText,
                 keyboardAccessory: keyboardAccessory,
                 keyboardAccessoryHeight: keyboardAccessoryHeight,
                 keyboardAccessoryReplacesKeyboard: keyboardAccessoryReplacesKeyboard,
@@ -1247,6 +1267,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onCancelSelectionByKeyboard: () -> Bool
     let onPromoteBlockToPageByKeyboard: () -> Bool
     let onHorizontalSwipe: (CGFloat) -> Bool
+    let dragPayloadText: String?
     let keyboardAccessory: AnyView?
     let keyboardAccessoryHeight: CGFloat?
     let keyboardAccessoryReplacesKeyboard: Bool
@@ -2304,6 +2325,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onCancelSelectionByKeyboard: () -> Bool
     let onPromoteBlockToPageByKeyboard: () -> Bool
     let onHorizontalSwipe: (CGFloat) -> Bool
+    let dragPayloadText: String?
     let keyboardAccessory: AnyView?
     let keyboardAccessoryHeight: CGFloat?
     let keyboardAccessoryReplacesKeyboard: Bool
@@ -2384,6 +2406,18 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.onPasteAttachmentURLs = onPasteAttachmentURLs
         textView.onHorizontalSwipe = onHorizontalSwipe
         textView.installHorizontalSwipeRecognizersIfNeeded()
+        textView.textDragDelegate = context.coordinator
+        if MobileNativeTextBlockDragPolicy.disablesSystemTextDragInteraction {
+            textView.textDragInteraction?.isEnabled = false
+        } else {
+            textView.textDragInteraction?.isEnabled = true
+        }
+        if MobileNativeTextBlockDragPolicy.disablesSystemTextDropInteraction {
+            textView.disableSystemTextDropInteractionIfNeeded()
+        }
+        if MobileNativeTextBlockDragPolicy.installsUIDragInteraction {
+            textView.installBlockDragInteractionIfNeeded(delegate: context.coordinator)
+        }
         textView.accessibilityIdentifier = "editor.text.\(blockID)"
         textView.delegate = context.coordinator
         context.coordinator.applyModelText(text, to: textView)
@@ -2485,6 +2519,18 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             textView.onPasteAttachmentURLs = onPasteAttachmentURLs
             textView.onHorizontalSwipe = onHorizontalSwipe
             textView.installHorizontalSwipeRecognizersIfNeeded()
+            textView.textDragDelegate = context.coordinator
+            if MobileNativeTextBlockDragPolicy.disablesSystemTextDragInteraction {
+                textView.textDragInteraction?.isEnabled = false
+            } else {
+                textView.textDragInteraction?.isEnabled = true
+            }
+            if MobileNativeTextBlockDragPolicy.disablesSystemTextDropInteraction {
+                textView.disableSystemTextDropInteractionIfNeeded()
+            }
+            if MobileNativeTextBlockDragPolicy.installsUIDragInteraction {
+                textView.installBlockDragInteractionIfNeeded(delegate: context.coordinator)
+            }
         }
         if NativeTextCompositionPolicy.shouldApplyModelText(isComposing: textView.markedTextRange != nil),
            textView.text != text {
@@ -2572,7 +2618,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, UITextViewDelegate {
+    final class Coordinator: NSObject, UITextViewDelegate, UITextDragDelegate, UIDragInteractionDelegate {
         var parent: PlatformNativeTextView
         private var focusRequestState = NativeTextFocusRequestState()
         private var modelUpdateGuard = NativeTextModelUpdateGuard()
@@ -2972,6 +3018,45 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             parent.session.endEditing(blockID: parent.blockID)
         }
 
+        func textDraggableView(
+            _ textDraggableView: UIView & UITextDraggable,
+            itemsForDrag dragRequest: UITextDragRequest
+        ) -> [UIDragItem] {
+            [blockDragItem()]
+        }
+
+        func dragInteraction(
+            _ interaction: UIDragInteraction,
+            itemsForBeginning session: UIDragSession
+        ) -> [UIDragItem] {
+            [blockDragItem()]
+        }
+
+        func dragInteraction(
+            _ interaction: UIDragInteraction,
+            sessionAllowsMoveOperation session: UIDragSession
+        ) -> Bool {
+            true
+        }
+
+        func dragInteraction(
+            _ interaction: UIDragInteraction,
+            sessionIsRestrictedToDraggingApplication session: UIDragSession
+        ) -> Bool {
+            true
+        }
+
+        private func blockDragItem() -> UIDragItem {
+            let payload = MobileNativeTextBlockDragPolicy.payloadText(
+                blockID: parent.blockID,
+                explicitPayloadText: parent.dragPayloadText
+            )
+            let itemProvider = NSItemProvider(object: payload as NSString)
+            let dragItem = UIDragItem(itemProvider: itemProvider)
+            dragItem.localObject = payload
+            return dragItem
+        }
+
         func syncCurrentTextSelection(in textView: UITextView) {
             updateSessionSelection(textView: textView)
             parent.session.clearBlockSelection()
@@ -3120,6 +3205,7 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     var onPasteAttachmentURLs: (([URL]) -> Bool)?
     var onHorizontalSwipe: ((CGFloat) -> Bool)?
     private var didInstallHorizontalSwipeRecognizers = false
+    private var blockDragInteraction: UIDragInteraction?
 
     override var intrinsicContentSize: CGSize {
         let size = super.intrinsicContentSize
@@ -3152,6 +3238,27 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
         horizontalPan.cancelsTouchesInView = false
         horizontalPan.delegate = self
         addGestureRecognizer(horizontalPan)
+    }
+
+    func installBlockDragInteractionIfNeeded(delegate: UIDragInteractionDelegate) {
+        guard blockDragInteraction == nil else {
+            blockDragInteraction?.isEnabled = true
+            return
+        }
+
+        let interaction = UIDragInteraction(delegate: delegate)
+        interaction.isEnabled = true
+        interaction.allowsSimultaneousRecognitionDuringLift = false
+        addInteraction(interaction)
+        blockDragInteraction = interaction
+    }
+
+    func disableSystemTextDropInteractionIfNeeded() {
+        guard let textDropInteraction else {
+            return
+        }
+
+        removeInteraction(textDropInteraction)
     }
 
     override var keyCommands: [UIKeyCommand]? {

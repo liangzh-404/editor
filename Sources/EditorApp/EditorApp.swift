@@ -18,6 +18,9 @@ struct EditorApp: App {
     var body: some Scene {
         WindowGroup {
             AppEnvironment.makeRootView()
+                .onAppear {
+                    EditorBundledFontRegistry.registerBundledFontsIfNeeded()
+                }
         }
 #if os(macOS)
         .windowStyle(.hiddenTitleBar)
@@ -28,7 +31,7 @@ struct EditorApp: App {
         }
 #if os(macOS)
         Settings {
-            EditorShortcutSettingsView()
+            EditorSettingsView()
         }
 #endif
     }
@@ -124,9 +127,43 @@ private extension View {
 }
 
 #if os(macOS)
-private struct EditorShortcutSettingsView: View {
+private struct EditorSettingsView: View {
+    @AppStorage(EditorContentFont.appStorageKey) private var contentFontRawValue = EditorContentFont.defaultRawValue
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("外观")
+                    .font(.title3.weight(.semibold))
+            }
+
+            VStack(spacing: 0) {
+                HStack(spacing: 16) {
+                    Text("正文字体")
+                        .font(.body.weight(.medium))
+                        .frame(width: 112, alignment: .leading)
+
+                    Spacer(minLength: 16)
+
+                    Picker("正文字体", selection: $contentFontRawValue) {
+                        ForEach(EditorContentFont.allCases) { font in
+                            Text(font.displayName).tag(font.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 190, alignment: .trailing)
+                    .accessibilityIdentifier("editor.settings.content-font")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
+            )
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("快捷键")
                     .font(.title3.weight(.semibold))
@@ -159,6 +196,7 @@ private struct EditorShortcutSettingsView: View {
     }
 
     private func restoreDefaults() {
+        contentFontRawValue = EditorContentFont.defaultRawValue
         for command in EditorShortcutCommand.visibleCommands {
             UserDefaults.standard.set(command.defaultShortcutRawValue, forKey: command.userDefaultsKey)
         }

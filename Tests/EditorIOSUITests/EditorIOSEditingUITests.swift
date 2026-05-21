@@ -121,10 +121,18 @@ final class EditorIOSEditingUITests: XCTestCase {
             collapsedTitle.waitForExistence(timeout: 3),
             "The page title should appear in the blurred top bar once the body title scrolls away"
         )
-        XCTAssertLessThanOrEqual(
-            collapsedTitle.frame.minY,
-            64,
-            "The collapsed page title should be pinned in the top navigation bar"
+        let pageActions = app.navigationBars.buttons["editor.page-actions"]
+        XCTAssertTrue(pageActions.waitForExistence(timeout: 3), "The page actions button should still anchor the top bar")
+        XCTAssertGreaterThanOrEqual(
+            collapsedTitle.frame.midY,
+            pageActions.frame.minY,
+            "The collapsed page title should stay within the top navigation bar controls"
+        )
+        XCTAssertEqual(
+            collapsedTitle.frame.midY,
+            pageActions.frame.midY,
+            accuracy: 6,
+            "The collapsed page title should be vertically centered with the top bar controls"
         )
     }
 
@@ -612,6 +620,41 @@ final class EditorIOSEditingUITests: XCTestCase {
         XCTAssertTrue(firstValue.contains("Alpha"), "The original block should keep the text before Return; value: \(firstValue)")
         XCTAssertFalse(firstValue.contains("Beta"), "Text after Return should not remain in the original block; value: \(firstValue)")
         XCTAssertTrue(secondValue.contains("Beta"), "Typing after Return should continue in the inserted block; value: \(secondValue)")
+    }
+
+    @MainActor
+    func testIPhoneTextBlockCanReorderByLongPressDraggingFromTextView() {
+        let app = makeApp()
+        app.launch()
+
+        let textViews = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        )
+        let firstTextView = textViews.firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should be editable")
+
+        firstTextView.tap()
+        firstTextView.typeText(" Alpha\nBeta")
+
+        let source = textViews.element(boundBy: 0)
+        let destination = textViews.element(boundBy: 1)
+        XCTAssertTrue(source.waitForExistence(timeout: 5), "The source text block should still exist before dragging")
+        XCTAssertTrue(destination.waitForExistence(timeout: 5), "Return should create a destination text block")
+
+        let sourceCoordinate = source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let destinationLowerCoordinate = destination.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+        sourceCoordinate.press(forDuration: 0.8, thenDragTo: destinationLowerCoordinate)
+
+        let reorderedFirstValue = textViews.element(boundBy: 0).value as? String ?? ""
+        let reorderedSecondValue = textViews.element(boundBy: 1).value as? String ?? ""
+        XCTAssertTrue(
+            reorderedFirstValue.contains("Beta"),
+            "Long-press dragging from inside the native text view should move the first text block below the second; first value: \(reorderedFirstValue), second value: \(reorderedSecondValue)"
+        )
+        XCTAssertTrue(
+            reorderedSecondValue.contains("Alpha"),
+            "The dragged source text should land after the destination; first value: \(reorderedFirstValue), second value: \(reorderedSecondValue)"
+        )
     }
 
     @MainActor
