@@ -359,6 +359,7 @@ struct EditorShellView: View {
             guard foregroundSyncActivationPolicy.shouldSync(for: phase) else {
                 return
             }
+            viewModel.lockExpiredEncryptedPagesForUI()
             viewModel.syncAfterForegroundInterval()
         }
     }

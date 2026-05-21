@@ -119,6 +119,9 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var unlockedEncryptedPageIDs: Set<String> = []
     @Published private(set) var authenticatingEncryptedPageID: String?
 
+    private static let encryptedPageAutoLockInterval: TimeInterval = 60
+    private static let encryptedPageAutoLockIntervalNanoseconds: UInt64 = 60_000_000_000
+
     private let repository: PageRepository?
     private let diaryRepository: DiaryRepository?
     private let tagRepository: TagRepository?
@@ -148,6 +151,8 @@ final class WorkspaceViewModel: ObservableObject {
     private var isForegroundSyncRerunPending = false
     private var nextForegroundSyncAttemptAt: Date?
     private var syncChangeObservation: SyncChangeObservation?
+    private var encryptedPageLastOpenedAt: [String: Date] = [:]
+    private var encryptedPageAutoLockTask: Task<Void, Never>?
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
 
     var canNavigateBack: Bool {
@@ -331,6 +336,9 @@ final class WorkspaceViewModel: ObservableObject {
         attachmentPreviewGenerationStatuses = [:]
         unlockedEncryptedPageIDs = []
         authenticatingEncryptedPageID = nil
+        encryptedPageLastOpenedAt = [:]
+        encryptedPageAutoLockTask?.cancel()
+        encryptedPageAutoLockTask = nil
         startObservingSyncChangesIfNeeded()
     }
 
@@ -365,6 +373,8 @@ final class WorkspaceViewModel: ObservableObject {
         attachmentPreviewGenerationStatuses = [:]
         unlockedEncryptedPageIDs = []
         authenticatingEncryptedPageID = nil
+        encryptedPageLastOpenedAt = [:]
+        encryptedPageAutoLockTask = nil
         requestInitialCompactPageNavigationIfNeeded(source: "snapshot")
     }
 
@@ -543,6 +553,10 @@ final class WorkspaceViewModel: ObservableObject {
         !isEncryptedPageUnlocked(pageID)
     }
 
+    func lockExpiredEncryptedPagesForUI() {
+        lockExpiredEncryptedPages(now: currentDateProvider())
+    }
+
     private func isPageContentVisible(pageID: String) -> Bool {
         isEncryptedPageUnlocked(pageID)
     }
@@ -553,6 +567,7 @@ final class WorkspaceViewModel: ObservableObject {
             return true
         }
         guard !unlockedEncryptedPageIDs.contains(pageID) else {
+            markEncryptedPageOpened(pageID)
             return true
         }
         guard authenticatingEncryptedPageID != pageID else {
@@ -568,6 +583,7 @@ final class WorkspaceViewModel: ObservableObject {
 
         if didAuthenticate {
             unlockedEncryptedPageIDs.insert(pageID)
+            markEncryptedPageOpened(pageID)
             EditorLog.security.debug(
                 "encrypted_page_unlocked page_id=\(pageID, privacy: .public)"
             )
@@ -580,11 +596,67 @@ final class WorkspaceViewModel: ObservableObject {
         return false
     }
 
+    private func markEncryptedPageOpened(_ pageID: String) {
+        guard snapshot.pages.contains(where: { $0.id == pageID && $0.isEncrypted }) else {
+            return
+        }
+
+        encryptedPageLastOpenedAt[pageID] = currentDateProvider()
+    }
+
+    private func lockExpiredEncryptedPages(now: Date) {
+        guard !unlockedEncryptedPageIDs.isEmpty else {
+            return
+        }
+
+        let encryptedPageIDs = Set(snapshot.pages.filter(\.isEncrypted).map(\.id))
+        let expiredPageIDs = unlockedEncryptedPageIDs.filter { pageID in
+            guard encryptedPageIDs.contains(pageID) else {
+                return true
+            }
+            guard selectedPageID != pageID else {
+                return false
+            }
+            guard let lastOpenedAt = encryptedPageLastOpenedAt[pageID] else {
+                return true
+            }
+            return now.timeIntervalSince(lastOpenedAt) >= Self.encryptedPageAutoLockInterval
+        }
+
+        for pageID in expiredPageIDs {
+            unlockedEncryptedPageIDs.remove(pageID)
+            encryptedPageLastOpenedAt.removeValue(forKey: pageID)
+            EditorLog.security.debug(
+                "encrypted_page_auto_locked page_id=\(pageID, privacy: .public)"
+            )
+        }
+    }
+
+    private func scheduleEncryptedPageAutoLockIfNeeded(leftPageID: String?) {
+        guard let leftPageID,
+              unlockedEncryptedPageIDs.contains(leftPageID),
+              snapshot.pages.contains(where: { $0.id == leftPageID && $0.isEncrypted })
+        else {
+            return
+        }
+
+        encryptedPageAutoLockTask?.cancel()
+        encryptedPageAutoLockTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: Self.encryptedPageAutoLockIntervalNanoseconds)
+            } catch {
+                return
+            }
+            self?.lockExpiredEncryptedPagesForUI()
+        }
+    }
+
     private func selectPage(
         id: String,
         collection: WorkspaceCollection,
         recordHistory: Bool
     ) {
+        let previousSelectedPageID = selectedPageID
         if recordHistory {
             recordNavigationHistoryBeforeOpening(pageID: id)
         }
@@ -594,6 +666,9 @@ final class WorkspaceViewModel: ObservableObject {
         refreshBacklinksForSelectedPage()
         refreshExternalLinksForSelectedPage()
         refreshConflictsForSelectedPage()
+        if previousSelectedPageID != id {
+            scheduleEncryptedPageAutoLockIfNeeded(leftPageID: previousSelectedPageID)
+        }
     }
 
     private var diaryPageIDs: Set<String> {
@@ -2064,6 +2139,7 @@ final class WorkspaceViewModel: ObservableObject {
         do {
             try updatePageEncryption(id: pageID, isEncrypted: isEncrypted)
             unlockedEncryptedPageIDs.remove(pageID)
+            encryptedPageLastOpenedAt.removeValue(forKey: pageID)
             EditorLog.input.debug(
                 "page_encryption_visible page_id=\(pageID, privacy: .public) is_encrypted=\(isEncrypted, privacy: .public)"
             )
@@ -3411,6 +3487,9 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func apply(snapshot: WorkspaceSnapshot) {
         self.snapshot = snapshot
+        let encryptedPageIDs = Set(snapshot.pages.filter(\.isEncrypted).map(\.id))
+        unlockedEncryptedPageIDs.formIntersection(encryptedPageIDs)
+        encryptedPageLastOpenedAt = encryptedPageLastOpenedAt.filter { encryptedPageIDs.contains($0.key) }
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID

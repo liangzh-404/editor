@@ -259,6 +259,79 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUnlockedEncryptedPageAutoLocksAfterOneMinuteAway() async throws {
+        var currentDate = Self.date(year: 2026, month: 5, day: 21)
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let publicPageID = try XCTUnwrap(snapshot.selectedPageID)
+        let encryptedPage = try repository.createPage(
+            workspaceID: workspaceID,
+            title: "一分钟后重锁",
+            isEncrypted: true
+        )
+        let authenticator = RecordingEncryptedPageAuthenticator(results: [true, true])
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            encryptedPageAuthenticator: authenticator,
+            currentDateProvider: { currentDate }
+        )
+        try viewModel.load()
+
+        await viewModel.selectPageForUI(id: encryptedPage.id)
+        XCTAssertTrue(viewModel.isEncryptedPageUnlocked(encryptedPage.id))
+
+        await viewModel.selectPageForUI(id: publicPageID)
+        currentDate = currentDate.addingTimeInterval(59)
+        viewModel.lockExpiredEncryptedPagesForUI()
+        XCTAssertTrue(viewModel.isEncryptedPageUnlocked(encryptedPage.id))
+
+        currentDate = currentDate.addingTimeInterval(1)
+        viewModel.lockExpiredEncryptedPagesForUI()
+
+        XCTAssertFalse(viewModel.isEncryptedPageUnlocked(encryptedPage.id))
+        await viewModel.selectPageForUI(id: encryptedPage.id)
+        XCTAssertEqual(authenticator.requestCount, 2)
+    }
+
+    @MainActor
+    func testUnlockedEncryptedPageStaysUnlockedWhileOpenPastAutoLockInterval() async throws {
+        var currentDate = Self.date(year: 2026, month: 5, day: 21)
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let cipher = EncryptedNoteCipher(
+            metadataStore: KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        )
+        let repository = PageRepository(database: database, encryptedNoteCipher: cipher)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let encryptedPage = try repository.createPage(
+            workspaceID: workspaceID,
+            title: "打开时不重锁",
+            isEncrypted: true
+        )
+        let authenticator = RecordingEncryptedPageAuthenticator(results: [true])
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            encryptedPageAuthenticator: authenticator,
+            currentDateProvider: { currentDate }
+        )
+        try viewModel.load()
+
+        await viewModel.selectPageForUI(id: encryptedPage.id)
+        currentDate = currentDate.addingTimeInterval(120)
+        viewModel.lockExpiredEncryptedPagesForUI()
+
+        XCTAssertTrue(viewModel.isEncryptedPageUnlocked(encryptedPage.id))
+        XCTAssertEqual(authenticator.requestCount, 1)
+    }
+
+    @MainActor
     func testOpenParentPageForCurrentPageUsesRecordedPageParentLink() throws {
         let database = try migratedDatabase()
         defer { database.close() }
