@@ -860,7 +860,8 @@ final class SyncEngineTests: XCTestCase {
                     title: "Roadmap",
                     orderKey: "000001",
                     isArchived: false,
-                    isFavorite: true
+                    isFavorite: true,
+                    isPinned: true
                 )
             ],
             attachmentChanges: [
@@ -908,6 +909,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(page.notebookID, "notebook-remote")
         XCTAssertEqual(page.title, "Roadmap")
         XCTAssertEqual(page.isFavorite, true)
+        XCTAssertEqual(page.isPinned, true)
         XCTAssertNotNil(page.updatedAt)
         XCTAssertEqual(snapshot.favoritePages.map(\.id), ["page-remote"])
         XCTAssertEqual(snapshot.blocks.map(\.textPlain), ["Remote body"])
@@ -1203,6 +1205,7 @@ final class SyncEngineTests: XCTestCase {
                     $0["orderKey"] = "000001" as CKRecordValue
                     $0["isArchived"] = NSNumber(value: false)
                     $0["isFavorite"] = NSNumber(value: true)
+                    $0["isPinned"] = NSNumber(value: true)
                     $0["isEncrypted"] = NSNumber(value: true)
                 }
             ],
@@ -1261,6 +1264,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.diaryPageChanges.map(\.pageID), ["page-remote"])
         XCTAssertEqual(changeSet.diaryPageChanges.first?.diaryDate, "2026-05-21")
         XCTAssertEqual(changeSet.pageChanges.first?.isFavorite, true)
+        XCTAssertEqual(changeSet.pageChanges.first?.isPinned, true)
         XCTAssertEqual(changeSet.pageChanges.first?.isEncrypted, true)
         XCTAssertEqual(changeSet.tagChanges.map(\.tagID), ["tag-remote"])
         XCTAssertEqual(changeSet.tagChanges.first?.name, "Remote Tag")
@@ -1825,6 +1829,7 @@ final class SyncEngineTests: XCTestCase {
         let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         try pageRepository.updatePageFavorite(pageID: pageID, isFavorite: true)
+        try pageRepository.updatePagePinned(pageID: pageID, isPinned: true)
         try pageRepository.updatePageEncryption(pageID: pageID, isEncrypted: true)
         let saver = CapturingCloudKitRecordSaver()
 
@@ -1837,6 +1842,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(record.recordType, "PageRecord")
         XCTAssertEqual(record["entityID"] as? String, pageID)
         XCTAssertEqual((record["isFavorite"] as? NSNumber)?.boolValue, true)
+        XCTAssertEqual((record["isPinned"] as? NSNumber)?.boolValue, true)
         XCTAssertEqual((record["isEncrypted"] as? NSNumber)?.boolValue, true)
         XCTAssertEqual((record["isArchived"] as? NSNumber)?.boolValue, false)
         XCTAssertEqual(record["title"] as? String, "欢迎")

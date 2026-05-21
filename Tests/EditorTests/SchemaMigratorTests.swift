@@ -178,6 +178,17 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(pageColumns.contains("is_encrypted"))
     }
 
+    func testPagesExposePinnedNoteFlag() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let pageColumns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('pages')"))
+
+        XCTAssertTrue(pageColumns.contains("is_pinned"))
+    }
+
     func testMigrationCreatesTagAndDiaryTables() throws {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         defer { database.close() }

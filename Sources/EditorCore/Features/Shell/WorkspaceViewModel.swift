@@ -1679,6 +1679,20 @@ final class WorkspaceViewModel: ObservableObject {
         try refreshDerivedState(rebuildSearchIndex: false)
     }
 
+    func updatePagePinned(id pageID: String, isPinned: Bool) throws {
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let previousCollection = selectedCollection
+        let previousPageID = selectedPageID
+        try repository.updatePagePinned(pageID: pageID, isPinned: isPinned)
+        let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+        apply(snapshot: loadedSnapshot)
+        restoreSelectionAfterReload(collection: previousCollection, pageID: previousPageID)
+        try refreshDerivedState(rebuildSearchIndex: false)
+    }
+
     func updatePageEncryption(id pageID: String, isEncrypted: Bool) throws {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
@@ -2248,6 +2262,19 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "page_favorite_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func updatePagePinnedForUI(id pageID: String, isPinned: Bool) {
+        do {
+            try updatePagePinned(id: pageID, isPinned: isPinned)
+            EditorLog.input.debug(
+                "page_pinned_visible page_id=\(pageID, privacy: .public) is_pinned=\(isPinned, privacy: .public)"
+            )
+        } catch {
+            EditorLog.input.error(
+                "page_pinned_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }

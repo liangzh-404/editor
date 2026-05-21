@@ -534,6 +534,43 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneAllDocumentsPageRowRevealsArchiveFavoriteAndPinActions() {
+        let app = makeApp()
+        app.launch()
+
+        let documentListBackButton = app.navigationBars.buttons["全部文档"]
+        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Initial compact page should expose a back button to the document list")
+        documentListBackButton.tap()
+
+        let libraryBackButton = app.navigationBars.buttons["资料库"]
+        XCTAssertTrue(libraryBackButton.waitForExistence(timeout: 5), "The document list should expose a back button to the library")
+        libraryBackButton.tap()
+
+        let allDocuments = app.buttons["editor.compact.all-documents"]
+        XCTAssertTrue(allDocuments.waitForExistence(timeout: 5), "The library screen should expose all documents")
+        allDocuments.tap()
+
+        let documentList = app.scrollViews["editor.compact-document-list"]
+        XCTAssertTrue(documentList.waitForExistence(timeout: 5), "All documents should open the middle document-list screen")
+
+        let welcomePage = app.buttons["editor.page.page-welcome"]
+        XCTAssertTrue(welcomePage.waitForExistence(timeout: 5), "All documents should show the welcome page row")
+
+        let archiveAction = app.buttons["editor.page.page-welcome.swipe.archive"]
+        let favoriteAction = app.buttons["editor.page.page-welcome.swipe.favorite"]
+        let pinAction = app.buttons["editor.page.page-welcome.swipe.pin"]
+        XCTAssertFalse(archiveAction.exists)
+        XCTAssertFalse(favoriteAction.exists)
+        XCTAssertFalse(pinAction.exists)
+
+        welcomePage.swipeLeft()
+
+        XCTAssertTrue(archiveAction.waitForExistence(timeout: 5))
+        XCTAssertTrue(favoriteAction.waitForExistence(timeout: 5))
+        XCTAssertTrue(pinAction.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testIPhoneWelcomeBlockAcceptsTypedText() {
         let app = makeApp()
         app.launch()

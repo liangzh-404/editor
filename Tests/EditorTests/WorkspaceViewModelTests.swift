@@ -1912,6 +1912,30 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdatePagePinnedRefreshesSnapshotAndKeepsSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let scratchPage = try viewModel.createPageInSelectedWorkspace(title: "Scratch")
+
+        try viewModel.updatePagePinned(id: scratchPage.id, isPinned: true)
+
+        XCTAssertEqual(viewModel.selectedPageID, scratchPage.id)
+        XCTAssertEqual(viewModel.selectedPage?.isPinned, true)
+        XCTAssertEqual(viewModel.snapshot.pages.first?.id, scratchPage.id)
+
+        try viewModel.updatePagePinned(id: scratchPage.id, isPinned: false)
+
+        XCTAssertEqual(viewModel.selectedPageID, scratchPage.id)
+        XCTAssertEqual(viewModel.selectedPage?.isPinned, false)
+    }
+
+    @MainActor
     func testUndoLastPageArchiveRestoresBackgroundPageWithoutChangingCurrentSelection() throws {
         let database = try migratedDatabase()
         defer { database.close() }

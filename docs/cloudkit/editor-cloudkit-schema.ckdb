@@ -71,6 +71,7 @@ DEFINE SCHEMA
         entityType      STRING,
         isArchived      INT64,
         isFavorite      INT64,
+        isPinned        INT64,
         notebookID      STRING,
         orderKey        STRING,
         syncGeneration  STRING,

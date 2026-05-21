@@ -1165,6 +1165,55 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testPageRowChromeRemovesLeadingDocumentIconAndShowsStatusBadges() {
+        let page = PageSummary(
+            id: "page-pinned-favorite",
+            workspaceID: "workspace",
+            title: "Pinned Favorite",
+            isFavorite: true,
+            isPinned: true,
+            isEncrypted: true
+        )
+
+        XCTAssertFalse(PageRowLeadingGlyphPolicy.showsDocumentIcon)
+        XCTAssertEqual(
+            PageRowStatusBadgeModel.badges(for: page).map(\.accessibilityLabel),
+            ["已置顶", "已收藏", "已加密"]
+        )
+    }
+
+    func testPageRowSwipeActionsIncludeArchiveFavoriteAndPin() {
+        let page = PageSummary(
+            id: "page-actions",
+            workspaceID: "workspace",
+            title: "Actions",
+            isFavorite: false,
+            isPinned: false
+        )
+
+        XCTAssertEqual(
+            PageRowSwipeActionModel.actions(for: page).map(\.kind),
+            [.archive, .favorite, .pin]
+        )
+        XCTAssertEqual(
+            PageRowSwipeActionModel.actions(for: page).map(\.title),
+            ["归档", "收藏", "置顶"]
+        )
+
+        let pinnedFavorite = PageSummary(
+            id: "page-actions-on",
+            workspaceID: "workspace",
+            title: "Actions On",
+            isFavorite: true,
+            isPinned: true
+        )
+
+        XCTAssertEqual(
+            PageRowSwipeActionModel.actions(for: pinnedFavorite).map(\.title),
+            ["归档", "取消收藏", "取消置顶"]
+        )
+    }
+
     func testArchiveUndoVisibilityStaysOutOfSearchAndArchiveSections() {
         XCTAssertFalse(
             ArchiveUndoVisibilityPolicy.isVisible(canUndoPageArchive: true, selectedCollection: .search),

@@ -80,6 +80,7 @@ final class PageRepository {
                    pages.notebook_id,
                    pages.title,
                    pages.is_favorite,
+                   pages.is_pinned,
                    pages.is_encrypted,
                    CASE
                        WHEN diary_pages.page_id IS NOT NULL THEN pages.created_at
@@ -90,7 +91,7 @@ final class PageRepository {
             LEFT JOIN diary_pages ON diary_pages.page_id = pages.id
             WHERE pages.workspace_id = ?
               AND pages.is_archived = 0
-            ORDER BY effective_updated_at DESC, pages.created_at DESC
+            ORDER BY pages.is_pinned DESC, effective_updated_at DESC, pages.created_at DESC
             """,
             bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
         ).map { row in
@@ -100,6 +101,7 @@ final class PageRepository {
                 notebookID: row["notebook_id"] ?? nil,
                 title: decryptPageTitleForSnapshot(row),
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
+                isPinned: Self.sqliteBool(row["is_pinned"]),
                 isEncrypted: Self.sqliteBool(row["is_encrypted"]),
                 updatedAt: row["effective_updated_at"]
             )
@@ -112,6 +114,7 @@ final class PageRepository {
                    pages.notebook_id,
                    pages.title,
                    pages.is_favorite,
+                   pages.is_pinned,
                    pages.is_encrypted,
                    pages.updated_at
             FROM pages
@@ -128,6 +131,7 @@ final class PageRepository {
                 notebookID: row["notebook_id"] ?? nil,
                 title: decryptPageTitleForSnapshot(row),
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
+                isPinned: Self.sqliteBool(row["is_pinned"]),
                 isEncrypted: Self.sqliteBool(row["is_encrypted"]),
                 updatedAt: row["updated_at"]
             )
@@ -320,6 +324,45 @@ final class PageRepository {
 
         EditorLog.store.debug(
             "page_favorite_updated page_id=\(pageID, privacy: .public) is_favorite=\(isFavorite, privacy: .public)"
+        )
+    }
+
+    func updatePagePinned(pageID: String, isPinned: Bool) throws {
+        let rows = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        guard rows.first != nil else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        let now = Self.timestamp()
+        try database.execute(
+            """
+            UPDATE pages
+            SET is_pinned = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .integer(isPinned ? 1 : 0),
+                .text(now),
+                .text(pageID)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "page",
+            entityID: pageID,
+            changeType: "update"
+        )
+
+        EditorLog.store.debug(
+            "page_pinned_updated page_id=\(pageID, privacy: .public) is_pinned=\(isPinned, privacy: .public)"
         )
     }
 
@@ -792,6 +835,7 @@ final class PageRepository {
             notebookID: resolvedNotebookID,
             title: title,
             isFavorite: false,
+            isPinned: false,
             isEncrypted: isEncrypted,
             updatedAt: now
         )
@@ -1976,6 +2020,7 @@ final class PageRepository {
             notebookID: notebookID,
             title: title,
             isFavorite: false,
+            isPinned: false,
             isEncrypted: sourceIsEncrypted,
             updatedAt: now
         )
@@ -1989,6 +2034,7 @@ final class PageRepository {
                    notebook_id,
                    title,
                    is_favorite,
+                   is_pinned,
                    is_encrypted,
                    updated_at
             FROM pages
@@ -2007,6 +2053,7 @@ final class PageRepository {
             notebookID: row["notebook_id"] ?? nil,
             title: try decryptPageTitleIfNeeded(row),
             isFavorite: Self.sqliteBool(row["is_favorite"]),
+            isPinned: Self.sqliteBool(row["is_pinned"]),
             isEncrypted: Self.sqliteBool(row["is_encrypted"]),
             updatedAt: row["updated_at"]
         )

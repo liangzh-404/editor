@@ -45,6 +45,7 @@ struct RemotePageChange: Equatable, Sendable {
     let orderKey: String
     let isArchived: Bool
     let isFavorite: Bool
+    let isPinned: Bool
     let isEncrypted: Bool
     let updatedAt: String?
 
@@ -56,6 +57,7 @@ struct RemotePageChange: Equatable, Sendable {
         orderKey: String,
         isArchived: Bool,
         isFavorite: Bool = false,
+        isPinned: Bool = false,
         isEncrypted: Bool = false,
         updatedAt: String? = nil
     ) {
@@ -66,6 +68,7 @@ struct RemotePageChange: Equatable, Sendable {
         self.orderKey = orderKey
         self.isArchived = isArchived
         self.isFavorite = isFavorite
+        self.isPinned = isPinned
         self.isEncrypted = isEncrypted
         self.updatedAt = updatedAt
     }
@@ -294,11 +297,12 @@ final class SyncMergeEngine {
                 order_key,
                 is_archived,
                 is_favorite,
+                is_pinned,
                 is_encrypted,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
                 notebook_id = excluded.notebook_id,
@@ -306,6 +310,7 @@ final class SyncMergeEngine {
                 order_key = excluded.order_key,
                 is_archived = excluded.is_archived,
                 is_favorite = excluded.is_favorite,
+                is_pinned = excluded.is_pinned,
                 is_encrypted = excluded.is_encrypted,
                 updated_at = excluded.updated_at
             """,
@@ -317,6 +322,7 @@ final class SyncMergeEngine {
                 .text(remote.orderKey),
                 .integer(remote.isArchived ? 1 : 0),
                 .integer(remote.isFavorite ? 1 : 0),
+                .integer(remote.isPinned ? 1 : 0),
                 .integer(remote.isEncrypted ? 1 : 0),
                 .text(now),
                 .text(now)

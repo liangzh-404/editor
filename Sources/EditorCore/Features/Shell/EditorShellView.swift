@@ -1421,12 +1421,11 @@ private struct CompactRecentPageCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: page.isFavorite ? "star.fill" : PageRowIconResolver.systemName(isEncrypted: page.isEncrypted))
-                    .foregroundStyle(page.isFavorite ? Color.yellow : Color.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(page.title)
                     .font(.headline.weight(.bold))
                     .lineLimit(1)
+                PageRowStatusBadges(page: page, font: .caption.weight(.semibold))
                 Spacer()
             }
 
@@ -1457,6 +1456,133 @@ private struct CompactRecentPageCard: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.white.opacity(0.72))
         )
+    }
+}
+
+enum PageRowLeadingGlyphPolicy {
+    static let showsDocumentIcon = false
+}
+
+enum PageRowStatusBadgeKind: Hashable, Sendable {
+    case pinned
+    case favorite
+    case encrypted
+}
+
+struct PageRowStatusBadge: Equatable, Sendable {
+    let kind: PageRowStatusBadgeKind
+    let systemImage: String
+    let accessibilityLabel: String
+}
+
+enum PageRowStatusBadgeModel {
+    static func badges(for page: PageSummary) -> [PageRowStatusBadge] {
+        var badges: [PageRowStatusBadge] = []
+        if page.isPinned {
+            badges.append(
+                PageRowStatusBadge(
+                    kind: .pinned,
+                    systemImage: "pin.fill",
+                    accessibilityLabel: "已置顶"
+                )
+            )
+        }
+        if page.isFavorite {
+            badges.append(
+                PageRowStatusBadge(
+                    kind: .favorite,
+                    systemImage: "star.fill",
+                    accessibilityLabel: "已收藏"
+                )
+            )
+        }
+        if page.isEncrypted {
+            badges.append(
+                PageRowStatusBadge(
+                    kind: .encrypted,
+                    systemImage: "lock.fill",
+                    accessibilityLabel: "已加密"
+                )
+            )
+        }
+        return badges
+    }
+}
+
+enum PageRowSwipeActionKind: Hashable, Sendable {
+    case archive
+    case favorite
+    case pin
+
+    var accessibilityIdentifier: String {
+        switch self {
+        case .archive:
+            return "archive"
+        case .favorite:
+            return "favorite"
+        case .pin:
+            return "pin"
+        }
+    }
+}
+
+struct PageRowSwipeAction: Identifiable, Equatable, Sendable {
+    let kind: PageRowSwipeActionKind
+    let title: String
+    let systemImage: String
+
+    var id: PageRowSwipeActionKind {
+        kind
+    }
+}
+
+enum PageRowSwipeActionModel {
+    static func actions(for page: PageSummary) -> [PageRowSwipeAction] {
+        [
+            PageRowSwipeAction(
+                kind: .archive,
+                title: "归档",
+                systemImage: "archivebox"
+            ),
+            PageRowSwipeAction(
+                kind: .favorite,
+                title: page.isFavorite ? "取消收藏" : "收藏",
+                systemImage: page.isFavorite ? "star.slash" : "star"
+            ),
+            PageRowSwipeAction(
+                kind: .pin,
+                title: page.isPinned ? "取消置顶" : "置顶",
+                systemImage: page.isPinned ? "pin.slash" : "pin"
+            )
+        ]
+    }
+}
+
+private struct PageRowStatusBadges: View {
+    let page: PageSummary
+    let font: Font
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(PageRowStatusBadgeModel.badges(for: page), id: \.kind) { badge in
+                Image(systemName: badge.systemImage)
+                    .font(font)
+                    .foregroundStyle(color(for: badge.kind))
+                    .accessibilityLabel(badge.accessibilityLabel)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func color(for kind: PageRowStatusBadgeKind) -> Color {
+        switch kind {
+        case .pinned:
+            return EditorDesignTokens.Colors.accent.color
+        case .favorite:
+            return .yellow
+        case .encrypted:
+            return EditorDesignTokens.Colors.tertiaryText.color
+        }
     }
 }
 
@@ -5187,6 +5313,18 @@ private struct PageListView: View {
             }
 
             Button {
+                viewModel.updatePagePinnedForUI(
+                    id: page.id,
+                    isPinned: !page.isPinned
+                )
+            } label: {
+                Label(
+                    page.isPinned ? "取消置顶" : "置顶",
+                    systemImage: page.isPinned ? "pin.slash" : "pin"
+                )
+            }
+
+            Button {
                 viewModel.updatePageEncryptionForUI(
                     id: page.id,
                     isEncrypted: !page.isEncrypted
@@ -5203,6 +5341,49 @@ private struct PageListView: View {
             } label: {
                 Label("归档", systemImage: "archivebox")
             }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            pageSwipeActionButtons(for: page)
+        }
+    }
+
+    @ViewBuilder
+    private func pageSwipeActionButtons(for page: PageSummary) -> some View {
+        ForEach(PageRowSwipeActionModel.actions(for: page)) { action in
+            Button(role: action.kind == .archive ? .destructive : nil) {
+                performSwipeAction(action.kind, for: page)
+            } label: {
+                Label(action.title, systemImage: action.systemImage)
+            }
+            .tint(swipeActionTint(action.kind))
+        }
+    }
+
+    private func performSwipeAction(_ action: PageRowSwipeActionKind, for page: PageSummary) {
+        switch action {
+        case .archive:
+            viewModel.archivePageForUI(id: page.id)
+        case .favorite:
+            viewModel.updatePageFavoriteForUI(
+                id: page.id,
+                isFavorite: !page.isFavorite
+            )
+        case .pin:
+            viewModel.updatePagePinnedForUI(
+                id: page.id,
+                isPinned: !page.isPinned
+            )
+        }
+    }
+
+    private func swipeActionTint(_ action: PageRowSwipeActionKind) -> Color {
+        switch action {
+        case .archive:
+            return .red
+        case .favorite:
+            return .yellow
+        case .pin:
+            return EditorDesignTokens.Colors.accent.color
         }
     }
 
@@ -5485,6 +5666,18 @@ private struct CompactPageListView: View {
                             }
 
                             Button {
+                                viewModel.updatePagePinnedForUI(
+                                    id: page.id,
+                                    isPinned: !page.isPinned
+                                )
+                            } label: {
+                                Label(
+                                    page.isPinned ? "取消置顶" : "置顶",
+                                    systemImage: page.isPinned ? "pin.slash" : "pin"
+                                )
+                            }
+
+                            Button {
                                 viewModel.updatePageEncryptionForUI(
                                     id: page.id,
                                     isEncrypted: !page.isEncrypted
@@ -5501,6 +5694,9 @@ private struct CompactPageListView: View {
                             } label: {
                                 Label("归档", systemImage: "archivebox")
                             }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            pageSwipeActionButtons(for: page)
                         }
                     }
                 } header: {
@@ -5618,6 +5814,46 @@ private struct CompactPageListView: View {
         viewModel.snapshot.pages.filter { $0.notebookID == notebook.id }
     }
 
+    @ViewBuilder
+    private func pageSwipeActionButtons(for page: PageSummary) -> some View {
+        ForEach(PageRowSwipeActionModel.actions(for: page)) { action in
+            Button(role: action.kind == .archive ? .destructive : nil) {
+                performSwipeAction(action.kind, for: page)
+            } label: {
+                Label(action.title, systemImage: action.systemImage)
+            }
+            .tint(swipeActionTint(action.kind))
+        }
+    }
+
+    private func performSwipeAction(_ action: PageRowSwipeActionKind, for page: PageSummary) {
+        switch action {
+        case .archive:
+            viewModel.archivePageForUI(id: page.id)
+        case .favorite:
+            viewModel.updatePageFavoriteForUI(
+                id: page.id,
+                isFavorite: !page.isFavorite
+            )
+        case .pin:
+            viewModel.updatePagePinnedForUI(
+                id: page.id,
+                isPinned: !page.isPinned
+            )
+        }
+    }
+
+    private func swipeActionTint(_ action: PageRowSwipeActionKind) -> Color {
+        switch action {
+        case .archive:
+            return .red
+        case .favorite:
+            return .yellow
+        case .pin:
+            return EditorDesignTokens.Colors.accent.color
+        }
+    }
+
     private func nestingLevel(for notebook: NotebookSummary) -> Int {
         NotebookHierarchy.nestingLevel(for: notebook, in: viewModel.snapshot.notebooks)
     }
@@ -5681,7 +5917,7 @@ private struct CompactCollectionPageListView: View {
                 .padding(.bottom, 18)
         }
 #if os(iOS)
-        .highPriorityGesture(
+        .simultaneousGesture(
             DragGesture(minimumDistance: 56, coordinateSpace: .local)
                 .onEnded { value in
                     guard abs(value.translation.width) > abs(value.translation.height) * 1.25 else {
@@ -5689,8 +5925,6 @@ private struct CompactCollectionPageListView: View {
                     }
                     if value.translation.width > 56 {
                         onRevealMainMenu()
-                    } else if value.translation.width < -56 {
-                        onRevealNextScreen()
                     }
                 }
         )
@@ -5706,15 +5940,25 @@ private struct CompactCollectionPageListView: View {
             compactArchiveSection
         default:
             ForEach(items) { item in
-                NavigationLink(value: CompactRoute.page(item.page.id)) {
-                    CompactRecentPageCard(
-                        page: item.page,
-                        tagNames: item.tagNames,
-                        preview: item.preview
-                    )
+                CompactPageSwipeActionsRow(
+                    page: item.page,
+                    onAction: { action in
+                        performSwipeAction(action, for: item.page)
+                    }
+                ) {
+                    NavigationLink(value: CompactRoute.page(item.page.id)) {
+                        CompactRecentPageCard(
+                            page: item.page,
+                            tagNames: item.tagNames,
+                            preview: item.preview
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("editor.page.\(item.page.id)")
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("editor.page.\(item.page.id)")
+                .contextMenu {
+                    pageContextMenuButtons(for: item.page)
+                }
             }
         }
     }
@@ -5767,6 +6011,91 @@ private struct CompactCollectionPageListView: View {
         )
     }
 
+    @ViewBuilder
+    private func pageContextMenuButtons(for page: PageSummary) -> some View {
+        Button {
+            viewModel.updatePageFavoriteForUI(
+                id: page.id,
+                isFavorite: !page.isFavorite
+            )
+        } label: {
+            Label(
+                page.isFavorite ? "取消收藏" : "加入收藏",
+                systemImage: page.isFavorite ? "star.slash" : "star"
+            )
+        }
+
+        Button {
+            viewModel.updatePagePinnedForUI(
+                id: page.id,
+                isPinned: !page.isPinned
+            )
+        } label: {
+            Label(
+                page.isPinned ? "取消置顶" : "置顶",
+                systemImage: page.isPinned ? "pin.slash" : "pin"
+            )
+        }
+
+        Button {
+            viewModel.updatePageEncryptionForUI(
+                id: page.id,
+                isEncrypted: !page.isEncrypted
+            )
+        } label: {
+            Label(
+                page.isEncrypted ? "取消加密" : "加密",
+                systemImage: page.isEncrypted ? "lock.open" : "lock"
+            )
+        }
+
+        Button {
+            viewModel.archivePageForUI(id: page.id)
+        } label: {
+            Label("归档", systemImage: "archivebox")
+        }
+    }
+
+    @ViewBuilder
+    private func pageSwipeActionButtons(for page: PageSummary) -> some View {
+        ForEach(PageRowSwipeActionModel.actions(for: page)) { action in
+            Button(role: action.kind == .archive ? .destructive : nil) {
+                performSwipeAction(action.kind, for: page)
+            } label: {
+                Label(action.title, systemImage: action.systemImage)
+            }
+            .tint(swipeActionTint(action.kind))
+        }
+    }
+
+    private func performSwipeAction(_ action: PageRowSwipeActionKind, for page: PageSummary) {
+        switch action {
+        case .archive:
+            viewModel.archivePageForUI(id: page.id)
+        case .favorite:
+            viewModel.updatePageFavoriteForUI(
+                id: page.id,
+                isFavorite: !page.isFavorite
+            )
+        case .pin:
+            viewModel.updatePagePinnedForUI(
+                id: page.id,
+                isPinned: !page.isPinned
+            )
+        }
+    }
+
+    private func swipeActionTint(_ action: PageRowSwipeActionKind) -> Color {
+        switch action {
+        case .archive:
+            return .red
+        case .favorite:
+            return .yellow
+        case .pin:
+            return EditorDesignTokens.Colors.accent.color
+        }
+    }
+
     private var navigationTitle: String {
         switch collection {
         case .allDocuments:
@@ -5797,6 +6126,100 @@ private struct CompactCollectionPageListView: View {
                 _ = viewModel.createDailyDiaryForCompactUI()
             }
         )
+    }
+}
+
+private struct CompactPageSwipeActionsRow<Content: View>: View {
+    let page: PageSummary
+    let onAction: (PageRowSwipeActionKind) -> Void
+    let content: Content
+    @State private var horizontalOffset: CGFloat = 0
+
+    private let actionWidth: CGFloat = 70
+    private let actionHeight: CGFloat = 108
+
+    init(
+        page: PageSummary,
+        onAction: @escaping (PageRowSwipeActionKind) -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.page = page
+        self.onAction = onAction
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            content
+                .offset(x: horizontalOffset)
+                .contentShape(Rectangle())
+                .allowsHitTesting(horizontalOffset == 0)
+                .highPriorityGesture(swipeGesture)
+            if horizontalOffset != 0 {
+                swipeActions
+                    .zIndex(1)
+            }
+        }
+        .clipped()
+    }
+
+    private var swipeActions: some View {
+        HStack(spacing: 0) {
+            ForEach(PageRowSwipeActionModel.actions(for: page)) { action in
+                Button {
+                    horizontalOffset = 0
+                    onAction(action.kind)
+                } label: {
+                    Label(action.title, systemImage: action.systemImage)
+                        .labelStyle(.iconOnly)
+                        .font(.title3.weight(.semibold))
+                        .frame(width: actionWidth, height: actionHeight)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .background(swipeActionColor(action.kind))
+                .accessibilityLabel(action.title)
+                .accessibilityIdentifier("editor.page.\(page.id).swipe.\(action.kind.accessibilityIdentifier)")
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(height: actionHeight)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .allowsHitTesting(horizontalOffset != 0)
+        .accessibilityHidden(horizontalOffset == 0)
+    }
+
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 18, coordinateSpace: .local)
+            .onChanged { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else {
+                    return
+                }
+                horizontalOffset = min(0, max(value.translation.width, -maximumRevealWidth))
+            }
+            .onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else {
+                    horizontalOffset = 0
+                    return
+                }
+                let projectedWidth = min(value.translation.width, value.predictedEndTranslation.width)
+                horizontalOffset = projectedWidth < -(actionWidth * 0.35) ? -maximumRevealWidth : 0
+            }
+    }
+
+    private var maximumRevealWidth: CGFloat {
+        actionWidth * CGFloat(PageRowSwipeActionModel.actions(for: page).count)
+    }
+
+    private func swipeActionColor(_ action: PageRowSwipeActionKind) -> Color {
+        switch action {
+        case .archive:
+            return .red
+        case .favorite:
+            return .yellow
+        case .pin:
+            return EditorDesignTokens.Colors.accent.color
+        }
     }
 }
 
@@ -6178,15 +6601,17 @@ private struct PageRow: View {
     private var compactBody: some View {
         HStack(spacing: 8) {
             batchSelectionButton
-            pageIcon
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(page.title)
-                    .font(isSelected ? .body.weight(.semibold) : .body)
-                    .lineLimit(1)
-                    .accessibilityLabel(page.title)
-                    .accessibilityValue(pageRowAccessibilityValue)
-                    .accessibilityIdentifier("editor.page-row.\(page.id)")
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(page.title)
+                        .font(isSelected ? .body.weight(.semibold) : .body)
+                        .lineLimit(1)
+                    PageRowStatusBadges(page: page, font: .caption2.weight(.semibold))
+                }
+                .accessibilityLabel(page.title)
+                .accessibilityValue(pageRowAccessibilityValue)
+                .accessibilityIdentifier("editor.page-row.\(page.id)")
 
                 if !tagNames.isEmpty {
                     HStack(spacing: 4) {
@@ -6205,14 +6630,6 @@ private struct PageRow: View {
             }
 
             Spacer(minLength: 8)
-
-            if let onFavoriteToggle {
-                favoriteButton(onFavoriteToggle)
-            } else if page.isFavorite {
-                Image(systemName: "star.fill")
-                    .foregroundStyle(.yellow)
-                    .accessibilityHidden(true)
-            }
         }
         .frame(maxWidth: PageRowLayoutPolicy.maxWidth, alignment: .leading)
         .padding(.horizontal, 10)
@@ -6232,17 +6649,17 @@ private struct PageRow: View {
             batchSelectionButton
                 .padding(.top, 4)
 
-            pageIcon
-                .padding(.top, 5)
-
             VStack(alignment: .leading, spacing: 8) {
-                Text(page.title)
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
-                    .accessibilityLabel(page.title)
-                    .accessibilityValue(pageRowAccessibilityValue)
-                    .accessibilityIdentifier("editor.page-row.\(page.id)")
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Text(page.title)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+                    PageRowStatusBadges(page: page, font: .caption.weight(.semibold))
+                }
+                .accessibilityLabel(page.title)
+                .accessibilityValue(pageRowAccessibilityValue)
+                .accessibilityIdentifier("editor.page-row.\(page.id)")
 
                 if !tagNames.isEmpty {
                     tagChips
@@ -6275,16 +6692,6 @@ private struct PageRow: View {
             }
 
             Spacer(minLength: 8)
-
-            if let onFavoriteToggle {
-                favoriteButton(onFavoriteToggle)
-                    .padding(.top, 2)
-            } else if page.isFavorite {
-                Image(systemName: "star.fill")
-                    .foregroundStyle(.yellow)
-                    .padding(.top, 2)
-                    .accessibilityHidden(true)
-            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
@@ -6390,9 +6797,10 @@ private struct PageRow: View {
         let selection = isSelected ? "已选中" : "未选中"
         let batchSelection = isMarkedForBatch ? "已加入批量选择" : "未加入批量选择"
         let favorite = page.isFavorite ? "已收藏" : "未收藏"
+        let pinned = page.isPinned ? "已置顶" : "未置顶"
         let encryption = page.isEncrypted ? "已加密" : "未加密"
         let tags = tagNames.isEmpty ? "无标签" : "标签：\(tagNames.joined(separator: ", "))"
-        return "\(selection), \(batchSelection), \(favorite), \(encryption), \(tags)"
+        return "\(selection), \(batchSelection), \(pinned), \(favorite), \(encryption), \(tags)"
     }
 }
 

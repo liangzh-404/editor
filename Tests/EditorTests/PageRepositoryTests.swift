@@ -188,6 +188,46 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(unfavoriteSnapshot.favoritePages, [])
     }
 
+    func testUpdatePagePinnedPersistsReloadsAndQueuesSyncChange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+
+        try repository.updatePagePinned(pageID: pageID, isPinned: true)
+        let pinnedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(pinnedSnapshot.pages.first?.isPinned, true)
+        XCTAssertEqual(
+            try SyncRepository(database: database).pendingChanges().last,
+            SyncChange(entityType: "page", entityID: pageID, changeType: "update")
+        )
+
+        try repository.updatePagePinned(pageID: pageID, isPinned: false)
+        let unpinnedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(unpinnedSnapshot.pages.first?.isPinned, false)
+    }
+
+    func testPinnedPagesLoadBeforeMoreRecentlyEditedUnpinnedPages() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let pinnedPage = try repository.createPage(workspaceID: workspaceID, title: "Pinned")
+        try repository.updatePagePinned(pageID: pinnedPage.id, isPinned: true)
+        let laterPage = try repository.createPage(workspaceID: workspaceID, title: "Later")
+
+        let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(reloadedSnapshot.pages.first?.id, pinnedPage.id)
+        XCTAssertEqual(reloadedSnapshot.pages.dropFirst().first?.id, laterPage.id)
+    }
+
     func testEncryptedPageStoresPlaintextAndReloadsWithEncryptionFlag() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -26,6 +26,7 @@ struct PageSummary: Identifiable, Equatable, Sendable {
     let notebookID: String?
     let title: String
     let isFavorite: Bool
+    let isPinned: Bool
     let isEncrypted: Bool
     let updatedAt: String?
 
@@ -35,6 +36,7 @@ struct PageSummary: Identifiable, Equatable, Sendable {
         notebookID: String? = nil,
         title: String,
         isFavorite: Bool = false,
+        isPinned: Bool = false,
         isEncrypted: Bool = false,
         updatedAt: String? = nil
     ) {
@@ -43,6 +45,7 @@ struct PageSummary: Identifiable, Equatable, Sendable {
         self.notebookID = notebookID
         self.title = title
         self.isFavorite = isFavorite
+        self.isPinned = isPinned
         self.isEncrypted = isEncrypted
         self.updatedAt = updatedAt
     }
@@ -682,6 +685,7 @@ extension WorkspaceSnapshot {
                         notebookID: page.notebookID,
                         title: title,
                         isFavorite: page.isFavorite,
+                        isPinned: page.isPinned,
                         isEncrypted: page.isEncrypted,
                         updatedAt: page.updatedAt
                     )
@@ -713,6 +717,7 @@ extension WorkspaceSnapshot {
                         notebookID: page.notebookID,
                         title: page.title,
                         isFavorite: isFavorite,
+                        isPinned: page.isPinned,
                         isEncrypted: page.isEncrypted,
                         updatedAt: page.updatedAt
                     )
@@ -726,6 +731,52 @@ extension WorkspaceSnapshot {
                         notebookID: page.notebookID,
                         title: page.title,
                         isFavorite: isFavorite,
+                        isPinned: page.isPinned,
+                        isEncrypted: page.isEncrypted,
+                        updatedAt: page.updatedAt
+                    )
+                    : page
+            },
+            blocks: blocks,
+            attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            pageParentLinks: pageParentLinks,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
+
+    func replacingPagePinned(pageID: String, isPinned: Bool) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages.map { page in
+                page.id == pageID
+                    ? PageSummary(
+                        id: page.id,
+                        workspaceID: page.workspaceID,
+                        notebookID: page.notebookID,
+                        title: page.title,
+                        isFavorite: page.isFavorite,
+                        isPinned: isPinned,
+                        isEncrypted: page.isEncrypted,
+                        updatedAt: page.updatedAt
+                    )
+                    : page
+            },
+            archivedPages: archivedPages.map { page in
+                page.id == pageID
+                    ? PageSummary(
+                        id: page.id,
+                        workspaceID: page.workspaceID,
+                        notebookID: page.notebookID,
+                        title: page.title,
+                        isFavorite: page.isFavorite,
+                        isPinned: isPinned,
                         isEncrypted: page.isEncrypted,
                         updatedAt: page.updatedAt
                     )
@@ -756,6 +807,7 @@ extension WorkspaceSnapshot {
                         notebookID: page.notebookID,
                         title: page.title,
                         isFavorite: page.isFavorite,
+                        isPinned: page.isPinned,
                         isEncrypted: isEncrypted,
                         updatedAt: page.updatedAt
                     )
@@ -769,6 +821,7 @@ extension WorkspaceSnapshot {
                         notebookID: page.notebookID,
                         title: page.title,
                         isFavorite: page.isFavorite,
+                        isPinned: page.isPinned,
                         isEncrypted: isEncrypted,
                         updatedAt: page.updatedAt
                     )
