@@ -292,6 +292,22 @@ final class PlatformSecurityTests: XCTestCase {
         )
     }
 
+    func testCloudKitEntitlementInspectorDisablesCloudKitForUITestLaunchEnvironment() {
+        XCTAssertTrue(
+            CloudKitEntitlementInspector.shouldDisableCloudKitForUITesting(
+                environment: ["EDITOR_UI_TEST_RESET_STORE": "1"]
+            )
+        )
+        XCTAssertTrue(
+            CloudKitEntitlementInspector.shouldDisableCloudKitForUITesting(
+                environment: ["XCTestConfigurationFilePath": "/tmp/test.xctestconfiguration"]
+            )
+        )
+        XCTAssertFalse(
+            CloudKitEntitlementInspector.shouldDisableCloudKitForUITesting(environment: [:])
+        )
+    }
+
     private func makeTemporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

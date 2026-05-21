@@ -1,5 +1,72 @@
+import Foundation
+import CoreText
 import SwiftUI
 import HighlightSwift
+
+enum EditorContentFont: String, CaseIterable, Identifiable, Sendable {
+    case system
+    case lxgwWenKai
+
+    static let appStorageKey = "editor.content-font"
+    static let lxgwWenKaiPostScriptName = "LXGWWenKai-Regular"
+    static let lxgwWenKaiResourceName = "LXGWWenKai-Regular"
+
+    var id: String {
+        rawValue
+    }
+
+    var displayName: String {
+        switch self {
+        case .system:
+            return "系统"
+        case .lxgwWenKai:
+            return "霞鹜文楷"
+        }
+    }
+
+    func postScriptName(for blockType: BlockType) -> String? {
+        guard self == .lxgwWenKai else {
+            return nil
+        }
+
+        switch blockType {
+        case .codeBlock, .table:
+            return nil
+        default:
+            return Self.lxgwWenKaiPostScriptName
+        }
+    }
+}
+
+@MainActor
+enum EditorBundledFontRegistry {
+    private static var didAttemptRegistration = false
+
+    static func registerBundledFontsIfNeeded() {
+        guard !didAttemptRegistration else {
+            return
+        }
+        didAttemptRegistration = true
+
+        guard let fontURL = bundledFontURL() else {
+            return
+        }
+
+        var error: Unmanaged<CFError>?
+        CTFontManagerRegisterFontsForURL(fontURL as CFURL, .process, &error)
+    }
+
+    private static func bundledFontURL() -> URL? {
+        Bundle.main.url(
+            forResource: EditorContentFont.lxgwWenKaiResourceName,
+            withExtension: "ttf"
+        ) ?? Bundle.main.url(
+            forResource: EditorContentFont.lxgwWenKaiResourceName,
+            withExtension: "ttf",
+            subdirectory: "Fonts"
+        )
+    }
+}
 
 enum BlockKeyboardMoveDirection: Equatable, Sendable {
     case up
@@ -812,6 +879,7 @@ struct NativeTextBlockEditor: View {
     let blockID: String
     let text: String
     let blockType: BlockType
+    let contentFont: EditorContentFont
     @ObservedObject var session: EditorSession
     let lineWrapping: Bool
     let focusRequestID: UUID?
@@ -844,6 +912,7 @@ struct NativeTextBlockEditor: View {
         blockID: String,
         text: String,
         blockType: BlockType,
+        contentFont: EditorContentFont = .system,
         session: EditorSession,
         lineWrapping: Bool = true,
         focusRequestID: UUID? = nil,
@@ -874,6 +943,7 @@ struct NativeTextBlockEditor: View {
         self.blockID = blockID
         self.text = text
         self.blockType = blockType
+        self.contentFont = contentFont
         self.session = session
         self.lineWrapping = lineWrapping
         self.focusRequestID = focusRequestID
@@ -908,6 +978,7 @@ struct NativeTextBlockEditor: View {
                 blockID: blockID,
                 text: text,
                 blockType: blockType,
+                contentFont: contentFont,
                 session: session,
                 lineWrapping: lineWrapping,
                 focusRequestID: focusRequestID,
@@ -1153,6 +1224,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let blockID: String
     let text: String
     let blockType: BlockType
+    let contentFont: EditorContentFont
     @ObservedObject var session: EditorSession
     let lineWrapping: Bool
     let focusRequestID: UUID?
@@ -1407,6 +1479,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     }
 
     private var nsFont: NSFont {
+        if let customFont = customNSFont {
+            return customFont
+        }
+
         switch blockType {
         case .heading1:
             return .systemFont(ofSize: 18, weight: .semibold)
@@ -1418,6 +1494,29 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             return .monospacedSystemFont(ofSize: 13, weight: .regular)
         default:
             return .systemFont(ofSize: EditorDesignTokens.Typography.bodySize, weight: .regular)
+        }
+    }
+
+    private var customNSFont: NSFont? {
+        guard let postScriptName = contentFont.postScriptName(for: blockType) else {
+            return nil
+        }
+        EditorBundledFontRegistry.registerBundledFontsIfNeeded()
+        return NSFont(name: postScriptName, size: nsFontSize)
+    }
+
+    private var nsFontSize: CGFloat {
+        switch blockType {
+        case .heading1:
+            return 18
+        case .heading2:
+            return 16
+        case .heading3:
+            return 14
+        case .codeBlock, .table:
+            return 13
+        default:
+            return CGFloat(EditorDesignTokens.Typography.bodySize)
         }
     }
 
@@ -2182,6 +2281,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let blockID: String
     let text: String
     let blockType: BlockType
+    let contentFont: EditorContentFont
     @ObservedObject var session: EditorSession
     let lineWrapping: Bool
     let focusRequestID: UUID?
@@ -2416,6 +2516,10 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     }
 
     private var uiFont: UIFont {
+        if let customFont = customUIFont {
+            return customFont
+        }
+
         switch blockType {
         case .heading1:
             return .systemFont(ofSize: 28, weight: .semibold)
@@ -2427,6 +2531,29 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             return .monospacedSystemFont(ofSize: 16, weight: .regular)
         default:
             return .systemFont(ofSize: 18, weight: .regular)
+        }
+    }
+
+    private var customUIFont: UIFont? {
+        guard let postScriptName = contentFont.postScriptName(for: blockType) else {
+            return nil
+        }
+        EditorBundledFontRegistry.registerBundledFontsIfNeeded()
+        return UIFont(name: postScriptName, size: uiFontSize)
+    }
+
+    private var uiFontSize: CGFloat {
+        switch blockType {
+        case .heading1:
+            return 28
+        case .heading2:
+            return 24
+        case .heading3:
+            return 20
+        case .codeBlock, .table:
+            return 16
+        default:
+            return 18
         }
     }
 
