@@ -784,13 +784,13 @@ enum NativeTextCursorChrome {
 enum NativeTextEditorLayout {
     static let verticalTextInset: CGFloat = 2
     static let textContainerInset = CGSize(width: 0, height: verticalTextInset)
+    static let keyboardFormatPanelHeight: CGFloat = MobileFormatPaletteChrome.height
 #if os(iOS)
     static let uiTextContainerInset = UIEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
     static let uiVerticalTextInset = uiTextContainerInset.top + uiTextContainerInset.bottom
     static let uiCaretVerticalOffset: CGFloat = 0
     static let placeholderTopPadding: CGFloat = 4
     static let keyboardToolbarHeight: CGFloat = MobileKeyboardToolbarChrome.height
-    static let keyboardFormatPanelHeight: CGFloat = 220
 #endif
 
     static func measuredHeight(contentHeight: CGFloat, minimumHeight: CGFloat) -> CGFloat {
