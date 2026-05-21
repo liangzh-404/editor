@@ -2,9 +2,9 @@ import XCTest
 
 final class EditorBlockChromeTests: XCTestCase {
     func testCraftThingsDesignTokensMatchDesktopEditorialPalette() {
-        assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF7, green: 0xF5, blue: 0xF1)
-        assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xFB, green: 0xFA, blue: 0xF7)
-        assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFF, green: 0xFE, blue: 0xFC)
+        assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF1, green: 0xEE, blue: 0xE8)
+        assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF6, green: 0xF2, blue: 0xEA)
+        assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFA, green: 0xF6, blue: 0xEE)
         assertColor(EditorDesignTokens.Colors.primaryText, red: 0x22, green: 0x21, blue: 0x1F)
         assertColor(EditorDesignTokens.Colors.secondaryText, red: 0x62, green: 0x5F, blue: 0x59)
         assertColor(EditorDesignTokens.Colors.tertiaryText, red: 0x8A, green: 0x86, blue: 0x7E)
@@ -59,6 +59,11 @@ final class EditorBlockChromeTests: XCTestCase {
 #endif
     }
 
+    func testMobileNavigationBarChromeKeepsCollapsedTitlePinnedHigh() {
+        XCTAssertEqual(MobileNavigationBarChrome.topMaskHeight, 72)
+        XCTAssertEqual(MobileNavigationBarChrome.collapsedTitleVerticalOffset, -12)
+    }
+
     func testMobileNavigationTitleAppearsOnlyAfterBodyTitleEntersTopMask() {
         XCTAssertFalse(
             MobileNavigationTitleVisibilityResolver.isNavigationTitleVisible(
@@ -100,13 +105,13 @@ final class EditorBlockChromeTests: XCTestCase {
             ),
             "The top title should stay hidden before the user has clearly scrolled the page"
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             MobileNavigationTitleScrollVisibilityResolver.isNavigationTitleVisible(
                 baselineMaxY: 169,
                 scrollOffsetY: 32,
                 topMaskHeight: 72
             ),
-            "The top title should appear once scrolling has clearly moved content under the top bar"
+            "When the title frame is known, the top title should wait until the body title actually reaches the top mask"
         )
         XCTAssertTrue(
             MobileNavigationTitleScrollVisibilityResolver.isNavigationTitleVisible(
@@ -123,6 +128,100 @@ final class EditorBlockChromeTests: XCTestCase {
                 topMaskHeight: 72
             ),
             "The top title should still appear after a real scroll even if the title frame preference is delayed"
+        )
+    }
+
+    func testMobileNavigationTitleStateUsesScrollFallbackWhenTitleFrameIsDelayed() {
+        let state = MobileNavigationTitleVisibilityState().updated(
+            scrollOffsetY: 0,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        let updatedState = state.updated(
+            scrollOffsetY: 32,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        XCTAssertTrue(
+            updatedState.isVisible,
+            "The top title should not wait forever for a title-frame preference once scrolling proves the body title is off the current viewport"
+        )
+    }
+
+    func testMobileNavigationTitleStateIgnoresInitialContentOffset() {
+        let state = MobileNavigationTitleVisibilityState().updated(
+            scrollOffsetY: 96,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        XCTAssertFalse(
+            state.isVisible,
+            "The top title should not appear just because iOS reports a non-zero initial content offset"
+        )
+
+        let barelyScrolledState = state.updated(
+            titleFrame: CGRect(x: 0, y: 120, width: 320, height: 48),
+            scrollOffsetY: 128,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        XCTAssertFalse(
+            barelyScrolledState.isVisible,
+            "The top title should stay hidden while the measured body title is still visible below the top mask"
+        )
+
+        let titleScrolledAwayState = barelyScrolledState.updated(
+            scrollOffsetY: 224,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        XCTAssertTrue(
+            titleScrolledAwayState.isVisible,
+            "The top title should appear after the measured body title scrolls into the top mask"
+        )
+    }
+
+    func testMobileNavigationTitleStateDoesNotShowTopTitleBeforeRealScroll() {
+        let state = MobileNavigationTitleVisibilityState().updated(
+            titleFrame: CGRect(x: 0, y: 20, width: 320, height: 48),
+            scrollOffsetY: 0,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        XCTAssertFalse(
+            state.isVisible,
+            "The top title should stay hidden on first render even when the body title starts near the navigation bar"
+        )
+    }
+
+    func testMobileNavigationTitleStateKeepsRepeatedPreferenceUpdatesStable() {
+        let state = MobileNavigationTitleVisibilityState().updated(
+            titleFrame: CGRect(x: 0, y: 120, width: 320, height: 48),
+            scrollOffsetY: 0,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        let repeatedState = state.updated(
+            titleFrame: CGRect(x: 0, y: 120, width: 320, height: 48),
+            scrollOffsetY: 0,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        XCTAssertEqual(
+            repeatedState,
+            state,
+            "Repeated geometry preference delivery should not create a new navigation-title state and keep SwiftUI layouts from churning"
+        )
+    }
+
+    func testMobileKeyboardToolbarPutsDismissKeyboardWithRightSideActions() {
+        XCTAssertEqual(
+            MobileKeyboardToolbarUtilityActionResolver.leadingActions,
+            [.paste, .undo]
+        )
+        XCTAssertEqual(
+            MobileKeyboardToolbarTrailingActionResolver.visibleActions,
+            [.outline, .moreFormat, .dismissKeyboard]
         )
     }
 
@@ -591,7 +690,7 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testCompactLibraryChromeUsesLightAppSurface() {
-        assertColor(CompactLibraryChrome.backgroundToken, red: 0xF7, green: 0xF5, blue: 0xF1)
+        assertColor(CompactLibraryChrome.backgroundToken, red: 0xF1, green: 0xEE, blue: 0xE8)
         assertColor(CompactLibraryChrome.primaryForegroundToken, red: 0x22, green: 0x21, blue: 0x1F)
         assertColor(CompactLibraryChrome.mutedForegroundToken, red: 0x62, green: 0x5F, blue: 0x59)
         XCTAssertEqual(CompactLibraryChrome.rowCornerRadius, 13)
@@ -1239,9 +1338,10 @@ final class EditorBlockChromeTests: XCTestCase {
     func testMobileKeyboardToolbarReplacesCopyWithDismissKeyboard() {
         XCTAssertEqual(
             MobileKeyboardToolbarUtilityActionResolver.visibleActions,
-            [.paste, .undo, .dismissKeyboard]
+            [.paste, .undo]
         )
         XCTAssertFalse(MobileKeyboardToolbarUtilityActionResolver.visibleActions.contains(.copy))
+        XCTAssertTrue(MobileKeyboardToolbarTrailingActionResolver.visibleActions.contains(.dismissKeyboard))
     }
 
     func testMobileFormatPaletteOmitsRedundantCraftTabs() {

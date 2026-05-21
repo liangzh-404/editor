@@ -22,6 +22,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(editor.blockID, "block-1")
         XCTAssertEqual(editor.text, "Hello")
         XCTAssertEqual(editor.blockType, .paragraph)
+        XCTAssertEqual(editor.contentFont, .system)
     }
 
     @MainActor
@@ -133,6 +134,24 @@ final class NativeTextBlockEditorTests: XCTestCase {
 
     func testNativeTextDropPolicyKeepsBlockDragsOutOfTextEditor() {
         XCTAssertFalse(NativeTextDropPolicy.acceptsDropIntoTextEditor)
+    }
+
+    func testEditorContentFontOnlyAppliesToReadableTextBlocks() {
+        XCTAssertNil(EditorContentFont.system.postScriptName(for: .paragraph))
+        XCTAssertEqual(
+            EditorContentFont.lxgwWenKai.postScriptName(for: .paragraph),
+            "LXGWWenKai-Regular"
+        )
+        XCTAssertEqual(
+            EditorContentFont.lxgwWenKai.postScriptName(for: .heading1),
+            "LXGWWenKai-Regular"
+        )
+        XCTAssertEqual(
+            EditorContentFont.lxgwWenKai.postScriptName(for: .taskItem),
+            "LXGWWenKai-Regular"
+        )
+        XCTAssertNil(EditorContentFont.lxgwWenKai.postScriptName(for: .codeBlock))
+        XCTAssertNil(EditorContentFont.lxgwWenKai.postScriptName(for: .table))
     }
 
     func testNativeTextInsertionPointRectResolverClampsTallCaretToFontLineHeight() {

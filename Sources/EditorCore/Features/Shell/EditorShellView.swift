@@ -51,9 +51,9 @@ struct EditorShadowToken: Equatable, Sendable {
 
 enum EditorDesignTokens {
     enum Colors {
-        static let appBackground = EditorColorToken.hex(0xF7, 0xF5, 0xF1)
-        static let sidebarBackground = EditorColorToken.hex(0xFB, 0xFA, 0xF7)
-        static let editorBackground = EditorColorToken.hex(0xFF, 0xFE, 0xFC)
+        static let appBackground = EditorColorToken.hex(0xF1, 0xEE, 0xE8)
+        static let sidebarBackground = EditorColorToken.hex(0xF6, 0xF2, 0xEA)
+        static let editorBackground = EditorColorToken.hex(0xFA, 0xF6, 0xEE)
         static let primaryText = EditorColorToken.hex(0x22, 0x21, 0x1F)
         static let secondaryText = EditorColorToken.hex(0x62, 0x5F, 0x59)
         static let tertiaryText = EditorColorToken.hex(0x8A, 0x86, 0x7E)
@@ -157,11 +157,11 @@ enum MobileNavigationTitleScrollVisibilityResolver {
         topMaskHeight: CGFloat
     ) -> Bool {
         let scrollOffsetY = max(0, scrollOffsetY)
-        if scrollOffsetY >= fallbackScrollOffsetThreshold {
-            return true
+        guard scrollOffsetY >= fallbackScrollOffsetThreshold else {
+            return false
         }
         guard let baselineMaxY else {
-            return false
+            return true
         }
         let currentTitleFrame = CGRect(
             x: 0,
@@ -173,6 +173,43 @@ enum MobileNavigationTitleScrollVisibilityResolver {
             titleFrame: currentTitleFrame,
             topMaskHeight: topMaskHeight
         )
+    }
+}
+
+struct MobileNavigationTitleVisibilityState: Equatable, Sendable {
+    private(set) var isVisible = false
+    private(set) var baselineMaxY: CGFloat?
+    private(set) var scrollOffsetY: CGFloat = 0
+    private(set) var initialScrollOffsetY: CGFloat?
+
+    func updated(
+        titleFrame: CGRect? = nil,
+        scrollOffsetY nextScrollOffsetY: CGFloat? = nil,
+        topMaskHeight: CGFloat
+    ) -> Self {
+        var next = self
+        if let nextScrollOffsetY {
+            let normalizedOffsetY = max(0, nextScrollOffsetY)
+            if next.initialScrollOffsetY == nil {
+                next.initialScrollOffsetY = normalizedOffsetY
+            }
+            next.scrollOffsetY = max(0, normalizedOffsetY - (next.initialScrollOffsetY ?? 0))
+        }
+
+        if let titleFrame, !titleFrame.isEmpty {
+            let reportedBaselineMaxY = titleFrame.maxY + next.scrollOffsetY
+            if next.baselineMaxY == nil || next.scrollOffsetY == 0 {
+                next.baselineMaxY = reportedBaselineMaxY
+            }
+        }
+
+        next.isVisible = MobileNavigationTitleScrollVisibilityResolver
+            .isNavigationTitleVisible(
+                baselineMaxY: next.baselineMaxY,
+                scrollOffsetY: next.scrollOffsetY,
+                topMaskHeight: topMaskHeight
+            )
+        return next
     }
 }
 
@@ -1866,9 +1903,27 @@ enum MobileKeyboardToolbarUtilityAction: Equatable, Sendable {
 }
 
 enum MobileKeyboardToolbarUtilityActionResolver {
+    static let leadingActions: [MobileKeyboardToolbarUtilityAction] = [
+        .paste,
+        .undo
+    ]
+
     static let visibleActions: [MobileKeyboardToolbarUtilityAction] = [
         .paste,
-        .undo,
+        .undo
+    ]
+}
+
+enum MobileKeyboardToolbarTrailingAction: Equatable, Sendable {
+    case outline
+    case moreFormat
+    case dismissKeyboard
+}
+
+enum MobileKeyboardToolbarTrailingActionResolver {
+    static let visibleActions: [MobileKeyboardToolbarTrailingAction] = [
+        .outline,
+        .moreFormat,
         .dismissKeyboard
     ]
 }
@@ -2508,7 +2563,7 @@ private struct MobileKeyboardInputBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            ForEach(MobileKeyboardToolbarUtilityActionResolver.visibleActions, id: \.self) { action in
+            ForEach(MobileKeyboardToolbarUtilityActionResolver.leadingActions, id: \.self) { action in
                 utilityToolbarButton(action)
             }
 
@@ -2518,6 +2573,24 @@ private struct MobileKeyboardInputBar: View {
 
             Spacer(minLength: 0)
 
+            ForEach(MobileKeyboardToolbarTrailingActionResolver.visibleActions, id: \.self) { action in
+                trailingToolbarButton(action)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.primary.opacity(0.82))
+        .frame(maxWidth: .infinity)
+        .frame(height: NativeTextEditorLayout.keyboardToolbarHeight)
+        .padding(.horizontal, 18)
+        .background(.regularMaterial)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor.mobile-keyboard-toolbar")
+    }
+
+    @ViewBuilder
+    private func trailingToolbarButton(_ action: MobileKeyboardToolbarTrailingAction) -> some View {
+        switch action {
+        case .outline:
             Button {
                 onToggleOutline()
             } label: {
@@ -2533,7 +2606,7 @@ private struct MobileKeyboardInputBar: View {
             }
             .accessibilityLabel(isOutlinePresented ? "关闭右侧栏" : "右侧栏")
             .accessibilityIdentifier("editor.mobile-keyboard.outline")
-
+        case .moreFormat:
             Button {
                 onShowMoreFormatPanel()
             } label: {
@@ -2556,15 +2629,14 @@ private struct MobileKeyboardInputBar: View {
             }
             .accessibilityLabel("更多格式")
             .accessibilityIdentifier("editor.mobile-keyboard.more-format")
+        case .dismissKeyboard:
+            toolbarButton(
+                systemImage: "keyboard.chevron.compact.down",
+                accessibilityLabel: "关闭键盘",
+                identifier: "editor.mobile-keyboard.dismiss",
+                action: onDismissKeyboard
+            )
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.primary.opacity(0.82))
-        .frame(maxWidth: .infinity)
-        .frame(height: NativeTextEditorLayout.keyboardToolbarHeight)
-        .padding(.horizontal, 18)
-        .background(.regularMaterial)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("editor.mobile-keyboard-toolbar")
     }
 
     private func toolbarButton(
@@ -6395,8 +6467,9 @@ private enum PageListCoordinateSpace {
     static let selection = "editor.page-list.selection"
 }
 
-private enum MobileNavigationBarChrome {
+enum MobileNavigationBarChrome {
     static let topMaskHeight: CGFloat = 72
+    static let collapsedTitleVerticalOffset: CGFloat = -12
 }
 
 private struct MobilePageTitleFramePreferenceKey: PreferenceKey {
@@ -6764,10 +6837,9 @@ private struct EditorCanvasView: View {
     @State private var scheduledPageTitleFocusPageID: String?
     @State private var pageTitleFocusRequestID: UUID?
     @FocusState private var isPageTitleFocused: Bool
+    @AppStorage(EditorContentFont.appStorageKey) private var contentFontRawValue = EditorContentFont.system.rawValue
 #if os(iOS)
-    @State private var isMobileNavigationTitleVisible = false
-    @State private var mobilePageTitleBaselineMaxY: CGFloat?
-    @State private var mobileCanvasScrollOffsetY: CGFloat = 0
+    @State private var mobileNavigationTitleState = MobileNavigationTitleVisibilityState()
 #endif
 
     var body: some View {
@@ -6893,6 +6965,7 @@ private struct EditorCanvasView: View {
                             targetPageID: block.pageReferenceTargetPageID,
                             blocks: allBlocks
                         ),
+                        contentFont: contentFont,
                         editorSession: editorSession,
                         nestingLevel: nestingLevel(for: block),
                         listOrdinal: ListBlockOrdinalResolver.ordinal(for: block, at: index, in: blocks),
@@ -7531,53 +7604,41 @@ private struct EditorCanvasView: View {
 #endif
     }
 
+    private var contentFont: EditorContentFont {
+        EditorContentFont(rawValue: contentFontRawValue) ?? .system
+    }
+
 #if os(iOS)
+    @ViewBuilder
     private var mobileNavigationTitleView: some View {
-        Text(page?.title ?? "")
-            .font(.headline)
-            .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
-            .lineLimit(1)
-            .opacity(isMobileNavigationTitleVisible ? 1 : 0)
-            .accessibilityHidden(!isMobileNavigationTitleVisible)
-            .accessibilityIdentifier("editor.mobile-navigation-title")
+        if mobileNavigationTitleState.isVisible {
+            Text(page?.title ?? "")
+                .font(.headline)
+                .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+                .lineLimit(1)
+                .offset(y: MobileNavigationBarChrome.collapsedTitleVerticalOffset)
+                .accessibilityIdentifier("editor.mobile-navigation-title")
+        }
     }
 
     private func resetMobileNavigationTitleVisibility() {
-        mobilePageTitleBaselineMaxY = nil
-        mobileCanvasScrollOffsetY = 0
-        isMobileNavigationTitleVisible = false
+        let nextState = MobileNavigationTitleVisibilityState()
+        if mobileNavigationTitleState != nextState {
+            mobileNavigationTitleState = nextState
+        }
     }
 
     private func updateMobileNavigationTitleVisibility(
         titleFrame: CGRect? = nil,
         scrollOffsetY: CGFloat? = nil
     ) {
-        if let scrollOffsetY {
-            mobileCanvasScrollOffsetY = max(0, scrollOffsetY)
-        }
-
-        if let titleFrame, !titleFrame.isEmpty {
-            let reportedBaselineMaxY = titleFrame.maxY + mobileCanvasScrollOffsetY
-            if mobilePageTitleBaselineMaxY == nil || mobileCanvasScrollOffsetY == 0 {
-                mobilePageTitleBaselineMaxY = reportedBaselineMaxY
-            }
-        }
-
-        guard let mobilePageTitleBaselineMaxY else {
-            if isMobileNavigationTitleVisible {
-                isMobileNavigationTitleVisible = false
-            }
-            return
-        }
-
-        let shouldShowTitle = MobileNavigationTitleScrollVisibilityResolver
-            .isNavigationTitleVisible(
-                baselineMaxY: mobilePageTitleBaselineMaxY,
-                scrollOffsetY: mobileCanvasScrollOffsetY,
-                topMaskHeight: MobileNavigationBarChrome.topMaskHeight
-            )
-        if isMobileNavigationTitleVisible != shouldShowTitle {
-            isMobileNavigationTitleVisible = shouldShowTitle
+        let nextState = mobileNavigationTitleState.updated(
+            titleFrame: titleFrame,
+            scrollOffsetY: scrollOffsetY,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+        if mobileNavigationTitleState != nextState {
+            mobileNavigationTitleState = nextState
         }
     }
 
@@ -7768,6 +7829,22 @@ private struct EditorCanvasView: View {
             }
 
             Section("文本") {
+                Menu {
+                    ForEach(EditorContentFont.allCases) { font in
+                        Button {
+                            contentFontRawValue = font.rawValue
+                        } label: {
+                            Label(
+                                font.displayName,
+                                systemImage: contentFont == font ? "checkmark" : "textformat"
+                            )
+                        }
+                    }
+                } label: {
+                    Label("正文字体", systemImage: "textformat")
+                }
+                .accessibilityIdentifier("editor.content-font-menu")
+
                 Button {
                     _ = presentInlineLinkInsertionFromCurrentTarget()
                 } label: {
@@ -10170,6 +10247,7 @@ private struct BlockRowView: View {
     let attachment: AttachmentSnapshot?
     let attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus
     let pageReferencePreviewText: String?
+    let contentFont: EditorContentFont
     @ObservedObject var editorSession: EditorSession
     let nestingLevel: Int
     let listOrdinal: Int?
@@ -10240,6 +10318,7 @@ private struct BlockRowView: View {
         attachment: AttachmentSnapshot? = nil,
         attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus = .idle,
         pageReferencePreviewText: String? = nil,
+        contentFont: EditorContentFont = .system,
         editorSession: EditorSession,
         nestingLevel: Int = 0,
         listOrdinal: Int? = nil,
@@ -10299,6 +10378,7 @@ private struct BlockRowView: View {
         self.attachment = attachment
         self.attachmentPreviewGenerationStatus = attachmentPreviewGenerationStatus
         self.pageReferencePreviewText = pageReferencePreviewText
+        self.contentFont = contentFont
         self.editorSession = editorSession
         self.nestingLevel = nestingLevel
         self.listOrdinal = listOrdinal
@@ -10991,6 +11071,7 @@ private struct BlockRowView: View {
             blockID: block.id,
             text: block.textPlain,
             blockType: block.type,
+            contentFont: contentFont,
             session: editorSession,
             lineWrapping: block.type == .codeBlock ? block.codeBlockLineWrapping : true,
             focusRequestID: effectiveFocusRequestID,

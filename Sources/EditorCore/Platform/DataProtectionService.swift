@@ -56,8 +56,17 @@ enum CloudKitEntitlementInspector {
 
         return hasCloudKitContainers(entitlementValue: entitlement)
 #else
+        let environment = ProcessInfo.processInfo.environment
+        if shouldDisableCloudKitForUITesting(environment: environment) {
+            return false
+        }
         return true
 #endif
+    }
+
+    static func shouldDisableCloudKitForUITesting(environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+            || environment["EDITOR_UI_TEST_RESET_STORE"] == "1"
     }
 
     static func hasCloudKitContainers(entitlementValue: Any?) -> Bool {

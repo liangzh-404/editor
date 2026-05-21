@@ -23,6 +23,8 @@ targets:
       - path: Sources/EditorCore
     resources:
       - path: Sources/EditorApp/Assets.xcassets
+      - path: Sources/EditorApp/Fonts/LXGWWenKai-Regular.ttf
+      - path: Sources/EditorApp/Fonts/OFL-LXGWWenKai.txt
     dependencies:
       - package: HighlightSwift
     settings:
@@ -43,6 +45,8 @@ targets:
       - path: Sources/EditorCore
     resources:
       - path: Sources/EditorApp/Assets.xcassets
+      - path: Sources/EditorApp/Fonts/LXGWWenKai-Regular.ttf
+      - path: Sources/EditorApp/Fonts/OFL-LXGWWenKai.txt
     dependencies:
       - package: HighlightSwift
     info:

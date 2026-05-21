@@ -35,6 +35,7 @@
 		2B18D251AA0DE11D5BE12665 /* SchemaMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1775693501BBE99927D7F07C /* SchemaMigrator.swift */; };
 		2DEDA2FC15262360AF629C4E /* MarkdownTransformerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B4FFAB9393B2FC649D63658 /* MarkdownTransformerTests.swift */; };
 		2E5D8C4812A1F6B46B5AFBB3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEA9B4045EC55EF40332F7B5 /* Assets.xcassets */; };
+		24EF2C5E2EA08C5D605C6A53 /* LXGWWenKai-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A5C5B5B0239FC9FBBBF0A0DA /* LXGWWenKai-Regular.ttf */; };
 		30761AF9DB95A5C98582DB35 /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC9BD3D38C16BD85AE9DB4C /* AppEnvironment.swift */; };
 		330DE8B1EA9F4976ACB74DE0 /* AttachmentRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40CF7A6C22692BF36767B56 /* AttachmentRepositoryTests.swift */; };
 		33844EA317B147AFBA7BC67E /* SyncMergeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9020679BDD2802585CAFFF9A /* SyncMergeEngine.swift */; };
@@ -98,7 +99,10 @@
 		CD88B386243D25D829DA765D /* ConflictRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4214430A753C37880763D5D8 /* ConflictRepository.swift */; };
 		CF0299159866AE5746836C4C /* EditorLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40AB9B809EE4F1C8F4A7E86C /* EditorLog.swift */; };
 		D0F49BDD4C83A83C39652E71 /* MarkdownTransformer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74204D7572275A5FE96AABBC /* MarkdownTransformer.swift */; };
+		D0E2070DFF3C7EC1A0736C17 /* OFL-LXGWWenKai.txt in Resources */ = {isa = PBXBuildFile; fileRef = 075A127EEFE79AEA13A01FE2 /* OFL-LXGWWenKai.txt */; };
 		D5711FED3EE127BC730B5DE2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEA9B4045EC55EF40332F7B5 /* Assets.xcassets */; };
+		DECD6E3570FF8FC8C3A9CA9B /* LXGWWenKai-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A5C5B5B0239FC9FBBBF0A0DA /* LXGWWenKai-Regular.ttf */; };
+		9655FE90815078B0687B8D0A /* OFL-LXGWWenKai.txt in Resources */ = {isa = PBXBuildFile; fileRef = 075A127EEFE79AEA13A01FE2 /* OFL-LXGWWenKai.txt */; };
 		D8D7399DED14D82F9239B6AA /* SearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCF64425F694601BF7DC842 /* SearchRepository.swift */; };
 		DBDB948DE2D478350B9D694E /* MarkdownTransformer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74204D7572275A5FE96AABBC /* MarkdownTransformer.swift */; };
 		E01A39518EEC3D364DDC767F /* MarkdownTransformer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74204D7572275A5FE96AABBC /* MarkdownTransformer.swift */; };
@@ -159,6 +163,7 @@
 		6BCEEC54CE3487C39364879C /* EditorSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSessionTests.swift; sourceTree = "<group>"; };
 		721AB2B9FBD1E62EB105C77B /* BacklinkRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BacklinkRepository.swift; sourceTree = "<group>"; };
 		74204D7572275A5FE96AABBC /* MarkdownTransformer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTransformer.swift; sourceTree = "<group>"; };
+		075A127EEFE79AEA13A01FE2 /* OFL-LXGWWenKai.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Fonts/OFL-LXGWWenKai.txt"; sourceTree = "<group>"; };
 		781D821462B3C5971EAAE009 /* TagRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagRepositoryTests.swift; sourceTree = "<group>"; };
 		830B98899C8D1F1F4FF0083E /* EditorMacEditingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorMacEditingUITests.swift; sourceTree = "<group>"; };
 		83E314E1BD6803FBAA36C92C /* DiaryRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiaryRepositoryTests.swift; sourceTree = "<group>"; };
@@ -172,6 +177,7 @@
 		9DA7C15C1BD0598E212E5F20 /* EditorShortcutConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorShortcutConfigurationTests.swift; sourceTree = "<group>"; };
 		9E25294134A69C459AE6E1D0 /* ObsidianVaultImporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsidianVaultImporterTests.swift; sourceTree = "<group>"; };
 		9E5987A98D4AEC7981273C41 /* SyncRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRepository.swift; sourceTree = "<group>"; };
+		A5C5B5B0239FC9FBBBF0A0DA /* LXGWWenKai-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Fonts/LXGWWenKai-Regular.ttf"; sourceTree = "<group>"; };
 		BA04F3B5378D60E40322DFDE /* DataProtectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataProtectionService.swift; sourceTree = "<group>"; };
 		BE22D36D2A1E20D4EF5DC1C6 /* EditorMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EditorMac.entitlements; sourceTree = "<group>"; };
 		BE299953F1B4500B81B093A6 /* EditorIOS-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "EditorIOS-Info.plist"; sourceTree = "<group>"; };
@@ -235,6 +241,8 @@
 				1214EBBA79907FAE38BD08D0 /* EditorCloudKit.entitlements */,
 				BE299953F1B4500B81B093A6 /* EditorIOS-Info.plist */,
 				97FDEF1160608404948118EE /* EditorIOS.entitlements */,
+				A5C5B5B0239FC9FBBBF0A0DA /* LXGWWenKai-Regular.ttf */,
+				075A127EEFE79AEA13A01FE2 /* OFL-LXGWWenKai.txt */,
 				BE22D36D2A1E20D4EF5DC1C6 /* EditorMac.entitlements */,
 			);
 			name = EditorApp;
@@ -560,6 +568,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				2E5D8C4812A1F6B46B5AFBB3 /* Assets.xcassets in Resources */,
+				DECD6E3570FF8FC8C3A9CA9B /* LXGWWenKai-Regular.ttf in Resources */,
+				9655FE90815078B0687B8D0A /* OFL-LXGWWenKai.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -568,6 +578,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				D5711FED3EE127BC730B5DE2 /* Assets.xcassets in Resources */,
+				24EF2C5E2EA08C5D605C6A53 /* LXGWWenKai-Regular.ttf in Resources */,
+				D0E2070DFF3C7EC1A0736C17 /* OFL-LXGWWenKai.txt in Resources */,
 				B314C4800CB52538C63604C6 /* EditorIOS-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
