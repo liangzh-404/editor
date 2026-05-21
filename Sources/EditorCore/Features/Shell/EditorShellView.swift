@@ -1783,7 +1783,249 @@ enum MobileFormatPaletteTab: Equatable, Sendable {
 }
 
 enum MobileFormatPaletteTabResolver {
-    static let visibleTabs: [MobileFormatPaletteTab] = [.heading, .more]
+    static let visibleTabs: [MobileFormatPaletteTab] = []
+}
+
+enum MobileFormatPaletteChrome {
+    static let columnCount = 6
+    static let gridSpacing: CGFloat = 10
+    static let buttonHeight: CGFloat = 62
+    static let horizontalPadding: CGFloat = 16
+    static let verticalPadding: CGFloat = 14
+    static let cardCornerRadius: CGFloat = 22
+    static let height: CGFloat = 328
+}
+
+enum MobileFormatPaletteAction: Equatable, Sendable {
+    case collapsePanel
+    case dismissKeyboard
+    case outdent
+    case indent
+    case paragraph
+    case heading1
+    case heading2
+    case heading3
+    case unorderedList
+    case orderedList
+    case task
+    case toggle
+    case quote
+    case codeBlock
+    case table
+    case divider
+    case callout
+    case bold
+    case italic
+    case strikethrough
+    case inlineCode
+    case insertLink
+
+    var blockType: BlockType? {
+        switch self {
+        case .paragraph:
+            return .paragraph
+        case .heading1:
+            return .heading1
+        case .heading2:
+            return .heading2
+        case .heading3:
+            return .heading3
+        case .unorderedList:
+            return .unorderedListItem
+        case .orderedList:
+            return .orderedListItem
+        case .task:
+            return .taskItem
+        case .toggle:
+            return .toggle
+        case .quote:
+            return .quote
+        case .codeBlock:
+            return .codeBlock
+        case .table:
+            return .table
+        case .divider:
+            return .divider
+        case .callout:
+            return .callout
+        case .collapsePanel,
+             .dismissKeyboard,
+             .outdent,
+             .indent,
+             .bold,
+             .italic,
+             .strikethrough,
+             .inlineCode,
+             .insertLink:
+            return nil
+        }
+    }
+
+    var inlineFormat: MarkdownInlineFormat? {
+        switch self {
+        case .bold:
+            return .bold
+        case .italic:
+            return .italic
+        case .strikethrough:
+            return .strikethrough
+        case .inlineCode:
+            return .code
+        case .collapsePanel,
+             .dismissKeyboard,
+             .outdent,
+             .indent,
+             .paragraph,
+             .heading1,
+             .heading2,
+             .heading3,
+             .unorderedList,
+             .orderedList,
+             .task,
+             .toggle,
+             .quote,
+             .codeBlock,
+             .table,
+             .divider,
+             .callout,
+             .insertLink:
+            return nil
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .collapsePanel:
+            return "返回键盘"
+        case .dismissKeyboard:
+            return "关闭键盘"
+        case .outdent:
+            return "减少缩进"
+        case .indent:
+            return "增加缩进"
+        case .paragraph:
+            return "正文"
+        case .heading1:
+            return "H1"
+        case .heading2:
+            return "H2"
+        case .heading3:
+            return "H3"
+        case .unorderedList:
+            return "无序列表"
+        case .orderedList:
+            return "有序列表"
+        case .task:
+            return "任务"
+        case .toggle:
+            return "折叠"
+        case .quote:
+            return "引用"
+        case .codeBlock:
+            return "代码块"
+        case .table:
+            return "表格"
+        case .divider:
+            return "分割线"
+        case .callout:
+            return "提示"
+        case .bold:
+            return "加粗"
+        case .italic:
+            return "斜体"
+        case .strikethrough:
+            return "删除线"
+        case .inlineCode:
+            return "代码"
+        case .insertLink:
+            return "链接"
+        }
+    }
+
+    var accessibilityIdentifier: String {
+        switch self {
+        case .collapsePanel:
+            return "editor.mobile-format.collapse"
+        case .dismissKeyboard:
+            return "editor.mobile-format.dismiss-keyboard"
+        default:
+            return "editor.mobile-format.\(accessibilityLabel)"
+        }
+    }
+
+    var systemImage: String? {
+        switch self {
+        case .collapsePanel:
+            return "chevron.down"
+        case .dismissKeyboard:
+            return "keyboard.chevron.compact.down"
+        case .outdent:
+            return "decrease.indent"
+        case .indent:
+            return "increase.indent"
+        case .paragraph:
+            return "text.alignleft"
+        case .heading1,
+             .heading2,
+             .heading3:
+            return nil
+        case .unorderedList:
+            return "list.bullet"
+        case .orderedList:
+            return "list.number"
+        case .task:
+            return "checklist"
+        case .toggle:
+            return "chevron.right.square"
+        case .quote:
+            return "quote.opening"
+        case .codeBlock:
+            return "chevron.left.forwardslash.chevron.right"
+        case .table:
+            return "tablecells"
+        case .divider:
+            return "minus"
+        case .callout:
+            return "text.bubble"
+        case .bold:
+            return "bold"
+        case .italic:
+            return "italic"
+        case .strikethrough:
+            return "strikethrough"
+        case .inlineCode:
+            return "curlybraces"
+        case .insertLink:
+            return "link"
+        }
+    }
+}
+
+enum MobileFormatPaletteActionResolver {
+    static let visibleActions: [MobileFormatPaletteAction] = [
+        .collapsePanel,
+        .paragraph,
+        .table,
+        .quote,
+        .codeBlock,
+        .callout,
+        .dismissKeyboard,
+        .heading1,
+        .bold,
+        .italic,
+        .strikethrough,
+        .inlineCode,
+        .outdent,
+        .unorderedList,
+        .orderedList,
+        .task,
+        .toggle,
+        .insertLink,
+        .indent,
+        .divider,
+        .heading2,
+        .heading3
+    ]
 }
 
 enum CompactChrome {
@@ -2593,12 +2835,10 @@ private struct MobileKeyboardInputBar: View {
 }
 
 private struct MobileFormatPalette: View {
-    let selectedTab: MobileFormatPaletteTab
     let selectedBlockType: BlockType
     let canIndent: Bool
     let canOutdent: Bool
     let canApplyInlineFormat: Bool
-    let onSelectTab: (MobileFormatPaletteTab) -> Void
     let onChangeType: (BlockType) -> Void
     let onIndent: () -> Void
     let onOutdent: () -> Void
@@ -2611,44 +2851,20 @@ private struct MobileFormatPalette: View {
     var body: some View {
         let settledOffset = min(pullDownOffset, 82)
 
-        VStack(spacing: 12) {
-            ZStack {
-                Capsule()
-                    .fill(Color.secondary.opacity(0.22))
-                    .frame(width: 42, height: 5)
-                    .accessibilityHidden(true)
-
-                HStack {
-                    dismissKeyboardButton
-                    Spacer()
-                    collapseButton
-                }
-            }
-            .frame(height: 30)
-
-            HStack(spacing: 8) {
-                ForEach(MobileFormatPaletteTabResolver.visibleTabs, id: \.self) { tab in
-                    tabButton(tab)
-                }
-            }
-            .padding(4)
-            .background(Color.black.opacity(0.035))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
+        VStack(spacing: 0) {
             controls
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 8)
-        .padding(.bottom, 16)
+        .padding(.horizontal, MobileFormatPaletteChrome.horizontalPadding)
+        .padding(.vertical, MobileFormatPaletteChrome.verticalPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial)
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: MobileFormatPaletteChrome.cardCornerRadius, style: .continuous)
                 .stroke(Color.white.opacity(0.74), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: MobileFormatPaletteChrome.cardCornerRadius, style: .continuous))
         .shadow(color: Color.black.opacity(0.14), radius: 22, x: 0, y: 8)
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
@@ -2661,133 +2877,18 @@ private struct MobileFormatPalette: View {
 
     @ViewBuilder
     private var controls: some View {
-        LazyVGrid(columns: formatGridColumns, spacing: 10) {
-            switch selectedTab {
-            case .heading:
-                squareFormatButton("正文", systemImage: "textformat", isSelected: selectedBlockType == .paragraph) {
-                    onChangeType(.paragraph)
-                }
-                squareFormatButton("H1", systemImage: "textformat.size", isSelected: selectedBlockType == .heading1) {
-                    onChangeType(.heading1)
-                }
-                squareFormatButton("H2", systemImage: "textformat.size", isSelected: selectedBlockType == .heading2) {
-                    onChangeType(.heading2)
-                }
-                squareFormatButton("H3", systemImage: "textformat.size", isSelected: selectedBlockType == .heading3) {
-                    onChangeType(.heading3)
-                }
-            case .more:
-                squareFormatButton("任务", systemImage: "checklist", isSelected: selectedBlockType == .taskItem) {
-                    onChangeType(.taskItem)
-                }
-                squareFormatButton("折叠", systemImage: "play.fill", isSelected: selectedBlockType == .toggle) {
-                    onChangeType(.toggle)
-                }
-                squareFormatButton("引用", systemImage: "quote.opening", isSelected: selectedBlockType == .quote) {
-                    onChangeType(.quote)
-                }
-                squareFormatButton("代码块", systemImage: "chevron.left.forwardslash.chevron.right", isSelected: selectedBlockType == .codeBlock) {
-                    onChangeType(.codeBlock)
-                }
-                squareFormatButton("提示", systemImage: "text.bubble", isSelected: selectedBlockType == .callout) {
-                    onChangeType(.callout)
-                }
-                squareFormatButton("减少缩进", systemImage: "decrease.indent", isEnabled: canOutdent) {
-                    onOutdent()
-                }
-                squareFormatButton("增加缩进", systemImage: "increase.indent", isEnabled: canIndent) {
-                    onIndent()
-                }
-                squareFormatButton("加粗", systemImage: "bold", isEnabled: canApplyInlineFormat) {
-                    onApplyInlineFormat(.bold)
-                }
-                squareFormatButton("斜体", systemImage: "italic", isEnabled: canApplyInlineFormat) {
-                    onApplyInlineFormat(.italic)
-                }
-                squareFormatButton("删除线", systemImage: "strikethrough", isEnabled: canApplyInlineFormat) {
-                    onApplyInlineFormat(.strikethrough)
-                }
-                squareFormatButton("代码", systemImage: "chevron.left.forwardslash.chevron.right", isEnabled: canApplyInlineFormat) {
-                    onApplyInlineFormat(.code)
-                }
-                squareFormatButton("链接", systemImage: "link", isEnabled: canApplyInlineFormat) {
-                    onInsertLink()
-                }
+        LazyVGrid(columns: formatGridColumns, spacing: MobileFormatPaletteChrome.gridSpacing) {
+            ForEach(MobileFormatPaletteActionResolver.visibleActions, id: \.self) { action in
+                paletteGridButton(action)
             }
         }
     }
 
     private var formatGridColumns: [GridItem] {
         Array(
-            repeating: GridItem(.flexible(minimum: 44), spacing: 10),
-            count: 6
+            repeating: GridItem(.flexible(minimum: 44), spacing: MobileFormatPaletteChrome.gridSpacing),
+            count: MobileFormatPaletteChrome.columnCount
         )
-    }
-
-    private func tabButton(_ tab: MobileFormatPaletteTab, systemImage: String? = nil) -> some View {
-        Button {
-            onSelectTab(tab)
-        } label: {
-            HStack(spacing: 6) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                }
-                Text(tab.title)
-            }
-            .font(.system(size: 17, weight: selectedTab == tab ? .semibold : .regular))
-            .foregroundStyle(selectedTab == tab ? Color.primary : Color.secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.82)
-            .frame(maxWidth: .infinity)
-            .frame(height: 38)
-            .background(selectedTab == tab ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectedFillOpacity) : Color.clear)
-            .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(
-                        selectedTab == tab
-                            ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectionBorderOpacity)
-                            : Color.clear,
-                        lineWidth: 1.6
-                    )
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(tab.title)
-        .accessibilityIdentifier("editor.mobile-format.tab.\(tab.title)")
-    }
-
-    private var dismissKeyboardButton: some View {
-        Button {
-            onDismissKeyboard()
-        } label: {
-            Image(systemName: "keyboard.chevron.compact.down")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color.secondary)
-                .frame(width: 34, height: 30)
-                .background(Color.black.opacity(0.045))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("关闭键盘")
-        .accessibilityIdentifier("editor.mobile-format.dismiss-keyboard")
-    }
-
-    private var collapseButton: some View {
-        Button {
-            onReturnToKeyboard()
-        } label: {
-            Image(systemName: "chevron.down")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color.secondary)
-                .frame(width: 34, height: 30)
-                .background(Color.black.opacity(0.045))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("返回键盘")
-        .accessibilityIdentifier("editor.mobile-format.collapse")
     }
 
     private var pullDownCollapseGesture: some Gesture {
@@ -2807,55 +2908,120 @@ private struct MobileFormatPalette: View {
             }
     }
 
-    private func squareFormatButton(
-        _ title: String,
-        systemImage: String,
-        isSelected: Bool = false,
-        isEnabled: Bool = true,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(isSelected ? MobileActionChrome.accentColor : Color.primary.opacity(isEnabled ? 0.92 : 0.28))
-                .frame(maxWidth: .infinity)
-                .frame(height: 56)
-                .background(isSelected ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectedButtonFillOpacity) : Color.black.opacity(isEnabled ? 0.058 : 0.035))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    private func paletteGridButton(_ action: MobileFormatPaletteAction) -> some View {
+        let isEnabled = isActionEnabled(action)
+        let isSelected = isActionSelected(action)
+        return Button {
+            performAction(action)
+        } label: {
+            Group {
+                if let systemImage = action.systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 22, weight: .medium))
+                } else {
+                    Text(action.accessibilityLabel)
+                        .font(.system(size: 20, weight: .semibold))
+                }
+            }
+            .foregroundStyle(isSelected ? MobileActionChrome.accentColor : Color.primary.opacity(isEnabled ? 0.94 : 0.26))
+            .frame(maxWidth: .infinity)
+            .frame(height: MobileFormatPaletteChrome.buttonHeight)
+            .background(paletteButtonBackground(isEnabled: isEnabled, isSelected: isSelected))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(isEnabled ? 0.52 : 0.20), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
-        .accessibilityIdentifier("editor.mobile-format.\(title)")
+        .accessibilityLabel(action.accessibilityLabel)
+        .accessibilityIdentifier(action.accessibilityIdentifier)
     }
 
-    private func wideFormatButton(
-        _ title: String,
-        systemImage: String,
-        isSelected: Bool = false,
-        isEnabled: Bool = true,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 22, weight: .medium))
-                Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(isSelected ? MobileActionChrome.accentColor : Color.primary.opacity(isEnabled ? 0.92 : 0.28))
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(isSelected ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectedButtonFillOpacity) : Color.black.opacity(isEnabled ? 0.055 : 0.035))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    private func paletteButtonBackground(isEnabled: Bool, isSelected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(
+                isSelected
+                    ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectedButtonFillOpacity)
+                    : Color.white.opacity(isEnabled ? 0.78 : 0.34)
+            )
+    }
+
+    private func isActionSelected(_ action: MobileFormatPaletteAction) -> Bool {
+        action.blockType == selectedBlockType
+    }
+
+    private func isActionEnabled(_ action: MobileFormatPaletteAction) -> Bool {
+        switch action {
+        case .outdent:
+            return canOutdent
+        case .indent:
+            return canIndent
+        case .bold,
+             .italic,
+             .strikethrough,
+             .inlineCode,
+             .insertLink:
+            return canApplyInlineFormat
+        case .collapsePanel,
+             .dismissKeyboard,
+             .paragraph,
+             .heading1,
+             .heading2,
+             .heading3,
+             .unorderedList,
+             .orderedList,
+             .task,
+             .toggle,
+             .quote,
+             .codeBlock,
+             .table,
+             .divider,
+             .callout:
+            return true
         }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
-        .accessibilityIdentifier("editor.mobile-format.\(title)")
+    }
+
+    private func performAction(_ action: MobileFormatPaletteAction) {
+        switch action {
+        case .collapsePanel:
+            onReturnToKeyboard()
+        case .dismissKeyboard:
+            onDismissKeyboard()
+        case .outdent:
+            onOutdent()
+        case .indent:
+            onIndent()
+        case .insertLink:
+            onInsertLink()
+        case .bold,
+             .italic,
+             .strikethrough,
+             .inlineCode:
+            guard let inlineFormat = action.inlineFormat else {
+                return
+            }
+            onApplyInlineFormat(inlineFormat)
+        case .paragraph,
+             .heading1,
+             .heading2,
+             .heading3,
+             .unorderedList,
+             .orderedList,
+             .task,
+             .toggle,
+             .quote,
+             .codeBlock,
+             .table,
+             .divider,
+             .callout:
+            guard let blockType = action.blockType else {
+                return
+            }
+            onChangeType(blockType)
+        }
     }
 
 }
@@ -10722,14 +10888,10 @@ private struct BlockRowView: View {
 
     private var mobileKeyboardFormatPalette: some View {
         MobileFormatPalette(
-            selectedTab: mobileFormatPaletteTab,
             selectedBlockType: block.type,
             canIndent: canMoveUp,
             canOutdent: nestingLevel > 0,
             canApplyInlineFormat: mobileInlineFormatSelection != nil,
-            onSelectTab: { tab in
-                mobileFormatPaletteTab = tab
-            },
             onChangeType: { type in
                 let refocusSelection = mobileInlineFormatSelection
                 if type.isTextEditable && type != .table {

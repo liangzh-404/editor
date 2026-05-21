@@ -1226,7 +1226,52 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testMobileFormatPaletteOmitsRedundantCraftTabs() {
-        XCTAssertEqual(MobileFormatPaletteTabResolver.visibleTabs, [.heading, .more])
+        XCTAssertTrue(MobileFormatPaletteTabResolver.visibleTabs.isEmpty)
+    }
+
+    func testMobileFormatPaletteUsesSingleBearStyleGrid() {
+        XCTAssertEqual(MobileFormatPaletteChrome.columnCount, 6)
+        XCTAssertEqual(MobileFormatPaletteChrome.buttonHeight, 62)
+        XCTAssertGreaterThan(NativeTextEditorLayout.keyboardFormatPanelHeight, 300)
+        XCTAssertEqual(
+            Array(MobileFormatPaletteActionResolver.visibleActions.prefix(6)),
+            [.collapsePanel, .paragraph, .table, .quote, .codeBlock, .callout]
+        )
+    }
+
+    func testMobileFormatPaletteIncludesSupportedFormatsAndOmitsUnsupportedFillers() {
+        let actions = MobileFormatPaletteActionResolver.visibleActions
+
+        XCTAssertEqual(
+            actions.compactMap(\.blockType),
+            [
+                .paragraph,
+                .table,
+                .quote,
+                .codeBlock,
+                .callout,
+                .heading1,
+                .unorderedListItem,
+                .orderedListItem,
+                .taskItem,
+                .toggle,
+                .divider,
+                .heading2,
+                .heading3
+            ]
+        )
+        XCTAssertEqual(actions.compactMap(\.inlineFormat), [.bold, .italic, .strikethrough, .code])
+        XCTAssertTrue(actions.contains(.insertLink))
+        XCTAssertTrue(actions.contains(.indent))
+        XCTAssertTrue(actions.contains(.outdent))
+        XCTAssertTrue(actions.contains(.dismissKeyboard))
+
+        let labels = Set(actions.map(\.accessibilityLabel))
+        XCTAssertFalse(labels.contains("下划线"))
+        XCTAssertFalse(labels.contains("颜色"))
+        XCTAssertFalse(labels.contains("高亮"))
+        XCTAssertFalse(labels.contains("日历"))
+        XCTAssertFalse(labels.contains("拍照"))
     }
 
     func testDesktopAuxiliaryRailButtonIsOfferedEvenBeforeRailHasContent() {
