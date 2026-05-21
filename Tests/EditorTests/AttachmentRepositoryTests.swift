@@ -151,6 +151,60 @@ final class AttachmentRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedAttachment.thumbnailPath, generatedThumbnailPath)
     }
 
+    func testRepairAttachmentFilePathsRestoresMovedAppContainerPaths() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let oldAttachmentsDirectory = makeTemporaryDirectory()
+        let newAttachmentsDirectory = makeTemporaryDirectory()
+        let oldRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: oldAttachmentsDirectory
+        )
+        let result = try oldRepository.importAttachment(
+            sourceURL: try makeSourceFile(name: "photo.png", data: Self.onePixelPNGData),
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+        let oldAttachmentDirectory = URL(fileURLWithPath: result.attachment.localPath)
+            .deletingLastPathComponent()
+        let newAttachmentDirectory = newAttachmentsDirectory
+            .appendingPathComponent(workspaceID, isDirectory: true)
+            .appendingPathComponent(result.attachment.id, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: newAttachmentDirectory.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.moveItem(
+            at: oldAttachmentDirectory,
+            to: newAttachmentDirectory
+        )
+
+        let repairedCount = try AttachmentRepository(
+            database: database,
+            attachmentsDirectory: newAttachmentsDirectory
+        ).repairAttachmentFilePaths()
+        let repairedAttachment = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().attachments.first { $0.id == result.attachment.id }
+        )
+
+        XCTAssertEqual(repairedCount, 1)
+        XCTAssertEqual(
+            repairedAttachment.localPath,
+            newAttachmentDirectory.appendingPathComponent("photo.png").path
+        )
+        XCTAssertEqual(
+            repairedAttachment.thumbnailPath,
+            newAttachmentDirectory.appendingPathComponent("thumbnail.jpg").path
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repairedAttachment.localPath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(repairedAttachment.thumbnailPath)))
+    }
+
     func testImportVideoCreatesAndPersistsThumbnail() throws {
         let database = try migratedDatabase()
         defer { database.close() }

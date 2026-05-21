@@ -42,6 +42,31 @@ final class TagRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.pageIDs(tagID: tag.id), [pageID])
     }
 
+    func testTagCreateAssignAndRemoveQueueSyncChanges() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let repository = TagRepository(database: database)
+        let syncRepository = SyncRepository(database: database)
+
+        let tag = try repository.createTag(workspaceID: workspaceID, name: "Writing")
+        try repository.assignTags(pageID: pageID, tagIDs: [tag.id])
+        try repository.assignTags(pageID: pageID, tagIDs: [])
+
+        XCTAssertTrue(try syncRepository.pendingChanges().contains(
+            SyncChange(entityType: "tag", entityID: tag.id, changeType: "create")
+        ))
+        XCTAssertTrue(try syncRepository.pendingChanges().contains(
+            SyncChange(entityType: "pageTag", entityID: "\(pageID).\(tag.id)", changeType: "create")
+        ))
+        XCTAssertTrue(try syncRepository.pendingChanges().contains(
+            SyncChange(entityType: "pageTag", entityID: "\(pageID).\(tag.id)", changeType: "delete")
+        ))
+    }
+
     func testDeleteTagRemovesChildrenAndAssignments() throws {
         let database = try migratedDatabase()
         defer { database.close() }

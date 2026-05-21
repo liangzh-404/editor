@@ -339,7 +339,7 @@ final class LiveCloudKitAccountStatusProvider: CloudKitAccountStatusProviding {
     }
 }
 
-final class CloudKitAccountMetadataService {
+final class CloudKitAccountMetadataService: @unchecked Sendable {
     static let accountStatusKey = "cloudkit.account.status"
 
     private let provider: CloudKitAccountStatusProviding

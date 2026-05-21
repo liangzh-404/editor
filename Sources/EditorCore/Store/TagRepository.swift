@@ -1,5 +1,20 @@
 import Foundation
 
+enum PageTagSyncIdentity {
+    static func entityID(pageID: String, tagID: String) -> String {
+        "\(pageID).\(tagID)"
+    }
+
+    static func components(entityID: String) -> (pageID: String, tagID: String)? {
+        let parts = entityID.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else {
+            return nil
+        }
+
+        return (pageID: parts[0], tagID: parts[1])
+    }
+}
+
 final class TagRepository {
     private let database: SQLiteDatabase
 
@@ -29,6 +44,11 @@ final class TagRepository {
                 .text(now),
                 .text(now)
             ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "tag",
+            entityID: tagID,
+            changeType: "create"
         )
 
         return try tags(workspaceID: workspaceID).first { $0.id == tagID } ?? TagSummary(
@@ -74,18 +94,49 @@ final class TagRepository {
     }
 
     func assignTags(pageID: String, tagIDs: [String]) throws {
+        let existingTagIDs = Set(
+            try database.query(
+                "SELECT tag_id FROM page_tags WHERE page_id = ?",
+                bindings: [.text(pageID)]
+            ).compactMap { $0["tag_id"] }
+        )
+        let nextTagIDs = Set(tagIDs)
+        let removedTagIDs = existingTagIDs.subtracting(nextTagIDs)
+        let addedTagIDs = nextTagIDs.subtracting(existingTagIDs)
+        guard !removedTagIDs.isEmpty || !addedTagIDs.isEmpty else {
+            return
+        }
+
         let now = ISO8601DateFormatter().string(from: Date())
         try database.withImmediateTransaction("page_tags_assign") {
-            try database.execute(
-                "DELETE FROM page_tags WHERE page_id = ?",
-                bindings: [.text(pageID)]
-            )
-            for tagID in tagIDs {
+            for tagID in removedTagIDs {
+                try database.execute(
+                    "DELETE FROM page_tags WHERE page_id = ? AND tag_id = ?",
+                    bindings: [.text(pageID), .text(tagID)]
+                )
+            }
+            for tagID in addedTagIDs {
                 try database.execute(
                     "INSERT INTO page_tags (page_id, tag_id, created_at) VALUES (?, ?, ?)",
                     bindings: [.text(pageID), .text(tagID), .text(now)]
                 )
             }
+        }
+
+        let syncRepository = SyncRepository(database: database)
+        for tagID in addedTagIDs.sorted() {
+            try syncRepository.enqueue(
+                entityType: "pageTag",
+                entityID: PageTagSyncIdentity.entityID(pageID: pageID, tagID: tagID),
+                changeType: "create"
+            )
+        }
+        for tagID in removedTagIDs.sorted() {
+            try syncRepository.enqueue(
+                entityType: "pageTag",
+                entityID: PageTagSyncIdentity.entityID(pageID: pageID, tagID: tagID),
+                changeType: "delete"
+            )
         }
     }
 
@@ -114,10 +165,68 @@ final class TagRepository {
     }
 
     func deleteTag(id tagID: String) throws {
+        let tagIDs = try tagIDsIncludingDescendants(of: tagID)
+        guard !tagIDs.isEmpty else {
+            return
+        }
+
+        let placeholders = Array(repeating: "?", count: tagIDs.count).joined(separator: ", ")
+        let tagIDBindings = tagIDs.map(SQLiteValue.text)
+        let assignments = try database.query(
+            """
+            SELECT page_id, tag_id
+            FROM page_tags
+            WHERE tag_id IN (\(placeholders))
+            """,
+            bindings: tagIDBindings
+        )
         try database.execute(
             "DELETE FROM tags WHERE id = ?",
             bindings: [.text(tagID)]
         )
+        let syncRepository = SyncRepository(database: database)
+        for assignment in assignments {
+            guard let pageID = assignment["page_id"],
+                  let tagID = assignment["tag_id"] else {
+                continue
+            }
+            try syncRepository.enqueue(
+                entityType: "pageTag",
+                entityID: PageTagSyncIdentity.entityID(pageID: pageID, tagID: tagID),
+                changeType: "delete"
+            )
+        }
+        for removedTagID in tagIDs {
+            try syncRepository.enqueue(
+                entityType: "tag",
+                entityID: removedTagID,
+                changeType: "delete"
+            )
+        }
+    }
+
+    private func tagIDsIncludingDescendants(of tagID: String) throws -> [String] {
+        guard try database.query(
+            "SELECT id FROM tags WHERE id = ? LIMIT 1",
+            bindings: [.text(tagID)]
+        ).first != nil else {
+            return []
+        }
+
+        var tagIDs: [String] = []
+        func appendTagAndChildren(_ currentTagID: String) throws {
+            tagIDs.append(currentTagID)
+            let childIDs = try database.query(
+                "SELECT id FROM tags WHERE parent_tag_id = ? ORDER BY order_key ASC",
+                bindings: [.text(currentTagID)]
+            ).compactMap { $0["id"] }
+            for childID in childIDs {
+                try appendTagAndChildren(childID)
+            }
+        }
+
+        try appendTagAndChildren(tagID)
+        return tagIDs
     }
 
     private func nextTagOrderKey(workspaceID: String, parentTagID: String?) throws -> String {

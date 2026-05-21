@@ -40,7 +40,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testNativeTextBlockEditorShowsPlaceholderOnlyForFocusedEmptyBlock() {
+    func testNativeTextBlockEditorDoesNotShowSlashPlaceholderForFocusedEmptyBlock() {
         let session = EditorSession()
         let editor = NativeTextBlockEditor(
             blockID: "block-1",
@@ -60,7 +60,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
             session: session,
             onTextChange: { _ in }
         )
-        XCTAssertTrue(focusedEditor.showsPlaceholder)
+        XCTAssertFalse(focusedEditor.showsPlaceholder)
 
         let editorWithText = NativeTextBlockEditor(
             blockID: "block-1",
@@ -115,7 +115,7 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 isComposing: true
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             NativeTextPlaceholderVisibilityPolicy.showsPlaceholder(
                 text: "",
                 isFocused: true,

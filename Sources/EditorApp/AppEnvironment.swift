@@ -80,6 +80,7 @@ enum AppEnvironment {
             database: database,
             attachmentsDirectory: attachmentsDirectory
         )
+        try attachmentRepository.repairAttachmentFilePaths()
         try seedAttachmentForUITestingIfNeeded(
             attachmentRepository: attachmentRepository,
             snapshot: snapshot

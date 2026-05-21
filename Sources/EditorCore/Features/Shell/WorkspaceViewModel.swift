@@ -37,10 +37,22 @@ enum WorkspaceForegroundSyncResult: Sendable {
     case failure(String)
 }
 
+enum WorkspaceCloudKitAccountStatusRefreshResult: Sendable {
+    case success(CloudKitAccountAvailability)
+    case failure(String)
+}
+
 protocol WorkspaceSyncScheduling {
     func scheduleForegroundSync(
         operation: @escaping @Sendable () -> WorkspaceForegroundSyncResult,
         completion: @escaping @MainActor @Sendable (WorkspaceForegroundSyncResult) -> Void
+    )
+}
+
+protocol CloudKitAccountStatusScheduling {
+    func scheduleAccountStatusRefresh(
+        operation: @escaping @Sendable () -> WorkspaceCloudKitAccountStatusRefreshResult,
+        completion: @escaping @MainActor @Sendable (WorkspaceCloudKitAccountStatusRefreshResult) -> Void
     )
 }
 
@@ -50,6 +62,22 @@ final class BackgroundWorkspaceSyncScheduler: WorkspaceSyncScheduling {
     func scheduleForegroundSync(
         operation: @escaping @Sendable () -> WorkspaceForegroundSyncResult,
         completion: @escaping @MainActor @Sendable (WorkspaceForegroundSyncResult) -> Void
+    ) {
+        queue.async {
+            let result = operation()
+            Task { @MainActor in
+                completion(result)
+            }
+        }
+    }
+}
+
+final class BackgroundCloudKitAccountStatusScheduler: CloudKitAccountStatusScheduling {
+    private let queue = DispatchQueue(label: "editor.cloudkit-account-status", qos: .utility)
+
+    func scheduleAccountStatusRefresh(
+        operation: @escaping @Sendable () -> WorkspaceCloudKitAccountStatusRefreshResult,
+        completion: @escaping @MainActor @Sendable (WorkspaceCloudKitAccountStatusRefreshResult) -> Void
     ) {
         queue.async {
             let result = operation()
@@ -75,6 +103,11 @@ private final class SyncChangeObservation: @unchecked Sendable {
 private struct PageNavigationHistoryEntry: Equatable {
     let pageID: String
     let collection: WorkspaceCollection
+}
+
+enum WorkspacePageCreationFocus: Equatable, Sendable {
+    case initialBlock
+    case pageTitle
 }
 
 enum CompactPageNavigationResolver {
@@ -110,6 +143,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var cloudKitAccountStatus: CloudKitAccountAvailability?
     @Published private(set) var syncStatusText = "同步空闲"
     @Published private(set) var pendingFocusBlockID: String?
+    @Published private(set) var pendingPageTitleFocusPageID: String?
     @Published private(set) var pendingCompactPageNavigationID: String?
     @Published private(set) var canUndoTextEdit = false
     @Published private(set) var canRedoTextEdit = false
@@ -135,6 +169,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let syncEngine: SyncEngine?
     private let syncScheduler: WorkspaceSyncScheduling
     private let cloudKitAccountMetadataService: CloudKitAccountMetadataService?
+    private let cloudKitAccountStatusScheduler: CloudKitAccountStatusScheduling
     private let encryptedPageAuthenticator: EncryptedPageAuthenticating
     private let currentDateProvider: () -> Date
     private let diaryCalendar: Calendar
@@ -149,6 +184,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var pageNavigationForwardStack: [PageNavigationHistoryEntry] = []
     private var isForegroundSyncRunning = false
     private var isForegroundSyncRerunPending = false
+    private var isCloudKitAccountStatusRefreshRunning = false
     private var nextForegroundSyncAttemptAt: Date?
     private var syncChangeObservation: SyncChangeObservation?
     private var encryptedPageLastOpenedAt: [String: Date] = [:]
@@ -302,6 +338,7 @@ final class WorkspaceViewModel: ObservableObject {
         syncEngine: SyncEngine? = nil,
         syncScheduler: WorkspaceSyncScheduling = BackgroundWorkspaceSyncScheduler(),
         cloudKitAccountMetadataService: CloudKitAccountMetadataService? = nil,
+        cloudKitAccountStatusScheduler: CloudKitAccountStatusScheduling = BackgroundCloudKitAccountStatusScheduler(),
         encryptedPageAuthenticator: EncryptedPageAuthenticating = SystemEncryptedPageAuthenticator(),
         currentDateProvider: @escaping () -> Date = Date.init,
         diaryCalendar: Calendar = .current
@@ -319,6 +356,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.syncEngine = syncEngine
         self.syncScheduler = syncScheduler
         self.cloudKitAccountMetadataService = cloudKitAccountMetadataService
+        self.cloudKitAccountStatusScheduler = cloudKitAccountStatusScheduler
         self.encryptedPageAuthenticator = encryptedPageAuthenticator
         self.currentDateProvider = currentDateProvider
         self.diaryCalendar = diaryCalendar
@@ -329,6 +367,7 @@ final class WorkspaceViewModel: ObservableObject {
         selectedCollection = .recent
         activeDiaryEntry = nil
         pendingFocusBlockID = nil
+        pendingPageTitleFocusPageID = nil
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
         canRedoTextEdit = false
@@ -356,6 +395,7 @@ final class WorkspaceViewModel: ObservableObject {
         syncEngine = nil
         syncScheduler = BackgroundWorkspaceSyncScheduler()
         cloudKitAccountMetadataService = nil
+        cloudKitAccountStatusScheduler = BackgroundCloudKitAccountStatusScheduler()
         encryptedPageAuthenticator = SystemEncryptedPageAuthenticator()
         currentDateProvider = Date.init
         diaryCalendar = .current
@@ -366,6 +406,7 @@ final class WorkspaceViewModel: ObservableObject {
         selectedCollection = snapshot.selectedPageID == nil ? .diary : .recent
         activeDiaryEntry = snapshot.activeDiaryEntry
         pendingFocusBlockID = nil
+        pendingPageTitleFocusPageID = nil
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
         canRedoTextEdit = false
@@ -413,12 +454,47 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func refreshCloudKitAccountStatusForUI() {
+        guard let cloudKitAccountMetadataService else {
+            return
+        }
+
+        guard !isCloudKitAccountStatusRefreshRunning else {
+            EditorLog.sync.debug("cloudkit_account_status_skipped reason=already_running")
+            return
+        }
+
+        isCloudKitAccountStatusRefreshRunning = true
+        cloudKitAccountStatusScheduler.scheduleAccountStatusRefresh(
+            operation: {
+                Self.refreshCloudKitAccountStatus(service: cloudKitAccountMetadataService)
+            },
+            completion: { [weak self] result in
+                self?.finishCloudKitAccountStatusRefresh(result)
+            }
+        )
+    }
+
+    nonisolated private static func refreshCloudKitAccountStatus(
+        service: CloudKitAccountMetadataService
+    ) -> WorkspaceCloudKitAccountStatusRefreshResult {
         do {
-            try refreshCloudKitAccountStatus()
+            return .success(try service.refreshAndStoreStatus())
         } catch {
+            return .failure(String(describing: error))
+        }
+    }
+
+    private func finishCloudKitAccountStatusRefresh(
+        _ result: WorkspaceCloudKitAccountStatusRefreshResult
+    ) {
+        isCloudKitAccountStatusRefreshRunning = false
+        switch result {
+        case .success(let status):
+            cloudKitAccountStatus = status
+        case .failure(let errorDescription):
             cloudKitAccountStatus = .couldNotDetermine
             EditorLog.sync.error(
-                "cloudkit_account_status_failed error=\(String(describing: error), privacy: .public)"
+                "cloudkit_account_status_failed error=\(errorDescription, privacy: .public)"
             )
         }
     }
@@ -1012,8 +1088,12 @@ final class WorkspaceViewModel: ObservableObject {
 
     func createNewDocumentForCompactUI() -> String? {
         do {
-            let page = try createPageInSelectedWorkspace(title: "未命名")
+            let page = try createPageInSelectedWorkspace(
+                title: "未命名",
+                initialFocus: .pageTitle
+            )
             pendingCompactPageNavigationID = page.id
+            pendingPageTitleFocusPageID = page.id
             EditorLog.render.debug(
                 "compact_page_navigation_queued page_id=\(page.id, privacy: .public) source=compact_new_document"
             )
@@ -1021,6 +1101,25 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "compact_new_document_failed error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func createDailyDiaryForCompactUI() -> String? {
+        do {
+            guard let page = try openDailyDiaryPage(source: "compact_daily_create", recordHistory: true) else {
+                return nil
+            }
+            try focusBottomEmptyTextBlockForCurrentPage(source: "compact_daily_create")
+            pendingCompactPageNavigationID = page.id
+            EditorLog.render.debug(
+                "compact_page_navigation_queued page_id=\(page.id, privacy: .public) source=compact_daily_create"
+            )
+            return page.id
+        } catch {
+            EditorLog.input.error(
+                "compact_daily_create_failed error=\(String(describing: error), privacy: .public)"
             )
             return nil
         }
@@ -1204,6 +1303,14 @@ final class WorkspaceViewModel: ObservableObject {
             pendingFocusBlockID = nil
         }
         return pendingFocusBlockID
+    }
+
+    @discardableResult
+    func consumePendingPageTitleFocusPageID() -> String? {
+        defer {
+            pendingPageTitleFocusPageID = nil
+        }
+        return pendingPageTitleFocusPageID
     }
 
     @discardableResult
@@ -1783,7 +1890,8 @@ final class WorkspaceViewModel: ObservableObject {
     @discardableResult
     func createPageInSelectedWorkspace(
         title: String = "未命名",
-        notebookID: String? = nil
+        notebookID: String? = nil,
+        initialFocus: WorkspacePageCreationFocus = .initialBlock
     ) throws -> PageSummary {
         guard let repository else {
             throw WorkspaceViewModelError.missingRepository
@@ -1800,7 +1908,16 @@ final class WorkspaceViewModel: ObservableObject {
         )
         try load()
         selectPage(id: page.id)
-        requestFocusForInitialEmptyBlockIfNeeded(source: "page_create")
+        switch initialFocus {
+        case .initialBlock:
+            requestFocusForInitialEmptyBlockIfNeeded(source: "page_create")
+        case .pageTitle:
+            pendingFocusBlockID = nil
+            pendingPageTitleFocusPageID = page.id
+            EditorLog.focus.debug(
+                "editor_page_title_focus_queued page_id=\(page.id, privacy: .public) source=page_create"
+            )
+        }
         return page
     }
 
@@ -3568,6 +3685,25 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        pendingFocusBlockID = block.id
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=\(source, privacy: .public)"
+        )
+    }
+
+    private func focusBottomEmptyTextBlockForCurrentPage(source: String) throws {
+        if let lastBlock = visibleBlocks.last,
+           lastBlock.type.isTextEditable,
+           lastBlock.type != .table,
+           lastBlock.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pendingFocusBlockID = lastBlock.id
+            EditorLog.focus.debug(
+                "editor_focus_request_queued block_id=\(lastBlock.id, privacy: .public) source=\(source, privacy: .public)"
+            )
+            return
+        }
+
+        let block = try appendParagraphBlockToCurrentPage()
         pendingFocusBlockID = block.id
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=\(source, privacy: .public)"

@@ -671,7 +671,7 @@ enum NativeTextCompositionPolicy {
 
 enum NativeTextPlaceholderVisibilityPolicy {
     static func showsPlaceholder(text: String, isFocused: Bool, isComposing: Bool) -> Bool {
-        text.isEmpty && isFocused && !isComposing
+        false
     }
 }
 

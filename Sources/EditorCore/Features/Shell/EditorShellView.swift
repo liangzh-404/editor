@@ -435,6 +435,7 @@ private struct ThreeColumnEditorShell: View {
                     availableTags: viewModel.snapshot.tags,
                     selectedPageTagIDs: viewModel.selectedPageTagIDs,
                     pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                    pendingPageTitleFocusPageID: viewModel.pendingPageTitleFocusPageID,
                     canUndoTextEdit: viewModel.canUndoTextEdit,
                     canRedoTextEdit: viewModel.canRedoTextEdit,
                     displayMode: displayMode,
@@ -628,6 +629,9 @@ private struct ThreeColumnEditorShell: View {
                     onPendingBlockFocusHandled: {
                         _ = viewModel.consumePendingFocusBlockID()
                     },
+                    onPendingPageTitleFocusHandled: {
+                        _ = viewModel.consumePendingPageTitleFocusPageID()
+                    },
                     onRemoveTagFromSelectedPage: { tagID in
                         viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
                     },
@@ -733,6 +737,7 @@ private struct ThreeColumnEditorShell: View {
                 availableTags: viewModel.snapshot.tags,
                 selectedPageTagIDs: viewModel.selectedPageTagIDs,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                pendingPageTitleFocusPageID: viewModel.pendingPageTitleFocusPageID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
                 canRedoTextEdit: viewModel.canRedoTextEdit,
                 displayMode: displayMode,
@@ -925,6 +930,9 @@ private struct ThreeColumnEditorShell: View {
                 onMobileRevealPageList: nil,
                 onPendingBlockFocusHandled: {
                     _ = viewModel.consumePendingFocusBlockID()
+                },
+                onPendingPageTitleFocusHandled: {
+                    _ = viewModel.consumePendingPageTitleFocusPageID()
                 },
                 onRemoveTagFromSelectedPage: { tagID in
                     viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
@@ -1177,6 +1185,11 @@ private struct CompactHomeView: View {
         .accessibilityIdentifier("editor.compact-library")
         .navigationTitle("资料库")
         .background(CompactLibraryChrome.backgroundColor)
+        .overlay(alignment: .bottomTrailing) {
+            quickCreateButton
+                .padding(.trailing, 18)
+                .padding(.bottom, 18)
+        }
 #if os(iOS)
         .highPriorityGesture(compactForwardSwipeGesture)
         .toolbarBackground(CompactLibraryChrome.backgroundColor, for: .navigationBar)
@@ -1289,8 +1302,78 @@ private struct CompactHomeView: View {
         .accessibilityIdentifier(item.identifier)
     }
 
+    private var quickCreateButton: some View {
+        MobileQuickCreateButton(
+            onCreateNewDocument: {
+                _ = viewModel.createNewDocumentForCompactUI()
+            },
+            onCreateDailyDiary: {
+                _ = viewModel.createDailyDiaryForCompactUI()
+            }
+        )
+    }
+
     private func tagCount(_ tagID: String) -> Int {
         viewModel.snapshot.pageTags.filter { $0.tagID == tagID }.count
+    }
+}
+
+private struct MobileQuickCreateButton: View {
+    let onCreateNewDocument: () -> Void
+    let onCreateDailyDiary: () -> Void
+
+    var body: some View {
+        Button(action: onCreateNewDocument) {
+            Image(systemName: "plus")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Color.white)
+                .frame(width: 54, height: 54)
+                .background(
+                    Circle()
+                        .fill(MobileActionChrome.accentColor)
+                        .shadow(color: Color.black.opacity(0.18), radius: 14, x: 0, y: 8)
+                )
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            ForEach(MobileQuickCreateMenuModel.longPressActions, id: \.self) { action in
+                Button {
+                    perform(action)
+                } label: {
+                    Label(title(for: action), systemImage: systemImage(for: action))
+                }
+            }
+        }
+        .accessibilityLabel("快速创建")
+        .accessibilityValue("点击新建笔记，长按选择日记或笔记")
+        .accessibilityIdentifier("editor.mobile.quick-create")
+    }
+
+    private func perform(_ action: MobileQuickCreateAction) {
+        switch action {
+        case .dailyDiary:
+            onCreateDailyDiary()
+        case .newDocument:
+            onCreateNewDocument()
+        }
+    }
+
+    private func title(for action: MobileQuickCreateAction) -> String {
+        switch action {
+        case .dailyDiary:
+            return "创建日记"
+        case .newDocument:
+            return "新建笔记"
+        }
+    }
+
+    private func systemImage(for action: MobileQuickCreateAction) -> String {
+        switch action {
+        case .dailyDiary:
+            return "square.and.pencil"
+        case .newDocument:
+            return "doc.badge.plus"
+        }
     }
 }
 
@@ -1369,6 +1452,28 @@ enum BlockDragHandleVisibilityPolicy {
     static func opacity(isHovered: Bool) -> Double {
         isHovered ? 1 : EditorBlockChrome.inactiveHandleOpacity
     }
+}
+
+enum MobileBlockDragHandleVisibilityPolicy {
+    static func opacity(isSelectionModeActive: Bool) -> Double {
+        isSelectionModeActive ? 0 : 1
+    }
+}
+
+enum MobileBlockDragActivationPolicy {
+    static let usesLongPressDraggableHandle = true
+}
+
+enum MobileQuickCreateAction: Equatable, Hashable, Sendable {
+    case dailyDiary
+    case newDocument
+}
+
+enum MobileQuickCreateMenuModel {
+    static let longPressActions: [MobileQuickCreateAction] = [
+        .dailyDiary,
+        .newDocument
+    ]
 }
 
 enum AttachmentImageCaptionVisibilityPolicy {
@@ -3757,6 +3862,7 @@ private struct CompactPageDestination: View {
                 availableTags: viewModel.snapshot.tags,
                 selectedPageTagIDs: viewModel.selectedPageTagIDs,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                pendingPageTitleFocusPageID: viewModel.pendingPageTitleFocusPageID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
                 canRedoTextEdit: viewModel.canRedoTextEdit,
                 showsAuxiliaryRail: false,
@@ -3947,6 +4053,9 @@ private struct CompactPageDestination: View {
                 onPendingBlockFocusHandled: {
                     _ = viewModel.consumePendingFocusBlockID()
                 },
+                onPendingPageTitleFocusHandled: {
+                    _ = viewModel.consumePendingPageTitleFocusPageID()
+                },
                 onRemoveTagFromSelectedPage: { tagID in
                     viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
                 },
@@ -3955,6 +4064,9 @@ private struct CompactPageDestination: View {
                 }
             )
             .onAppear {
+                if viewModel.pendingPageTitleFocusPageID == page.id {
+                    didRequestInitialFocus = true
+                }
                 Task {
                     await viewModel.selectPageForUI(id: page.id)
                     guard viewModel.selectedPageID == page.id,
@@ -5245,6 +5357,11 @@ private struct CompactPageListView: View {
         .navigationTitle("页面")
         .scrollContentBackground(.hidden)
         .background(EditorDesignTokens.Colors.editorBackground.color)
+        .overlay(alignment: .bottomTrailing) {
+            quickCreateButton
+                .padding(.trailing, 18)
+                .padding(.bottom, 18)
+        }
 #if os(iOS)
         .highPriorityGesture(
             DragGesture(minimumDistance: 56, coordinateSpace: .local)
@@ -5265,6 +5382,17 @@ private struct CompactPageListView: View {
 
     private func nestingLevel(for notebook: NotebookSummary) -> Int {
         NotebookHierarchy.nestingLevel(for: notebook, in: viewModel.snapshot.notebooks)
+    }
+
+    private var quickCreateButton: some View {
+        MobileQuickCreateButton(
+            onCreateNewDocument: {
+                _ = viewModel.createNewDocumentForCompactUI()
+            },
+            onCreateDailyDiary: {
+                _ = viewModel.createDailyDiaryForCompactUI()
+            }
+        )
     }
 }
 
@@ -5309,6 +5437,11 @@ private struct CompactCollectionPageListView: View {
         .navigationTitle(navigationTitle)
         .background(CompactChrome.backgroundColor)
         .accessibilityIdentifier("editor.compact-document-list")
+        .overlay(alignment: .bottomTrailing) {
+            quickCreateButton
+                .padding(.trailing, 18)
+                .padding(.bottom, 18)
+        }
 #if os(iOS)
         .highPriorityGesture(
             DragGesture(minimumDistance: 56, coordinateSpace: .local)
@@ -5415,6 +5548,17 @@ private struct CompactCollectionPageListView: View {
         case .archive:
             return "归档"
         }
+    }
+
+    private var quickCreateButton: some View {
+        MobileQuickCreateButton(
+            onCreateNewDocument: {
+                _ = viewModel.createNewDocumentForCompactUI()
+            },
+            onCreateDailyDiary: {
+                _ = viewModel.createDailyDiaryForCompactUI()
+            }
+        )
     }
 }
 
@@ -6342,6 +6486,174 @@ private struct EncryptedPageLockedView: View {
     }
 }
 
+#if os(iOS)
+private struct PageTitleUIKitTextField: UIViewRepresentable {
+    @Binding var text: String
+    let focusRequestID: UUID?
+    let isEnabled: Bool
+    let onEditingBegan: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> UITextField {
+        let textField = UITextField()
+        textField.borderStyle = .none
+        textField.backgroundColor = .clear
+        textField.placeholder = "未命名"
+        textField.font = UIFont.systemFont(
+            ofSize: CGFloat(EditorDesignTokens.Typography.documentTitleSize),
+            weight: .semibold
+        )
+        textField.textColor = EditorDesignTokens.Colors.primaryText.uiColor
+        textField.adjustsFontForContentSizeCategory = true
+        textField.returnKeyType = .done
+        textField.delegate = context.coordinator
+        textField.accessibilityIdentifier = "editor.page-title"
+        return textField
+    }
+
+    func updateUIView(_ textField: UITextField, context: Context) {
+        context.coordinator.parent = self
+        textField.isEnabled = isEnabled
+        if !textField.isFirstResponder, textField.text != text {
+            textField.text = text
+        }
+        context.coordinator.handleFocusRequestIfNeeded(
+            textField: textField,
+            focusRequestID: focusRequestID
+        )
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: PageTitleUIKitTextField
+        private var handledFocusRequestID: UUID?
+        private var scheduledFocusRequestID: UUID?
+
+        init(parent: PageTitleUIKitTextField) {
+            self.parent = parent
+        }
+
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            parent.onEditingBegan()
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            let title = textField.text ?? ""
+            if title != parent.text {
+                parent.text = title
+            }
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            textField.resignFirstResponder()
+            return true
+        }
+
+        func handleFocusRequestIfNeeded(textField: UITextField, focusRequestID: UUID?) {
+            guard let focusRequestID,
+                  handledFocusRequestID != focusRequestID,
+                  scheduledFocusRequestID != focusRequestID else {
+                return
+            }
+
+            scheduledFocusRequestID = focusRequestID
+            scheduleFocusAttempt(
+                textField: textField,
+                focusRequestID: focusRequestID,
+                remainingAttempts: 24
+            )
+        }
+
+        private func scheduleFocusAttempt(
+            textField: UITextField,
+            focusRequestID: UUID,
+            remainingAttempts: Int
+        ) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + focusDelay(for: remainingAttempts)) { [weak textField, weak self] in
+                guard let textField, let self else {
+                    return
+                }
+
+                if self.performFocus(textField: textField) {
+                    self.scheduleFocusConfirmation(
+                        textField: textField,
+                        focusRequestID: focusRequestID,
+                        remainingAttempts: remainingAttempts
+                    )
+                    return
+                }
+
+                guard remainingAttempts > 0 else {
+                    self.finishFocusRequest(focusRequestID, didFocus: false)
+                    EditorLog.focus.debug("page_title_focus_request_retry_exhausted")
+                    return
+                }
+
+                self.scheduleFocusAttempt(
+                    textField: textField,
+                    focusRequestID: focusRequestID,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+        }
+
+        private func performFocus(textField: UITextField) -> Bool {
+            let didFocus = textField.window != nil && textField.becomeFirstResponder()
+            if didFocus {
+                textField.selectAll(nil)
+            }
+            return didFocus
+        }
+
+        private func scheduleFocusConfirmation(
+            textField: UITextField,
+            focusRequestID: UUID,
+            remainingAttempts: Int
+        ) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak textField, weak self] in
+                guard let textField else {
+                    return
+                }
+                guard let self else {
+                    return
+                }
+                if textField.isFirstResponder {
+                    self.finishFocusRequest(focusRequestID, didFocus: true)
+                    return
+                }
+
+                guard remainingAttempts > 0 else {
+                    self.finishFocusRequest(focusRequestID, didFocus: false)
+                    EditorLog.focus.debug("page_title_focus_request_retry_exhausted")
+                    return
+                }
+
+                self.scheduleFocusAttempt(
+                    textField: textField,
+                    focusRequestID: focusRequestID,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+        }
+
+        private func finishFocusRequest(_ focusRequestID: UUID, didFocus: Bool) {
+            if scheduledFocusRequestID == focusRequestID {
+                scheduledFocusRequestID = nil
+            }
+            if didFocus {
+                handledFocusRequestID = focusRequestID
+            }
+        }
+
+        private func focusDelay(for remainingAttempts: Int) -> DispatchTimeInterval {
+            remainingAttempts == 24 ? .milliseconds(0) : .milliseconds(45)
+        }
+    }
+}
+#endif
+
 private struct EditorCanvasView: View {
     let page: PageSummary?
     let pages: [PageSummary]
@@ -6359,6 +6671,7 @@ private struct EditorCanvasView: View {
     var availableTags: [TagSummary] = []
     var selectedPageTagIDs: [String] = []
     let pendingFocusBlockID: String?
+    var pendingPageTitleFocusPageID: String? = nil
     let canUndoTextEdit: Bool
     let canRedoTextEdit: Bool
     var displayMode: EditorDisplayMode = .standard
@@ -6421,6 +6734,7 @@ private struct EditorCanvasView: View {
     let onAttachmentImageDisplayWidthChange: (String, Double) -> Void
     let onMobileRevealPageList: (() -> Void)?
     let onPendingBlockFocusHandled: () -> Void
+    var onPendingPageTitleFocusHandled: () -> Void = {}
     var onRemoveTagFromSelectedPage: (String) -> Bool = { _ in false }
     var onCreateAndAssignTagToSelectedPage: (String) -> Bool = { _ in false }
     @State private var isAttachmentImporterPresented = false
@@ -6447,6 +6761,9 @@ private struct EditorCanvasView: View {
     @State private var attachmentResizeHandleFrames: [String: CGRect] = [:]
     @State private var blockSelectionMarqueeStart: CGPoint?
     @State private var blockSelectionMarqueeCurrent: CGPoint?
+    @State private var scheduledPageTitleFocusPageID: String?
+    @State private var pageTitleFocusRequestID: UUID?
+    @FocusState private var isPageTitleFocused: Bool
 #if os(iOS)
     @State private var isMobileNavigationTitleVisible = false
     @State private var mobilePageTitleBaselineMaxY: CGFloat?
@@ -6470,21 +6787,33 @@ private struct EditorCanvasView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
                 HStack(alignment: .center, spacing: 12) {
+#if os(iOS)
+                    PageTitleUIKitTextField(
+                        text: pageTitleBinding,
+                        focusRequestID: pageTitleFocusRequestID,
+                        isEnabled: page != nil,
+                        onEditingBegan: {
+                            clearTransientSelectionsAfterPageTitleFocusIfNeeded()
+                        }
+                    )
+                    .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(titleFrameReporter)
+#else
                     TextField("未命名", text: pageTitleBinding)
                         .textFieldStyle(.plain)
                         .font(.system(size: EditorDesignTokens.Typography.documentTitleSize, weight: .semibold))
                         .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
                         .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
                         .disabled(page == nil)
+                        .focused($isPageTitleFocused)
                         .accessibilityIdentifier("editor.page-title")
-#if os(iOS)
-                        .background(titleFrameReporter)
-#endif
                         .simultaneousGesture(
                             TapGesture().onEnded {
                                 clearTransientSelections()
                             }
                         )
+#endif
 
                     Spacer(minLength: 12)
                 }
@@ -7061,6 +7390,7 @@ private struct EditorCanvasView: View {
         .focusedValue(\.openParentPageAction, openParentPageAction)
         .onAppear {
             scheduleScrollMetricsReset()
+            schedulePendingPageTitleFocusIfNeeded(pendingPageTitleFocusPageID)
             schedulePendingFocusIfNeeded(pendingFocusBlockID)
             logRenderMetrics(reason: "appear")
         }
@@ -7068,6 +7398,12 @@ private struct EditorCanvasView: View {
 #if os(iOS)
             resetMobileNavigationTitleVisibility()
 #endif
+            scheduledPageTitleFocusPageID = nil
+            schedulePendingPageTitleFocusIfNeeded(pendingPageTitleFocusPageID)
+        }
+        .onChange(of: pendingPageTitleFocusPageID) { _, pageID in
+            scheduledPageTitleFocusPageID = nil
+            schedulePendingPageTitleFocusIfNeeded(pageID)
         }
         .onChange(of: pendingFocusBlockID) { _, blockID in
             schedulePendingFocusIfNeeded(blockID)
@@ -7144,6 +7480,55 @@ private struct EditorCanvasView: View {
         } set: { title in
             onPageTitleChange(title)
         }
+    }
+
+    private func schedulePendingPageTitleFocusIfNeeded(_ pageID: String?) {
+        guard let pageID,
+              pageID == page?.id else {
+            return
+        }
+        guard scheduledPageTitleFocusPageID != pageID else {
+            return
+        }
+
+        scheduledPageTitleFocusPageID = pageID
+#if os(iOS)
+        let retryDelays: [TimeInterval] = [0.15]
+#else
+        let retryDelays: [TimeInterval] = [0.15, 0.35, 0.7]
+#endif
+        for (index, delay) in retryDelays.enumerated() {
+            let isLastAttempt = index == retryDelays.count - 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                prepareTitleFocusAttempt()
+#if os(iOS)
+                pageTitleFocusRequestID = UUID()
+#else
+                isPageTitleFocused = true
+#endif
+                if isLastAttempt {
+                    scheduledPageTitleFocusPageID = nil
+                    onPendingPageTitleFocusHandled()
+                }
+            }
+        }
+    }
+
+    private func prepareTitleFocusAttempt() {
+        pendingFocusRequest = nil
+        if let focusedBlockID = editorSession.focusedBlockID {
+            editorSession.endEditing(blockID: focusedBlockID)
+        }
+#if os(iOS)
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+#elseif os(macOS)
+        NSApp.keyWindow?.makeFirstResponder(nil)
+#endif
     }
 
 #if os(iOS)
@@ -7920,6 +8305,17 @@ private struct EditorCanvasView: View {
         activeBlockDropTarget = BlockDropTargetLifecycleReducer
             .targetAfterEditorInteraction(current: activeBlockDropTarget)
         transientSelectionResetRequest = TransientSelectionResetRequest(excludingBlockID: excludingBlockID)
+    }
+
+    private func clearTransientSelectionsAfterPageTitleFocusIfNeeded() {
+        guard !editorSession.selectedBlockIDs.isEmpty ||
+            activeBlockDropTarget != nil ||
+            blockSelectionMarqueeStart != nil ||
+            blockSelectionMarqueeCurrent != nil else {
+            return
+        }
+
+        clearTransientSelections()
     }
 
     @discardableResult
@@ -10143,7 +10539,9 @@ private struct BlockRowView: View {
 #if os(macOS)
         BlockDragHandleVisibilityPolicy.opacity(isHovered: isRowHovered)
 #else
-        isRowActive ? 1 : EditorBlockChrome.inactiveHandleOpacity
+        MobileBlockDragHandleVisibilityPolicy.opacity(
+            isSelectionModeActive: isMobileSelectionModeActive
+        )
 #endif
     }
 
@@ -10180,6 +10578,7 @@ private struct BlockRowView: View {
             }
             .accessibilityLabel("块拖拽手柄")
             .accessibilityValue(block.type.editorMenuTitle)
+            .accessibilityHint("长按并拖动调整块位置或层级")
             .accessibilityIdentifier("editor.block.\(block.id).drag-handle")
             .frame(width: CGFloat(EditorBlockChrome.dragHandleWidth), height: 20)
             .contentShape(Rectangle())

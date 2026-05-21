@@ -232,6 +232,25 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(BlockDragHandleVisibilityPolicy.opacity(isHovered: true), 1)
     }
 
+    func testMobileBlockDragHandleStaysVisibleForLongPressReordering() {
+        XCTAssertEqual(
+            MobileBlockDragHandleVisibilityPolicy.opacity(isSelectionModeActive: false),
+            1
+        )
+        XCTAssertEqual(
+            MobileBlockDragHandleVisibilityPolicy.opacity(isSelectionModeActive: true),
+            0
+        )
+        XCTAssertTrue(MobileBlockDragActivationPolicy.usesLongPressDraggableHandle)
+    }
+
+    func testMobileQuickCreateLongPressMenuKeepsDiaryBeforeNewDocument() {
+        XCTAssertEqual(
+            MobileQuickCreateMenuModel.longPressActions,
+            [.dailyDiary, .newDocument]
+        )
+    }
+
     func testNestedListVerticalRhythmKeepsDropSlotsSubtleLikeCraft() {
         XCTAssertLessThanOrEqual(EditorBlockChrome.dropSlotHeight, 4)
         XCTAssertLessThanOrEqual(

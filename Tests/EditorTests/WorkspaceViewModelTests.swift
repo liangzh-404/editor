@@ -146,7 +146,8 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedPage?.title, "未命名")
         XCTAssertEqual(viewModel.pendingCompactPageNavigationID, newPageID)
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
-        XCTAssertEqual(viewModel.pendingFocusBlockID, viewModel.visibleBlocks.first?.id)
+        XCTAssertNil(viewModel.pendingFocusBlockID)
+        XCTAssertEqual(viewModel.pendingPageTitleFocusPageID, newPageID)
     }
 
     @MainActor
@@ -423,6 +424,55 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertTrue(viewModel.navigateBackForUI())
         XCTAssertEqual(viewModel.selectedPageID, welcomePageID)
+    }
+
+    @MainActor
+    func testCompactNewDocumentQueuesPageNavigationAndTitleFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        let pageID = try XCTUnwrap(viewModel.createNewDocumentForCompactUI())
+
+        XCTAssertEqual(viewModel.selectedPageID, pageID)
+        XCTAssertEqual(viewModel.selectedPage?.title, "未命名")
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, pageID)
+        XCTAssertEqual(viewModel.pendingPageTitleFocusPageID, pageID)
+        XCTAssertNil(viewModel.pendingFocusBlockID)
+        XCTAssertEqual(viewModel.consumePendingPageTitleFocusPageID(), pageID)
+        XCTAssertNil(viewModel.pendingPageTitleFocusPageID)
+    }
+
+    @MainActor
+    func testCompactDailyCreateQueuesNavigationAndBottomEmptyLineFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database),
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 16) },
+            diaryCalendar: Self.gregorianCalendar
+        )
+        try viewModel.load()
+        viewModel.selectCollection(.diary)
+        let firstDiaryBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.updateBlockText(blockID: firstDiaryBlockID, text: "上午记录")
+        viewModel.selectCollection(.allDocuments)
+
+        let pageID = try XCTUnwrap(viewModel.createDailyDiaryForCompactUI())
+
+        XCTAssertEqual(viewModel.selectedPageID, pageID)
+        XCTAssertEqual(viewModel.selectedCollection, .diary)
+        XCTAssertEqual(viewModel.selectedPage?.title, "2026年5月16日 星期六")
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, pageID)
+        XCTAssertNil(viewModel.pendingPageTitleFocusPageID)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["上午记录", ""])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, viewModel.visibleBlocks.last?.id)
     }
 
     @MainActor
@@ -3702,6 +3752,42 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSyncAfterActivationSchedulesCloudKitAccountStatusRefreshOffMainActor() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let keychainStore = KeychainMetadataStore(service: "com.liangzhang.editor.tests.\(UUID().uuidString)")
+        defer {
+            try? keychainStore.removeValue(for: CloudKitAccountMetadataService.accountStatusKey)
+        }
+        let provider = CountingCloudKitAccountStatusProvider(status: .available)
+        let accountStatusScheduler = DeferredCloudKitAccountStatusScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            cloudKitAccountMetadataService: CloudKitAccountMetadataService(
+                provider: provider,
+                metadataStore: keychainStore
+            ),
+            cloudKitAccountStatusScheduler: accountStatusScheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+
+        XCTAssertEqual(provider.callCount, 0)
+        XCTAssertEqual(accountStatusScheduler.scheduledOperationCount, 1)
+        XCTAssertEqual(viewModel.cloudKitAccountStatusText, "iCloud 未检查")
+
+        try accountStatusScheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(provider.callCount, 1)
+        XCTAssertEqual(viewModel.cloudKitAccountStatus, .available)
+        XCTAssertEqual(viewModel.cloudKitAccountStatusText, "iCloud 可用")
+    }
+
+    @MainActor
     func testLocalSyncChangeSchedulesAutomaticForegroundSyncWithoutManualAction() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -4116,6 +4202,20 @@ private struct WorkspaceStaticCloudKitAccountStatusProvider: CloudKitAccountStat
     }
 }
 
+private final class CountingCloudKitAccountStatusProvider: CloudKitAccountStatusProviding {
+    let status: CKAccountStatus
+    private(set) var callCount = 0
+
+    init(status: CKAccountStatus) {
+        self.status = status
+    }
+
+    func accountStatus() throws -> CKAccountStatus {
+        callCount += 1
+        return status
+    }
+}
+
 private final class RecordingEncryptedPageAuthenticator: EncryptedPageAuthenticating {
     private var results: [Bool]
     private(set) var requestCount = 0
@@ -4211,6 +4311,41 @@ private final class DeferredWorkspaceSyncScheduler: WorkspaceSyncScheduling {
 
         let scheduledForegroundSync = scheduledForegroundSyncs.removeFirst()
         scheduledForegroundSync.completion(scheduledForegroundSync.operation())
+    }
+}
+
+private final class DeferredCloudKitAccountStatusScheduler: CloudKitAccountStatusScheduling {
+    private struct ScheduledAccountStatusRefresh {
+        let operation: @Sendable () -> WorkspaceCloudKitAccountStatusRefreshResult
+        let completion: @MainActor @Sendable (WorkspaceCloudKitAccountStatusRefreshResult) -> Void
+    }
+
+    private var scheduledAccountStatusRefreshes: [ScheduledAccountStatusRefresh] = []
+
+    var scheduledOperationCount: Int {
+        scheduledAccountStatusRefreshes.count
+    }
+
+    func scheduleAccountStatusRefresh(
+        operation: @escaping @Sendable () -> WorkspaceCloudKitAccountStatusRefreshResult,
+        completion: @escaping @MainActor @Sendable (WorkspaceCloudKitAccountStatusRefreshResult) -> Void
+    ) {
+        scheduledAccountStatusRefreshes.append(
+            ScheduledAccountStatusRefresh(
+                operation: operation,
+                completion: completion
+            )
+        )
+    }
+
+    @MainActor
+    func runNextScheduledOperation() throws {
+        guard !scheduledAccountStatusRefreshes.isEmpty else {
+            throw WorkspaceViewModelTestError.noScheduledForegroundSync
+        }
+
+        let scheduledRefresh = scheduledAccountStatusRefreshes.removeFirst()
+        scheduledRefresh.completion(scheduledRefresh.operation())
     }
 }
 

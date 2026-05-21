@@ -206,6 +206,38 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneMiddleQuickCreateFocusesNewPageTitle() {
+        let app = makeApp()
+        app.launch()
+
+        let documentListBackButton = app.navigationBars.buttons["全部文档"]
+        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Initial compact editor should expose the middle document-list back button")
+        documentListBackButton.tap()
+
+        let quickCreate = app.buttons["editor.mobile.quick-create"]
+        XCTAssertTrue(quickCreate.waitForExistence(timeout: 5), "The middle document-list screen should expose the floating quick-create button")
+        quickCreate.tap()
+
+        let pageTitle = app.textFields["editor.page-title"]
+        XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "Quick create should navigate into the newly created page")
+        XCTAssertTrue(
+            waitForKeyboardFocus(pageTitle, timeout: 5),
+            "Quick create should focus the new page title instead of the first empty block"
+        )
+
+        pageTitle.typeText("MobileTitle")
+        let titleValue = pageTitle.value as? String ?? pageTitle.label
+        XCTAssertTrue(titleValue.contains("MobileTitle"), "Typed text should land in the page title; value: \(titleValue)")
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The new page should still contain an empty editable block")
+        let bodyValue = firstTextView.value as? String ?? ""
+        XCTAssertFalse(bodyValue.contains("MobileTitle"), "Quick-create title typing should not leak into the first block; value: \(bodyValue)")
+    }
+
+    @MainActor
     func testIPhoneBlankCanvasRegionFocusesEditorAtDocumentEnd() {
         let app = makeApp()
         app.launch()
@@ -564,6 +596,12 @@ final class EditorIOSEditingUITests: XCTestCase {
 private extension XCTestCase {
     func waitForNonExistence(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
         let predicate = NSPredicate(format: "exists == false")
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    func waitForKeyboardFocus(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "hasKeyboardFocus == true")
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }

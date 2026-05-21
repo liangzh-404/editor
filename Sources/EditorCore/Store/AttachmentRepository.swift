@@ -168,6 +168,84 @@ final class AttachmentRepository: @unchecked Sendable {
     }
 
     @discardableResult
+    func repairAttachmentFilePaths() throws -> Int {
+        let rows = try database.query(
+            """
+            SELECT id,
+                   workspace_id,
+                   original_filename,
+                   local_path,
+                   thumbnail_path
+            FROM attachments
+            """
+        )
+        var repairs: [(id: String, localPath: String, thumbnailPath: String?)] = []
+
+        for row in rows {
+            let attachmentID = row["id"] ?? ""
+            let workspaceID = row["workspace_id"] ?? ""
+            let originalFilename = row["original_filename"] ?? ""
+            guard !attachmentID.isEmpty,
+                  !workspaceID.isEmpty,
+                  !originalFilename.isEmpty else {
+                continue
+            }
+
+            let attachmentDirectory = managedAttachmentDirectory(
+                workspaceID: workspaceID,
+                attachmentID: attachmentID
+            )
+            let currentLocalPath = row["local_path"] ?? ""
+            let currentThumbnailPath = row["thumbnail_path"] ?? nil
+            let repairedLocalPath = repairedManagedFilePath(
+                currentPath: currentLocalPath,
+                expectedURL: attachmentDirectory.appendingPathComponent(originalFilename)
+            )
+            let repairedThumbnailPath = repairedManagedThumbnailPath(
+                currentPath: currentThumbnailPath,
+                attachmentDirectory: attachmentDirectory
+            )
+
+            guard repairedLocalPath != nil || repairedThumbnailPath != nil else {
+                continue
+            }
+
+            repairs.append((
+                id: attachmentID,
+                localPath: repairedLocalPath ?? currentLocalPath,
+                thumbnailPath: repairedThumbnailPath ?? currentThumbnailPath
+            ))
+        }
+
+        guard !repairs.isEmpty else {
+            return 0
+        }
+
+        try database.withImmediateTransaction("repair_attachment_file_paths") {
+            for repair in repairs {
+                try database.execute(
+                    """
+                    UPDATE attachments
+                    SET local_path = ?,
+                        thumbnail_path = ?
+                    WHERE id = ?
+                    """,
+                    bindings: [
+                        .text(repair.localPath),
+                        repair.thumbnailPath.map(SQLiteValue.text) ?? .null,
+                        .text(repair.id)
+                    ]
+                )
+            }
+        }
+
+        EditorLog.attachment.debug(
+            "attachment_file_paths_repaired count=\(repairs.count, privacy: .public)"
+        )
+        return repairs.count
+    }
+
+    @discardableResult
     func purgeUnreferencedAttachments(workspaceID: String) throws -> Int {
         let orphanedAttachments = try database.query(
             """
@@ -338,6 +416,43 @@ final class AttachmentRepository: @unchecked Sendable {
         let lastOrderKey = rows.first.flatMap { $0["order_key"] } ?? "000000"
         let nextValue = (Int(lastOrderKey) ?? 0) + 1
         return String(format: "%06d", nextValue)
+    }
+
+    private func managedAttachmentDirectory(workspaceID: String, attachmentID: String) -> URL {
+        attachmentsDirectory
+            .appendingPathComponent(workspaceID, isDirectory: true)
+            .appendingPathComponent(attachmentID, isDirectory: true)
+    }
+
+    private func repairedManagedFilePath(currentPath: String, expectedURL: URL) -> String? {
+        guard !currentPath.isEmpty,
+              !fileManager.fileExists(atPath: currentPath),
+              fileManager.fileExists(atPath: expectedURL.path) else {
+            return nil
+        }
+        return expectedURL.path
+    }
+
+    private func repairedManagedThumbnailPath(
+        currentPath: String?,
+        attachmentDirectory: URL
+    ) -> String? {
+        guard let currentPath,
+              !currentPath.isEmpty,
+              !fileManager.fileExists(atPath: currentPath) else {
+            return nil
+        }
+
+        let filename = URL(fileURLWithPath: currentPath).lastPathComponent
+        guard !filename.isEmpty else {
+            return nil
+        }
+
+        let expectedURL = attachmentDirectory.appendingPathComponent(filename)
+        guard fileManager.fileExists(atPath: expectedURL.path) else {
+            return nil
+        }
+        return expectedURL.path
     }
 
     private func attachmentPayloadJSON(

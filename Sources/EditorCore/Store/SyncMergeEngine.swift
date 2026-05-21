@@ -85,6 +85,47 @@ struct RemoteDiaryPageChange: Equatable, Sendable {
     }
 }
 
+struct RemoteTagChange: Equatable, Sendable {
+    let tagID: String
+    let workspaceID: String
+    let parentTagID: String?
+    let name: String
+    let orderKey: String
+    let updatedAt: String?
+
+    init(
+        tagID: String,
+        workspaceID: String,
+        parentTagID: String? = nil,
+        name: String,
+        orderKey: String,
+        updatedAt: String? = nil
+    ) {
+        self.tagID = tagID
+        self.workspaceID = workspaceID
+        self.parentTagID = parentTagID
+        self.name = name
+        self.orderKey = orderKey
+        self.updatedAt = updatedAt
+    }
+}
+
+struct RemotePageTagChange: Equatable, Sendable {
+    let pageID: String
+    let tagID: String
+    let createdAt: String?
+
+    init(pageID: String, tagID: String, createdAt: String? = nil) {
+        self.pageID = pageID
+        self.tagID = tagID
+        self.createdAt = createdAt
+    }
+
+    var entityID: String {
+        PageTagSyncIdentity.entityID(pageID: pageID, tagID: tagID)
+    }
+}
+
 struct RemoteBlockChange: Equatable, Sendable {
     let blockID: String
     let pageID: String
@@ -323,6 +364,76 @@ final class SyncMergeEngine {
             )
             try clearPendingLocalChanges(entityType: "diaryPage", entityID: remote.pageID)
         }
+    }
+
+    func applyRemoteTag(_ remote: RemoteTagChange) throws {
+        guard try shouldApplyRemoteChange(
+            entityType: "tag",
+            entityID: remote.tagID,
+            remoteUpdatedAt: remote.updatedAt,
+            localUpdatedAt: localUpdatedAt(table: "tags", idColumn: "id", entityID: remote.tagID)
+        ) else {
+            return
+        }
+
+        let now = remote.updatedAt ?? ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            INSERT INTO tags (id, workspace_id, parent_tag_id, name, order_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                workspace_id = excluded.workspace_id,
+                parent_tag_id = excluded.parent_tag_id,
+                name = excluded.name,
+                order_key = excluded.order_key,
+                updated_at = excluded.updated_at
+            """,
+            bindings: [
+                .text(remote.tagID),
+                .text(remote.workspaceID),
+                remote.parentTagID.map(SQLiteValue.text) ?? .null,
+                .text(remote.name),
+                .text(remote.orderKey),
+                .text(now),
+                .text(now)
+            ]
+        )
+        try clearPendingLocalChanges(entityType: "tag", entityID: remote.tagID)
+    }
+
+    func applyRemotePageTag(_ remote: RemotePageTagChange) throws {
+        guard try shouldApplyRemoteChange(
+            entityType: "pageTag",
+            entityID: remote.entityID,
+            remoteUpdatedAt: remote.createdAt,
+            localUpdatedAt: localPageTagCreatedAt(remote)
+        ) else {
+            return
+        }
+
+        guard try pageExists(pageID: remote.pageID),
+              try tagExists(tagID: remote.tagID) else {
+            EditorLog.sync.error(
+                "remote_page_tag_skipped_missing_dependency page_id=\(remote.pageID, privacy: .public) tag_id=\(remote.tagID, privacy: .public)"
+            )
+            return
+        }
+
+        let now = remote.createdAt ?? ISO8601DateFormatter().string(from: Date())
+        try database.execute(
+            """
+            INSERT INTO page_tags (page_id, tag_id, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(page_id, tag_id) DO UPDATE SET
+                created_at = excluded.created_at
+            """,
+            bindings: [
+                .text(remote.pageID),
+                .text(remote.tagID),
+                .text(now)
+            ]
+        )
+        try clearPendingLocalChanges(entityType: "pageTag", entityID: remote.entityID)
     }
 
     func applyRemoteBlock(_ remote: RemoteBlockChange) throws {
@@ -798,6 +909,10 @@ final class SyncMergeEngine {
             try applyRemoteDiaryPageDeletion(pageID: remote.entityID)
         case "notebook":
             try applyRemoteNotebookDeletion(notebookID: remote.entityID)
+        case "tag":
+            try applyRemoteTagDeletion(tagID: remote.entityID)
+        case "pageTag":
+            try applyRemotePageTagDeletion(entityID: remote.entityID)
         case "attachment":
             try applyRemoteAttachmentDeletion(attachmentID: remote.entityID)
         case "block":
@@ -969,6 +1084,35 @@ final class SyncMergeEngine {
         ).first?["updated_at"] ?? nil
     }
 
+    private func localPageTagCreatedAt(_ remote: RemotePageTagChange) throws -> String? {
+        try database.query(
+            """
+            SELECT created_at
+            FROM page_tags
+            WHERE page_id = ? AND tag_id = ?
+            LIMIT 1
+            """,
+            bindings: [
+                .text(remote.pageID),
+                .text(remote.tagID)
+            ]
+        ).first?["created_at"] ?? nil
+    }
+
+    private func pageExists(pageID: String) throws -> Bool {
+        try database.query(
+            "SELECT id FROM pages WHERE id = ? LIMIT 1",
+            bindings: [.text(pageID)]
+        ).first != nil
+    }
+
+    private func tagExists(tagID: String) throws -> Bool {
+        try database.query(
+            "SELECT id FROM tags WHERE id = ? LIMIT 1",
+            bindings: [.text(tagID)]
+        ).first != nil
+    }
+
     private static func compareRemoteToLocal(
         remoteUpdatedAt: String,
         localUpdatedAt: String
@@ -1095,6 +1239,29 @@ final class SyncMergeEngine {
         EditorLog.sync.debug(
             "remote_notebook_deleted notebook_id=\(notebookID, privacy: .public)"
         )
+    }
+
+    private func applyRemoteTagDeletion(tagID: String) throws {
+        try database.execute(
+            "DELETE FROM tags WHERE id = ?",
+            bindings: [.text(tagID)]
+        )
+        try clearPendingLocalChanges(entityType: "tag", entityID: tagID)
+    }
+
+    private func applyRemotePageTagDeletion(entityID: String) throws {
+        guard let components = PageTagSyncIdentity.components(entityID: entityID) else {
+            return
+        }
+
+        try database.execute(
+            "DELETE FROM page_tags WHERE page_id = ? AND tag_id = ?",
+            bindings: [
+                .text(components.pageID),
+                .text(components.tagID)
+            ]
+        )
+        try clearPendingLocalChanges(entityType: "pageTag", entityID: entityID)
     }
 
     private func applyRemoteAttachmentDeletion(attachmentID: String) throws {

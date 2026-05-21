@@ -1091,6 +1091,93 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
+    func testFetchRemoteChangesAppliesRemoteTagAndPageTagAssignment() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            tagChanges: [
+                RemoteTagChange(
+                    tagID: "tag-remote",
+                    workspaceID: workspaceID,
+                    name: "Remote Tag",
+                    orderKey: "000001",
+                    updatedAt: "2026-05-21T00:00:00Z"
+                )
+            ],
+            pageTagChanges: [
+                RemotePageTagChange(
+                    pageID: pageID,
+                    tagID: "tag-remote",
+                    createdAt: "2026-05-21T00:00:01Z"
+                )
+            ],
+            changes: []
+        )
+
+        let summary = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+
+        XCTAssertEqual(summary.appliedCount, 2)
+        XCTAssertEqual(try TagRepository(database: database).tags(workspaceID: workspaceID).map(\.name), ["Remote Tag"])
+        XCTAssertEqual(try TagRepository(database: database).tagAssignments(), [
+            PageTagAssignment(pageID: pageID, tagID: "tag-remote")
+        ])
+    }
+
+    func testFetchRemoteChangesAppliesRemoteTagAndPageTagDeletion() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let tag = try tagRepository.createTag(workspaceID: workspaceID, name: "Remote Deleted")
+        try tagRepository.assignTags(pageID: pageID, tagIDs: [tag.id])
+        let pageTagID = PageTagSyncIdentity.entityID(pageID: pageID, tagID: tag.id)
+        let syncRepository = SyncRepository(database: database)
+        for change in try syncRepository.pendingChanges() {
+            try syncRepository.markUploaded(
+                change: change,
+                uploadResult: CloudKitUploadResult(
+                    recordName: "editor-cloudkit-v2.\(change.entityType).\(change.entityID)",
+                    changeTag: nil
+                )
+            )
+        }
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            changes: [],
+            deletedRecords: [
+                RemoteDeletedRecord(entityType: "tag", entityID: tag.id),
+                RemoteDeletedRecord(entityType: "pageTag", entityID: pageTagID)
+            ]
+        )
+
+        let summary = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+
+        XCTAssertEqual(summary.appliedCount, 2)
+        XCTAssertEqual(try tagRepository.tags(workspaceID: workspaceID), [])
+        XCTAssertEqual(try tagRepository.tagAssignments(), [])
+        XCTAssertFalse(try syncRepository.pendingChanges().contains {
+            $0.entityType == "tag" || $0.entityType == "pageTag"
+        })
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsRemoteRecordsToChangeSet() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -1124,6 +1211,21 @@ final class SyncEngineTests: XCTestCase {
                     $0["workspaceID"] = "workspace-remote" as CKRecordValue
                     $0["diaryDate"] = "2026-05-21" as CKRecordValue
                     $0["updatedAt"] = "2026-05-21T00:00:00Z" as CKRecordValue
+                }
+            ],
+            "TagRecord": [
+                makeRecord(type: "TagRecord", entityType: "tag", entityID: "tag-remote") {
+                    $0["workspaceID"] = "workspace-remote" as CKRecordValue
+                    $0["name"] = "Remote Tag" as CKRecordValue
+                    $0["orderKey"] = "000001" as CKRecordValue
+                    $0["updatedAt"] = "2026-05-21T00:00:01Z" as CKRecordValue
+                }
+            ],
+            "PageTagRecord": [
+                makeRecord(type: "PageTagRecord", entityType: "pageTag", entityID: "page-remote.tag-remote") {
+                    $0["pageID"] = "page-remote" as CKRecordValue
+                    $0["tagID"] = "tag-remote" as CKRecordValue
+                    $0["createdAt"] = "2026-05-21T00:00:02Z" as CKRecordValue
                 }
             ],
             "AttachmentRecord": [
@@ -1160,6 +1262,15 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.diaryPageChanges.first?.diaryDate, "2026-05-21")
         XCTAssertEqual(changeSet.pageChanges.first?.isFavorite, true)
         XCTAssertEqual(changeSet.pageChanges.first?.isEncrypted, true)
+        XCTAssertEqual(changeSet.tagChanges.map(\.tagID), ["tag-remote"])
+        XCTAssertEqual(changeSet.tagChanges.first?.name, "Remote Tag")
+        XCTAssertEqual(changeSet.pageTagChanges, [
+            RemotePageTagChange(
+                pageID: "page-remote",
+                tagID: "tag-remote",
+                createdAt: "2026-05-21T00:00:02Z"
+            )
+        ])
         XCTAssertEqual(changeSet.attachmentChanges.map(\.attachmentID), ["attachment-remote"])
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
     }
@@ -1489,6 +1600,12 @@ final class SyncEngineTests: XCTestCase {
                 "PageRecord": [
                     CKRecord.ID(recordName: "editor-cloudkit-v2.page.page-remote")
                 ],
+                "TagRecord": [
+                    CKRecord.ID(recordName: "editor-cloudkit-v2.tag.tag-remote")
+                ],
+                "PageTagRecord": [
+                    CKRecord.ID(recordName: "editor-cloudkit-v2.pageTag.page-remote.tag-remote")
+                ],
                 "AttachmentRecord": [
                     CKRecord.ID(recordName: "editor-cloudkit-v2.attachment.attachment-remote")
                 ],
@@ -1507,6 +1624,8 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.deletedRecords, [
             RemoteDeletedRecord(entityType: "notebook", entityID: "notebook-remote"),
             RemoteDeletedRecord(entityType: "page", entityID: "page-remote"),
+            RemoteDeletedRecord(entityType: "tag", entityID: "tag-remote"),
+            RemoteDeletedRecord(entityType: "pageTag", entityID: "page-remote.tag-remote"),
             RemoteDeletedRecord(entityType: "attachment", entityID: "attachment-remote"),
             RemoteDeletedRecord(entityType: "block", entityID: "block-remote")
         ])
@@ -1723,6 +1842,64 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(record["title"] as? String, "欢迎")
     }
 
+    func testCloudKitPrivateDatabaseAdapterMapsTagChangeToRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let tag = try TagRepository(database: database).createTag(workspaceID: workspaceID, name: "Writing")
+        let saver = CapturingCloudKitRecordSaver()
+
+        let result = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordSaver: saver
+        ).upload(change: SyncChange(entityType: "tag", entityID: tag.id, changeType: "create"))
+
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        XCTAssertEqual(record.recordType, "TagRecord")
+        XCTAssertEqual(record.recordID.recordName, "editor-cloudkit-v2.tag.\(tag.id)")
+        XCTAssertEqual(record["entityID"] as? String, tag.id)
+        XCTAssertEqual(record["entityType"] as? String, "tag")
+        XCTAssertEqual(record["syncGeneration"] as? String, "editor-cloudkit-v2")
+        XCTAssertEqual(record["workspaceID"] as? String, workspaceID)
+        XCTAssertEqual(record["name"] as? String, "Writing")
+        XCTAssertEqual(record["orderKey"] as? String, "000001")
+        XCTAssertEqual(result.recordName, "editor-cloudkit-v2.tag.\(tag.id)")
+    }
+
+    func testCloudKitPrivateDatabaseAdapterMapsPageTagChangeToRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let tagRepository = TagRepository(database: database)
+        let tag = try tagRepository.createTag(workspaceID: workspaceID, name: "Writing")
+        try tagRepository.assignTags(pageID: pageID, tagIDs: [tag.id])
+        let pageTagID = PageTagSyncIdentity.entityID(pageID: pageID, tagID: tag.id)
+        let saver = CapturingCloudKitRecordSaver()
+
+        let result = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordSaver: saver
+        ).upload(change: SyncChange(entityType: "pageTag", entityID: pageTagID, changeType: "create"))
+
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        XCTAssertEqual(record.recordType, "PageTagRecord")
+        XCTAssertEqual(record.recordID.recordName, "editor-cloudkit-v2.pageTag.\(pageTagID)")
+        XCTAssertEqual(record["entityID"] as? String, pageTagID)
+        XCTAssertEqual(record["entityType"] as? String, "pageTag")
+        XCTAssertEqual(record["syncGeneration"] as? String, "editor-cloudkit-v2")
+        XCTAssertEqual(record["pageID"] as? String, pageID)
+        XCTAssertEqual(record["tagID"] as? String, tag.id)
+        XCTAssertNotNil(record["createdAt"] as? String)
+        XCTAssertEqual(result.recordName, "editor-cloudkit-v2.pageTag.\(pageTagID)")
+    }
+
     func testCloudKitPrivateDatabaseAdapterMapsDiaryPageToRecord() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -1919,6 +2096,8 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
     let notebookChanges: [RemoteNotebookChange]
     let pageChanges: [RemotePageChange]
     let diaryPageChanges: [RemoteDiaryPageChange]
+    let tagChanges: [RemoteTagChange]
+    let pageTagChanges: [RemotePageTagChange]
     let attachmentChanges: [RemoteAttachmentChange]
     let changes: [RemoteBlockChange]
     let fullSnapshotPageIDs: Set<String>
@@ -1931,6 +2110,8 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
         notebookChanges: [RemoteNotebookChange] = [],
         pageChanges: [RemotePageChange] = [],
         diaryPageChanges: [RemoteDiaryPageChange] = [],
+        tagChanges: [RemoteTagChange] = [],
+        pageTagChanges: [RemotePageTagChange] = [],
         attachmentChanges: [RemoteAttachmentChange] = [],
         changes: [RemoteBlockChange],
         fullSnapshotPageIDs: Set<String> = [],
@@ -1941,6 +2122,8 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
         self.notebookChanges = notebookChanges
         self.pageChanges = pageChanges
         self.diaryPageChanges = diaryPageChanges
+        self.tagChanges = tagChanges
+        self.pageTagChanges = pageTagChanges
         self.attachmentChanges = attachmentChanges
         self.changes = changes
         self.fullSnapshotPageIDs = fullSnapshotPageIDs
@@ -1957,6 +2140,8 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
             notebookChanges: notebookChanges,
             pageChanges: pageChanges,
             diaryPageChanges: diaryPageChanges,
+            tagChanges: tagChanges,
+            pageTagChanges: pageTagChanges,
             attachmentChanges: attachmentChanges,
             blockChanges: changes,
             fullSnapshotPageIDs: fullSnapshotPageIDs,
