@@ -71,7 +71,7 @@ enum EditorDesignTokens {
 
     enum Layout {
         static let editorMaxWidth: Double = 680
-        static let editorExpandedMaxWidth: Double = 1040
+        static let editorExpandedMaxWidth: Double = 860
         static let sidebarMinWidth: Double = 240
         static let sidebarIdealWidth: Double = 288
         static let sidebarMaxWidth: Double = 360
@@ -216,9 +216,60 @@ struct MobileNavigationTitleVisibilityState: Equatable, Sendable {
 
 enum EditorCanvasWidthPolicy {
     static func maxWidth(hasVisibleAuxiliaryRail: Bool) -> Double {
-        hasVisibleAuxiliaryRail
-            ? EditorDesignTokens.Layout.editorMaxWidth
-            : EditorDesignTokens.Layout.editorExpandedMaxWidth
+        EditorDesignTokens.Layout.editorExpandedMaxWidth
+    }
+}
+
+enum DesktopInlineOutlineActiveHeadingResolver {
+    static let activationY: CGFloat = 96
+
+    static func activeBlockID(
+        outlineItems: [PageOutlineItem],
+        visibleBlockFrames: [String: CGRect],
+        blockIDsInDocumentOrder: [String],
+        selectedBlockID: String? = nil,
+        focusedBlockID: String?,
+        activationY: CGFloat = Self.activationY
+    ) -> String? {
+        guard !outlineItems.isEmpty else {
+            return nil
+        }
+
+        let outlineBlockIDs = Set(outlineItems.map(\.blockID))
+        if let selectedBlockID, outlineBlockIDs.contains(selectedBlockID) {
+            return selectedBlockID
+        }
+
+        let visibleHeadingsAboveActivationLine = visibleBlockFrames
+            .filter { outlineBlockIDs.contains($0.key) && $0.value.minY <= activationY }
+            .sorted { $0.value.minY < $1.value.minY }
+
+        if let activeVisibleHeading = visibleHeadingsAboveActivationLine.last?.key {
+            return activeVisibleHeading
+        }
+
+        let documentIndexesByID = Dictionary(
+            uniqueKeysWithValues: blockIDsInDocumentOrder.enumerated().map { ($0.element, $0.offset) }
+        )
+        let firstVisibleBlockIndex = visibleBlockFrames
+            .compactMap { documentIndexesByID[$0.key] }
+            .min()
+
+        if let firstVisibleBlockIndex,
+           let precedingHeading = outlineItems.last(where: { item in
+               guard let headingIndex = documentIndexesByID[item.blockID] else {
+                   return false
+               }
+               return headingIndex <= firstVisibleBlockIndex
+           }) {
+            return precedingHeading.blockID
+        }
+
+        if let focusedBlockID, outlineBlockIDs.contains(focusedBlockID) {
+            return focusedBlockID
+        }
+
+        return outlineItems.first?.blockID
     }
 }
 
@@ -236,7 +287,7 @@ enum EditorDisplayMode: Equatable, Sendable {
     }
 
     var showsAuxiliaryRail: Bool {
-        self == .standard
+        false
     }
 
     var splitVisibility: NavigationSplitViewVisibility {
@@ -989,9 +1040,9 @@ private struct ThreeColumnEditorShell: View {
 enum DesktopColumnDividerChrome {
     static let hitWidth: Double = 9
     static let lineWidth: Double = 1
-    static let idleOpacity: Double = 0.045
-    static let hoverOpacity: Double = 0.22
-    static let draggingOpacity: Double = 0.34
+    static let idleOpacity: Double = 0.18
+    static let hoverOpacity: Double = 0.34
+    static let draggingOpacity: Double = 0.50
 }
 
 enum DesktopColumnResizeDragResolver {
@@ -5142,17 +5193,7 @@ private struct PageListView: View {
     var body: some View {
 #if os(macOS)
         VStack(spacing: 0) {
-            HStack {
-                Text(navigationTitle)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 28)
-            .frame(height: 74)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(PageListChrome.backgroundColor)
+            pageListHeader
 
             pageListScroll
         }
@@ -5173,6 +5214,81 @@ private struct PageListView: View {
 #endif
     }
 
+#if os(macOS)
+    private var pageListHeader: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Text(navigationTitle)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    _ = viewModel.createNewDocumentForUI()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.callout.weight(.semibold))
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
+                .help("新建文档")
+                .accessibilityLabel("新建文档")
+                .accessibilityIdentifier("editor.page-list.new-document")
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+
+                TextField("搜索", text: pageListSearchBinding)
+                    .textFieldStyle(.plain)
+                    .accessibilityIdentifier("editor.page-list.search-field")
+                    .onSubmit {
+                        viewModel.selectCollection(.search)
+                    }
+
+                if !viewModel.searchQuery.isEmpty {
+                    Button {
+                        viewModel.updateSearchQuery("")
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清空搜索")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(EditorDesignTokens.Colors.appBackground.color, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(EditorDesignTokens.Colors.border.color.opacity(0.95), lineWidth: 1)
+            )
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PageListChrome.backgroundColor)
+    }
+
+    private var pageListSearchBinding: Binding<String> {
+        Binding {
+            viewModel.searchQuery
+        } set: { query in
+            viewModel.updateSearchQuery(query)
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                viewModel.selectCollection(.search)
+            }
+        }
+    }
+#endif
+
     private var pageListScroll: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 14) {
@@ -5192,7 +5308,11 @@ private struct PageListView: View {
                 case .tag(let tagID):
                     tagSection(tagID: tagID)
                 case .search:
+#if os(macOS)
+                    SearchSectionView(viewModel: viewModel, showsSearchField: false)
+#else
                     SearchSectionView(viewModel: viewModel)
+#endif
                 case .archive:
                     archiveSection
                 }
@@ -6541,36 +6661,39 @@ private struct NotebookSectionHeader: View {
 
 private struct SearchSectionView: View {
     @ObservedObject var viewModel: WorkspaceViewModel
+    var showsSearchField = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+            if showsSearchField {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
 
-                TextField("标题、正文、附件", text: searchBinding)
-                    .textFieldStyle(.plain)
-                    .accessibilityIdentifier("editor.search-field")
+                    TextField("标题、正文、附件", text: searchBinding)
+                        .textFieldStyle(.plain)
+                        .accessibilityIdentifier("editor.search-field")
 
-                if !viewModel.searchQuery.isEmpty {
-                    Button {
-                        viewModel.updateSearchQuery("")
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                    if !viewModel.searchQuery.isEmpty {
+                        Button {
+                            viewModel.updateSearchQuery("")
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("清空搜索")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("清空搜索")
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(EditorDesignTokens.Colors.sidebarBackground.color, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(EditorDesignTokens.Colors.border.color, lineWidth: 1)
+                )
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(EditorDesignTokens.Colors.sidebarBackground.color, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(EditorDesignTokens.Colors.border.color, lineWidth: 1)
-            )
 
             if !viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("\(viewModel.searchResults.count) 个结果")
@@ -7513,6 +7636,9 @@ private struct EditorCanvasView: View {
     @State private var isAuxiliaryRailCollapsed = false
     @State private var isMobileOutlinePresented = false
     @State private var blockRowFrames: [String: CGRect] = [:]
+#if os(macOS)
+    @State private var desktopOutlineSelectedBlockID: String?
+#endif
     @State private var attachmentResizeHandleFrames: [String: CGRect] = [:]
     @State private var blockSelectionMarqueeStart: CGPoint?
     @State private var blockSelectionMarqueeCurrent: CGPoint?
@@ -7537,9 +7663,8 @@ private struct EditorCanvasView: View {
 
     private var unlockedCanvasBody: some View {
         ZStack(alignment: .topTrailing) {
-            HStack(alignment: .top, spacing: 0) {
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
                 HStack(alignment: .center, spacing: 12) {
 #if os(iOS)
                     PageTitleUIKitTextField(
@@ -7902,10 +8027,16 @@ private struct EditorCanvasView: View {
             .frame(maxWidth: activeEditorMaxWidth, alignment: .leading)
             .padding(.horizontal, CGFloat(EditorCanvasChromeLayout.horizontalPadding))
             .padding(.vertical, CGFloat(EditorCanvasChromeLayout.verticalPadding))
+            .frame(maxWidth: .infinity, alignment: .center)
             }
             .accessibilityIdentifier("editor.canvas-scroll")
             .coordinateSpace(name: EditorCanvasCoordinateSpace.blockSelection)
             .onPreferenceChange(BlockRowFramePreferenceKey.self) { frames in
+#if os(macOS)
+                if blockRowFrames != frames {
+                    desktopOutlineSelectedBlockID = nil
+                }
+#endif
                 blockRowFrames = frames
             }
             .onPreferenceChange(AttachmentResizeHandleFramePreferenceKey.self) { frames in
@@ -7946,23 +8077,11 @@ private struct EditorCanvasView: View {
                 scrollMetricsDebugProbe
             }
 #endif
-
-            if shouldOfferAuxiliaryRail && !isAuxiliaryRailCollapsed {
-                EditorAuxiliaryRail(
-                    outlineItems: outlineItems,
-                    backlinks: backlinks,
-                    externalLinks: externalLinks,
-                    activeBlockID: editorSession.focusedBlockID,
-                    onSelectOutlineItem: onSelectOutlineItem,
-                    onSelectBacklink: onSelectBacklink,
-                    onCollapse: {
-                        isAuxiliaryRailCollapsed = true
-                    }
-                )
-                .modifier(AuxiliaryRailColumnChrome())
-                .accessibilityIdentifier("editor.auxiliary-rail")
+#if os(macOS)
+            .overlay(alignment: .leading) {
+                desktopInlineOutlineLayer
             }
-            }
+#endif
 #if os(macOS)
             macCanvasToolbar
                 .padding(.top, 24)
@@ -8163,6 +8282,8 @@ private struct EditorCanvasView: View {
         .onChange(of: page?.id) { _, _ in
 #if os(iOS)
             resetMobileNavigationTitleVisibility()
+#elseif os(macOS)
+            desktopOutlineSelectedBlockID = nil
 #endif
             scheduledPageTitleFocusPageID = nil
             schedulePendingPageTitleFocusIfNeeded(pendingPageTitleFocusPageID)
@@ -8377,6 +8498,34 @@ private struct EditorCanvasView: View {
     }
 
 #if os(macOS)
+    @ViewBuilder
+    private var desktopInlineOutlineLayer: some View {
+        if !outlineItems.isEmpty {
+            DesktopInlineOutline(
+                outlineItems: outlineItems,
+                activeBlockID: desktopOutlineActiveBlockID,
+                onSelectOutlineItem: selectDesktopOutlineItem
+            )
+            .padding(.leading, 22)
+            .frame(maxHeight: .infinity, alignment: .center)
+        }
+    }
+
+    private var desktopOutlineActiveBlockID: String? {
+        DesktopInlineOutlineActiveHeadingResolver.activeBlockID(
+            outlineItems: outlineItems,
+            visibleBlockFrames: blockRowFrames,
+            blockIDsInDocumentOrder: blocks.map(\.id),
+            selectedBlockID: desktopOutlineSelectedBlockID,
+            focusedBlockID: pendingFocusRequest?.blockID ?? pendingFocusBlockID ?? editorSession.focusedBlockID
+        )
+    }
+
+    private func selectDesktopOutlineItem(_ item: PageOutlineItem) {
+        desktopOutlineSelectedBlockID = item.blockID
+        onSelectOutlineItem(item)
+    }
+
     private var macCanvasToolbarTrailingPadding: CGFloat {
         if shouldReserveAuxiliaryRailSpace {
             return CGFloat(EditorDesignTokens.Layout.auxiliaryRailWidth + 24)
@@ -9972,6 +10121,40 @@ private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
 }
 #endif
 
+#if os(macOS)
+private struct DesktopInlineOutline: View {
+    let outlineItems: [PageOutlineItem]
+    let activeBlockID: String?
+    let onSelectOutlineItem: (PageOutlineItem) -> Void
+
+    var body: some View {
+        OutlinePanel(
+            outlineItems: outlineItems,
+            activeBlockID: activeBlockID,
+            onSelectOutlineItem: onSelectOutlineItem
+        )
+        .padding(.vertical, 12)
+        .padding(.horizontal, 10)
+        .frame(width: 210, alignment: .leading)
+        .background(
+            EditorDesignTokens.Colors.editorBackground.color.opacity(0.92),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(EditorDesignTokens.Colors.border.color.opacity(0.80), lineWidth: 1)
+        )
+        .shadow(
+            color: EditorDesignTokens.Shadows.popoverSmall.swiftUIColor,
+            radius: CGFloat(EditorDesignTokens.Shadows.popoverSmall.radius),
+            x: CGFloat(EditorDesignTokens.Shadows.popoverSmall.x),
+            y: CGFloat(EditorDesignTokens.Shadows.popoverSmall.y)
+        )
+        .accessibilityIdentifier("editor.desktop-inline-outline")
+    }
+}
+#endif
+
 private struct AuxiliaryRailColumnChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
@@ -10140,6 +10323,11 @@ private struct OutlinePanel: View {
                         Text(item.title)
                             .font(.callout)
                             .lineLimit(1)
+                            .foregroundStyle(
+                                isActive
+                                    ? EditorDesignTokens.Colors.primaryText.color
+                                    : EditorDesignTokens.Colors.secondaryText.color
+                            )
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.leading, CGFloat(max(item.level - 1, 0)) * 12)
@@ -10147,8 +10335,16 @@ private struct OutlinePanel: View {
                     .padding(.vertical, 7)
                     .background(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(isActive ? EditorDesignTokens.Colors.border.color.opacity(0.70) : Color.clear)
+                            .fill(isActive ? EditorDesignTokens.Colors.accent.color.opacity(0.12) : Color.clear)
                     )
+                    .overlay(alignment: .leading) {
+                        if isActive {
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(EditorDesignTokens.Colors.accent.color.opacity(0.78))
+                                .frame(width: 3)
+                                .padding(.vertical, 6)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)

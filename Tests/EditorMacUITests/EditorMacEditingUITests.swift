@@ -2197,6 +2197,14 @@ final class EditorMacEditingUITests: XCTestCase {
 
         let outlinePanel = app.element(identifier: "editor.outline")
         XCTAssertTrue(outlinePanel.waitForExistence(timeout: 5), "Imported heading should create an Outline panel")
+        XCTAssertTrue(
+            app.element(identifier: "editor.desktop-inline-outline").waitForExistence(timeout: 5),
+            "Desktop headings should appear in the inline outline on the left side of the editor column"
+        )
+        XCTAssertFalse(
+            app.element(identifier: "editor.auxiliary-rail").exists,
+            "Desktop outline should no longer create a fourth right-side column"
+        )
 
         let outlineRow = app.element(identifierPrefix: "editor.outline.")
         XCTAssertTrue(outlineRow.waitForExistence(timeout: 5), "Outline panel should expose the imported heading")
