@@ -1433,14 +1433,22 @@ private struct MobileQuickCreateButton: View {
 
     var body: some View {
         Button(action: onCreateNewDocument) {
-            Image(systemName: "plus")
-                .font(.title3.weight(.semibold))
+            Image(systemName: MobileQuickCreateButtonChrome.iconSystemName)
+                .font(.system(size: MobileQuickCreateButtonChrome.iconSize, weight: .medium))
                 .foregroundStyle(Color.white)
-                .frame(width: 54, height: 54)
+                .frame(
+                    width: MobileQuickCreateButtonChrome.diameter,
+                    height: MobileQuickCreateButtonChrome.diameter
+                )
                 .background(
                     Circle()
                         .fill(MobileActionChrome.accentColor)
-                        .shadow(color: Color.black.opacity(0.18), radius: 14, x: 0, y: 8)
+                        .shadow(
+                            color: Color.black.opacity(MobileQuickCreateButtonChrome.shadowOpacity),
+                            radius: MobileQuickCreateButtonChrome.shadowRadius,
+                            x: 0,
+                            y: MobileQuickCreateButtonChrome.shadowYOffset
+                        )
                 )
         }
         .buttonStyle(.plain)
@@ -1486,6 +1494,15 @@ private struct MobileQuickCreateButton: View {
     }
 }
 
+enum MobileQuickCreateButtonChrome {
+    static let iconSystemName = "pencil"
+    static let diameter: CGFloat = 54
+    static let iconSize: CGFloat = 23
+    static let shadowOpacity: Double = 0.16
+    static let shadowRadius: CGFloat = 14
+    static let shadowYOffset: CGFloat = 8
+}
+
 private struct CompactRecentPageCard: View {
     let page: PageSummary
     let tagNames: [String]
@@ -1525,7 +1542,7 @@ private struct CompactRecentPageCard: View {
         }
         .padding(.horizontal, 2)
         .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: CompactDocumentListChrome.rowMinHeight, alignment: .leading)
         .background(PageListChrome.backgroundColor)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -1631,6 +1648,110 @@ enum PageRowSwipeActionModel {
                 systemImage: page.isPinned ? "pin.slash" : "pin"
             )
         ]
+    }
+}
+
+enum CompactPageSwipeActionChrome {
+    static let actionWidth: CGFloat = 62
+    static let actionHeight: CGFloat = CompactDocumentListChrome.rowMinHeight
+    static let cornerRadius: CGFloat = 14
+    static let iconSize: CGFloat = 21
+    static let iconWeight: Font.Weight = .medium
+    static let releaseSpringResponse: Double = 0.28
+    static let releaseSpringDampingFraction: Double = 0.72
+    static let releaseSpringBlendDuration: Double = 0.08
+
+    static var releaseAnimation: Animation {
+        .interactiveSpring(
+            response: releaseSpringResponse,
+            dampingFraction: releaseSpringDampingFraction,
+            blendDuration: releaseSpringBlendDuration
+        )
+    }
+
+    static func colorToken(for action: PageRowSwipeActionKind) -> EditorColorToken {
+        switch action {
+        case .archive:
+            return EditorColorToken.hex(0xEF, 0x6F, 0x63)
+        case .favorite:
+            return EditorColorToken.hex(0xF1, 0xC9, 0x55)
+        case .pin:
+            return EditorColorToken.hex(0x7D, 0x97, 0xE8)
+        }
+    }
+
+    static func color(for action: PageRowSwipeActionKind) -> Color {
+        colorToken(for: action).color
+    }
+}
+
+enum CompactPageSwipeRevealPolicy {
+    static let openThresholdRatio: CGFloat = 0.42
+    static let closeThresholdRatio: CGFloat = 0.58
+    static let minimumActionWidthScale: CGFloat = 0.62
+    static let fadeSlideDistance: CGFloat = 18
+
+    static func visibleWidth(horizontalOffset: CGFloat, maximumRevealWidth: CGFloat) -> CGFloat {
+        min(max(-horizontalOffset, 0), maximumRevealWidth)
+    }
+
+    static func revealProgress(visibleWidth: CGFloat, maximumRevealWidth: CGFloat) -> CGFloat {
+        guard maximumRevealWidth > 0 else {
+            return 0
+        }
+        return min(max(visibleWidth / maximumRevealWidth, 0), 1)
+    }
+
+    static func actionWidthScale(visibleWidth: CGFloat, maximumRevealWidth: CGFloat) -> CGFloat {
+        max(
+            minimumActionWidthScale,
+            revealProgress(visibleWidth: visibleWidth, maximumRevealWidth: maximumRevealWidth)
+        )
+    }
+
+    static func actionGroupWidth(visibleWidth: CGFloat, maximumRevealWidth: CGFloat) -> CGFloat {
+        maximumRevealWidth * actionWidthScale(
+            visibleWidth: visibleWidth,
+            maximumRevealWidth: maximumRevealWidth
+        )
+    }
+
+    static func actionHeight(visibleWidth: CGFloat) -> CGFloat {
+        CompactPageSwipeActionChrome.actionHeight
+    }
+
+    static func cornerRadius(visibleWidth: CGFloat) -> CGFloat {
+        CompactPageSwipeActionChrome.cornerRadius
+    }
+
+    static func iconScale(visibleWidth: CGFloat, maximumRevealWidth: CGFloat) -> CGFloat {
+        actionWidthScale(visibleWidth: visibleWidth, maximumRevealWidth: maximumRevealWidth)
+    }
+
+    static func opacity(visibleWidth: CGFloat, maximumRevealWidth: CGFloat) -> Double {
+        let progress = revealProgress(visibleWidth: visibleWidth, maximumRevealWidth: maximumRevealWidth)
+        return Double(min(progress / minimumActionWidthScale, 1))
+    }
+
+    static func trailingOffset(visibleWidth: CGFloat, maximumRevealWidth: CGFloat) -> CGFloat {
+        let progress = revealProgress(visibleWidth: visibleWidth, maximumRevealWidth: maximumRevealWidth)
+        return (1 - min(progress / minimumActionWidthScale, 1)) * fadeSlideDistance
+    }
+
+    static func shouldStayOpen(
+        startOffset: CGFloat,
+        translationWidth: CGFloat,
+        projectedOffset: CGFloat,
+        maximumRevealWidth: CGFloat
+    ) -> Bool {
+        let projectedVisibleWidth = visibleWidth(
+            horizontalOffset: projectedOffset,
+            maximumRevealWidth: maximumRevealWidth
+        )
+        let thresholdRatio = startOffset < 0 && translationWidth > 0
+            ? closeThresholdRatio
+            : openThresholdRatio
+        return projectedVisibleWidth >= maximumRevealWidth * thresholdRatio
     }
 }
 
@@ -2469,6 +2590,13 @@ enum CompactChrome {
     static var backgroundColor: Color {
         Color(red: backgroundRed, green: backgroundGreen, blue: backgroundBlue)
     }
+}
+
+enum CompactDocumentListChrome {
+    static let horizontalPadding: CGFloat = 24
+    static let verticalPadding: CGFloat = 10
+    static let rowMinHeight: CGFloat = 86
+    static let prefersInlineNavigationTitle = true
 }
 
 enum PageListChrome {
@@ -5629,14 +5757,7 @@ private struct PageListView: View {
     }
 
     private func swipeActionTint(_ action: PageRowSwipeActionKind) -> Color {
-        switch action {
-        case .archive:
-            return .red
-        case .favorite:
-            return .yellow
-        case .pin:
-            return EditorDesignTokens.Colors.accent.color
-        }
+        CompactPageSwipeActionChrome.color(for: action)
     }
 
     private var showsMiddleColumnRowControls: Bool {
@@ -6080,13 +6201,19 @@ private struct CompactPageListView: View {
         }
         .navigationTitle("页面")
         .scrollContentBackground(.hidden)
-        .background(EditorDesignTokens.Colors.editorBackground.color)
+        .background(CompactChrome.backgroundColor)
         .overlay(alignment: .bottomTrailing) {
             quickCreateButton
                 .padding(.trailing, 18)
                 .padding(.bottom, 18)
         }
 #if os(iOS)
+        .navigationBarTitleDisplayMode(
+            CompactDocumentListChrome.prefersInlineNavigationTitle ? .inline : .large
+        )
+        .toolbarBackground(CompactChrome.backgroundColor, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.light, for: .navigationBar)
         .highPriorityGesture(
             DragGesture(minimumDistance: 56, coordinateSpace: .local)
                 .onEnded { value in
@@ -6134,14 +6261,7 @@ private struct CompactPageListView: View {
     }
 
     private func swipeActionTint(_ action: PageRowSwipeActionKind) -> Color {
-        switch action {
-        case .archive:
-            return .red
-        case .favorite:
-            return .yellow
-        case .pin:
-            return EditorDesignTokens.Colors.accent.color
-        }
+        CompactPageSwipeActionChrome.color(for: action)
     }
 
     private func nestingLevel(for notebook: NotebookSummary) -> Int {
@@ -6189,14 +6309,16 @@ private struct CompactCollectionPageListView: View {
     let collection: WorkspaceCollection
     let onRevealMainMenu: () -> Void
     let onRevealNextScreen: () -> Void
+    @State private var activeSwipeActionPageID: String?
+    @State private var listGestureStartedWithOpenSwipeActions = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 collectionContent
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
+            .padding(.horizontal, CompactDocumentListChrome.horizontalPadding)
+            .padding(.vertical, CompactDocumentListChrome.verticalPadding)
         }
         .navigationTitle(navigationTitle)
         .background(CompactChrome.backgroundColor)
@@ -6207,9 +6329,26 @@ private struct CompactCollectionPageListView: View {
                 .padding(.bottom, 18)
         }
 #if os(iOS)
+        .navigationBarTitleDisplayMode(
+            CompactDocumentListChrome.prefersInlineNavigationTitle ? .inline : .large
+        )
+        .toolbarBackground(CompactChrome.backgroundColor, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.light, for: .navigationBar)
         .simultaneousGesture(
             DragGesture(minimumDistance: 56, coordinateSpace: .local)
+                .onChanged { _ in
+                    if !listGestureStartedWithOpenSwipeActions {
+                        listGestureStartedWithOpenSwipeActions = activeSwipeActionPageID != nil
+                    }
+                }
                 .onEnded { value in
+                    defer {
+                        listGestureStartedWithOpenSwipeActions = false
+                    }
+                    guard !listGestureStartedWithOpenSwipeActions else {
+                        return
+                    }
                     guard abs(value.translation.width) > abs(value.translation.height) * 1.25 else {
                         return
                     }
@@ -6232,6 +6371,7 @@ private struct CompactCollectionPageListView: View {
             ForEach(items) { item in
                 CompactPageSwipeActionsRow(
                     page: item.page,
+                    activeSwipeActionPageID: $activeSwipeActionPageID,
                     onAction: { action in
                         performSwipeAction(action, for: item.page)
                     }
@@ -6376,14 +6516,7 @@ private struct CompactCollectionPageListView: View {
     }
 
     private func swipeActionTint(_ action: PageRowSwipeActionKind) -> Color {
-        switch action {
-        case .archive:
-            return .red
-        case .favorite:
-            return .yellow
-        case .pin:
-            return EditorDesignTokens.Colors.accent.color
-        }
+        CompactPageSwipeActionChrome.color(for: action)
     }
 
     private var navigationTitle: String {
@@ -6423,47 +6556,71 @@ private struct CompactPageSwipeActionsRow<Content: View>: View {
     let page: PageSummary
     let onAction: (PageRowSwipeActionKind) -> Void
     let content: Content
+    @Binding private var activeSwipeActionPageID: String?
     @State private var horizontalOffset: CGFloat = 0
-
-    private let actionWidth: CGFloat = 70
-    private let actionHeight: CGFloat = 108
+    @State private var dragStartHorizontalOffset: CGFloat?
 
     init(
         page: PageSummary,
+        activeSwipeActionPageID: Binding<String?> = .constant(nil),
         onAction: @escaping (PageRowSwipeActionKind) -> Void,
         @ViewBuilder content: () -> Content
     ) {
         self.page = page
+        _activeSwipeActionPageID = activeSwipeActionPageID
         self.onAction = onAction
         self.content = content()
     }
 
     var body: some View {
         ZStack(alignment: .trailing) {
+            if visibleSwipeActionWidth > 0 {
+                visibleSwipeActions
+            }
             content
                 .offset(x: horizontalOffset)
                 .contentShape(Rectangle())
                 .allowsHitTesting(horizontalOffset == 0)
-                .highPriorityGesture(swipeGesture)
-            if horizontalOffset != 0 {
-                swipeActions
-                    .zIndex(1)
+        }
+        .contentShape(Rectangle())
+        .highPriorityGesture(swipeGesture)
+        .onChange(of: activeSwipeActionPageID) { _, pageID in
+            if pageID != page.id, horizontalOffset != 0 {
+                updateHorizontalOffset(0, animated: true)
+                dragStartHorizontalOffset = nil
             }
         }
         .clipped()
+    }
+
+    private var visibleSwipeActions: some View {
+        swipeActions
+            .frame(width: actionGroupWidth, height: actionHeight, alignment: .trailing)
+            .opacity(swipeActionGroupOpacity)
+            .offset(x: swipeActionGroupTrailingOffset)
+            .frame(width: visibleSwipeActionWidth, alignment: .trailing)
+            .clipped()
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .contentShape(Rectangle())
+            .highPriorityGesture(swipeGesture)
+            .allowsHitTesting(isSwipeActionGroupFullyOpen)
+            .accessibilityHidden(!isSwipeActionGroupFullyOpen)
     }
 
     private var swipeActions: some View {
         HStack(spacing: 0) {
             ForEach(PageRowSwipeActionModel.actions(for: page)) { action in
                 Button {
-                    horizontalOffset = 0
+                    closeSwipeActions()
                     onAction(action.kind)
                 } label: {
                     Label(action.title, systemImage: action.systemImage)
                         .labelStyle(.iconOnly)
-                        .font(.title3.weight(.semibold))
-                        .frame(width: actionWidth, height: actionHeight)
+                        .font(.system(
+                            size: scaledActionIconSize,
+                            weight: CompactPageSwipeActionChrome.iconWeight
+                        ))
+                        .frame(width: scaledActionButtonWidth, height: actionHeight)
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
@@ -6472,11 +6629,8 @@ private struct CompactPageSwipeActionsRow<Content: View>: View {
                 .accessibilityIdentifier("editor.page.\(page.id).swipe.\(action.kind.accessibilityIdentifier)")
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: actionCornerRadius, style: .continuous))
         .frame(height: actionHeight)
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .allowsHitTesting(horizontalOffset != 0)
-        .accessibilityHidden(horizontalOffset == 0)
     }
 
     private var swipeGesture: some Gesture {
@@ -6485,31 +6639,134 @@ private struct CompactPageSwipeActionsRow<Content: View>: View {
                 guard abs(value.translation.width) > abs(value.translation.height) else {
                     return
                 }
-                horizontalOffset = min(0, max(value.translation.width, -maximumRevealWidth))
+                if dragStartHorizontalOffset == nil {
+                    dragStartHorizontalOffset = horizontalOffset
+                }
+                let startOffset = dragStartHorizontalOffset ?? horizontalOffset
+                updateHorizontalOffset(startOffset + value.translation.width, animated: false)
             }
             .onEnded { value in
+                defer {
+                    dragStartHorizontalOffset = nil
+                }
                 guard abs(value.translation.width) > abs(value.translation.height) else {
-                    horizontalOffset = 0
+                    updateHorizontalOffset(0, animated: true)
                     return
                 }
-                let projectedWidth = min(value.translation.width, value.predictedEndTranslation.width)
-                horizontalOffset = projectedWidth < -(actionWidth * 0.35) ? -maximumRevealWidth : 0
+                let startOffset = dragStartHorizontalOffset ?? horizontalOffset
+                let projectedOffset = min(
+                    0,
+                    max(startOffset + value.predictedEndTranslation.width, -maximumRevealWidth)
+                )
+                let shouldStayOpen = CompactPageSwipeRevealPolicy.shouldStayOpen(
+                    startOffset: startOffset,
+                    translationWidth: value.translation.width,
+                    projectedOffset: projectedOffset,
+                    maximumRevealWidth: maximumRevealWidth
+                )
+                updateHorizontalOffset(shouldStayOpen ? -maximumRevealWidth : 0, animated: true)
             }
     }
 
     private var maximumRevealWidth: CGFloat {
-        actionWidth * CGFloat(PageRowSwipeActionModel.actions(for: page).count)
+        actionWidth * actionCount
+    }
+
+    private var actionWidth: CGFloat {
+        CompactPageSwipeActionChrome.actionWidth
+    }
+
+    private var actionHeight: CGFloat {
+        CompactPageSwipeActionChrome.actionHeight
+    }
+
+    private var actionCount: CGFloat {
+        CGFloat(PageRowSwipeActionModel.actions(for: page).count)
+    }
+
+    private var visibleSwipeActionWidth: CGFloat {
+        CompactPageSwipeRevealPolicy.visibleWidth(
+            horizontalOffset: horizontalOffset,
+            maximumRevealWidth: maximumRevealWidth
+        )
+    }
+
+    private var actionWidthScale: CGFloat {
+        CompactPageSwipeRevealPolicy.actionWidthScale(
+            visibleWidth: visibleSwipeActionWidth,
+            maximumRevealWidth: maximumRevealWidth
+        )
+    }
+
+    private var actionGroupWidth: CGFloat {
+        CompactPageSwipeRevealPolicy.actionGroupWidth(
+            visibleWidth: visibleSwipeActionWidth,
+            maximumRevealWidth: maximumRevealWidth
+        )
+    }
+
+    private var scaledActionButtonWidth: CGFloat {
+        actionGroupWidth / actionCount
+    }
+
+    private var scaledActionIconSize: CGFloat {
+        CompactPageSwipeActionChrome.iconSize
+            * CompactPageSwipeRevealPolicy.iconScale(
+                visibleWidth: visibleSwipeActionWidth,
+                maximumRevealWidth: maximumRevealWidth
+            )
+    }
+
+    private var actionCornerRadius: CGFloat {
+        CompactPageSwipeRevealPolicy.cornerRadius(visibleWidth: visibleSwipeActionWidth)
+    }
+
+    private var swipeActionGroupOpacity: Double {
+        CompactPageSwipeRevealPolicy.opacity(
+            visibleWidth: visibleSwipeActionWidth,
+            maximumRevealWidth: maximumRevealWidth
+        )
+    }
+
+    private var swipeActionGroupTrailingOffset: CGFloat {
+        CompactPageSwipeRevealPolicy.trailingOffset(
+            visibleWidth: visibleSwipeActionWidth,
+            maximumRevealWidth: maximumRevealWidth
+        )
+    }
+
+    private var isSwipeActionGroupFullyOpen: Bool {
+        visibleSwipeActionWidth >= maximumRevealWidth - 1
+    }
+
+    private func closeSwipeActions() {
+        updateHorizontalOffset(0, animated: true)
+    }
+
+    private func updateHorizontalOffset(_ offset: CGFloat, animated: Bool) {
+        let clampedOffset = min(0, max(offset, -maximumRevealWidth))
+        let applyOffset = {
+            horizontalOffset = clampedOffset
+            if clampedOffset == 0 {
+                if activeSwipeActionPageID == page.id {
+                    activeSwipeActionPageID = nil
+                }
+            } else {
+                activeSwipeActionPageID = page.id
+            }
+        }
+
+        if animated {
+            withAnimation(CompactPageSwipeActionChrome.releaseAnimation, applyOffset)
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction, applyOffset)
+        }
     }
 
     private func swipeActionColor(_ action: PageRowSwipeActionKind) -> Color {
-        switch action {
-        case .archive:
-            return .red
-        case .favorite:
-            return .yellow
-        case .pin:
-            return EditorDesignTokens.Colors.accent.color
-        }
+        CompactPageSwipeActionChrome.color(for: action)
     }
 }
 

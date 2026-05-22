@@ -827,6 +827,13 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(CompactChrome.backgroundBlue, PageListChrome.backgroundBlue)
     }
 
+    func testCompactDocumentListChromeUsesBearLikeSpacingAndInlineTitle() {
+        XCTAssertEqual(CompactDocumentListChrome.horizontalPadding, 24)
+        XCTAssertEqual(CompactDocumentListChrome.verticalPadding, 10)
+        XCTAssertEqual(CompactDocumentListChrome.rowMinHeight, 86)
+        XCTAssertTrue(CompactDocumentListChrome.prefersInlineNavigationTitle)
+    }
+
     func testCompactLibraryChromeUsesLightAppSurface() {
         assertColor(CompactLibraryChrome.backgroundToken, red: 0xF7, green: 0xF7, blue: 0xF5)
         assertColor(CompactLibraryChrome.primaryForegroundToken, red: 0x22, green: 0x21, blue: 0x1F)
@@ -1421,6 +1428,93 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testCompactPageSwipeActionsUseLighterPlayfulBearLikeChrome() {
+        XCTAssertEqual(CompactPageSwipeActionChrome.actionWidth, 62)
+        XCTAssertEqual(CompactPageSwipeActionChrome.actionHeight, CompactDocumentListChrome.rowMinHeight)
+        XCTAssertEqual(CompactPageSwipeActionChrome.cornerRadius, 14)
+        XCTAssertEqual(CompactPageSwipeActionChrome.iconSize, 21)
+        XCTAssertEqual(CompactPageSwipeActionChrome.iconWeight, .medium)
+        XCTAssertEqual(CompactPageSwipeActionChrome.releaseSpringResponse, 0.28)
+        XCTAssertEqual(CompactPageSwipeActionChrome.releaseSpringDampingFraction, 0.72)
+        XCTAssertEqual(CompactPageSwipeActionChrome.releaseSpringBlendDuration, 0.08)
+        assertColor(CompactPageSwipeActionChrome.colorToken(for: .archive), red: 0xEF, green: 0x6F, blue: 0x63)
+        assertColor(CompactPageSwipeActionChrome.colorToken(for: .favorite), red: 0xF1, green: 0xC9, blue: 0x55)
+        assertColor(CompactPageSwipeActionChrome.colorToken(for: .pin), red: 0x7D, green: 0x97, blue: 0xE8)
+    }
+
+    func testCompactPageSwipeRevealPolicyShrinksWidthOnlyBeforeFadingOut() {
+        let maximumRevealWidth = CompactPageSwipeActionChrome.actionWidth * 3
+        let partiallyVisibleWidth: CGFloat = 40
+
+        XCTAssertEqual(
+            CompactPageSwipeRevealPolicy.visibleWidth(horizontalOffset: -partiallyVisibleWidth, maximumRevealWidth: maximumRevealWidth),
+            partiallyVisibleWidth
+        )
+        XCTAssertEqual(
+            CompactPageSwipeRevealPolicy.visibleWidth(horizontalOffset: -maximumRevealWidth, maximumRevealWidth: maximumRevealWidth),
+            maximumRevealWidth
+        )
+        XCTAssertEqual(CompactPageSwipeRevealPolicy.minimumActionWidthScale, 0.62)
+        XCTAssertEqual(CompactPageSwipeRevealPolicy.fadeSlideDistance, 18)
+        XCTAssertEqual(
+            CompactPageSwipeRevealPolicy.actionWidthScale(visibleWidth: partiallyVisibleWidth, maximumRevealWidth: maximumRevealWidth),
+            CompactPageSwipeRevealPolicy.minimumActionWidthScale,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            CompactPageSwipeRevealPolicy.actionGroupWidth(visibleWidth: partiallyVisibleWidth, maximumRevealWidth: maximumRevealWidth),
+            maximumRevealWidth * CompactPageSwipeRevealPolicy.minimumActionWidthScale,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            CompactPageSwipeRevealPolicy.actionHeight(visibleWidth: partiallyVisibleWidth),
+            CompactPageSwipeActionChrome.actionHeight,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            CompactPageSwipeRevealPolicy.cornerRadius(visibleWidth: partiallyVisibleWidth),
+            CompactPageSwipeActionChrome.cornerRadius,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            CompactPageSwipeRevealPolicy.iconScale(visibleWidth: partiallyVisibleWidth, maximumRevealWidth: maximumRevealWidth),
+            CompactPageSwipeRevealPolicy.minimumActionWidthScale,
+            accuracy: 0.001
+        )
+        XCTAssertLessThan(
+            CompactPageSwipeRevealPolicy.opacity(visibleWidth: partiallyVisibleWidth, maximumRevealWidth: maximumRevealWidth),
+            1
+        )
+        XCTAssertEqual(
+            CompactPageSwipeRevealPolicy.trailingOffset(visibleWidth: maximumRevealWidth, maximumRevealWidth: maximumRevealWidth),
+            0,
+            accuracy: 0.001
+        )
+        XCTAssertGreaterThan(
+            CompactPageSwipeRevealPolicy.trailingOffset(visibleWidth: partiallyVisibleWidth, maximumRevealWidth: maximumRevealWidth),
+            0
+        )
+        XCTAssertEqual(CompactPageSwipeRevealPolicy.openThresholdRatio, 0.42)
+        XCTAssertEqual(CompactPageSwipeRevealPolicy.closeThresholdRatio, 0.58)
+        XCTAssertFalse(
+            CompactPageSwipeRevealPolicy.shouldStayOpen(
+                startOffset: 0,
+                translationWidth: -40,
+                projectedOffset: -40,
+                maximumRevealWidth: maximumRevealWidth
+            ),
+            "A small left drag should reveal partially instead of snapping the whole action group open."
+        )
+        XCTAssertTrue(
+            CompactPageSwipeRevealPolicy.shouldStayOpen(
+                startOffset: 0,
+                translationWidth: -120,
+                projectedOffset: -120,
+                maximumRevealWidth: maximumRevealWidth
+            )
+        )
+    }
+
     func testArchiveUndoVisibilityStaysOutOfSearchAndArchiveSections() {
         XCTAssertFalse(
             ArchiveUndoVisibilityPolicy.isVisible(canUndoPageArchive: true, selectedCollection: .search),
@@ -1612,6 +1706,13 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(MobileActionChrome.selectedFillOpacity, 0.12)
         XCTAssertEqual(MobileActionChrome.selectedButtonFillOpacity, 0.13)
         XCTAssertEqual(MobileActionChrome.selectionBorderOpacity, 0.24)
+    }
+
+    func testMobileQuickCreateButtonUsesPencilGlyphLikeBear() {
+        XCTAssertEqual(MobileQuickCreateButtonChrome.iconSystemName, "pencil")
+        XCTAssertEqual(MobileQuickCreateButtonChrome.diameter, 54)
+        XCTAssertEqual(MobileQuickCreateButtonChrome.iconSize, 23)
+        XCTAssertEqual(MobileQuickCreateButtonChrome.shadowOpacity, 0.16)
     }
 
     func testMobileKeyboardToolbarChromeIsLowerAndLighterWeight() {
