@@ -1089,7 +1089,7 @@ final class WorkspaceViewModel: ObservableObject {
     func createNewDocumentForCompactUI() -> String? {
         do {
             let page = try createPageInSelectedWorkspace(
-                title: "未命名",
+                title: "",
                 initialFocus: .pageTitle
             )
             pendingCompactPageNavigationID = page.id

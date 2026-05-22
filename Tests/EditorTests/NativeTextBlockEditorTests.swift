@@ -217,6 +217,31 @@ final class NativeTextBlockEditorTests: XCTestCase {
     }
     #endif
 
+    func testNativeTextKeyboardRestorePolicyDoesNotStealFocusAfterResponderTransfer() {
+        XCTAssertTrue(
+            NativeTextKeyboardRestorePolicy.shouldRestoreSystemKeyboard(
+                wasReplacingKeyboard: true,
+                replacesKeyboard: false,
+                isTextViewFirstResponder: true
+            )
+        )
+        XCTAssertFalse(
+            NativeTextKeyboardRestorePolicy.shouldRestoreSystemKeyboard(
+                wasReplacingKeyboard: true,
+                replacesKeyboard: false,
+                isTextViewFirstResponder: false
+            ),
+            "When a title field has already become first responder, the old body text view must not asynchronously steal focus back"
+        )
+        XCTAssertFalse(
+            NativeTextKeyboardRestorePolicy.shouldRestoreSystemKeyboard(
+                wasReplacingKeyboard: false,
+                replacesKeyboard: false,
+                isTextViewFirstResponder: true
+            )
+        )
+    }
+
     func testNativeTextEditorLayoutAddsVerticalInsetToAvoidSelectionClipping() {
         XCTAssertEqual(NativeTextEditorLayout.textContainerInset.height, 2)
         XCTAssertEqual(
@@ -1166,19 +1191,29 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(
             IOSEditorKeyboardShortcutBridgeActivationResolver.capturesPaste(
                 hasFocusedTextBlock: false,
-                hasCurrentPage: true
+                hasCurrentPage: true,
+                hasFocusedPageTitle: false
             )
         )
         XCTAssertFalse(
             IOSEditorKeyboardShortcutBridgeActivationResolver.capturesPaste(
                 hasFocusedTextBlock: true,
-                hasCurrentPage: true
+                hasCurrentPage: true,
+                hasFocusedPageTitle: false
             )
         )
         XCTAssertFalse(
             IOSEditorKeyboardShortcutBridgeActivationResolver.capturesPaste(
                 hasFocusedTextBlock: false,
-                hasCurrentPage: false
+                hasCurrentPage: false,
+                hasFocusedPageTitle: false
+            )
+        )
+        XCTAssertFalse(
+            IOSEditorKeyboardShortcutBridgeActivationResolver.capturesPaste(
+                hasFocusedTextBlock: false,
+                hasCurrentPage: true,
+                hasFocusedPageTitle: true
             )
         )
         XCTAssertTrue(

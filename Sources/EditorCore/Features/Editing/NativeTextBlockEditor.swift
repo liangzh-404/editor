@@ -783,6 +783,16 @@ enum NativeTextCursorChrome {
 #endif
 }
 
+enum NativeTextKeyboardRestorePolicy {
+    static func shouldRestoreSystemKeyboard(
+        wasReplacingKeyboard: Bool,
+        replacesKeyboard: Bool,
+        isTextViewFirstResponder: Bool
+    ) -> Bool {
+        wasReplacingKeyboard && !replacesKeyboard && isTextViewFirstResponder
+    }
+}
+
 enum NativeTextEditorLayout {
     static let verticalTextInset: CGFloat = 2
     static let textContainerInset = CGSize(width: 0, height: verticalTextInset)
@@ -2663,7 +2673,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             let effectiveHeight = height ?? NativeTextEditorLayout.keyboardToolbarHeight
             let wasReplacingKeyboard = configuredKeyboardReplacesKeyboard
             let keyboardModeChanged = wasReplacingKeyboard != replacesKeyboard
-            let shouldRestoreSystemKeyboard = wasReplacingKeyboard && !replacesKeyboard
+            let shouldRestoreSystemKeyboard = NativeTextKeyboardRestorePolicy.shouldRestoreSystemKeyboard(
+                wasReplacingKeyboard: wasReplacingKeyboard,
+                replacesKeyboard: replacesKeyboard,
+                isTextViewFirstResponder: textView.isFirstResponder
+            )
             let container: EditorKeyboardAccessoryContainerView
             if let hostingController = keyboardAccessoryHostingController, !keyboardModeChanged {
                 hostingController.rootView = accessory
@@ -2731,8 +2745,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                     guard let textView, textView.window != nil else {
                         return
                     }
-                    guard textView.isFirstResponder else {
-                        textView.becomeFirstResponder()
+                    guard NativeTextKeyboardRestorePolicy.shouldRestoreSystemKeyboard(
+                        wasReplacingKeyboard: true,
+                        replacesKeyboard: false,
+                        isTextViewFirstResponder: textView.isFirstResponder
+                    ) else {
                         return
                     }
                     textView.resignFirstResponder()

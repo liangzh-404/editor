@@ -4,7 +4,7 @@ final class EditorBlockChromeTests: XCTestCase {
     func testCraftThingsDesignTokensMatchDesktopEditorialPalette() {
         assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF7, green: 0xF7, blue: 0xF5)
         assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF2, green: 0xF2, blue: 0xEF)
-        assertColor(EditorDesignTokens.Colors.documentListBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
+        assertColor(EditorDesignTokens.Colors.documentListBackground, red: 0xF8, green: 0xF8, blue: 0xF6)
         assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
         assertColor(EditorDesignTokens.Colors.primaryText, red: 0x22, green: 0x21, blue: 0x1F)
         assertColor(EditorDesignTokens.Colors.secondaryText, red: 0x5F, green: 0x61, blue: 0x66)
@@ -63,6 +63,70 @@ final class EditorBlockChromeTests: XCTestCase {
     func testMobileNavigationBarChromeKeepsCollapsedTitleVerticallyCentered() {
         XCTAssertEqual(MobileNavigationBarChrome.topMaskHeight, 72)
         XCTAssertEqual(MobileNavigationBarChrome.collapsedTitleVerticalOffset, 0)
+    }
+
+    func testPageTitleDisplayPolicyUsesPlaceholderOnlyForEmptyDisplaySurfaces() {
+        XCTAssertEqual(PageTitleDisplayPolicy.emptyTitlePlaceholder, "未命名")
+        XCTAssertEqual(PageTitleDisplayPolicy.listTitle(for: ""), "未命名")
+        XCTAssertEqual(PageTitleDisplayPolicy.listTitle(for: "   "), "未命名")
+        XCTAssertEqual(PageTitleDisplayPolicy.listTitle(for: "真实标题"), "真实标题")
+        XCTAssertEqual(PageTitleDisplayPolicy.editingText(for: ""), "")
+        XCTAssertEqual(PageTitleDisplayPolicy.editingText(for: "真实标题"), "真实标题")
+    }
+
+    func testPageTitleFieldChromeUsesAccentCursorAndHidesPlaceholderWhileEditing() {
+        XCTAssertEqual(PageTitleFieldChrome.cursorColorToken, EditorDesignTokens.Colors.accent)
+        XCTAssertEqual(PageTitleFieldChrome.placeholderText(isFocused: false, text: ""), "未命名")
+        XCTAssertNil(PageTitleFieldChrome.placeholderText(isFocused: true, text: ""))
+        XCTAssertNil(PageTitleFieldChrome.placeholderText(isFocused: false, text: "真实标题"))
+    }
+
+    func testMobileNavigationBarChromeUsesSolidEditorBackground() {
+        XCTAssertTrue(
+            MobileNavigationBarChrome.usesSolidEditorBackground,
+            "The compact editor navigation bar should not use translucent material that flashes a mask over page transitions"
+        )
+    }
+
+    func testPageTitleFocusSchedulingStartsImmediatelyOnCompact() {
+        XCTAssertEqual(PageTitleFocusSchedulingPolicy.compactRetryDelays.first, 0)
+        XCTAssertLessThanOrEqual(
+            PageTitleFocusSchedulingPolicy.compactRetryDelays.first ?? 1,
+            0.05,
+            "Quick-create title focus should start without a visible no-focus pause"
+        )
+    }
+
+    func testPageTitleFocusSchedulingSkipsCancelledOrStaleAttempts() {
+        XCTAssertTrue(
+            PageTitleFocusSchedulingPolicy.shouldRunScheduledAttempt(
+                scheduledPageID: "page-a",
+                requestedPageID: "page-a",
+                currentPageID: "page-a"
+            )
+        )
+        XCTAssertFalse(
+            PageTitleFocusSchedulingPolicy.shouldRunScheduledAttempt(
+                scheduledPageID: nil,
+                requestedPageID: "page-a",
+                currentPageID: "page-a"
+            ),
+            "Cancelling a pending title focus before body focus should stop the delayed resign/refocus task"
+        )
+        XCTAssertFalse(
+            PageTitleFocusSchedulingPolicy.shouldRunScheduledAttempt(
+                scheduledPageID: "page-b",
+                requestedPageID: "page-a",
+                currentPageID: "page-a"
+            )
+        )
+        XCTAssertFalse(
+            PageTitleFocusSchedulingPolicy.shouldRunScheduledAttempt(
+                scheduledPageID: "page-a",
+                requestedPageID: "page-a",
+                currentPageID: "page-b"
+            )
+        )
     }
 
     func testMobileNavigationTitleAppearsOnlyAfterBodyTitleEntersTopMask() {
@@ -229,7 +293,7 @@ final class EditorBlockChromeTests: XCTestCase {
     func testDesktopColumnDividerStaysVisualOnlyAndSubtle() {
         XCTAssertEqual(DesktopColumnDividerChrome.hitWidth, 9)
         XCTAssertEqual(DesktopColumnDividerChrome.lineWidth, 1)
-        XCTAssertLessThan(DesktopColumnDividerChrome.idleOpacity, 0.05)
+        XCTAssertGreaterThanOrEqual(DesktopColumnDividerChrome.idleOpacity, 0.12)
         XCTAssertGreaterThan(DesktopColumnDividerChrome.hoverOpacity, DesktopColumnDividerChrome.idleOpacity)
         XCTAssertGreaterThan(DesktopColumnDividerChrome.draggingOpacity, DesktopColumnDividerChrome.hoverOpacity)
     }
@@ -744,10 +808,15 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertGreaterThan(BlockDropIndicatorChrome.emphasizedOpacity, BlockDropIndicatorChrome.standardOpacity)
     }
 
-    func testPageListChromeUsesWhiteBearLikeSurface() {
+    func testPageListChromeUsesBearLikeTintedSurfaceAndVisibleBoundary() {
         XCTAssertEqual(PageListChrome.backgroundRed, EditorDesignTokens.Colors.documentListBackground.red)
         XCTAssertEqual(PageListChrome.backgroundGreen, EditorDesignTokens.Colors.documentListBackground.green)
         XCTAssertEqual(PageListChrome.backgroundBlue, EditorDesignTokens.Colors.documentListBackground.blue)
+        XCTAssertNotEqual(
+            EditorDesignTokens.Colors.documentListBackground,
+            EditorDesignTokens.Colors.editorBackground,
+            "The middle column should read as a separate Bear-like surface from the writing canvas"
+        )
         XCTAssertGreaterThan(PageListChrome.rowDividerOpacity, 0)
         XCTAssertLessThan(PageListChrome.selectedFillOpacity, 0.08)
     }
@@ -766,13 +835,18 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(CompactLibraryChrome.selectedRowOpacity, 0.08)
     }
 
-    func testBearLikeLightThemeUsesNeutralWhiteWritingSurfaces() {
+    func testBearLikeLightThemeUsesTintedMiddleColumnAndWhiteWritingSurface() {
         assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF7, green: 0xF7, blue: 0xF5)
         assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF2, green: 0xF2, blue: 0xEF)
-        assertColor(EditorDesignTokens.Colors.documentListBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
+        assertColor(EditorDesignTokens.Colors.documentListBackground, red: 0xF8, green: 0xF8, blue: 0xF6)
         assertColor(EditorDesignTokens.Colors.editorBackground, red: 0xFF, green: 0xFF, blue: 0xFF)
+        XCTAssertNotEqual(EditorDesignTokens.Colors.documentListBackground, EditorDesignTokens.Colors.editorBackground)
         XCTAssertLessThan(SidebarChrome.backgroundYellowBias, 0.015)
         XCTAssertLessThan(CompactChrome.backgroundYellowBias, 0.015)
+    }
+
+    func testCompactProgrammaticPagePushDisablesDefaultNavigationAnimation() {
+        XCTAssertTrue(CompactPagePushAnimationPolicy.disablesProgrammaticPushAnimation)
     }
 
     func testCraftTableChromeUsesEmbeddedDocumentGridMetrics() {

@@ -53,7 +53,7 @@ enum EditorDesignTokens {
     enum Colors {
         static let appBackground = EditorColorToken.hex(0xF7, 0xF7, 0xF5)
         static let sidebarBackground = EditorColorToken.hex(0xF2, 0xF2, 0xEF)
-        static let documentListBackground = EditorColorToken.hex(0xFF, 0xFF, 0xFF)
+        static let documentListBackground = EditorColorToken.hex(0xF8, 0xF8, 0xF6)
         static let editorBackground = EditorColorToken.hex(0xFF, 0xFF, 0xFF)
         static let primaryText = EditorColorToken.hex(0x22, 0x21, 0x1F)
         static let secondaryText = EditorColorToken.hex(0x5F, 0x61, 0x66)
@@ -989,9 +989,13 @@ private struct ThreeColumnEditorShell: View {
 enum DesktopColumnDividerChrome {
     static let hitWidth: Double = 9
     static let lineWidth: Double = 1
-    static let idleOpacity: Double = 0.045
-    static let hoverOpacity: Double = 0.22
-    static let draggingOpacity: Double = 0.34
+    static let idleOpacity: Double = 0.14
+    static let hoverOpacity: Double = 0.26
+    static let draggingOpacity: Double = 0.38
+}
+
+enum CompactPagePushAnimationPolicy {
+    static let disablesProgrammaticPushAnimation = true
 }
 
 enum DesktopColumnResizeDragResolver {
@@ -1181,11 +1185,25 @@ private struct CompactEditorShell: View {
             return
         }
 
-        path = CompactShellRoutePlanner.pathForPage(
+        let nextPath = CompactShellRoutePlanner.pathForPage(
             pageID,
             snapshot: viewModel.snapshot,
             selectedCollection: viewModel.selectedCollection
         )
+        guard nextPath != path else {
+            return
+        }
+
+        guard CompactPagePushAnimationPolicy.disablesProgrammaticPushAnimation else {
+            path = nextPath
+            return
+        }
+
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            path = nextPath
+        }
     }
 
     private func revealPreviousScreen() {
@@ -2587,9 +2605,10 @@ enum IOSTableBlockKeyboardActionResolver {
 enum IOSEditorKeyboardShortcutBridgeActivationResolver {
     static func capturesPaste(
         hasFocusedTextBlock: Bool,
-        hasCurrentPage: Bool
+        hasCurrentPage: Bool,
+        hasFocusedPageTitle: Bool = false
     ) -> Bool {
-        !hasFocusedTextBlock && hasCurrentPage
+        !hasFocusedTextBlock && hasCurrentPage && !hasFocusedPageTitle
     }
 
     static func capturesFocusMove(hasBlockSelection: Bool) -> Bool {
@@ -6707,12 +6726,12 @@ private struct PageRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(page.title)
+                    Text(displayTitle)
                         .font(isSelected ? .body.weight(.semibold) : .body)
                         .lineLimit(1)
                     PageRowStatusBadges(page: page, font: .caption2.weight(.semibold))
                 }
-                .accessibilityLabel(page.title)
+                .accessibilityLabel(displayTitle)
                 .accessibilityValue(pageRowAccessibilityValue)
                 .accessibilityIdentifier("editor.page-row.\(page.id)")
 
@@ -6754,13 +6773,13 @@ private struct PageRow: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Text(page.title)
+                    Text(displayTitle)
                         .font(.title3.weight(.semibold))
                         .lineLimit(1)
                         .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
                     PageRowStatusBadges(page: page, font: .caption.weight(.semibold))
                 }
-                .accessibilityLabel(page.title)
+                .accessibilityLabel(displayTitle)
                 .accessibilityValue(pageRowAccessibilityValue)
                 .accessibilityIdentifier("editor.page-row.\(page.id)")
 
@@ -6824,6 +6843,10 @@ private struct PageRow: View {
             return PageListChrome.batchFillColor
         }
         return isSelected ? PageListChrome.selectedFillColor : Color.clear
+    }
+
+    private var displayTitle: String {
+        PageTitleDisplayPolicy.listTitle(for: page.title)
     }
 
     private var compactBorderColor: Color {
@@ -7108,7 +7131,7 @@ private struct ArchivedPageRow: View {
             Image(systemName: "archivebox")
                 .foregroundStyle(.secondary)
 
-            Text(page.title)
+            Text(PageTitleDisplayPolicy.listTitle(for: page.title))
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -7152,6 +7175,46 @@ private enum PageListCoordinateSpace {
 enum MobileNavigationBarChrome {
     static let topMaskHeight: CGFloat = 72
     static let collapsedTitleVerticalOffset: CGFloat = 0
+    static let usesSolidEditorBackground = true
+}
+
+enum PageTitleDisplayPolicy {
+    static let emptyTitlePlaceholder = "未命名"
+
+    static func listTitle(for title: String) -> String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? emptyTitlePlaceholder
+            : title
+    }
+
+    static func editingText(for title: String) -> String {
+        title
+    }
+}
+
+enum PageTitleFieldChrome {
+    static let cursorColorToken = EditorDesignTokens.Colors.accent
+
+    static func placeholderText(isFocused: Bool, text: String) -> String? {
+        guard !isFocused,
+              text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return PageTitleDisplayPolicy.emptyTitlePlaceholder
+    }
+}
+
+enum PageTitleFocusSchedulingPolicy {
+    static let compactRetryDelays: [TimeInterval] = [0]
+    static let regularRetryDelays: [TimeInterval] = [0.15, 0.35, 0.7]
+
+    static func shouldRunScheduledAttempt(
+        scheduledPageID: String?,
+        requestedPageID: String,
+        currentPageID: String?
+    ) -> Bool {
+        scheduledPageID == requestedPageID && currentPageID == requestedPageID
+    }
 }
 
 private struct MobilePageTitleFramePreferenceKey: PreferenceKey {
@@ -7246,7 +7309,11 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
     @Binding var text: String
     let focusRequestID: UUID?
     let isEnabled: Bool
+    let onInteractionBegan: () -> Void
     let onEditingBegan: () -> Void
+    let onEditingEnded: () -> Void
+    let onReturn: () -> Void
+    let onFocusRequestFinished: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -7256,15 +7323,21 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
         let textField = UITextField()
         textField.borderStyle = .none
         textField.backgroundColor = .clear
-        textField.placeholder = "未命名"
+        textField.placeholder = PageTitleFieldChrome.placeholderText(isFocused: false, text: "")
         textField.font = UIFont.systemFont(
             ofSize: CGFloat(EditorDesignTokens.Typography.documentTitleSize),
             weight: .semibold
         )
         textField.textColor = EditorDesignTokens.Colors.primaryText.uiColor
+        textField.tintColor = PageTitleFieldChrome.cursorColorToken.uiColor
         textField.adjustsFontForContentSizeCategory = true
-        textField.returnKeyType = .done
+        textField.returnKeyType = .next
         textField.delegate = context.coordinator
+        textField.addTarget(
+            context.coordinator,
+            action: #selector(Coordinator.textFieldTouchDown(_:)),
+            for: .touchDown
+        )
         textField.accessibilityIdentifier = "editor.page-title"
         return textField
     }
@@ -7272,9 +7345,11 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
     func updateUIView(_ textField: UITextField, context: Context) {
         context.coordinator.parent = self
         textField.isEnabled = isEnabled
-        if !textField.isFirstResponder, textField.text != text {
-            textField.text = text
+        textField.tintColor = PageTitleFieldChrome.cursorColorToken.uiColor
+        if !textField.isFirstResponder, textField.text != PageTitleDisplayPolicy.editingText(for: text) {
+            textField.text = PageTitleDisplayPolicy.editingText(for: text)
         }
+        context.coordinator.updatePlaceholder(for: textField)
         context.coordinator.handleFocusRequestIfNeeded(
             textField: textField,
             focusRequestID: focusRequestID
@@ -7290,7 +7365,12 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
             self.parent = parent
         }
 
+        @objc func textFieldTouchDown(_ textField: UITextField) {
+            parent.onInteractionBegan()
+        }
+
         func textFieldDidBeginEditing(_ textField: UITextField) {
+            updatePlaceholder(for: textField)
             parent.onEditingBegan()
         }
 
@@ -7299,11 +7379,24 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
             if title != parent.text {
                 parent.text = title
             }
+            parent.onEditingEnded()
+            updatePlaceholder(for: textField)
         }
 
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-            textField.resignFirstResponder()
-            return true
+            let title = textField.text ?? ""
+            if title != parent.text {
+                parent.text = title
+            }
+            parent.onReturn()
+            return false
+        }
+
+        func updatePlaceholder(for textField: UITextField) {
+            textField.placeholder = PageTitleFieldChrome.placeholderText(
+                isFocused: textField.isFirstResponder,
+                text: textField.text ?? ""
+            )
         }
 
         func handleFocusRequestIfNeeded(textField: UITextField, focusRequestID: UUID?) {
@@ -7400,6 +7493,7 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
             if didFocus {
                 handledFocusRequestID = focusRequestID
             }
+            parent.onFocusRequestFinished(didFocus)
         }
 
         private func focusDelay(for remainingAttempts: Int) -> DispatchTimeInterval {
@@ -7522,6 +7616,8 @@ private struct EditorCanvasView: View {
     @AppStorage(EditorContentFont.appStorageKey) private var contentFontRawValue = EditorContentFont.defaultRawValue
 #if os(iOS)
     @State private var mobileNavigationTitleState = MobileNavigationTitleVisibilityState()
+    @State private var isPageTitleInteractionActive = false
+    @State private var isPageTitleFocusRequestActive = false
 #endif
 
     var body: some View {
@@ -7546,15 +7642,27 @@ private struct EditorCanvasView: View {
                         text: pageTitleBinding,
                         focusRequestID: pageTitleFocusRequestID,
                         isEnabled: page != nil,
+                        onInteractionBegan: {
+                            beginPageTitleInteraction()
+                        },
                         onEditingBegan: {
-                            clearTransientSelectionsAfterPageTitleFocusIfNeeded()
+                            beginPageTitleInteraction()
+                        },
+                        onEditingEnded: {
+                            isPageTitleInteractionActive = false
+                        },
+                        onReturn: {
+                            focusFirstEditableBlockFromPageTitle()
+                        },
+                        onFocusRequestFinished: { _ in
+                            isPageTitleFocusRequestActive = false
                         }
                     )
                     .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(titleFrameReporter)
 #else
-                    TextField("未命名", text: pageTitleBinding)
+                    TextField(PageTitleDisplayPolicy.emptyTitlePlaceholder, text: pageTitleBinding)
                         .textFieldStyle(.plain)
                         .font(.system(size: EditorDesignTokens.Typography.documentTitleSize, weight: .semibold))
                         .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
@@ -7567,6 +7675,9 @@ private struct EditorCanvasView: View {
                                 clearTransientSelections()
                             }
                         )
+                        .onSubmit {
+                            focusFirstEditableBlockFromPageTitle()
+                        }
 #endif
 
                     Spacer(minLength: 12)
@@ -8107,7 +8218,8 @@ private struct EditorCanvasView: View {
             IOSEditorKeyboardShortcutBridge(
                 isPasteEnabled: IOSEditorKeyboardShortcutBridgeActivationResolver.capturesPaste(
                     hasFocusedTextBlock: editorSession.focusedBlockID != nil || pendingFocusRequest != nil,
-                    hasCurrentPage: page != nil
+                    hasCurrentPage: page != nil,
+                    hasFocusedPageTitle: isPageTitleFocusActive
                 ),
                 isFocusMoveEnabled: IOSEditorKeyboardShortcutBridgeActivationResolver.capturesFocusMove(
                     hasBlockSelection: !editorSession.selectedBlockIDs.isEmpty
@@ -8146,7 +8258,7 @@ private struct EditorCanvasView: View {
                 pageActionsMenu
             }
         }
-        .toolbarBackground(.regularMaterial, for: .navigationBar)
+        .toolbarBackground(EditorDesignTokens.Colors.editorBackground.color, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
 #else
         .navigationTitle("")
@@ -8163,6 +8275,8 @@ private struct EditorCanvasView: View {
         .onChange(of: page?.id) { _, _ in
 #if os(iOS)
             resetMobileNavigationTitleVisibility()
+            isPageTitleInteractionActive = false
+            isPageTitleFocusRequestActive = false
 #endif
             scheduledPageTitleFocusPageID = nil
             schedulePendingPageTitleFocusIfNeeded(pendingPageTitleFocusPageID)
@@ -8259,15 +8373,23 @@ private struct EditorCanvasView: View {
 
         scheduledPageTitleFocusPageID = pageID
 #if os(iOS)
-        let retryDelays: [TimeInterval] = [0.15]
+        let retryDelays = PageTitleFocusSchedulingPolicy.compactRetryDelays
 #else
-        let retryDelays: [TimeInterval] = [0.15, 0.35, 0.7]
+        let retryDelays = PageTitleFocusSchedulingPolicy.regularRetryDelays
 #endif
         for (index, delay) in retryDelays.enumerated() {
             let isLastAttempt = index == retryDelays.count - 1
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard PageTitleFocusSchedulingPolicy.shouldRunScheduledAttempt(
+                    scheduledPageID: scheduledPageTitleFocusPageID,
+                    requestedPageID: pageID,
+                    currentPageID: page?.id
+                ) else {
+                    return
+                }
                 prepareTitleFocusAttempt()
 #if os(iOS)
+                isPageTitleFocusRequestActive = true
                 pageTitleFocusRequestID = UUID()
 #else
                 isPageTitleFocused = true
@@ -8296,6 +8418,25 @@ private struct EditorCanvasView: View {
         NSApp.keyWindow?.makeFirstResponder(nil)
 #endif
     }
+
+#if os(iOS)
+    private var isPageTitleFocusActive: Bool {
+        isPageTitleInteractionActive ||
+            isPageTitleFocusRequestActive ||
+            scheduledPageTitleFocusPageID != nil ||
+            pendingPageTitleFocusPageID == page?.id
+    }
+
+    private func beginPageTitleInteraction() {
+        isPageTitleInteractionActive = true
+        isPageTitleFocusRequestActive = false
+        pendingFocusRequest = nil
+        if let focusedBlockID = editorSession.focusedBlockID {
+            editorSession.endEditing(blockID: focusedBlockID)
+        }
+        clearTransientSelectionsAfterPageTitleFocusIfNeeded()
+    }
+#endif
 
     private var contentFont: EditorContentFont {
         EditorContentFont(rawValue: contentFontRawValue) ?? EditorContentFont.defaultFont
@@ -9068,6 +9209,34 @@ private struct EditorCanvasView: View {
         }
 
         pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+    }
+
+    private func focusFirstEditableBlockFromPageTitle() {
+        cancelPendingPageTitleFocus()
+        clearTransientSelections()
+        guard let block = blocks.first(where: { $0.type.isTextEditable }) else {
+            focusCanvas()
+            return
+        }
+
+        pendingFocusRequest = BlockFocusRequest(
+            blockID: block.id,
+            selection: endSelection(for: block)
+        )
+    }
+
+    private func cancelPendingPageTitleFocus() {
+        guard scheduledPageTitleFocusPageID != nil || pendingPageTitleFocusPageID == page?.id else {
+            return
+        }
+
+        scheduledPageTitleFocusPageID = nil
+#if os(iOS)
+        pageTitleFocusRequestID = nil
+#else
+        isPageTitleFocused = false
+#endif
+        onPendingPageTitleFocusHandled()
     }
 
     private func clearTransientSelections(excludingBlockID: String? = nil) {
@@ -9885,6 +10054,7 @@ private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
         var onPasteAttachments: () -> Bool = { false }
         var onMoveFocus: (BlockKeyboardFocusDirection) -> Bool = { _ in false }
         private var isCapturingKeyboard = false
+        private var firstResponderUpdateGeneration = 0
 
         override var canBecomeFirstResponder: Bool {
             isPasteEnabled || isFocusMoveEnabled
@@ -9919,8 +10089,13 @@ private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
         }
 
         func updateFirstResponderIfNeeded() {
+            firstResponderUpdateGeneration += 1
+            let updateGeneration = firstResponderUpdateGeneration
             DispatchQueue.main.async { [weak self] in
                 guard let self else {
+                    return
+                }
+                guard updateGeneration == self.firstResponderUpdateGeneration else {
                     return
                 }
 

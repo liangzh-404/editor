@@ -143,7 +143,8 @@ final class WorkspaceViewModelTests: XCTestCase {
         let newPageID = try XCTUnwrap(viewModel.createNewDocumentForCompactUI())
 
         XCTAssertEqual(viewModel.selectedPageID, newPageID)
-        XCTAssertEqual(viewModel.selectedPage?.title, "未命名")
+        XCTAssertEqual(viewModel.selectedPage?.title, "")
+        XCTAssertEqual(PageTitleDisplayPolicy.listTitle(for: viewModel.selectedPage?.title ?? ""), "未命名")
         XCTAssertEqual(viewModel.pendingCompactPageNavigationID, newPageID)
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
         XCTAssertNil(viewModel.pendingFocusBlockID)
@@ -438,7 +439,8 @@ final class WorkspaceViewModelTests: XCTestCase {
         let pageID = try XCTUnwrap(viewModel.createNewDocumentForCompactUI())
 
         XCTAssertEqual(viewModel.selectedPageID, pageID)
-        XCTAssertEqual(viewModel.selectedPage?.title, "未命名")
+        XCTAssertEqual(viewModel.selectedPage?.title, "")
+        XCTAssertEqual(PageTitleDisplayPolicy.listTitle(for: viewModel.selectedPage?.title ?? ""), "未命名")
         XCTAssertEqual(viewModel.pendingCompactPageNavigationID, pageID)
         XCTAssertEqual(viewModel.pendingPageTitleFocusPageID, pageID)
         XCTAssertNil(viewModel.pendingFocusBlockID)

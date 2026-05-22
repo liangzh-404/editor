@@ -232,6 +232,11 @@ final class EditorIOSEditingUITests: XCTestCase {
             waitForKeyboardFocus(pageTitle, timeout: 5),
             "Quick create should focus the new page title instead of the first empty block"
         )
+        let initialTitleValue = pageTitle.value as? String ?? pageTitle.label
+        XCTAssertFalse(
+            initialTitleValue.contains("未命名"),
+            "The focused quick-create title should be genuinely empty, not prefilled with the fallback title; value: \(initialTitleValue)"
+        )
 
         pageTitle.typeText("MobileTitle")
         let titleValue = pageTitle.value as? String ?? pageTitle.label
@@ -243,6 +248,30 @@ final class EditorIOSEditingUITests: XCTestCase {
         XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The new page should still contain an empty editable block")
         let bodyValue = firstTextView.value as? String ?? ""
         XCTAssertFalse(bodyValue.contains("MobileTitle"), "Quick-create title typing should not leak into the first block; value: \(bodyValue)")
+
+        pageTitle.typeText("\n")
+        XCTAssertTrue(
+            waitForKeyboardFocus(firstTextView, timeout: 5),
+            "Pressing Return in the iPhone page title should hand focus to the first text block"
+        )
+        firstTextView.typeText("BodyAfterReturn")
+        let focusedBodyValue = firstTextView.value as? String ?? ""
+        XCTAssertTrue(
+            focusedBodyValue.contains("BodyAfterReturn"),
+            "Typing after title Return should land in the first text block; value: \(focusedBodyValue)"
+        )
+
+        pageTitle.tap()
+        XCTAssertTrue(
+            waitForKeyboardFocus(pageTitle, timeout: 5),
+            "Tapping the title from the body text editor should focus it on the first tap"
+        )
+        pageTitle.typeText("Again")
+        let refocusedTitleValue = pageTitle.value as? String ?? pageTitle.label
+        XCTAssertTrue(
+            refocusedTitleValue.contains("Again"),
+            "Typing after one body-to-title tap should stay in the title; value: \(refocusedTitleValue)"
+        )
     }
 
     @MainActor
