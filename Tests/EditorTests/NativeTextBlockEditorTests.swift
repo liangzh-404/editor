@@ -86,6 +86,35 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertNil(state.beginScheduling(requestID))
     }
 
+    func testNativeTextFocusConfirmationPolicyRetriesWhenFocusIsLostAfterFirstResponderCall() {
+        XCTAssertFalse(
+            NativeTextFocusConfirmationPolicy.shouldMarkRequestHandled(
+                didPerformFocus: true,
+                isFirstResponderAfterConfirmation: false
+            )
+        )
+        XCTAssertTrue(
+            NativeTextFocusConfirmationPolicy.shouldRetry(
+                didPerformFocus: true,
+                isFirstResponderAfterConfirmation: false,
+                remainingAttempts: 1
+            )
+        )
+        XCTAssertFalse(
+            NativeTextFocusConfirmationPolicy.shouldRetry(
+                didPerformFocus: true,
+                isFirstResponderAfterConfirmation: false,
+                remainingAttempts: 0
+            )
+        )
+        XCTAssertTrue(
+            NativeTextFocusConfirmationPolicy.shouldMarkRequestHandled(
+                didPerformFocus: true,
+                isFirstResponderAfterConfirmation: true
+            )
+        )
+    }
+
     func testNativeTextModelUpdateGuardSuppressesProgrammaticTextChangeForwarding() {
         var guardState = NativeTextModelUpdateGuard()
 
@@ -140,15 +169,15 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertNil(EditorContentFont.system.postScriptName(for: .paragraph))
         XCTAssertEqual(
             EditorContentFont.lxgwWenKai.postScriptName(for: .paragraph),
-            "LXGWWenKai-Regular"
+            "LXGWWenKaiGBScreen"
         )
         XCTAssertEqual(
             EditorContentFont.lxgwWenKai.postScriptName(for: .heading1),
-            "LXGWWenKai-Regular"
+            "LXGWWenKaiGBScreen"
         )
         XCTAssertEqual(
             EditorContentFont.lxgwWenKai.postScriptName(for: .taskItem),
-            "LXGWWenKai-Regular"
+            "LXGWWenKaiGBScreen"
         )
         XCTAssertNil(EditorContentFont.lxgwWenKai.postScriptName(for: .codeBlock))
         XCTAssertNil(EditorContentFont.lxgwWenKai.postScriptName(for: .table))
@@ -158,8 +187,16 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(EditorContentFont.defaultFont, .lxgwWenKai)
         XCTAssertEqual(EditorContentFont.defaultRawValue, "lxgwWenKai")
         XCTAssertEqual(EditorContentFont.appStorageKey, "editor.content-font")
-        XCTAssertEqual(EditorContentFont.lxgwWenKaiResourceName, "LXGWWenKai-Regular")
-        XCTAssertEqual(EditorContentFont.lxgwWenKaiPostScriptName, "LXGWWenKai-Regular")
+        XCTAssertEqual(EditorContentFont.lxgwWenKaiResourceName, "LXGW WenK")
+        XCTAssertEqual(EditorContentFont.lxgwWenKaiPostScriptName, "LXGWWenKaiGBScreen")
+    }
+
+    func testEditorContentFontAppliesToContentPageTitle() {
+        XCTAssertNil(EditorContentFont.system.pageTitlePostScriptName)
+        XCTAssertEqual(
+            EditorContentFont.lxgwWenKai.pageTitlePostScriptName,
+            EditorContentFont.lxgwWenKaiPostScriptName
+        )
     }
 
     func testMobileNativeTextDragUsesExplicitBlockPayloadWhenTextViewConsumesLongPress() {

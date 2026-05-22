@@ -10,8 +10,8 @@ enum EditorContentFont: String, CaseIterable, Identifiable, Sendable {
     static let appStorageKey = "editor.content-font"
     static let defaultFont: EditorContentFont = .lxgwWenKai
     static let defaultRawValue = defaultFont.rawValue
-    static let lxgwWenKaiPostScriptName = "LXGWWenKai-Regular"
-    static let lxgwWenKaiResourceName = "LXGWWenKai-Regular"
+    static let lxgwWenKaiPostScriptName = "LXGWWenKaiGBScreen"
+    static let lxgwWenKaiResourceName = "LXGW WenK"
 
     var id: String {
         rawValue
@@ -23,6 +23,15 @@ enum EditorContentFont: String, CaseIterable, Identifiable, Sendable {
             return "系统"
         case .lxgwWenKai:
             return "霞鹜文楷"
+        }
+    }
+
+    var pageTitlePostScriptName: String? {
+        switch self {
+        case .system:
+            return nil
+        case .lxgwWenKai:
+            return Self.lxgwWenKaiPostScriptName
         }
     }
 
@@ -705,6 +714,28 @@ struct NativeTextFocusRequestState {
         if didFocus {
             handledFocusRequestID = requestID
         }
+    }
+}
+
+enum NativeTextFocusConfirmationPolicy {
+    static let confirmationDelay: TimeInterval = 0.05
+
+    static func shouldMarkRequestHandled(
+        didPerformFocus: Bool,
+        isFirstResponderAfterConfirmation: Bool
+    ) -> Bool {
+        didPerformFocus && isFirstResponderAfterConfirmation
+    }
+
+    static func shouldRetry(
+        didPerformFocus: Bool,
+        isFirstResponderAfterConfirmation: Bool,
+        remainingAttempts: Int
+    ) -> Bool {
+        !shouldMarkRequestHandled(
+            didPerformFocus: didPerformFocus,
+            isFirstResponderAfterConfirmation: isFirstResponderAfterConfirmation
+        ) && remainingAttempts > 0
     }
 }
 
@@ -1807,9 +1838,11 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                 }
 
                 if self.performFocus(textView: textView) {
-                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: true)
-                    self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
-                    self.parent.onFocusRequestHandled()
+                    self.scheduleFocusConfirmation(
+                        textView: textView,
+                        focusRequestID: focusRequestID,
+                        remainingAttempts: remainingAttempts
+                    )
                     return
                 }
 
@@ -1817,6 +1850,49 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                     self.focusRequestState.finish(requestID: focusRequestID, didFocus: false)
                     EditorLog.focus.debug(
                         "editor_focus_request_retry_exhausted block_id=\(self.parent.blockID, privacy: .public)"
+                    )
+                    return
+                }
+
+                self.scheduleFocusAttempt(
+                    textView: textView,
+                    focusRequestID: focusRequestID,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+        }
+
+        private func scheduleFocusConfirmation(
+            textView: NSTextView,
+            focusRequestID: UUID,
+            remainingAttempts: Int
+        ) {
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + NativeTextFocusConfirmationPolicy.confirmationDelay
+            ) { [weak textView, weak self] in
+                guard let textView, let self else {
+                    return
+                }
+
+                let isConfirmedFocused = self.isFocused(textView: textView)
+                if NativeTextFocusConfirmationPolicy.shouldMarkRequestHandled(
+                    didPerformFocus: true,
+                    isFirstResponderAfterConfirmation: isConfirmedFocused
+                ) {
+                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: true)
+                    self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
+                    self.parent.onFocusRequestHandled()
+                    return
+                }
+
+                guard NativeTextFocusConfirmationPolicy.shouldRetry(
+                    didPerformFocus: true,
+                    isFirstResponderAfterConfirmation: isConfirmedFocused,
+                    remainingAttempts: remainingAttempts
+                ) else {
+                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: false)
+                    EditorLog.focus.debug(
+                        "editor_focus_request_confirmation_failed block_id=\(self.parent.blockID, privacy: .public)"
                     )
                     return
                 }
@@ -1847,6 +1923,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                 )
             )
             return true
+        }
+
+        private func isFocused(textView: NSTextView) -> Bool {
+            textView.window?.firstResponder === textView
         }
 
         private func updateSessionSelection(textView: NSTextView) {
@@ -3109,9 +3189,11 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                 }
 
                 if self.performFocus(textView: textView) {
-                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: true)
-                    self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
-                    self.parent.onFocusRequestHandled()
+                    self.scheduleFocusConfirmation(
+                        textView: textView,
+                        focusRequestID: focusRequestID,
+                        remainingAttempts: remainingAttempts
+                    )
                     return
                 }
 
@@ -3119,6 +3201,49 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                     self.focusRequestState.finish(requestID: focusRequestID, didFocus: false)
                     EditorLog.focus.debug(
                         "editor_focus_request_retry_exhausted block_id=\(self.parent.blockID, privacy: .public)"
+                    )
+                    return
+                }
+
+                self.scheduleFocusAttempt(
+                    textView: textView,
+                    focusRequestID: focusRequestID,
+                    remainingAttempts: remainingAttempts - 1
+                )
+            }
+        }
+
+        private func scheduleFocusConfirmation(
+            textView: UITextView,
+            focusRequestID: UUID,
+            remainingAttempts: Int
+        ) {
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + NativeTextFocusConfirmationPolicy.confirmationDelay
+            ) { [weak textView, weak self] in
+                guard let textView, let self else {
+                    return
+                }
+
+                let isConfirmedFocused = textView.isFirstResponder
+                if NativeTextFocusConfirmationPolicy.shouldMarkRequestHandled(
+                    didPerformFocus: true,
+                    isFirstResponderAfterConfirmation: isConfirmedFocused
+                ) {
+                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: true)
+                    self.parent.session.beginEditing(blockID: self.parent.blockID, reason: .programmatic)
+                    self.parent.onFocusRequestHandled()
+                    return
+                }
+
+                guard NativeTextFocusConfirmationPolicy.shouldRetry(
+                    didPerformFocus: true,
+                    isFirstResponderAfterConfirmation: isConfirmedFocused,
+                    remainingAttempts: remainingAttempts
+                ) else {
+                    self.focusRequestState.finish(requestID: focusRequestID, didFocus: false)
+                    EditorLog.focus.debug(
+                        "editor_focus_request_confirmation_failed block_id=\(self.parent.blockID, privacy: .public)"
                     )
                     return
                 }

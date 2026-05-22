@@ -45,6 +45,8 @@ private struct EditorEditingCommands: Commands {
     @FocusedValue(\.navigateBackAction) private var navigateBackAction
     @FocusedValue(\.navigateForwardAction) private var navigateForwardAction
     @FocusedValue(\.showAllDocumentsAction) private var showAllDocumentsAction
+    @FocusedValue(\.showFavoritesAction) private var showFavoritesAction
+    @FocusedValue(\.toggleFocusModeAction) private var toggleFocusModeAction
     @FocusedValue(\.quickOpenAction) private var quickOpenAction
 
     @AppStorage(EditorShortcutCommand.newDocument.userDefaultsKey) private var newDocumentShortcut = EditorShortcutCommand.newDocument.defaultShortcutRawValue
@@ -54,6 +56,8 @@ private struct EditorEditingCommands: Commands {
     @AppStorage(EditorShortcutCommand.convertBlockToPage.userDefaultsKey) private var convertBlockToPageShortcut = EditorShortcutCommand.convertBlockToPage.defaultShortcutRawValue
     @AppStorage(EditorShortcutCommand.quickOpen.userDefaultsKey) private var quickOpenShortcut = EditorShortcutCommand.quickOpen.defaultShortcutRawValue
     @AppStorage(EditorShortcutCommand.showAllDocuments.userDefaultsKey) private var showAllDocumentsShortcut = EditorShortcutCommand.showAllDocuments.defaultShortcutRawValue
+    @AppStorage(EditorShortcutCommand.showFavorites.userDefaultsKey) private var showFavoritesShortcut = EditorShortcutCommand.showFavorites.defaultShortcutRawValue
+    @AppStorage(EditorShortcutCommand.toggleFocusMode.userDefaultsKey) private var toggleFocusModeShortcut = EditorShortcutCommand.toggleFocusMode.defaultShortcutRawValue
     @AppStorage(EditorShortcutCommand.insertMarkdownLink.userDefaultsKey) private var insertMarkdownLinkShortcut = EditorShortcutCommand.insertMarkdownLink.defaultShortcutRawValue
 
     var body: some Commands {
@@ -78,7 +82,7 @@ private struct EditorEditingCommands: Commands {
             .editorKeyboardShortcut(navigateForwardShortcut, fallback: .navigateForward)
             .disabled(navigateForwardAction == nil)
 
-            Button("跳到今天") {
+            Button("跳转到今日笔记") {
                 openTodayAction?()
             }
             .editorKeyboardShortcut(openTodayShortcut, fallback: .openToday)
@@ -97,6 +101,20 @@ private struct EditorEditingCommands: Commands {
             }
             .editorKeyboardShortcut(showAllDocumentsShortcut, fallback: .showAllDocuments)
             .disabled(showAllDocumentsAction == nil)
+
+            Button("收藏") {
+                showFavoritesAction?()
+            }
+            .editorKeyboardShortcut(showFavoritesShortcut, fallback: .showFavorites)
+            .disabled(showFavoritesAction == nil)
+        }
+
+        CommandMenu("视图") {
+            Button("专注模式") {
+                toggleFocusModeAction?()
+            }
+            .editorKeyboardShortcut(toggleFocusModeShortcut, fallback: .toggleFocusMode)
+            .disabled(toggleFocusModeAction == nil)
         }
 
         CommandGroup(after: .textEditing) {
@@ -131,68 +149,62 @@ private struct EditorSettingsView: View {
     @AppStorage(EditorContentFont.appStorageKey) private var contentFontRawValue = EditorContentFont.defaultRawValue
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("外观")
-                    .font(.title3.weight(.semibold))
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                SettingsSection(title: "外观") {
+                    HStack(spacing: 16) {
+                        Text("正文字体")
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+                            .frame(width: 136, alignment: .leading)
 
-            VStack(spacing: 0) {
-                HStack(spacing: 16) {
-                    Text("正文字体")
-                        .font(.body.weight(.medium))
-                        .frame(width: 112, alignment: .leading)
+                        Spacer(minLength: 16)
 
-                    Spacer(minLength: 16)
+                        Picker("正文字体", selection: $contentFontRawValue) {
+                            ForEach(EditorContentFont.allCases) { font in
+                                Text(font.displayName).tag(font.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 190, alignment: .trailing)
+                        .accessibilityIdentifier("editor.settings.content-font")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
 
-                    Picker("正文字体", selection: $contentFontRawValue) {
-                        ForEach(EditorContentFont.allCases) { font in
-                            Text(font.displayName).tag(font.rawValue)
+                SettingsSection(title: "快捷键") {
+                    VStack(spacing: 0) {
+                        ForEach(Array(EditorShortcutCommand.visibleCommands.enumerated()), id: \.element.id) { index, command in
+                            ShortcutSettingRow(command: command)
+                            if index < EditorShortcutCommand.visibleCommands.count - 1 {
+                                Divider()
+                                    .padding(.leading, 168)
+                                    .opacity(0.55)
+                            }
                         }
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 190, alignment: .trailing)
-                    .accessibilityIdentifier("editor.settings.content-font")
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-            }
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
-            )
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("快捷键")
-                    .font(.title3.weight(.semibold))
-            }
-
-            VStack(spacing: 0) {
-                ForEach(Array(EditorShortcutCommand.visibleCommands.enumerated()), id: \.element.id) { index, command in
-                    ShortcutSettingRow(command: command)
-                    if index < EditorShortcutCommand.visibleCommands.count - 1 {
-                        Divider()
-                            .padding(.leading, 144)
+                HStack(spacing: 16) {
+                    Spacer()
+                    Button {
+                        restoreDefaults()
+                    } label: {
+                        Label("恢复默认", systemImage: "arrow.counterclockwise")
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .tint(EditorDesignTokens.Colors.accent.color)
                 }
             }
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
-            )
-
-            HStack {
-                Spacer()
-                Button("恢复默认") {
-                    restoreDefaults()
-                }
-            }
+            .padding(28)
         }
-        .padding(28)
-        .frame(width: 520)
+        .scrollIndicators(.hidden)
+        .background(SettingsChrome.backgroundColor)
+        .frame(width: 620)
+        .frame(minHeight: 560)
     }
 
     private func restoreDefaults() {
@@ -203,9 +215,36 @@ private struct EditorSettingsView: View {
     }
 }
 
+private struct SettingsSection<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+
+            content
+                .background(SettingsChrome.surfaceColor, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(SettingsChrome.borderColor, lineWidth: 1)
+                )
+        }
+    }
+}
+
 private struct ShortcutSettingRow: View {
     let command: EditorShortcutCommand
     @AppStorage private var rawValue: String
+    @State private var isRecording = false
+    @State private var feedback: String?
 
     init(command: EditorShortcutCommand) {
         self.command = command
@@ -216,48 +255,250 @@ private struct ShortcutSettingRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Text(command.title)
                 .font(.body.weight(.medium))
-                .frame(width: 112, alignment: .leading)
+                .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+                .frame(width: 154, alignment: .leading)
 
-            Spacer(minLength: 16)
+            Spacer(minLength: 12)
 
-            validationView
+            statusView
 
-            TextField(command.defaultShortcutRawValue, text: $rawValue)
-                .textFieldStyle(.plain)
-                .monospaced()
-                .multilineTextAlignment(.trailing)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .frame(width: 154)
-                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(shortcutIsValid ? Color(nsColor: .separatorColor).opacity(0.4) : .red.opacity(0.65), lineWidth: 1)
+            ShortcutKeyCapsule(
+                displayValue: shortcut?.displayValue ?? "无效",
+                isRecording: isRecording,
+                isInvalid: statusMessage != nil
+            )
+            .accessibilityIdentifier("editor.shortcut.value.\(command.rawValue)")
+
+            Button {
+                isRecording.toggle()
+                if isRecording {
+                    feedback = nil
+                }
+            } label: {
+                ShortcutRecordButtonLabel(isRecording: isRecording)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("editor.shortcut.record.\(command.rawValue)")
+            .background(
+                ShortcutCaptureHost(
+                    isRecording: $isRecording,
+                    onCapture: applyRecordedShortcut,
+                    onInvalidCapture: {
+                        feedback = "需要修饰键"
+                        isRecording = false
+                    },
+                    onCancel: {
+                        feedback = nil
+                        isRecording = false
+                    }
                 )
-                .accessibilityIdentifier("editor.shortcut.\(command.rawValue)")
+                .frame(width: 0, height: 0)
+            )
+
+            Button {
+                rawValue = command.defaultShortcutRawValue
+                feedback = nil
+                isRecording = false
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("恢复默认")
+            .accessibilityLabel("恢复默认")
+            .accessibilityIdentifier("editor.shortcut.reset.\(command.rawValue)")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
     }
 
-    private var shortcutIsValid: Bool {
-        EditorKeyboardShortcut(rawValue: rawValue) != nil
+    private var shortcut: EditorKeyboardShortcut? {
+        EditorKeyboardShortcut(rawValue: rawValue)
+    }
+
+    private var statusMessage: String? {
+        if let feedback {
+            return feedback
+        }
+        guard shortcut != nil else {
+            return "不可用"
+        }
+        if let conflict = EditorShortcutConfiguration().conflictingCommand(for: rawValue, excluding: command) {
+            return "和 \(conflict.title) 冲突"
+        }
+        return nil
     }
 
     @ViewBuilder
-    private var validationView: some View {
-        if shortcutIsValid {
-            EmptyView()
-        } else {
-            Text("不可用")
+    private var statusView: some View {
+        if let statusMessage {
+            Text(statusMessage)
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.red)
+                .foregroundStyle(SettingsChrome.dangerColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .frame(width: 108, alignment: .trailing)
+                .accessibilityIdentifier("editor.shortcut.status.\(command.rawValue)")
+        } else {
+            Color.clear
+                .frame(width: 108, height: 1)
+        }
+    }
+
+    private func applyRecordedShortcut(_ recordedRawValue: String) {
+        guard let recordedShortcut = EditorKeyboardShortcut(rawValue: recordedRawValue) else {
+            feedback = "不可用"
+            isRecording = false
+            return
+        }
+
+        if let conflict = EditorShortcutConfiguration().conflictingCommand(
+            for: recordedShortcut.rawValue,
+            excluding: command
+        ) {
+            feedback = "和 \(conflict.title) 冲突"
+            isRecording = false
+            return
+        }
+
+        rawValue = recordedShortcut.rawValue
+        feedback = nil
+        isRecording = false
+    }
+}
+
+private struct ShortcutRecordButtonLabel: View {
+    let isRecording: Bool
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: isRecording ? "record.circle.fill" : "record.circle")
+                .font(.system(size: 13, weight: .semibold))
+            Text(isRecording ? "按键" : "录制")
+                .font(.caption.weight(.semibold))
+        }
+        .foregroundStyle(isRecording ? Color.white : EditorDesignTokens.Colors.primaryText.color)
+        .frame(width: 68, height: 28)
+        .background(
+            isRecording
+                ? SettingsChrome.recordingColor
+                : SettingsChrome.subtleControlColor,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(isRecording ? Color.clear : SettingsChrome.borderColor, lineWidth: 1)
+        )
+    }
+}
+
+private struct ShortcutKeyCapsule: View {
+    let displayValue: String
+    let isRecording: Bool
+    let isInvalid: Bool
+
+    var body: some View {
+        Text(isRecording ? "录制中" : displayValue)
+            .font(.system(.body, design: .monospaced).weight(.semibold))
+            .foregroundStyle(isInvalid ? SettingsChrome.dangerColor : EditorDesignTokens.Colors.primaryText.color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .frame(width: 112, height: 30)
+            .background(keyBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        isRecording
+                            ? SettingsChrome.recordingColor.opacity(0.75)
+                            : isInvalid
+                                ? SettingsChrome.dangerColor.opacity(0.65)
+                                : SettingsChrome.keyBorderColor,
+                        lineWidth: 1
+                    )
+            )
+    }
+
+    private var keyBackground: Color {
+        if isRecording {
+            return SettingsChrome.recordingColor.opacity(0.10)
+        }
+        if isInvalid {
+            return SettingsChrome.dangerColor.opacity(0.08)
+        }
+        return SettingsChrome.keycapColor
+    }
+}
+
+private enum SettingsChrome {
+    static let backgroundColor = EditorDesignTokens.Colors.appBackground.color
+    static let surfaceColor = Color.white.opacity(0.94)
+    static let subtleControlColor = Color(red: 0.952, green: 0.953, blue: 0.948)
+    static let keycapColor = Color(red: 0.982, green: 0.982, blue: 0.976)
+    static let borderColor = EditorDesignTokens.Colors.border.color.opacity(0.80)
+    static let keyBorderColor = Color(red: 0.835, green: 0.842, blue: 0.850)
+    static let recordingColor = EditorDesignTokens.Colors.accent.color
+    static let dangerColor = Color(red: 0.78, green: 0.12, blue: 0.16)
+}
+
+private struct ShortcutCaptureHost: NSViewRepresentable {
+    @Binding var isRecording: Bool
+    let onCapture: (String) -> Void
+    let onInvalidCapture: () -> Void
+    let onCancel: () -> Void
+
+    func makeNSView(context: Context) -> ShortcutCaptureNSView {
+        let view = ShortcutCaptureNSView(frame: .zero)
+        view.onCapture = onCapture
+        view.onInvalidCapture = onInvalidCapture
+        view.onCancel = onCancel
+        return view
+    }
+
+    func updateNSView(_ nsView: ShortcutCaptureNSView, context: Context) {
+        nsView.onCapture = onCapture
+        nsView.onInvalidCapture = onInvalidCapture
+        nsView.onCancel = onCancel
+        if isRecording {
+            DispatchQueue.main.async {
+                nsView.window?.makeFirstResponder(nsView)
+            }
+        } else if nsView.window?.firstResponder === nsView {
+            DispatchQueue.main.async {
+                nsView.window?.makeFirstResponder(nil)
+            }
+        }
+    }
+
+    final class ShortcutCaptureNSView: NSView {
+        var onCapture: (String) -> Void = { _ in }
+        var onInvalidCapture: () -> Void = {}
+        var onCancel: () -> Void = {}
+
+        override var acceptsFirstResponder: Bool {
+            true
+        }
+
+        override func keyDown(with event: NSEvent) {
+            if event.keyCode == 53 {
+                onCancel()
+                return
+            }
+            guard let rawValue = event.editorShortcutRawValue else {
+                NSSound.beep()
+                onInvalidCapture()
+                return
+            }
+            onCapture(rawValue)
         }
     }
 }
+
 #endif
 
 #if os(macOS)
