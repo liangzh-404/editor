@@ -35,7 +35,7 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadStartsInRecentModeAndDiaryStillOpensDailyPage() throws {
+    func testColdLaunchOpensTodayDiaryAndQueuesCompactEditorNavigation() throws {
         let database = try migratedDatabase()
         defer { database.close() }
         let repository = PageRepository(database: database)
@@ -49,18 +49,58 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         try viewModel.load()
 
-        XCTAssertEqual(viewModel.selectedCollection, .recent)
-        XCTAssertEqual(viewModel.selectedPage?.title, "欢迎")
-        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["开始用块写作。"])
-
-        viewModel.selectCollection(.diary)
-
         XCTAssertEqual(viewModel.selectedCollection, .diary)
         XCTAssertNil(viewModel.activeDiaryEntry)
         XCTAssertEqual(viewModel.selectedPage?.title, "2026年5月16日 星期六")
         XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph])
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
         XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [viewModel.selectedPageID])
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, viewModel.selectedPageID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, viewModel.visibleBlocks.first?.id)
+    }
+
+    @MainActor
+    func testColdLaunchFallsBackToTodayRecentNoteWithinOneHourWhenDiaryIsUnavailable() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let now = Self.date(year: 2026, month: 5, day: 16, hour: 10, minute: 30)
+        let oldPageID = try XCTUnwrap(snapshot.selectedPageID)
+        try updatePageTimestamps(
+            database: database,
+            pageID: oldPageID,
+            createdAt: Self.isoString(year: 2026, month: 5, day: 15, hour: 8, minute: 0),
+            updatedAt: Self.isoString(year: 2026, month: 5, day: 15, hour: 8, minute: 0)
+        )
+        try insertPage(
+            database: database,
+            id: "page-yesterday",
+            workspaceID: workspaceID,
+            title: "昨天笔记",
+            createdAt: Self.isoString(year: 2026, month: 5, day: 15, hour: 23, minute: 50),
+            updatedAt: Self.isoString(year: 2026, month: 5, day: 15, hour: 23, minute: 50)
+        )
+        try insertPage(
+            database: database,
+            id: "page-fresh",
+            workspaceID: workspaceID,
+            title: "一小时内笔记",
+            createdAt: Self.isoString(year: 2026, month: 5, day: 16, hour: 10, minute: 0),
+            updatedAt: Self.isoString(year: 2026, month: 5, day: 16, hour: 10, minute: 0)
+        )
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            currentDateProvider: { now },
+            diaryCalendar: Self.gregorianCalendar
+        )
+
+        try viewModel.load()
+
+        XCTAssertEqual(viewModel.selectedCollection, .recent)
+        XCTAssertEqual(viewModel.selectedPageID, "page-fresh")
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, "page-fresh")
     }
 
     @MainActor
@@ -149,6 +189,63 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
         XCTAssertNil(viewModel.pendingFocusBlockID)
         XCTAssertEqual(viewModel.pendingPageTitleFocusPageID, newPageID)
+    }
+
+    @MainActor
+    func testHomeScreenDiaryQuickActionOpensTodayDiary() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database),
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 16) },
+            diaryCalendar: Self.gregorianCalendar
+        )
+        try viewModel.load()
+        viewModel.selectCollection(.allDocuments)
+
+        XCTAssertTrue(viewModel.performHomeScreenQuickAction(.openDiary))
+
+        XCTAssertEqual(viewModel.selectedCollection, .diary)
+        XCTAssertEqual(viewModel.selectedPage?.title, "2026年5月16日 星期六")
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, viewModel.selectedPageID)
+    }
+
+    @MainActor
+    func testHomeScreenCreateNoteQuickActionCreatesNoteAndFocusesTitle() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertTrue(viewModel.performHomeScreenQuickAction(.createNote))
+
+        let pageID = try XCTUnwrap(viewModel.selectedPageID)
+        XCTAssertEqual(viewModel.selectedPage?.title, "")
+        XCTAssertEqual(PageTitleDisplayPolicy.listTitle(for: viewModel.selectedPage?.title ?? ""), "未命名")
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, pageID)
+        XCTAssertEqual(viewModel.pendingPageTitleFocusPageID, pageID)
+    }
+
+    @MainActor
+    func testHomeScreenQuickSearchActionQueuesCompactSearchNavigation() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertTrue(viewModel.performHomeScreenQuickAction(.quickSearch))
+
+        XCTAssertEqual(viewModel.selectedCollection, .search)
+        XCTAssertEqual(viewModel.pendingCompactCollectionNavigation, .search)
+        XCTAssertEqual(viewModel.consumePendingCompactCollectionNavigation(), .search)
+        XCTAssertNil(viewModel.pendingCompactCollectionNavigation)
     }
 
     @MainActor
@@ -392,6 +489,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             diaryCalendar: Self.gregorianCalendar
         )
         try viewModel.load()
+        viewModel.selectCollection(.recent)
         viewModel.selectPage(id: welcomePageID)
 
         XCTAssertTrue(viewModel.openTodayForUI())
@@ -2472,6 +2570,7 @@ final class WorkspaceViewModelTests: XCTestCase {
             diaryRepository: DiaryRepository(database: database)
         )
         try viewModel.load()
+        viewModel.selectCollection(.recent)
         viewModel.selectPage(id: pageID)
 
         try viewModel.importMarkdownToCurrentPage(
@@ -4281,8 +4380,36 @@ final class WorkspaceViewModelTests: XCTestCase {
         return calendar
     }
 
-    private static func date(year: Int, month: Int, day: Int) -> Date {
-        gregorianCalendar.date(from: DateComponents(year: year, month: month, day: day))!
+    private static func date(
+        year: Int,
+        month: Int,
+        day: Int,
+        hour: Int = 0,
+        minute: Int = 0
+    ) -> Date {
+        gregorianCalendar.date(
+            from: DateComponents(
+                calendar: gregorianCalendar,
+                timeZone: gregorianCalendar.timeZone,
+                year: year,
+                month: month,
+                day: day,
+                hour: hour,
+                minute: minute
+            )
+        )!
+    }
+
+    private static func isoString(
+        year: Int,
+        month: Int,
+        day: Int,
+        hour: Int,
+        minute: Int
+    ) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date(year: year, month: month, day: day, hour: hour, minute: minute))
     }
 
     private func makeSourceFile(name: String, contents: String) throws -> URL {
@@ -4303,7 +4430,9 @@ final class WorkspaceViewModelTests: XCTestCase {
         database: SQLiteDatabase,
         id: String,
         workspaceID: String,
-        title: String
+        title: String,
+        createdAt: String? = nil,
+        updatedAt: String? = nil
     ) throws {
         let now = ISO8601DateFormatter().string(from: Date())
         try database.execute(
@@ -4316,8 +4445,29 @@ final class WorkspaceViewModelTests: XCTestCase {
                 .text(workspaceID),
                 .text(title),
                 .text("000002"),
-                .text(now),
-                .text(now)
+                .text(createdAt ?? now),
+                .text(updatedAt ?? now)
+            ]
+        )
+    }
+
+    private func updatePageTimestamps(
+        database: SQLiteDatabase,
+        pageID: String,
+        createdAt: String,
+        updatedAt: String
+    ) throws {
+        try database.execute(
+            """
+            UPDATE pages
+            SET created_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .text(createdAt),
+                .text(updatedAt),
+                .text(pageID)
             ]
         )
     }

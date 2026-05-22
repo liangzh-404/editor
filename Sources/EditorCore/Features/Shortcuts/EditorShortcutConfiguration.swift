@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 #if os(macOS)
 import AppKit
+#elseif os(iOS)
+import UIKit
 #endif
 
 enum EditorShortcutCommand: String, CaseIterable, Identifiable {
@@ -315,3 +317,49 @@ extension NSEvent {
     }
 }
 #endif
+
+enum EditorHomeScreenQuickAction: String, CaseIterable, Identifiable, Sendable {
+    case openDiary = "com.liangzhang.editor.ios.open-diary"
+    case createNote = "com.liangzhang.editor.ios.create-note"
+    case quickSearch = "com.liangzhang.editor.ios.quick-search"
+
+    var id: String {
+        rawValue
+    }
+}
+
+struct EditorHomeScreenQuickActionRequest: Equatable, Identifiable {
+    let id = UUID()
+    let action: EditorHomeScreenQuickAction
+}
+
+@MainActor
+final class EditorHomeScreenQuickActionCenter: ObservableObject {
+    static let shared = EditorHomeScreenQuickActionCenter()
+
+    @Published private(set) var latestRequest: EditorHomeScreenQuickActionRequest?
+
+    private init() {}
+
+    func request(_ action: EditorHomeScreenQuickAction) {
+        latestRequest = EditorHomeScreenQuickActionRequest(action: action)
+    }
+
+#if os(iOS)
+    @discardableResult
+    func request(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
+        guard let action = EditorHomeScreenQuickAction(rawValue: shortcutItem.type) else {
+            return false
+        }
+        request(action)
+        return true
+    }
+#endif
+
+    func consume(_ request: EditorHomeScreenQuickActionRequest) {
+        guard latestRequest?.id == request.id else {
+            return
+        }
+        latestRequest = nil
+    }
+}

@@ -362,11 +362,16 @@ struct ForegroundSyncActivationPolicy {
 
 struct EditorShellView: View {
     @StateObject private var viewModel: WorkspaceViewModel
+    @ObservedObject private var homeScreenQuickActionCenter: EditorHomeScreenQuickActionCenter
     @Environment(\.scenePhase) private var scenePhase
     @State private var foregroundSyncActivationPolicy = ForegroundSyncActivationPolicy()
 
-    init(viewModel: WorkspaceViewModel) {
+    init(
+        viewModel: WorkspaceViewModel,
+        homeScreenQuickActionCenter: EditorHomeScreenQuickActionCenter = .shared
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel)
+        self.homeScreenQuickActionCenter = homeScreenQuickActionCenter
     }
 
     var body: some View {
@@ -379,15 +384,27 @@ struct EditorShellView: View {
                 if foregroundSyncActivationPolicy.shouldSync(for: scenePhase) {
                     viewModel.syncAfterActivation()
                 }
+                handleHomeScreenQuickActionIfNeeded(homeScreenQuickActionCenter.latestRequest)
             }
             .onChange(of: scenePhase) { _, phase in
                 if foregroundSyncActivationPolicy.shouldSync(for: phase) {
                     viewModel.syncAfterActivation()
                 }
             }
+            .onChange(of: homeScreenQuickActionCenter.latestRequest) { _, request in
+                handleHomeScreenQuickActionIfNeeded(request)
+            }
             .task(id: scenePhase) {
                 await runForegroundSyncPollingLoop(for: scenePhase)
             }
+    }
+
+    private func handleHomeScreenQuickActionIfNeeded(_ request: EditorHomeScreenQuickActionRequest?) {
+        guard let request else {
+            return
+        }
+        _ = viewModel.performHomeScreenQuickAction(request.action)
+        homeScreenQuickActionCenter.consume(request)
     }
 
     private func runForegroundSyncPollingLoop(for phase: ScenePhase) async {
@@ -722,7 +739,7 @@ private struct ThreeColumnEditorShell: View {
             toggleFocusMode()
         })
         .focusedValue(\.quickOpenAction, {
-            viewModel.selectCollection(.search)
+            _ = viewModel.openQuickSearchForUI()
         })
 #if os(macOS)
         .background(
@@ -1156,6 +1173,7 @@ private struct CompactEditorShell: View {
         self.viewModel = viewModel
         let initialPath = CompactShellRoutePlanner.initialPath(
             snapshot: viewModel.snapshot,
+            selectedPageID: viewModel.selectedPageID,
             selectedCollection: viewModel.selectedCollection
         )
         _path = State(initialValue: initialPath)
@@ -1201,7 +1219,7 @@ private struct CompactEditorShell: View {
                 }
             }
             .onAppear {
-                pushInitialPageIfNeeded()
+                pushOnAppearNavigationIfNeeded()
             }
             .onChange(of: viewModel.selectedPageID) { _, _ in
                 pushInitialPageIfNeeded()
@@ -1215,7 +1233,45 @@ private struct CompactEditorShell: View {
                 }
                 pushPageIfNeeded(pageID)
             }
+            .onChange(of: viewModel.pendingCompactCollectionNavigation) { _, _ in
+                _ = pushPendingCollectionIfNeeded()
+            }
         }
+    }
+
+    private func pushOnAppearNavigationIfNeeded() {
+        let plannedPath = CompactShellPendingNavigationPlanner.onAppearPath(
+            snapshot: viewModel.snapshot,
+            selectedPageID: viewModel.selectedPageID,
+            selectedCollection: viewModel.selectedCollection,
+            pendingCollection: viewModel.pendingCompactCollectionNavigation,
+            pendingPageID: viewModel.pendingCompactPageNavigationID,
+            didPushInitialPage: didPushInitialPage
+        )
+
+        guard !plannedPath.isEmpty else {
+            return
+        }
+
+        if viewModel.pendingCompactCollectionNavigation != nil {
+            _ = viewModel.consumePendingCompactCollectionNavigation()
+            _ = viewModel.consumePendingCompactPageNavigationID()
+        } else if viewModel.pendingCompactPageNavigationID != nil {
+            _ = viewModel.consumePendingCompactPageNavigationID()
+        }
+        path = plannedPath
+        didPushInitialPage = true
+    }
+
+    @discardableResult
+    private func pushPendingCollectionIfNeeded() -> Bool {
+        guard let collection = viewModel.consumePendingCompactCollectionNavigation() else {
+            return false
+        }
+        _ = viewModel.consumePendingCompactPageNavigationID()
+        path = [CompactShellRoutePlanner.documentListRoute(selectedCollection: collection)]
+        didPushInitialPage = true
+        return true
     }
 
     private func pushInitialPageIfNeeded() {
@@ -4423,6 +4479,40 @@ enum CompactShellScreen: Int, Equatable, Sendable {
     case editor = 3
 }
 
+enum CompactShellPendingNavigationPlanner {
+    static func onAppearPath(
+        snapshot: WorkspaceSnapshot,
+        selectedPageID: String?,
+        selectedCollection: WorkspaceCollection,
+        pendingCollection: WorkspaceCollection?,
+        pendingPageID: String?,
+        didPushInitialPage: Bool
+    ) -> [CompactRoute] {
+        if let pendingCollection {
+            return [CompactShellRoutePlanner.documentListRoute(selectedCollection: pendingCollection)]
+        }
+
+        if let pendingPageID,
+           snapshot.pages.contains(where: { $0.id == pendingPageID }) {
+            return CompactShellRoutePlanner.pathForPage(
+                pendingPageID,
+                snapshot: snapshot,
+                selectedCollection: selectedCollection
+            )
+        }
+
+        guard !didPushInitialPage else {
+            return []
+        }
+
+        return CompactShellRoutePlanner.initialPath(
+            snapshot: snapshot,
+            selectedPageID: selectedPageID,
+            selectedCollection: selectedCollection
+        )
+    }
+}
+
 enum CompactShellRoutePlanner {
     static let defaultActiveScreen = CompactShellScreen.editor
 
@@ -4430,8 +4520,20 @@ enum CompactShellRoutePlanner {
         snapshot: WorkspaceSnapshot,
         selectedCollection: WorkspaceCollection
     ) -> [CompactRoute] {
-        guard let pageID = CompactInitialNavigationResolver.initialPageID(
+        initialPath(
+            snapshot: snapshot,
             selectedPageID: snapshot.selectedPageID,
+            selectedCollection: selectedCollection
+        )
+    }
+
+    static func initialPath(
+        snapshot: WorkspaceSnapshot,
+        selectedPageID: String?,
+        selectedCollection: WorkspaceCollection
+    ) -> [CompactRoute] {
+        guard let pageID = CompactInitialNavigationResolver.initialPageID(
+            selectedPageID: selectedPageID,
             availablePageIDs: snapshot.pages.map(\.id)
         ) else {
             return []

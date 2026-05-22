@@ -1863,6 +1863,101 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testCompactShellInitialPathUsesRuntimeSelectionWhenSnapshotSelectionIsStale() {
+        let workspaceID = "workspace"
+        let stalePage = PageSummary(id: "page-stale", workspaceID: workspaceID, title: "Stale")
+        let diaryPage = PageSummary(id: "page-diary", workspaceID: workspaceID, title: "Diary")
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [stalePage, diaryPage],
+            blocks: [],
+            attachments: [],
+            diaryPages: [
+                DiaryPageSnapshot(
+                    pageID: diaryPage.id,
+                    workspaceID: workspaceID,
+                    diaryDate: "2026-05-22"
+                )
+            ],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: stalePage.id
+        )
+
+        XCTAssertEqual(
+            CompactShellRoutePlanner.initialPath(
+                snapshot: snapshot,
+                selectedPageID: diaryPage.id,
+                selectedCollection: .diary
+            ),
+            [.collection(.diary), .page(diaryPage.id)]
+        )
+    }
+
+    func testCompactShellOnAppearConsumesPendingPageEvenAfterInitialPathWasPushed() {
+        let workspaceID = "workspace"
+        let currentPage = PageSummary(id: "page-current", workspaceID: workspaceID, title: "Current")
+        let diaryPage = PageSummary(id: "page-diary", workspaceID: workspaceID, title: "Diary")
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [currentPage, diaryPage],
+            blocks: [],
+            attachments: [],
+            diaryPages: [
+                DiaryPageSnapshot(
+                    pageID: diaryPage.id,
+                    workspaceID: workspaceID,
+                    diaryDate: "2026-05-22"
+                )
+            ],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: currentPage.id
+        )
+
+        XCTAssertEqual(
+            CompactShellPendingNavigationPlanner.onAppearPath(
+                snapshot: snapshot,
+                selectedPageID: currentPage.id,
+                selectedCollection: .recent,
+                pendingCollection: nil,
+                pendingPageID: diaryPage.id,
+                didPushInitialPage: true
+            ),
+            [.collection(.diary), .page(diaryPage.id)]
+        )
+    }
+
+    func testCompactShellOnAppearPrefersPendingCollectionOverStalePendingPage() {
+        let workspaceID = "workspace"
+        let diaryPage = PageSummary(id: "page-diary", workspaceID: workspaceID, title: "Diary")
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [diaryPage],
+            blocks: [],
+            attachments: [],
+            diaryPages: [
+                DiaryPageSnapshot(
+                    pageID: diaryPage.id,
+                    workspaceID: workspaceID,
+                    diaryDate: "2026-05-22"
+                )
+            ],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: diaryPage.id
+        )
+
+        XCTAssertEqual(
+            CompactShellPendingNavigationPlanner.onAppearPath(
+                snapshot: snapshot,
+                selectedPageID: diaryPage.id,
+                selectedCollection: .diary,
+                pendingCollection: .search,
+                pendingPageID: diaryPage.id,
+                didPushInitialPage: true
+            ),
+            [.collection(.search)]
+        )
+    }
+
     func testCompactShellRevealPageListUsesCurrentDocumentCollection() {
         XCTAssertEqual(
             CompactShellRoutePlanner.documentListRoute(selectedCollection: .favorites),

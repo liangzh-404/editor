@@ -32,6 +32,33 @@
 	<array>
 		<string>LXGW WenK.ttf</string>
 	</array>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeDate</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>进入日记</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.liangzhang.editor.ios.open-diary</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeCompose</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>创建笔记</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.liangzhang.editor.ios.create-note</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeSearch</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>快捷搜索</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.liangzhang.editor.ios.quick-search</string>
+		</dict>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

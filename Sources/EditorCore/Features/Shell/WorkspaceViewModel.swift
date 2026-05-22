@@ -127,6 +127,39 @@ enum CompactPageNavigationResolver {
     }
 }
 
+enum WorkspaceColdLaunchSelectionResolver {
+    static let recentNoteInterval: TimeInterval = 3_600
+
+    static func recentNotePageID(
+        snapshot: WorkspaceSnapshot,
+        now: Date,
+        calendar: Calendar
+    ) -> String? {
+        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        return snapshot.pages.first { page in
+            guard !diaryPageIDs.contains(page.id),
+                  let updatedAtString = page.updatedAt,
+                  let updatedAt = date(from: updatedAtString) else {
+                return false
+            }
+
+            let age = now.timeIntervalSince(updatedAt)
+            return age >= 0
+                && age <= recentNoteInterval
+                && calendar.isDate(updatedAt, inSameDayAs: now)
+        }?.id
+    }
+
+    private static func date(from string: String) -> Date? {
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: string) {
+            return date
+        }
+        return ISO8601DateFormatter().date(from: string)
+    }
+}
+
 @MainActor
 final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var snapshot: WorkspaceSnapshot
@@ -146,6 +179,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var pendingFocusRequestID: UUID?
     @Published private(set) var pendingPageTitleFocusPageID: String?
     @Published private(set) var pendingCompactPageNavigationID: String?
+    @Published private(set) var pendingCompactCollectionNavigation: WorkspaceCollection?
     @Published private(set) var canUndoTextEdit = false
     @Published private(set) var canRedoTextEdit = false
     @Published private(set) var canUndoPageArchive = false
@@ -374,6 +408,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingFocusRequestID = nil
         pendingPageTitleFocusPageID = nil
         pendingCompactPageNavigationID = nil
+        pendingCompactCollectionNavigation = nil
         canUndoTextEdit = false
         canRedoTextEdit = false
         canUndoPageArchive = false
@@ -415,6 +450,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingFocusRequestID = nil
         pendingPageTitleFocusPageID = nil
         pendingCompactPageNavigationID = nil
+        pendingCompactCollectionNavigation = nil
         canUndoTextEdit = false
         canRedoTextEdit = false
         canUndoPageArchive = false
@@ -436,21 +472,44 @@ final class WorkspaceViewModel: ObservableObject {
         let previousSelectedPageID = selectedPageID
         let shouldRestorePreviousSelection = hasLoadedSnapshot
         let loadedSnapshot = try repository.loadWorkspaceSnapshot()
-        let shouldOpenDiary = diaryRepository != nil
-            && (previousSelectedCollection == .diary || loadedSnapshot.selectedPageID == nil)
         apply(snapshot: loadedSnapshot)
-        if shouldOpenDiary {
-            try openDailyDiaryPage(source: "load", recordHistory: false)
-        } else if shouldRestorePreviousSelection {
-            restoreSelectionAfterReload(
-                collection: previousSelectedCollection,
-                pageID: previousSelectedPageID
-            )
+        if shouldRestorePreviousSelection {
+            if previousSelectedCollection == .diary {
+                try openDailyDiaryPage(source: "load", recordHistory: false)
+            } else {
+                restoreSelectionAfterReload(
+                    collection: previousSelectedCollection,
+                    pageID: previousSelectedPageID
+                )
+            }
+        } else {
+            try selectColdLaunchDestination()
         }
         hasLoadedSnapshot = true
         try refreshDerivedState(rebuildSearchIndex: true)
         requestInitialEditorFocusIfNeeded(source: "load")
         requestInitialCompactPageNavigationIfNeeded(source: "load")
+    }
+
+    private func selectColdLaunchDestination() throws {
+        if diaryRepository != nil,
+           try openDailyDiaryPage(source: "cold_launch", recordHistory: false) != nil {
+            return
+        }
+
+        guard let recentPageID = WorkspaceColdLaunchSelectionResolver.recentNotePageID(
+            snapshot: snapshot,
+            now: currentDateProvider(),
+            calendar: diaryCalendar
+        ) else {
+            return
+        }
+
+        selectPage(id: recentPageID, collection: .recent, recordHistory: false)
+        pendingCompactPageNavigationID = recentPageID
+        EditorLog.render.debug(
+            "compact_page_navigation_queued page_id=\(recentPageID, privacy: .public) source=cold_launch_recent"
+        )
     }
 
     func refreshCloudKitAccountStatus() throws {
@@ -1137,6 +1196,26 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func openQuickSearchForUI() -> Bool {
+        selectedCollection = .search
+        updateSearchQuery("")
+        pendingCompactPageNavigationID = nil
+        pendingCompactCollectionNavigation = .search
+        EditorLog.render.debug("compact_collection_navigation_queued collection=search source=quick_search")
+        return true
+    }
+
+    func performHomeScreenQuickAction(_ action: EditorHomeScreenQuickAction) -> Bool {
+        switch action {
+        case .openDiary:
+            return createDailyDiaryForCompactUI() != nil
+        case .createNote:
+            return createNewDocumentForCompactUI() != nil
+        case .quickSearch:
+            return openQuickSearchForUI()
+        }
+    }
+
     func navigateBackForUI() -> Bool {
         do {
             return try navigateBack()
@@ -1337,6 +1416,14 @@ final class WorkspaceViewModel: ObservableObject {
             pendingCompactPageNavigationID = nil
         }
         return pendingCompactPageNavigationID
+    }
+
+    @discardableResult
+    func consumePendingCompactCollectionNavigation() -> WorkspaceCollection? {
+        defer {
+            pendingCompactCollectionNavigation = nil
+        }
+        return pendingCompactCollectionNavigation
     }
 
     func updateBlockText(blockID: String, text: String) throws {

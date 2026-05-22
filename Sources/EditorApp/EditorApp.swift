@@ -625,7 +625,34 @@ final class EditorIOSAppDelegate: NSObject, UIApplicationDelegate {
             hasCloudKitContainers: CloudKitEntitlementInspector.currentProcessHasCloudKitContainers(),
             registrar: application
         )
+        if let shortcutItem = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
+            _ = handleHomeScreenQuickAction(shortcutItem)
+            return false
+        }
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(
+            name: nil,
+            sessionRole: connectingSceneSession.role
+        )
+        if connectingSceneSession.role == .windowApplication {
+            configuration.delegateClass = EditorIOSSceneDelegate.self
+        }
+        return configuration
+    }
+
+    func application(
+        _ application: UIApplication,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        completionHandler(handleHomeScreenQuickAction(shortcutItem))
     }
 
     func application(
@@ -666,6 +693,52 @@ final class EditorIOSAppDelegate: NSObject, UIApplicationDelegate {
             payload: ["error": String(describing: error)]
         )
     }
+
+    private func handleHomeScreenQuickAction(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
+        dispatchHomeScreenQuickAction(shortcutItem, source: "app_delegate")
+    }
+}
+
+final class EditorIOSSceneDelegate: NSObject, UIWindowSceneDelegate {
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        guard let shortcutItem = connectionOptions.shortcutItem else {
+            return
+        }
+        _ = dispatchHomeScreenQuickAction(shortcutItem, source: "scene_will_connect")
+    }
+
+    func windowScene(
+        _ windowScene: UIWindowScene,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        completionHandler(dispatchHomeScreenQuickAction(shortcutItem, source: "scene_perform_action_completion"))
+    }
+}
+
+@discardableResult
+@MainActor
+private func dispatchHomeScreenQuickAction(
+    _ shortcutItem: UIApplicationShortcutItem,
+    source: String
+) -> Bool {
+    let accepted = EditorHomeScreenQuickActionCenter.shared.request(shortcutItem)
+    EditorLog.input.debug(
+        "home_screen_quick_action_received source=\(source, privacy: .public) type=\(shortcutItem.type, privacy: .public) accepted=\(accepted, privacy: .public)"
+    )
+    AppEnvironment.recordRuntimeDiagnostic(
+        eventName: "home_screen_quick_action_received",
+        payload: [
+            "source": source,
+            "type": shortcutItem.type,
+            "accepted": accepted
+        ]
+    )
+    return accepted
 }
 
 extension UIApplication: RemoteNotificationRegistering {}

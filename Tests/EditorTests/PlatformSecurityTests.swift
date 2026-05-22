@@ -95,6 +95,55 @@ final class PlatformSecurityTests: XCTestCase {
         XCTAssertEqual(plist["UIBackgroundModes"] as? [String], ["remote-notification"])
     }
 
+    func testIOSAppDeclaresHomeScreenQuickActionsForDiaryNoteAndSearch() throws {
+        let plist = try appPlist(named: "EditorIOS-Info.plist")
+        let items = try XCTUnwrap(plist["UIApplicationShortcutItems"] as? [[String: Any]])
+
+        XCTAssertEqual(
+            items.compactMap { $0["UIApplicationShortcutItemType"] as? String },
+            [
+                "com.liangzhang.editor.ios.open-diary",
+                "com.liangzhang.editor.ios.create-note",
+                "com.liangzhang.editor.ios.quick-search"
+            ]
+        )
+        XCTAssertEqual(
+            items.compactMap { $0["UIApplicationShortcutItemTitle"] as? String },
+            ["进入日记", "创建笔记", "快捷搜索"]
+        )
+    }
+
+    func testIOSAppDelegateDispatchesHomeScreenQuickActions() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/EditorApp/EditorApp.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("UIApplicationShortcutItem"))
+        XCTAssertTrue(source.contains("performActionFor shortcutItem"))
+        XCTAssertTrue(source.contains("EditorHomeScreenQuickActionCenter.shared.request"))
+    }
+
+    func testIOSSceneLifecycleDispatchesHomeScreenQuickActions() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/EditorApp/EditorApp.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("configurationForConnecting connectingSceneSession"))
+        XCTAssertTrue(source.contains("configuration.delegateClass = EditorIOSSceneDelegate.self"))
+        XCTAssertTrue(source.contains("final class EditorIOSSceneDelegate"))
+        XCTAssertTrue(source.contains("UIWindowSceneDelegate"))
+        XCTAssertTrue(source.contains("connectionOptions.shortcutItem"))
+        XCTAssertTrue(source.contains("windowScene("))
+        XCTAssertTrue(source.contains("performActionFor shortcutItem: UIApplicationShortcutItem"))
+        XCTAssertTrue(source.contains("scene_perform_action_completion"))
+    }
+
     func testIOSEntitlementsDeclareDevelopmentPushNotificationEnvironment() throws {
         let plist = try entitlementsPlist(named: "EditorIOS.entitlements")
 
