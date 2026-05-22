@@ -72,12 +72,12 @@ enum EditorDesignTokens {
     enum Layout {
         static let editorMaxWidth: Double = 680
         static let editorExpandedMaxWidth: Double = 1040
-        static let sidebarMinWidth: Double = 240
-        static let sidebarIdealWidth: Double = 288
-        static let sidebarMaxWidth: Double = 360
-        static let documentListMinWidth: Double = 300
-        static let documentListIdealWidth: Double = 360
-        static let documentListMaxWidth: Double = 460
+        static let sidebarMinWidth: Double = 180
+        static let sidebarIdealWidth: Double = 220
+        static let sidebarMaxWidth: Double = 320
+        static let documentListMinWidth: Double = 240
+        static let documentListIdealWidth: Double = 300
+        static let documentListMaxWidth: Double = 420
         static let documentListRowMinHeight: Double = 72
         static let documentListSelectedAccentWidth: Double = 3
         static let rowCornerRadius: Double = 8
@@ -287,6 +287,10 @@ struct EditorShowFavoritesActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct EditorToggleFocusModeActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 struct EditorQuickOpenActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
@@ -335,6 +339,11 @@ extension FocusedValues {
     var showFavoritesAction: (() -> Void)? {
         get { self[EditorShowFavoritesActionKey.self] }
         set { self[EditorShowFavoritesActionKey.self] = newValue }
+    }
+
+    var toggleFocusModeAction: (() -> Void)? {
+        get { self[EditorToggleFocusModeActionKey.self] }
+        set { self[EditorToggleFocusModeActionKey.self] = newValue }
     }
 
     var quickOpenAction: (() -> Void)? {
@@ -473,6 +482,7 @@ private struct ThreeColumnEditorShell: View {
                     availableTags: viewModel.snapshot.tags,
                     selectedPageTagIDs: viewModel.selectedPageTagIDs,
                     pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                    pendingFocusRequestID: viewModel.pendingFocusRequestID,
                     pendingPageTitleFocusPageID: viewModel.pendingPageTitleFocusPageID,
                     canUndoTextEdit: viewModel.canUndoTextEdit,
                     canRedoTextEdit: viewModel.canRedoTextEdit,
@@ -708,12 +718,54 @@ private struct ThreeColumnEditorShell: View {
         .focusedValue(\.showFavoritesAction, {
             viewModel.selectCollection(.favorites)
         })
+        .focusedValue(\.toggleFocusModeAction, {
+            toggleFocusMode()
+        })
         .focusedValue(\.quickOpenAction, {
             viewModel.selectCollection(.search)
         })
+#if os(macOS)
+        .background(
+            EditorGlobalShortcutBridge { command in
+                handleGlobalShortcut(command)
+            }
+            .frame(width: 0, height: 0)
+        )
+#endif
+    }
+
+    private func toggleFocusMode() {
+        displayMode = displayMode == .focus ? .standard : .focus
     }
 
 #if os(macOS)
+    private func handleGlobalShortcut(_ command: EditorShortcutCommand) -> Bool {
+        switch command {
+        case .newDocument:
+            return viewModel.createNewDocumentForUI()
+        case .openToday:
+            return viewModel.openTodayForUI()
+        case .navigateBack:
+            return viewModel.navigateBackForUI()
+        case .navigateForward:
+            return viewModel.navigateForwardForUI()
+        case .quickOpen:
+            viewModel.selectCollection(.search)
+            return true
+        case .showAllDocuments:
+            viewModel.selectCollection(.allDocuments)
+            return true
+        case .showFavorites:
+            viewModel.selectCollection(.favorites)
+            return true
+        case .toggleFocusMode:
+            toggleFocusMode()
+            return true
+        case .insertMarkdownLink, .convertBlockToPage:
+            return false
+        }
+    }
+
     private var desktopLayout: some View {
         HStack(alignment: .top, spacing: 0) {
             if displayMode.showsSidebar {
@@ -775,6 +827,7 @@ private struct ThreeColumnEditorShell: View {
                 availableTags: viewModel.snapshot.tags,
                 selectedPageTagIDs: viewModel.selectedPageTagIDs,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                pendingFocusRequestID: viewModel.pendingFocusRequestID,
                 pendingPageTitleFocusPageID: viewModel.pendingPageTitleFocusPageID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
                 canRedoTextEdit: viewModel.canRedoTextEdit,
@@ -1373,7 +1426,7 @@ private struct MobileQuickCreateButton: View {
                 )
         }
         .buttonStyle(.plain)
-        .contextMenu {
+	        .contextMenu {
             ForEach(MobileQuickCreateMenuModel.longPressActions, id: \.self) { action in
                 Button {
                     perform(action)
@@ -2651,6 +2704,20 @@ enum PageDragPayloadResolver {
     }
 }
 
+enum PageListRowActionTargetResolver {
+    static func pageIDs(
+        rowPageID: String,
+        selectedPageIDs: Set<String>,
+        visiblePageIDs: [String]
+    ) -> [String] {
+        PageDragPayloadResolver.pageIDsForDrag(
+            pageID: rowPageID,
+            selectedPageIDs: selectedPageIDs,
+            visiblePageIDs: visiblePageIDs
+        )
+    }
+}
+
 enum PageListSelectionRangeResolver {
     static func selection(
         anchorPageID: String,
@@ -2704,14 +2771,19 @@ enum PageListMarqueeStartPolicy {
 enum PageListKeyboardShortcutAction: Equatable, Sendable {
     case selectAllVisiblePages
     case selectRangeToSelectedPage
+    case archiveSelectedPages
 }
 
 enum PageListKeyboardShortcutActionResolver {
+    static let deleteBackwardKeyCode: UInt16 = 51
+    static let deleteForwardKeyCode: UInt16 = 117
+
     static func action(
         keyCode: UInt16,
         input: String?,
         modifiers: Set<BlockKeyboardShortcutModifier>,
         hasVisiblePages: Bool,
+        hasArchiveTargets: Bool,
         isTextEditing: Bool
     ) -> PageListKeyboardShortcutAction? {
         guard hasVisiblePages, !isTextEditing else {
@@ -2728,7 +2800,40 @@ enum PageListKeyboardShortcutActionResolver {
             return .selectRangeToSelectedPage
         }
 
+        if modifiers.isEmpty,
+           hasArchiveTargets,
+           keyCode == deleteBackwardKeyCode || keyCode == deleteForwardKeyCode {
+            return .archiveSelectedPages
+        }
+
         return nil
+    }
+}
+
+enum EditorPendingBlockFocusScheduleReason: Equatable, Sendable {
+    case pendingValueChanged
+    case pageChanged
+    case retry
+}
+
+enum EditorPendingBlockFocusSchedulePolicy {
+    static func shouldSchedule(
+        blockID: String?,
+        existingRequestBlockID: String?,
+        requestID: UUID?,
+        reason: EditorPendingBlockFocusScheduleReason
+    ) -> Bool {
+        guard blockID != nil else {
+            return false
+        }
+        if reason == .pageChanged || reason == .retry {
+            return true
+        }
+        if existingRequestBlockID == blockID,
+           requestID == nil {
+            return false
+        }
+        return true
     }
 }
 
@@ -4328,6 +4433,7 @@ private struct CompactPageDestination: View {
                 availableTags: viewModel.snapshot.tags,
                 selectedPageTagIDs: viewModel.selectedPageTagIDs,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                pendingFocusRequestID: viewModel.pendingFocusRequestID,
                 pendingPageTitleFocusPageID: viewModel.pendingPageTitleFocusPageID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
                 canRedoTextEdit: viewModel.canRedoTextEdit,
@@ -5197,12 +5303,6 @@ private struct PageListView: View {
                     archiveSection
                 }
 
-                if ArchiveUndoVisibilityPolicy.isVisible(
-                    canUndoPageArchive: viewModel.canUndoPageArchive,
-                    selectedCollection: viewModel.selectedCollection
-                ) {
-                    undoArchiveSection
-                }
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 22)
@@ -5223,11 +5323,17 @@ private struct PageListView: View {
             PageListKeyboardShortcutBridge(
                 isEnabled: !viewModel.visibleDocumentPages.isEmpty,
                 activationVersion: keyboardActivationVersion,
+                hasArchiveTargets: {
+                    !archiveKeyboardTargetPageIDs().isEmpty
+                },
                 onSelectAllVisiblePages: {
                     selectAllVisiblePages()
                 },
                 onSelectRangeToSelectedPage: {
                     selectPageRangeToSelectedPage()
+                },
+                onArchiveSelectedPages: {
+                    archiveSelectedPagesFromKeyboard()
                 }
             )
             .frame(width: 0, height: 0)
@@ -5241,6 +5347,16 @@ private struct PageListView: View {
         .onChange(of: viewModel.selectedCollection) { _, _ in
             clearPageBatchSelection()
             activatePageListKeyboardShortcuts()
+        }
+        .overlay(alignment: .bottom) {
+            if ArchiveUndoVisibilityPolicy.isVisible(
+                canUndoPageArchive: viewModel.canUndoPageArchive,
+                selectedCollection: viewModel.selectedCollection
+            ) {
+                undoArchiveToast
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 18)
+            }
         }
     }
 
@@ -5324,13 +5440,6 @@ private struct PageListView: View {
 
     private var archiveSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if ArchiveUndoVisibilityPolicy.isVisible(
-                canUndoPageArchive: viewModel.canUndoPageArchive,
-                selectedCollection: viewModel.selectedCollection
-            ) {
-                undoArchiveSection
-            }
-
             Text("归档")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -5351,16 +5460,37 @@ private struct PageListView: View {
         }
     }
 
-    private var undoArchiveSection: some View {
-        Button {
-            viewModel.undoLastPageArchiveForUI()
-        } label: {
-            Label("撤销归档", systemImage: "arrow.uturn.backward")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+    private var undoArchiveToast: some View {
+        HStack(spacing: 10) {
+            Label("已归档", systemImage: "archivebox")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+
+            Spacer(minLength: 8)
+
+            Button {
+                viewModel.undoLastPageArchiveForUI()
+            } label: {
+                Text("撤销")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(EditorDesignTokens.Colors.accent.color)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(EditorDesignTokens.Colors.border.color, lineWidth: 1)
+        )
+        .shadow(
+            color: EditorDesignTokens.Shadows.popoverSmall.swiftUIColor,
+            radius: CGFloat(EditorDesignTokens.Shadows.popoverSmall.radius),
+            x: CGFloat(EditorDesignTokens.Shadows.popoverSmall.x),
+            y: CGFloat(EditorDesignTokens.Shadows.popoverSmall.y)
+        )
         .accessibilityIdentifier("editor.undo-page-archive")
     }
 
@@ -5440,7 +5570,7 @@ private struct PageListView: View {
             }
 
             Button {
-                viewModel.archivePageForUI(id: page.id)
+                archiveRowPages(page.id)
             } label: {
                 Label("归档", systemImage: "archivebox")
             }
@@ -5465,7 +5595,7 @@ private struct PageListView: View {
     private func performSwipeAction(_ action: PageRowSwipeActionKind, for page: PageSummary) {
         switch action {
         case .archive:
-            viewModel.archivePageForUI(id: page.id)
+            archiveRowPages(page.id)
         case .favorite:
             viewModel.updatePageFavoriteForUI(
                 id: page.id,
@@ -5510,11 +5640,24 @@ private struct PageListView: View {
     }
 
     private func dragPageIDs(for pageID: String) -> [String] {
-        PageDragPayloadResolver.pageIDsForDrag(
-            pageID: pageID,
+        rowActionPageIDs(for: pageID)
+    }
+
+    private func rowActionPageIDs(for pageID: String) -> [String] {
+        PageListRowActionTargetResolver.pageIDs(
+            rowPageID: pageID,
             selectedPageIDs: selectedPageIDs,
             visiblePageIDs: viewModel.visibleDocumentPages.map(\.id)
         )
+    }
+
+    private func archiveRowPages(_ pageID: String) {
+        let pageIDs = rowActionPageIDs(for: pageID)
+        guard viewModel.archivePagesForUI(pageIDs: pageIDs) else {
+            return
+        }
+        selectedPageIDs.subtract(pageIDs)
+        activePageDragIDs = []
     }
 
     private func isPageBeingDragged(_ pageID: String) -> Bool {
@@ -5538,6 +5681,7 @@ private struct PageListView: View {
 
         selectedPageIDs = []
         selectionAnchorPageID = pageID
+        activatePageListKeyboardShortcuts()
         Task {
             await viewModel.selectPageForUI(id: pageID)
         }
@@ -5591,6 +5735,30 @@ private struct PageListView: View {
         let previousSelection = selectedPageIDs
         selectPageRange(to: selectedPageID)
         return selectedPageIDs != previousSelection || !selectedPageIDs.isEmpty
+    }
+
+    private func archiveKeyboardTargetPageIDs() -> [String] {
+        let visiblePageIDs = viewModel.visibleDocumentPages.map(\.id)
+        let selectedPageIDsInVisibleOrder = visiblePageIDs.filter { selectedPageIDs.contains($0) }
+        if !selectedPageIDsInVisibleOrder.isEmpty {
+            return selectedPageIDsInVisibleOrder
+        }
+        if let selectedPageID = viewModel.selectedPageID,
+           visiblePageIDs.contains(selectedPageID) {
+            return [selectedPageID]
+        }
+        return []
+    }
+
+    @discardableResult
+    private func archiveSelectedPagesFromKeyboard() -> Bool {
+        let pageIDs = archiveKeyboardTargetPageIDs()
+        guard viewModel.archivePagesForUI(pageIDs: pageIDs) else {
+            return false
+        }
+        selectedPageIDs.subtract(pageIDs)
+        activePageDragIDs = []
+        return true
     }
 
     private func clearPageBatchSelection() {
@@ -7245,6 +7413,7 @@ private struct EncryptedPageLockedView: View {
 private struct PageTitleUIKitTextField: UIViewRepresentable {
     @Binding var text: String
     let focusRequestID: UUID?
+    let contentFont: EditorContentFont
     let isEnabled: Bool
     let onEditingBegan: () -> Void
 
@@ -7257,10 +7426,7 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
         textField.borderStyle = .none
         textField.backgroundColor = .clear
         textField.placeholder = "未命名"
-        textField.font = UIFont.systemFont(
-            ofSize: CGFloat(EditorDesignTokens.Typography.documentTitleSize),
-            weight: .semibold
-        )
+        textField.font = Self.titleFont(contentFont: contentFont)
         textField.textColor = EditorDesignTokens.Colors.primaryText.uiColor
         textField.adjustsFontForContentSizeCategory = true
         textField.returnKeyType = .done
@@ -7272,6 +7438,7 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
     func updateUIView(_ textField: UITextField, context: Context) {
         context.coordinator.parent = self
         textField.isEnabled = isEnabled
+        textField.font = Self.titleFont(contentFont: contentFont)
         if !textField.isFirstResponder, textField.text != text {
             textField.text = text
         }
@@ -7406,6 +7573,15 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
             remainingAttempts == 24 ? .milliseconds(0) : .milliseconds(45)
         }
     }
+
+    private static func titleFont(contentFont: EditorContentFont) -> UIFont {
+        let size = CGFloat(EditorDesignTokens.Typography.documentTitleSize)
+        if let postScriptName = contentFont.pageTitlePostScriptName,
+           let font = UIFont(name: postScriptName, size: size) {
+            return font
+        }
+        return UIFont.systemFont(ofSize: size, weight: .semibold)
+    }
 }
 #endif
 
@@ -7426,6 +7602,7 @@ private struct EditorCanvasView: View {
     var availableTags: [TagSummary] = []
     var selectedPageTagIDs: [String] = []
     let pendingFocusBlockID: String?
+    var pendingFocusRequestID: UUID? = nil
     var pendingPageTitleFocusPageID: String? = nil
     let canUndoTextEdit: Bool
     let canRedoTextEdit: Bool
@@ -7545,6 +7722,7 @@ private struct EditorCanvasView: View {
                     PageTitleUIKitTextField(
                         text: pageTitleBinding,
                         focusRequestID: pageTitleFocusRequestID,
+                        contentFont: contentFont,
                         isEnabled: page != nil,
                         onEditingBegan: {
                             clearTransientSelectionsAfterPageTitleFocusIfNeeded()
@@ -7556,7 +7734,7 @@ private struct EditorCanvasView: View {
 #else
                     TextField("未命名", text: pageTitleBinding)
                         .textFieldStyle(.plain)
-                        .font(.system(size: EditorDesignTokens.Typography.documentTitleSize, weight: .semibold))
+                        .font(pageTitleFont)
                         .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
                         .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
                         .disabled(page == nil)
@@ -7806,8 +7984,12 @@ private struct EditorCanvasView: View {
                         focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
                         focusSelection: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.selection : nil,
                         onFocusRequestHandled: {
-                            if pendingFocusRequest?.blockID == block.id {
+                            let didHandlePendingRequest = pendingFocusRequest?.blockID == block.id
+                            if didHandlePendingRequest {
                                 pendingFocusRequest = nil
+                                EditorLog.focus.debug(
+                                    "editor_focus_request_handled block_id=\(block.id, privacy: .public)"
+                                )
                             }
                             if pendingFocusBlockID == block.id {
                                 onPendingBlockFocusHandled()
@@ -8157,7 +8339,7 @@ private struct EditorCanvasView: View {
         .onAppear {
             scheduleScrollMetricsReset()
             schedulePendingPageTitleFocusIfNeeded(pendingPageTitleFocusPageID)
-            schedulePendingFocusIfNeeded(pendingFocusBlockID)
+            schedulePendingFocusIfNeeded(pendingFocusBlockID, requestID: pendingFocusRequestID)
             logRenderMetrics(reason: "appear")
         }
         .onChange(of: page?.id) { _, _ in
@@ -8166,13 +8348,21 @@ private struct EditorCanvasView: View {
 #endif
             scheduledPageTitleFocusPageID = nil
             schedulePendingPageTitleFocusIfNeeded(pendingPageTitleFocusPageID)
+            schedulePendingFocusIfNeeded(
+                pendingFocusBlockID,
+                requestID: pendingFocusRequestID,
+                reason: .pageChanged
+            )
         }
         .onChange(of: pendingPageTitleFocusPageID) { _, pageID in
             scheduledPageTitleFocusPageID = nil
             schedulePendingPageTitleFocusIfNeeded(pageID)
         }
         .onChange(of: pendingFocusBlockID) { _, blockID in
-            schedulePendingFocusIfNeeded(blockID)
+            schedulePendingFocusIfNeeded(blockID, requestID: pendingFocusRequestID)
+        }
+        .onChange(of: pendingFocusRequestID) { _, requestID in
+            schedulePendingFocusIfNeeded(pendingFocusBlockID, requestID: requestID)
         }
         .onChange(of: renderMetrics) { _, _ in
             scheduleScrollMetricsReset()
@@ -8299,6 +8489,13 @@ private struct EditorCanvasView: View {
 
     private var contentFont: EditorContentFont {
         EditorContentFont(rawValue: contentFontRawValue) ?? EditorContentFont.defaultFont
+    }
+
+    private var pageTitleFont: Font {
+        if let postScriptName = contentFont.pageTitlePostScriptName {
+            return .custom(postScriptName, size: EditorDesignTokens.Typography.documentTitleSize)
+        }
+        return .system(size: EditorDesignTokens.Typography.documentTitleSize, weight: .semibold)
     }
 
 #if os(iOS)
@@ -9046,19 +9243,64 @@ private struct EditorCanvasView: View {
         )
     }
 
-    private func schedulePendingFocusIfNeeded(_ blockID: String?) {
+    private func schedulePendingFocusIfNeeded(
+        _ blockID: String?,
+        requestID: UUID?,
+        reason: EditorPendingBlockFocusScheduleReason = .pendingValueChanged
+    ) {
+        guard EditorPendingBlockFocusSchedulePolicy.shouldSchedule(
+            blockID: blockID,
+            existingRequestBlockID: pendingFocusRequest?.blockID,
+            requestID: requestID,
+            reason: reason
+        ) else {
+            return
+        }
         guard let blockID else {
             return
         }
 
-        guard pendingFocusRequest?.blockID != blockID else {
+        setPendingFocusRequest(blockID: blockID, reason: reason)
+        schedulePendingFocusRetriesIfNeeded(blockID: blockID, requestID: requestID, reason: reason)
+    }
+
+    private func setPendingFocusRequest(
+        blockID: String,
+        reason: EditorPendingBlockFocusScheduleReason
+    ) {
+        pendingFocusRequest = BlockFocusRequest(blockID: blockID)
+        let reasonLabel: String
+        switch reason {
+        case .pendingValueChanged:
+            reasonLabel = "pending_value_changed"
+        case .pageChanged:
+            reasonLabel = "page_changed"
+        case .retry:
+            reasonLabel = "retry"
+        }
+        EditorLog.focus.debug(
+            "editor_focus_request_scheduled block_id=\(blockID, privacy: .public) source=view_model reason=\(reasonLabel, privacy: .public)"
+        )
+    }
+
+    private func schedulePendingFocusRetriesIfNeeded(
+        blockID: String,
+        requestID: UUID?,
+        reason: EditorPendingBlockFocusScheduleReason
+    ) {
+        guard reason != .retry,
+              requestID != nil || reason == .pageChanged else {
             return
         }
 
-        pendingFocusRequest = BlockFocusRequest(blockID: blockID)
-        EditorLog.focus.debug(
-            "editor_focus_request_scheduled block_id=\(blockID, privacy: .public) source=view_model"
-        )
+        for delay in [0.08, 0.2, 0.4] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard pendingFocusRequest?.blockID == blockID else {
+                    return
+                }
+                schedulePendingFocusIfNeeded(blockID, requestID: requestID, reason: .retry)
+            }
+        }
     }
 
     private func focusCanvas() {
@@ -9466,6 +9708,68 @@ private struct EditorCanvasView: View {
 }
 
 #if os(macOS)
+private struct EditorGlobalShortcutBridge: NSViewRepresentable {
+    let onCommand: (EditorShortcutCommand) -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCommand: onCommand)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.hostView = view
+        context.coordinator.onCommand = onCommand
+        context.coordinator.install()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.hostView = nsView
+        context.coordinator.onCommand = onCommand
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    final class Coordinator {
+        weak var hostView: NSView?
+        var onCommand: (EditorShortcutCommand) -> Bool
+        private var eventMonitor: Any?
+
+        init(onCommand: @escaping (EditorShortcutCommand) -> Bool) {
+            self.onCommand = onCommand
+        }
+
+        func install() {
+            guard eventMonitor == nil else {
+                return
+            }
+
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self,
+                      self.hostView?.window?.isKeyWindow == true,
+                      let rawValue = event.editorShortcutRawValue,
+                      let command = EditorGlobalShortcutActionResolver.command(forRawValue: rawValue) else {
+                    return event
+                }
+                return self.onCommand(command) ? nil : event
+            }
+        }
+
+        func uninstall() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+                self.eventMonitor = nil
+            }
+        }
+
+        deinit {
+            uninstall()
+        }
+    }
+}
+
 enum MacEditorKeyboardShortcutAction: Equatable, Sendable {
     case cancelSelection
     case copySelection
@@ -9748,8 +10052,10 @@ private struct MacEditorKeyboardShortcutBridge: NSViewRepresentable {
 private struct PageListKeyboardShortcutBridge: NSViewRepresentable {
     let isEnabled: Bool
     let activationVersion: Int
+    let hasArchiveTargets: () -> Bool
     let onSelectAllVisiblePages: () -> Bool
     let onSelectRangeToSelectedPage: () -> Bool
+    let onArchiveSelectedPages: () -> Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -9758,8 +10064,10 @@ private struct PageListKeyboardShortcutBridge: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         context.coordinator.isEnabled = isEnabled
         context.coordinator.activationVersion = activationVersion
+        context.coordinator.hasArchiveTargets = hasArchiveTargets
         context.coordinator.onSelectAllVisiblePages = onSelectAllVisiblePages
         context.coordinator.onSelectRangeToSelectedPage = onSelectRangeToSelectedPage
+        context.coordinator.onArchiveSelectedPages = onArchiveSelectedPages
         context.coordinator.install()
         return ShortcutCaptureView(frame: .zero)
     }
@@ -9768,8 +10076,10 @@ private struct PageListKeyboardShortcutBridge: NSViewRepresentable {
         let shouldActivate = context.coordinator.activationVersion != activationVersion
         context.coordinator.isEnabled = isEnabled
         context.coordinator.activationVersion = activationVersion
+        context.coordinator.hasArchiveTargets = hasArchiveTargets
         context.coordinator.onSelectAllVisiblePages = onSelectAllVisiblePages
         context.coordinator.onSelectRangeToSelectedPage = onSelectRangeToSelectedPage
+        context.coordinator.onArchiveSelectedPages = onArchiveSelectedPages
         if shouldActivate {
             context.coordinator.activate(nsView)
         }
@@ -9782,8 +10092,10 @@ private struct PageListKeyboardShortcutBridge: NSViewRepresentable {
     final class Coordinator {
         var isEnabled = false
         var activationVersion = 0
+        var hasArchiveTargets: (() -> Bool)?
         var onSelectAllVisiblePages: (() -> Bool)?
         var onSelectRangeToSelectedPage: (() -> Bool)?
+        var onArchiveSelectedPages: (() -> Bool)?
         private var eventMonitor: Any?
 
         func install() {
@@ -9804,6 +10116,7 @@ private struct PageListKeyboardShortcutBridge: NSViewRepresentable {
                     input: event.charactersIgnoringModifiers,
                     modifiers: event.blockKeyboardShortcutModifiers,
                     hasVisiblePages: self.isEnabled,
+                    hasArchiveTargets: self.hasArchiveTargets?() == true,
                     isTextEditing: isTextEditing
                 )
 
@@ -9814,6 +10127,10 @@ private struct PageListKeyboardShortcutBridge: NSViewRepresentable {
                     }
                 case .selectRangeToSelectedPage:
                     if self.onSelectRangeToSelectedPage?() == true {
+                        return nil
+                    }
+                case .archiveSelectedPages:
+                    if self.onArchiveSelectedPages?() == true {
                         return nil
                     }
                 case nil:

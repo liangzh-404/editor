@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 enum EditorShortcutCommand: String, CaseIterable, Identifiable {
     case newDocument
@@ -10,6 +13,7 @@ enum EditorShortcutCommand: String, CaseIterable, Identifiable {
     case quickOpen
     case showAllDocuments
     case showFavorites
+    case toggleFocusMode
     case insertMarkdownLink
 
     var id: String {
@@ -23,7 +27,24 @@ enum EditorShortcutCommand: String, CaseIterable, Identifiable {
             .navigateBack,
             .navigateForward,
             .quickOpen,
-            .insertMarkdownLink
+            .showAllDocuments,
+            .showFavorites,
+            .toggleFocusMode,
+            .insertMarkdownLink,
+            .convertBlockToPage
+        ]
+    }
+
+    static var shellCommands: [EditorShortcutCommand] {
+        [
+            .newDocument,
+            .openToday,
+            .navigateBack,
+            .navigateForward,
+            .quickOpen,
+            .showAllDocuments,
+            .showFavorites,
+            .toggleFocusMode
         ]
     }
 
@@ -36,7 +57,7 @@ enum EditorShortcutCommand: String, CaseIterable, Identifiable {
         case .newDocument:
             return "新建文档"
         case .openToday:
-            return "跳到今天"
+            return "跳转到今日笔记"
         case .navigateBack:
             return "后退"
         case .navigateForward:
@@ -49,6 +70,8 @@ enum EditorShortcutCommand: String, CaseIterable, Identifiable {
             return "全部文档"
         case .showFavorites:
             return "收藏"
+        case .toggleFocusMode:
+            return "专注模式"
         case .insertMarkdownLink:
             return "插入链接"
         }
@@ -72,6 +95,8 @@ enum EditorShortcutCommand: String, CaseIterable, Identifiable {
             return "cmd+opt+1"
         case .showFavorites:
             return "cmd+opt+2"
+        case .toggleFocusMode:
+            return "cmd+opt+f"
         case .insertMarkdownLink:
             return "cmd+k"
         }
@@ -148,6 +173,44 @@ struct EditorKeyboardShortcut: Equatable {
         canonicalParts.append(parts.last ?? "")
         return canonicalParts.joined(separator: "+")
     }
+
+    var displayValue: String {
+        let parts = rawValue.split(separator: "+").map(String.init)
+        guard let keyPart = parts.last else {
+            return rawValue
+        }
+
+        var displayParts: [String] = []
+        if modifiers.contains(.command) {
+            displayParts.append("⌘")
+        }
+        if modifiers.contains(.control) {
+            displayParts.append("⌃")
+        }
+        if modifiers.contains(.option) {
+            displayParts.append("⌥")
+        }
+        if modifiers.contains(.shift) {
+            displayParts.append("⇧")
+        }
+        displayParts.append(Self.displayKey(for: keyPart))
+        return displayParts.joined()
+    }
+
+    private static func displayKey(for key: String) -> String {
+        switch key {
+        case "left":
+            return "←"
+        case "right":
+            return "→"
+        case "up":
+            return "↑"
+        case "down":
+            return "↓"
+        default:
+            return key.uppercased()
+        }
+    }
 }
 
 struct EditorShortcutConfiguration {
@@ -169,4 +232,86 @@ struct EditorShortcutConfiguration {
 
         return EditorKeyboardShortcut(rawValue: command.defaultShortcutRawValue)
     }
+
+    func conflictingCommand(
+        for rawValue: String,
+        excluding command: EditorShortcutCommand,
+        in commands: [EditorShortcutCommand] = EditorShortcutCommand.visibleCommands
+    ) -> EditorShortcutCommand? {
+        guard let candidate = EditorKeyboardShortcut(rawValue: rawValue) else {
+            return nil
+        }
+
+        return commands.first { otherCommand in
+            guard otherCommand != command else {
+                return false
+            }
+            return shortcut(for: otherCommand)?.rawValue == candidate.rawValue
+        }
+    }
 }
+
+enum EditorGlobalShortcutActionResolver {
+    static func command(
+        forRawValue rawValue: String,
+        configuration: EditorShortcutConfiguration = EditorShortcutConfiguration(),
+        commands: [EditorShortcutCommand] = EditorShortcutCommand.shellCommands
+    ) -> EditorShortcutCommand? {
+        guard let candidate = EditorKeyboardShortcut(rawValue: rawValue) else {
+            return nil
+        }
+
+        return commands.first { command in
+            configuration.shortcut(for: command)?.rawValue == candidate.rawValue
+        }
+    }
+}
+
+#if os(macOS)
+extension NSEvent {
+    var editorShortcutRawValue: String? {
+        let supportedModifiers = modifierFlags.intersection([.command, .control, .option, .shift])
+        guard !supportedModifiers.isEmpty,
+              let keyPart = editorShortcutKeyPart else {
+            return nil
+        }
+
+        var parts: [String] = []
+        if supportedModifiers.contains(.command) {
+            parts.append("cmd")
+        }
+        if supportedModifiers.contains(.control) {
+            parts.append("ctrl")
+        }
+        if supportedModifiers.contains(.option) {
+            parts.append("opt")
+        }
+        if supportedModifiers.contains(.shift) {
+            parts.append("shift")
+        }
+        parts.append(keyPart)
+        return parts.joined(separator: "+")
+    }
+
+    private var editorShortcutKeyPart: String? {
+        switch specialKey {
+        case .leftArrow:
+            return "left"
+        case .rightArrow:
+            return "right"
+        case .upArrow:
+            return "up"
+        case .downArrow:
+            return "down"
+        default:
+            break
+        }
+
+        guard let rawKey = charactersIgnoringModifiers?.trimmingCharacters(in: .whitespacesAndNewlines),
+              rawKey.count == 1 else {
+            return nil
+        }
+        return rawKey.lowercased()
+    }
+}
+#endif

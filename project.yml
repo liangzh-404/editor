@@ -23,7 +23,7 @@ targets:
       - path: Sources/EditorCore
     resources:
       - path: Sources/EditorApp/Assets.xcassets
-      - path: Sources/EditorApp/Fonts/LXGWWenKai-Regular.ttf
+      - path: Sources/EditorApp/Fonts/LXGW WenK.ttf
       - path: Sources/EditorApp/Fonts/OFL-LXGWWenKai.txt
     dependencies:
       - package: HighlightSwift
@@ -45,7 +45,7 @@ targets:
       - path: Sources/EditorCore
     resources:
       - path: Sources/EditorApp/Assets.xcassets
-      - path: Sources/EditorApp/Fonts/LXGWWenKai-Regular.ttf
+      - path: Sources/EditorApp/Fonts/LXGW WenK.ttf
       - path: Sources/EditorApp/Fonts/OFL-LXGWWenKai.txt
     dependencies:
       - package: HighlightSwift

@@ -408,6 +408,88 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testOpenTodayForUIAppendsAndFocusesBottomEmptyLineWhenDailyPageEndsWithText() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let welcomePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database),
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 16) },
+            diaryCalendar: Self.gregorianCalendar
+        )
+        try viewModel.load()
+        viewModel.selectCollection(.diary)
+        let diaryBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.updateBlockText(blockID: diaryBlockID, text: "上午记录")
+        viewModel.selectPage(id: welcomePageID)
+
+        XCTAssertTrue(viewModel.openTodayForUI())
+
+        XCTAssertEqual(viewModel.selectedCollection, .diary)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["上午记录", ""])
+        XCTAssertEqual(viewModel.pendingFocusBlockID, viewModel.visibleBlocks.last?.id)
+    }
+
+    @MainActor
+    func testOpenTodayForUIFocusesExistingBottomEmptyLineWithoutAppendingAnotherOne() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let welcomePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database),
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 16) },
+            diaryCalendar: Self.gregorianCalendar
+        )
+        try viewModel.load()
+        viewModel.selectCollection(.diary)
+        let diaryBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.updateBlockText(blockID: diaryBlockID, text: "上午记录")
+        let existingEmptyBlock = try viewModel.appendParagraphBlockToCurrentPage()
+        viewModel.selectPage(id: welcomePageID)
+
+        XCTAssertTrue(viewModel.openTodayForUI())
+
+        XCTAssertEqual(viewModel.selectedCollection, .diary)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["上午记录", ""])
+        XCTAssertEqual(viewModel.visibleBlocks.last?.id, existingEmptyBlock.id)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, existingEmptyBlock.id)
+    }
+
+    @MainActor
+    func testOpenTodayForUIRefreshesFocusRequestWhenAlreadyOnBottomEmptyLine() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database),
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 16) },
+            diaryCalendar: Self.gregorianCalendar
+        )
+        try viewModel.load()
+        viewModel.selectCollection(.diary)
+        let diaryBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.updateBlockText(blockID: diaryBlockID, text: "上午记录")
+        let existingEmptyBlock = try viewModel.appendParagraphBlockToCurrentPage()
+
+        XCTAssertTrue(viewModel.openTodayForUI())
+        let firstRequestID = try XCTUnwrap(viewModel.pendingFocusRequestID)
+
+        XCTAssertTrue(viewModel.openTodayForUI())
+
+        XCTAssertEqual(viewModel.pendingFocusBlockID, existingEmptyBlock.id)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["上午记录", ""])
+        XCTAssertNotEqual(viewModel.pendingFocusRequestID, firstRequestID)
+    }
+
+    @MainActor
     func testNewDocumentForUICreatesUntitledPageAndCanNavigateBack() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -639,6 +721,58 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(Set(viewModel.snapshot.archivedPages.map(\.id)), [firstPageID, secondPage.id])
         XCTAssertTrue(viewModel.snapshot.pages.isEmpty)
+    }
+
+    @MainActor
+    func testArchivePagesForUIRecordsSingleBatchUndoRestoringEveryArchivedPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let firstPageID = try XCTUnwrap(snapshot.selectedPageID)
+        let secondPage = try repository.createPage(workspaceID: workspaceID, title: "Second")
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertTrue(viewModel.archivePagesForUI(pageIDs: [firstPageID, secondPage.id]))
+        XCTAssertTrue(viewModel.canUndoPageArchive)
+
+        try viewModel.undoLastPageArchive()
+
+        XCTAssertEqual(viewModel.snapshot.archivedPages, [])
+        XCTAssertEqual(Set(viewModel.snapshot.pages.map(\.id)), [firstPageID, secondPage.id])
+        XCTAssertFalse(viewModel.canUndoPageArchive)
+    }
+
+    @MainActor
+    func testPageArchiveUndoExpiresAfterVisibilityDuration() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        var now = Self.date(year: 2026, month: 5, day: 22)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            currentDateProvider: { now }
+        )
+        try viewModel.load()
+        let scratchPage = try viewModel.createPageInSelectedWorkspace(title: "Scratch")
+
+        viewModel.archivePageForUI(id: scratchPage.id)
+        XCTAssertTrue(viewModel.canUndoPageArchive)
+        XCTAssertEqual(
+            viewModel.pageArchiveUndoExpirationDeadline,
+            now.addingTimeInterval(WorkspaceViewModel.pageArchiveUndoVisibilityDuration)
+        )
+
+        now = now.addingTimeInterval(WorkspaceViewModel.pageArchiveUndoVisibilityDuration + 0.1)
+        viewModel.expirePageArchiveUndoForUI()
+
+        XCTAssertFalse(viewModel.canUndoPageArchive)
+        XCTAssertNil(viewModel.pageArchiveUndoExpirationDeadline)
+        try viewModel.undoLastPageArchive()
+        XCTAssertEqual(viewModel.snapshot.archivedPages.map(\.title), ["Scratch"])
     }
 
     @MainActor

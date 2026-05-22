@@ -358,6 +358,44 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testShortcutSettingsRecorderRejectsConflictsAndStoresRecordedShortcut() {
+        let app = XCUIApplication()
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launch()
+
+        app.typeKey(",", modifierFlags: [.command])
+        let recordButton = app.buttons["editor.shortcut.record.openToday"]
+        XCTAssertTrue(recordButton.waitForExistence(timeout: 5), "Settings should expose the today shortcut recorder")
+
+        recordButton.click()
+        app.typeKey("n", modifierFlags: [.command])
+
+        let conflictStatus = app.descendants(matching: .any)["editor.shortcut.status.openToday"]
+        XCTAssertTrue(
+            conflictStatus.waitForLabelOrValue(containing: "新建文档", timeout: 5),
+            "Recording ⌘N for Today should be rejected as a New Document conflict"
+        )
+        let shortcutValue = app.descendants(matching: .any)["editor.shortcut.value.openToday"]
+        XCTAssertTrue(
+            shortcutValue.waitForLabelOrValue(containing: "⌘⌥N", timeout: 5),
+            "Conflict rejection should leave the Today shortcut unchanged"
+        )
+
+        recordButton.click()
+        app.typeKey("t", modifierFlags: [.command, .option])
+        XCTAssertTrue(
+            shortcutValue.waitForLabelOrValue(containing: "⌘⌥T", timeout: 5),
+            "Recording a non-conflicting shortcut should update the displayed Today shortcut"
+        )
+
+        app.buttons["editor.shortcut.reset.openToday"].click()
+        XCTAssertTrue(
+            shortcutValue.waitForLabelOrValue(containing: "⌘⌥N", timeout: 5),
+            "Reset should restore the Today shortcut default after the recorder flow"
+        )
+    }
+
+    @MainActor
     func testPageRowsExposeTagChipsInAllDocuments() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path

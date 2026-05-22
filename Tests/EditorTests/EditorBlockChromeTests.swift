@@ -1210,13 +1210,14 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
-    func testPageListKeyboardShortcutResolverScopesSelectAllAndShiftReturn() {
+    func testPageListKeyboardShortcutResolverScopesSelectAllShiftReturnAndDeleteArchive() {
         XCTAssertEqual(
             PageListKeyboardShortcutActionResolver.action(
                 keyCode: 0,
                 input: "a",
                 modifiers: [.command],
                 hasVisiblePages: true,
+                hasArchiveTargets: false,
                 isTextEditing: false
             ),
             .selectAllVisiblePages
@@ -1227,9 +1228,43 @@ final class EditorBlockChromeTests: XCTestCase {
                 input: "\r",
                 modifiers: [.shift],
                 hasVisiblePages: true,
+                hasArchiveTargets: false,
                 isTextEditing: false
             ),
             .selectRangeToSelectedPage
+        )
+        XCTAssertEqual(
+            PageListKeyboardShortcutActionResolver.action(
+                keyCode: PageListKeyboardShortcutActionResolver.deleteBackwardKeyCode,
+                input: nil,
+                modifiers: [],
+                hasVisiblePages: true,
+                hasArchiveTargets: true,
+                isTextEditing: false
+            ),
+            .archiveSelectedPages
+        )
+        XCTAssertEqual(
+            PageListKeyboardShortcutActionResolver.action(
+                keyCode: PageListKeyboardShortcutActionResolver.deleteForwardKeyCode,
+                input: nil,
+                modifiers: [],
+                hasVisiblePages: true,
+                hasArchiveTargets: true,
+                isTextEditing: false
+            ),
+            .archiveSelectedPages
+        )
+        XCTAssertNil(
+            PageListKeyboardShortcutActionResolver.action(
+                keyCode: PageListKeyboardShortcutActionResolver.deleteBackwardKeyCode,
+                input: nil,
+                modifiers: [],
+                hasVisiblePages: true,
+                hasArchiveTargets: false,
+                isTextEditing: false
+            ),
+            "Delete should only archive when the middle column has a selected row target."
         )
         XCTAssertNil(
             PageListKeyboardShortcutActionResolver.action(
@@ -1237,6 +1272,7 @@ final class EditorBlockChromeTests: XCTestCase {
                 input: "a",
                 modifiers: [.command],
                 hasVisiblePages: true,
+                hasArchiveTargets: false,
                 isTextEditing: true
             ),
             "Text editing keeps Cmd+A for text/block selection instead of stealing it for the middle list."
@@ -1292,6 +1328,25 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testPageListRowActionTargetResolverUsesBatchSelectionWhenRowIsSelected() {
+        XCTAssertEqual(
+            PageListRowActionTargetResolver.pageIDs(
+                rowPageID: "second",
+                selectedPageIDs: ["third", "second"],
+                visiblePageIDs: ["first", "second", "third"]
+            ),
+            ["second", "third"]
+        )
+        XCTAssertEqual(
+            PageListRowActionTargetResolver.pageIDs(
+                rowPageID: "first",
+                selectedPageIDs: ["third", "second"],
+                visiblePageIDs: ["first", "second", "third"]
+            ),
+            ["first"]
+        )
+    }
+
     func testArchiveUndoVisibilityStaysOutOfSearchAndArchiveSections() {
         XCTAssertFalse(
             ArchiveUndoVisibilityPolicy.isVisible(canUndoPageArchive: true, selectedCollection: .search),
@@ -1305,6 +1360,44 @@ final class EditorBlockChromeTests: XCTestCase {
         )
         XCTAssertFalse(
             ArchiveUndoVisibilityPolicy.isVisible(canUndoPageArchive: false, selectedCollection: .recent)
+        )
+    }
+
+    func testEditorPendingBlockFocusSchedulePolicyRetriesAfterPageChange() {
+        XCTAssertFalse(
+            EditorPendingBlockFocusSchedulePolicy.shouldSchedule(
+                blockID: "today-empty",
+                existingRequestBlockID: "today-empty",
+                requestID: nil,
+                reason: .pendingValueChanged
+            ),
+            "A repeated pending value without a fresh request should not churn focus."
+        )
+        XCTAssertTrue(
+            EditorPendingBlockFocusSchedulePolicy.shouldSchedule(
+                blockID: "today-empty",
+                existingRequestBlockID: "today-empty",
+                requestID: nil,
+                reason: .pageChanged
+            ),
+            "After Cmd+R changes from a normal document to today's diary, the canvas must retry the pending focus once the new rows are mounted."
+        )
+        XCTAssertTrue(
+            EditorPendingBlockFocusSchedulePolicy.shouldSchedule(
+                blockID: "today-empty",
+                existingRequestBlockID: "today-empty",
+                requestID: UUID(),
+                reason: .pendingValueChanged
+            )
+        )
+        XCTAssertTrue(
+            EditorPendingBlockFocusSchedulePolicy.shouldSchedule(
+                blockID: "today-empty",
+                existingRequestBlockID: "today-empty",
+                requestID: nil,
+                reason: .retry
+            ),
+            "A retry tick should be allowed to re-issue focus even when the previous request targeted the same block."
         )
     }
 

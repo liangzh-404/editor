@@ -143,11 +143,13 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var cloudKitAccountStatus: CloudKitAccountAvailability?
     @Published private(set) var syncStatusText = "同步空闲"
     @Published private(set) var pendingFocusBlockID: String?
+    @Published private(set) var pendingFocusRequestID: UUID?
     @Published private(set) var pendingPageTitleFocusPageID: String?
     @Published private(set) var pendingCompactPageNavigationID: String?
     @Published private(set) var canUndoTextEdit = false
     @Published private(set) var canRedoTextEdit = false
     @Published private(set) var canUndoPageArchive = false
+    @Published private(set) var pageArchiveUndoExpirationDeadline: Date?
     @Published private(set) var attachmentPreviewGenerationStatuses: [String: AttachmentPreviewGenerationStatus] = [:]
     @Published private(set) var markdownImportStatusText: String?
     @Published private(set) var unlockedEncryptedPageIDs: Set<String> = []
@@ -155,6 +157,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     private static let encryptedPageAutoLockInterval: TimeInterval = 60
     private static let encryptedPageAutoLockIntervalNanoseconds: UInt64 = 60_000_000_000
+    static let pageArchiveUndoVisibilityDuration: TimeInterval = 8
 
     private let repository: PageRepository?
     private let diaryRepository: DiaryRepository?
@@ -189,6 +192,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var syncChangeObservation: SyncChangeObservation?
     private var encryptedPageLastOpenedAt: [String: Date] = [:]
     private var encryptedPageAutoLockTask: Task<Void, Never>?
+    private var pageArchiveUndoExpirationTask: Task<Void, Never>?
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
 
     var canNavigateBack: Bool {
@@ -367,11 +371,13 @@ final class WorkspaceViewModel: ObservableObject {
         selectedCollection = .recent
         activeDiaryEntry = nil
         pendingFocusBlockID = nil
+        pendingFocusRequestID = nil
         pendingPageTitleFocusPageID = nil
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
         canRedoTextEdit = false
         canUndoPageArchive = false
+        pageArchiveUndoExpirationDeadline = nil
         attachmentPreviewGenerationStatuses = [:]
         unlockedEncryptedPageIDs = []
         authenticatingEncryptedPageID = nil
@@ -406,11 +412,13 @@ final class WorkspaceViewModel: ObservableObject {
         selectedCollection = snapshot.selectedPageID == nil ? .diary : .recent
         activeDiaryEntry = snapshot.activeDiaryEntry
         pendingFocusBlockID = nil
+        pendingFocusRequestID = nil
         pendingPageTitleFocusPageID = nil
         pendingCompactPageNavigationID = nil
         canUndoTextEdit = false
         canRedoTextEdit = false
         canUndoPageArchive = false
+        pageArchiveUndoExpirationDeadline = nil
         attachmentPreviewGenerationStatuses = [:]
         unlockedEncryptedPageIDs = []
         authenticatingEncryptedPageID = nil
@@ -1065,7 +1073,11 @@ final class WorkspaceViewModel: ObservableObject {
 
     func openTodayForUI() -> Bool {
         do {
-            return try openDailyDiaryPage(source: "shortcut_today", recordHistory: true) != nil
+            guard try openDailyDiaryPage(source: "shortcut_today", recordHistory: true) != nil else {
+                return false
+            }
+            try focusBottomEmptyTextBlockForCurrentPage(source: "shortcut_today")
+            return true
         } catch {
             EditorLog.render.error(
                 "daily_page_shortcut_open_failed error=\(String(describing: error), privacy: .public)"
@@ -1301,8 +1313,14 @@ final class WorkspaceViewModel: ObservableObject {
     func consumePendingFocusBlockID() -> String? {
         defer {
             pendingFocusBlockID = nil
+            pendingFocusRequestID = nil
         }
         return pendingFocusBlockID
+    }
+
+    private func requestBlockFocus(_ blockID: String) {
+        pendingFocusBlockID = blockID
+        pendingFocusRequestID = UUID()
     }
 
     @discardableResult
@@ -2071,6 +2089,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func undoLastPageArchive() throws {
+        refreshPageArchiveUndoAvailability()
         guard let undoSnapshot = pageArchiveUndoStack.last else {
             return
         }
@@ -2078,7 +2097,9 @@ final class WorkspaceViewModel: ObservableObject {
             throw WorkspaceViewModelError.missingRepository
         }
 
-        try repository.restorePage(pageID: undoSnapshot.pageID)
+        for pageID in undoSnapshot.pageIDs {
+            try repository.restorePage(pageID: pageID)
+        }
         try load()
         _ = pageArchiveUndoStack.popLast()
         refreshPageArchiveUndoAvailability()
@@ -2312,13 +2333,13 @@ final class WorkspaceViewModel: ObservableObject {
         do {
             for pageID in validPageIDs {
                 try repository.archivePage(pageID: pageID)
-                recordPageArchiveUndoSnapshot(
-                    pageID: pageID,
-                    previousNotebookID: previousNotebookID,
-                    previousPageID: previousPageID
-                )
             }
             try load()
+            recordPageArchiveUndoSnapshot(
+                pageIDs: validPageIDs,
+                previousNotebookID: previousNotebookID,
+                previousPageID: previousPageID
+            )
             restoreSelection(previousNotebookID: previousNotebookID, previousPageID: previousPageID)
             EditorLog.input.debug("page_archive_batch_visible count=\(validPageIDs.count, privacy: .public)")
             return true
@@ -2340,6 +2361,10 @@ final class WorkspaceViewModel: ObservableObject {
                 "page_restore_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
+    }
+
+    func expirePageArchiveUndoForUI() {
+        refreshPageArchiveUndoAvailability()
     }
 
     func undoLastPageArchiveForUI() {
@@ -3712,7 +3737,7 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
-        pendingFocusBlockID = block.id
+        requestBlockFocus(block.id)
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=\(source, privacy: .public)"
         )
@@ -3723,7 +3748,7 @@ final class WorkspaceViewModel: ObservableObject {
            lastBlock.type.isTextEditable,
            lastBlock.type != .table,
            lastBlock.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            pendingFocusBlockID = lastBlock.id
+            requestBlockFocus(lastBlock.id)
             EditorLog.focus.debug(
                 "editor_focus_request_queued block_id=\(lastBlock.id, privacy: .public) source=\(source, privacy: .public)"
             )
@@ -3731,7 +3756,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         let block = try appendParagraphBlockToCurrentPage()
-        pendingFocusBlockID = block.id
+        requestBlockFocus(block.id)
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(block.id, privacy: .public) source=\(source, privacy: .public)"
         )
@@ -4007,23 +4032,67 @@ final class WorkspaceViewModel: ObservableObject {
         previousNotebookID: String?,
         previousPageID: String?
     ) {
+        recordPageArchiveUndoSnapshot(
+            pageIDs: [pageID],
+            previousNotebookID: previousNotebookID,
+            previousPageID: previousPageID
+        )
+    }
+
+    private func recordPageArchiveUndoSnapshot(
+        pageIDs: [String],
+        previousNotebookID: String?,
+        previousPageID: String?
+    ) {
+        let pageIDs = orderedUniquePageIDs(pageIDs)
+        guard !pageIDs.isEmpty else {
+            return
+        }
         pageArchiveUndoStack.append(
             PageArchiveUndoSnapshot(
-                pageID: pageID,
+                pageIDs: pageIDs,
                 previousNotebookID: previousNotebookID,
-                previousPageID: previousPageID
+                previousPageID: previousPageID,
+                createdAt: currentDateProvider()
             )
         )
         refreshPageArchiveUndoAvailability()
     }
 
     private func removePageArchiveUndoSnapshots(for pageID: String) {
-        pageArchiveUndoStack.removeAll { $0.pageID == pageID }
+        pageArchiveUndoStack.removeAll { $0.pageIDs.contains(pageID) }
         refreshPageArchiveUndoAvailability()
     }
 
     private func refreshPageArchiveUndoAvailability() {
+        let now = currentDateProvider()
+        pageArchiveUndoStack.removeAll { snapshot in
+            now.timeIntervalSince(snapshot.createdAt) >= Self.pageArchiveUndoVisibilityDuration
+        }
         canUndoPageArchive = !pageArchiveUndoStack.isEmpty
+        pageArchiveUndoExpirationDeadline = pageArchiveUndoStack
+            .map { $0.createdAt.addingTimeInterval(Self.pageArchiveUndoVisibilityDuration) }
+            .max()
+        schedulePageArchiveUndoExpirationIfNeeded()
+    }
+
+    private func schedulePageArchiveUndoExpirationIfNeeded() {
+        pageArchiveUndoExpirationTask?.cancel()
+        guard let pageArchiveUndoExpirationDeadline else {
+            pageArchiveUndoExpirationTask = nil
+            return
+        }
+
+        let delay = max(0, pageArchiveUndoExpirationDeadline.timeIntervalSince(currentDateProvider()))
+        let nanoseconds = UInt64(delay * 1_000_000_000)
+        pageArchiveUndoExpirationTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return
+            }
+            self?.expirePageArchiveUndoForUI()
+        }
     }
 
     private func restoreSelection(previousNotebookID: String?, previousPageID: String?) {
@@ -4445,9 +4514,10 @@ private enum PageEditCoalescingKey: Equatable {
 }
 
 private struct PageArchiveUndoSnapshot {
-    let pageID: String
+    let pageIDs: [String]
     let previousNotebookID: String?
     let previousPageID: String?
+    let createdAt: Date
 }
 
 enum WorkspaceViewModelError: Error, Equatable {
