@@ -290,16 +290,20 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
-    func testDesktopColumnDividerStaysVisualOnlyAndSubtle() {
+    func testDesktopColumnDividerCreatesVisibleColumnBoundary() {
         XCTAssertEqual(DesktopColumnDividerChrome.hitWidth, 9)
         XCTAssertEqual(DesktopColumnDividerChrome.lineWidth, 1)
-        XCTAssertGreaterThanOrEqual(DesktopColumnDividerChrome.idleOpacity, 0.12)
+        XCTAssertGreaterThanOrEqual(
+            DesktopColumnDividerChrome.idleOpacity,
+            0.16,
+            "The middle and editor columns need a visible Bear-like boundary even while idle."
+        )
         XCTAssertGreaterThan(DesktopColumnDividerChrome.hoverOpacity, DesktopColumnDividerChrome.idleOpacity)
         XCTAssertGreaterThan(DesktopColumnDividerChrome.draggingOpacity, DesktopColumnDividerChrome.hoverOpacity)
     }
 
     func testDesktopColumnResizeUsesDragStartWidthWithoutAccumulatingMovingDividerDeltas() {
-        let startWidth: CGFloat = 300
+        let startWidth: CGFloat = 260
 
         XCTAssertEqual(
             DesktopColumnResizeDragResolver.width(
@@ -308,7 +312,7 @@ final class EditorBlockChromeTests: XCTestCase {
                 min: EditorDesignTokens.Layout.sidebarMinWidth,
                 max: EditorDesignTokens.Layout.sidebarMaxWidth
             ),
-            320
+            280
         )
         XCTAssertEqual(
             DesktopColumnResizeDragResolver.width(
@@ -317,7 +321,7 @@ final class EditorBlockChromeTests: XCTestCase {
                 min: EditorDesignTokens.Layout.sidebarMinWidth,
                 max: EditorDesignTokens.Layout.sidebarMaxWidth
             ),
-            325,
+            285,
             "A later drag event reports the total translation; it should not add the previous frame again."
         )
         XCTAssertEqual(
@@ -340,10 +344,10 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
-    func testEditorCanvasWidensWhenAuxiliaryRailIsHidden() {
+    func testEditorCanvasKeepsAControlledCenteredWidthWithoutRightRail() {
         XCTAssertEqual(
             EditorCanvasWidthPolicy.maxWidth(hasVisibleAuxiliaryRail: true),
-            EditorDesignTokens.Layout.editorMaxWidth
+            EditorDesignTokens.Layout.editorExpandedMaxWidth
         )
         XCTAssertEqual(
             EditorCanvasWidthPolicy.maxWidth(hasVisibleAuxiliaryRail: false),
@@ -354,7 +358,7 @@ final class EditorBlockChromeTests: XCTestCase {
     func testEditorDisplayModesProgressivelyHideSecondaryChrome() {
         XCTAssertTrue(EditorDisplayMode.standard.showsSidebar)
         XCTAssertTrue(EditorDisplayMode.standard.showsDocumentList)
-        XCTAssertTrue(EditorDisplayMode.standard.showsAuxiliaryRail)
+        XCTAssertFalse(EditorDisplayMode.standard.showsAuxiliaryRail)
 
         XCTAssertTrue(EditorDisplayMode.writing.showsSidebar)
         XCTAssertFalse(EditorDisplayMode.writing.showsDocumentList)
@@ -363,6 +367,60 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertFalse(EditorDisplayMode.focus.showsSidebar)
         XCTAssertFalse(EditorDisplayMode.focus.showsDocumentList)
         XCTAssertFalse(EditorDisplayMode.focus.showsAuxiliaryRail)
+    }
+
+    func testDesktopInlineOutlineActivatesScrolledSectionHeading() {
+        let outlineItems = [
+            PageOutlineItem(blockID: "heading-1", title: "Intro", level: 1),
+            PageOutlineItem(blockID: "heading-2", title: "Details", level: 2),
+            PageOutlineItem(blockID: "heading-3", title: "Wrap", level: 2)
+        ]
+        let visibleBlockFrames: [String: CGRect] = [
+            "paragraph-2": CGRect(x: 0, y: 12, width: 400, height: 28),
+            "paragraph-3": CGRect(x: 0, y: 52, width: 400, height: 28),
+            "heading-3": CGRect(x: 0, y: 190, width: 400, height: 36)
+        ]
+
+        XCTAssertEqual(
+            DesktopInlineOutlineActiveHeadingResolver.activeBlockID(
+                outlineItems: outlineItems,
+                visibleBlockFrames: visibleBlockFrames,
+                blockIDsInDocumentOrder: [
+                    "heading-1",
+                    "paragraph-1",
+                    "heading-2",
+                    "paragraph-2",
+                    "paragraph-3",
+                    "heading-3"
+                ],
+                focusedBlockID: nil
+            ),
+            "heading-2",
+            "When the user scrolls past a heading, the inline outline should keep the current section highlighted."
+        )
+    }
+
+    func testDesktopInlineOutlineManualSelectionOverridesVisibleScrollHeading() {
+        let outlineItems = [
+            PageOutlineItem(blockID: "heading-1", title: "Intro", level: 1),
+            PageOutlineItem(blockID: "heading-2", title: "Details", level: 2)
+        ]
+        let visibleBlockFrames: [String: CGRect] = [
+            "heading-1": CGRect(x: 0, y: 12, width: 400, height: 36),
+            "heading-2": CGRect(x: 0, y: 132, width: 400, height: 36)
+        ]
+
+        XCTAssertEqual(
+            DesktopInlineOutlineActiveHeadingResolver.activeBlockID(
+                outlineItems: outlineItems,
+                visibleBlockFrames: visibleBlockFrames,
+                blockIDsInDocumentOrder: ["heading-1", "heading-2"],
+                selectedBlockID: "heading-2",
+                focusedBlockID: "heading-2"
+            ),
+            "heading-2",
+            "Clicking an outline heading should highlight the selected heading even while an earlier heading remains above the scroll activation line."
+        )
     }
 
     func testCraftQuietChromeKeepsListRowsUnboxedAndCompact() {
