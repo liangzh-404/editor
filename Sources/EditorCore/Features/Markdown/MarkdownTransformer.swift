@@ -121,11 +121,25 @@ enum SlashCommandResolver {
             type: .divider
         ),
         SlashCommandDescriptor(
-            id: "attachment",
-            title: "附件",
-            subtitle: "插入图片或文件",
-            aliases: ["attach", "attachment", "file", "image", "附件", "图片", "文件"],
+            id: "attachment-image",
+            title: "图片",
+            subtitle: "插入图片",
+            aliases: ["image", "photo", "图片", "照片"],
+            type: .attachmentImage
+        ),
+        SlashCommandDescriptor(
+            id: "attachment-file",
+            title: "文件",
+            subtitle: "插入文件",
+            aliases: ["attach", "attachment", "file", "附件", "文件"],
             type: .attachmentFile
+        ),
+        SlashCommandDescriptor(
+            id: "drawing",
+            title: "画板",
+            subtitle: "插入可编辑画板",
+            aliases: ["drawing", "draw", "sketch", "画板", "手绘", "草图"],
+            type: .drawing
         )
     ]
 
@@ -1550,7 +1564,7 @@ enum MarkdownTransformer {
             return "[[\(block.textPlain)]]"
         case .blockReference:
             return "[[#\(block.textPlain)]]"
-        case .attachmentImage, .attachmentVideo, .attachmentFile:
+        case .attachmentImage, .attachmentVideo, .attachmentFile, .drawing:
             return attachmentMarkdown(for: block, attachments: attachments)
         }
     }

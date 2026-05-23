@@ -86,6 +86,40 @@ final class AttachmentRepositoryTests: XCTestCase {
         XCTAssertEqual(file.block.type, .attachmentFile)
     }
 
+    func testImportDrawingPersistsEditableDrawingBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let repository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let drawingData = Data("editable-drawing-data".utf8)
+
+        let result = try repository.importAttachment(
+            sourceURL: try makeSourceFile(name: "sketch.drawing", data: drawingData),
+            workspaceID: workspaceID,
+            pageID: pageID
+        )
+
+        XCTAssertEqual(result.attachment.kind.rawValue, "drawing")
+        XCTAssertEqual(result.attachment.utiType, "com.apple.drawing")
+        XCTAssertEqual(result.block.type.rawValue, "drawing")
+        XCTAssertEqual(result.block.textPlain, "sketch.drawing")
+        XCTAssertEqual(result.block.attachmentID, result.attachment.id)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: result.attachment.localPath)), drawingData)
+
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+        let reloadedBlock = try XCTUnwrap(reloadedSnapshot.blocks.first { $0.id == result.block.id })
+        let reloadedAttachment = try XCTUnwrap(reloadedSnapshot.attachments.first { $0.id == result.attachment.id })
+        XCTAssertEqual(reloadedBlock.type.rawValue, "drawing")
+        XCTAssertTrue(reloadedAttachment.matches(block: reloadedBlock))
+    }
+
     func testImportImageCreatesAndPersistsThumbnail() throws {
         let database = try migratedDatabase()
         defer { database.close() }

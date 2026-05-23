@@ -102,6 +102,7 @@ enum BlockType: String, Equatable, Sendable {
     case attachmentImage
     case attachmentVideo
     case attachmentFile
+    case drawing
 
     var isTextEditable: Bool {
         switch self {
@@ -123,7 +124,8 @@ enum BlockType: String, Equatable, Sendable {
              .blockReference,
              .attachmentImage,
              .attachmentVideo,
-             .attachmentFile:
+             .attachmentFile,
+             .drawing:
             return false
         }
     }
@@ -148,7 +150,8 @@ enum BlockType: String, Equatable, Sendable {
              .blockReference,
              .attachmentImage,
              .attachmentVideo,
-             .attachmentFile:
+             .attachmentFile,
+             .drawing:
             return false
         }
     }
@@ -158,8 +161,16 @@ enum AttachmentKind: String, Equatable, Sendable {
     case image
     case video
     case file
+    case drawing
+
+    static let drawingUTIType = "com.apple.drawing"
 
     init(utiType: String) {
+        if utiType == Self.drawingUTIType {
+            self = .drawing
+            return
+        }
+
         guard let type = UTType(utiType) else {
             self = .file
             return
@@ -182,6 +193,8 @@ enum AttachmentKind: String, Equatable, Sendable {
             return .attachmentVideo
         case .file:
             return .attachmentFile
+        case .drawing:
+            return .drawing
         }
     }
 }
@@ -373,7 +386,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
 private extension BlockType {
     var isAttachment: Bool {
         switch self {
-        case .attachmentImage, .attachmentVideo, .attachmentFile:
+        case .attachmentImage, .attachmentVideo, .attachmentFile, .drawing:
             return true
         default:
             return false
@@ -432,6 +445,8 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
             return []
         case .file:
             return []
+        case .drawing:
+            return localPath.isEmpty ? [] : [localPath]
         }
     }
 
@@ -449,6 +464,8 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
             }
             return .pending
         case .file:
+            return .unavailable
+        case .drawing:
             return .unavailable
         }
     }

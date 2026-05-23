@@ -123,6 +123,24 @@ final class MarkdownTransformerTests: XCTestCase {
         XCTAssertTrue(SlashCommandResolver.matchingCommands(for: "/").contains { $0.type == .attachmentFile })
     }
 
+    func testSlashCommandResolverMatchesAttachmentAndDrawingCommands() {
+        XCTAssertEqual(
+            SlashCommandResolver.matchingCommands(for: "/图片").map(\.type.rawValue),
+            ["attachmentImage"],
+            "/图片 should open an image-specific insertion command instead of the generic file command"
+        )
+        XCTAssertEqual(
+            SlashCommandResolver.matchingCommands(for: "/文件").map(\.type.rawValue),
+            ["attachmentFile"],
+            "/文件 should keep the generic file insertion command"
+        )
+        XCTAssertEqual(
+            SlashCommandResolver.matchingCommands(for: "/画板").map(\.type.rawValue),
+            ["drawing"],
+            "/画板 should insert a native drawing block"
+        )
+    }
+
     func testExportBlocksToMarkdown() {
         let blocks = [
             block(type: .heading1, text: "Title"),

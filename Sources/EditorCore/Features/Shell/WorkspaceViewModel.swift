@@ -3713,6 +3713,36 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    func updateDrawingBlock(blockID: String, data: Data) throws {
+        guard let attachmentRepository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+        guard let block = snapshot.blocks.first(where: { $0.id == blockID }),
+              block.type == .drawing,
+              let attachmentID = block.attachmentID else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        try attachmentRepository.updateDrawingAttachment(
+            attachmentID: attachmentID,
+            data: data
+        )
+        try load()
+    }
+
+    func updateDrawingBlockForUI(blockID: String, data: Data) {
+        do {
+            try updateDrawingBlock(blockID: blockID, data: data)
+            EditorLog.attachment.debug(
+                "drawing_block_updated block_id=\(blockID, privacy: .public) bytes=\(data.count, privacy: .public)"
+            )
+        } catch {
+            EditorLog.attachment.error(
+                "drawing_block_update_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     @discardableResult
     func purgeUnreferencedAttachments() throws -> Int {
         guard let attachmentRepository else {
@@ -4913,7 +4943,8 @@ private extension BlockType {
              .blockReference,
              .attachmentImage,
              .attachmentVideo,
-             .attachmentFile:
+             .attachmentFile,
+             .drawing:
             return false
         }
     }

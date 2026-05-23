@@ -3232,6 +3232,12 @@ final class PageRepository {
                 kind: .file,
                 filename: block.textPlain
             )
+        case .drawing:
+            return try attachmentBlockPayloadJSON(
+                attachmentID: block.attachmentID,
+                kind: .drawing,
+                filename: block.textPlain
+            )
         default:
             return try blockPayloadJSON(
                 type: block.type,
@@ -3303,7 +3309,7 @@ final class PageRepository {
     }
 
     private static func attachmentID(type: BlockType, payloadJSON: String) -> String? {
-        guard type == .attachmentImage || type == .attachmentVideo || type == .attachmentFile,
+        guard type == .attachmentImage || type == .attachmentVideo || type == .attachmentFile || type == .drawing,
               let data = payloadJSON.data(using: .utf8),
               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -3336,6 +3342,8 @@ final class PageRepository {
             return .video
         case .attachmentFile:
             return .file
+        case .drawing:
+            return .drawing
         default:
             return nil
         }

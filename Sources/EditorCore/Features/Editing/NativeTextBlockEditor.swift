@@ -477,7 +477,8 @@ enum BlockKeyboardFocusResolver {
              .blockReference,
              .attachmentImage,
              .attachmentVideo,
-             .attachmentFile:
+             .attachmentFile,
+             .drawing:
             return true
         }
     }
