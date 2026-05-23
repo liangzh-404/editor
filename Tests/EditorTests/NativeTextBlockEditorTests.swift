@@ -731,6 +731,33 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testNativeTextPasteSplitPolicyRoutesMultilineTextForEditableBlocksOnly() {
+        XCTAssertTrue(
+            NativeTextPasteSplitPolicy.shouldRouteToBlockPaste(
+                text: "Alpha\nBeta",
+                blockType: .paragraph
+            )
+        )
+        XCTAssertTrue(
+            NativeTextPasteSplitPolicy.shouldRouteToBlockPaste(
+                text: "Alpha\n\nBeta",
+                blockType: .unorderedListItem
+            )
+        )
+        XCTAssertFalse(
+            NativeTextPasteSplitPolicy.shouldRouteToBlockPaste(
+                text: "Alpha",
+                blockType: .paragraph
+            )
+        )
+        XCTAssertFalse(
+            NativeTextPasteSplitPolicy.shouldRouteToBlockPaste(
+                text: "let a = 1\nlet b = 2",
+                blockType: .codeBlock
+            )
+        )
+    }
+
     func testBlockKeyboardShortcutResolverHandlesTabIndentAndShiftTabOutdent() {
         XCTAssertEqual(
             BlockKeyboardShortcutResolver.indentationDirection(

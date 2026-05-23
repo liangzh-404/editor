@@ -743,6 +743,9 @@ private struct ThreeColumnEditorShell: View {
                     onReplaceTextAtSelection: { selection, replacementText in
                         viewModel.replaceTextAtSelectionForUI(selection: selection, replacementText: replacementText)
                     },
+                    onPasteTextAtSelection: { selection, pasteText in
+                        viewModel.pasteTextAtSelectionForUI(selection: selection, pasteText: pasteText)
+                    },
                     onMergeTextBlockWithPrevious: { blockID, selection in
                         viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
                     },
@@ -1088,6 +1091,9 @@ private struct ThreeColumnEditorShell: View {
                 },
                 onReplaceTextAtSelection: { selection, replacementText in
                     viewModel.replaceTextAtSelectionForUI(selection: selection, replacementText: replacementText)
+                },
+                onPasteTextAtSelection: { selection, pasteText in
+                    viewModel.pasteTextAtSelectionForUI(selection: selection, pasteText: pasteText)
                 },
                 onMergeTextBlockWithPrevious: { blockID, selection in
                     viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
@@ -4911,6 +4917,9 @@ private struct CompactPageDestination: View {
                 onReplaceTextAtSelection: { selection, replacementText in
                     viewModel.replaceTextAtSelectionForUI(selection: selection, replacementText: replacementText)
                 },
+                onPasteTextAtSelection: { selection, pasteText in
+                    viewModel.pasteTextAtSelectionForUI(selection: selection, pasteText: pasteText)
+                },
                 onMergeTextBlockWithPrevious: { blockID, selection in
                     viewModel.mergeTextBlockWithPreviousAtSelectionForUI(blockID: blockID, selection: selection)
                 },
@@ -8364,6 +8373,7 @@ private struct EditorCanvasView: View {
     let onInsertBlockAfter: (String) -> Bool
     let onSplitTextBlockAtSelection: (String, EditorTextSelection) -> EditorTextSelection?
     let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
+    let onPasteTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeTextBlockWithPrevious: (String, EditorTextSelection) -> EditorTextSelection?
     let onMergeTextBlockWithNext: (String, EditorTextSelection) -> EditorTextSelection?
     let onIndentBlock: (String) -> Bool
@@ -8648,6 +8658,16 @@ private struct EditorCanvasView: View {
                         },
                         onReplaceTextAtSelection: { selection, replacementText in
                             guard let nextSelection = onReplaceTextAtSelection(selection, replacementText) else {
+                                return nil
+                            }
+                            pendingFocusRequest = BlockFocusRequest(
+                                blockID: nextSelection.blockID,
+                                selection: nextSelection
+                            )
+                            return nextSelection
+                        },
+                        onPasteTextAtSelection: { selection, pasteText in
+                            guard let nextSelection = onPasteTextAtSelection(selection, pasteText) else {
                                 return nil
                             }
                             pendingFocusRequest = BlockFocusRequest(
@@ -12472,6 +12492,7 @@ private struct BlockRowView: View {
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
     let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
+    let onPasteTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onIndent: () -> Bool
@@ -12545,6 +12566,7 @@ private struct BlockRowView: View {
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onInsertBlockAfter: @escaping (EditorTextSelection) -> EditorTextSelection? = { _ in nil },
         onReplaceTextAtSelection: @escaping (EditorTextSelection, String) -> EditorTextSelection? = { _, _ in nil },
+        onPasteTextAtSelection: @escaping (EditorTextSelection, String) -> EditorTextSelection? = { _, _ in nil },
         onMergeBlockWithPrevious: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onMergeBlockWithNext: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onIndent: @escaping () -> Bool = { false },
@@ -12606,6 +12628,7 @@ private struct BlockRowView: View {
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
         self.onReplaceTextAtSelection = onReplaceTextAtSelection
+        self.onPasteTextAtSelection = onPasteTextAtSelection
         self.onMergeBlockWithPrevious = onMergeBlockWithPrevious
         self.onMergeBlockWithNext = onMergeBlockWithNext
         self.onIndent = onIndent
@@ -13332,6 +13355,7 @@ private struct BlockRowView: View {
             onInsertLinkByKeyboard: onInsertLinkByKeyboard,
             onInsertBlockAfter: onInsertBlockAfter,
             onReplaceTextAtSelection: onReplaceTextAtSelection,
+            onPasteTextAtSelection: onPasteTextAtSelection,
             onMergeBlockWithPrevious: onMergeBlockWithPrevious,
             onMergeBlockWithNext: onMergeBlockWithNext,
             onSlashCommandNavigationByKeyboard: handleSlashCommandNavigation,
@@ -13548,6 +13572,12 @@ private struct BlockRowView: View {
         let selection = mobileInlineFormatSelection ?? blockEndSelection
         guard isValidMobileSelection(selection) else {
             return false
+        }
+
+        if NativeTextPasteSplitPolicy.shouldRouteToBlockPaste(text: pasteText, blockType: block.type),
+           let nextSelection = onPasteTextAtSelection(selection, pasteText) {
+            requestMobileRefocusAfterFormatMutation(selection: nextSelection)
+            return true
         }
 
         let range = NSRange(location: selection.location, length: selection.length)

@@ -227,6 +227,18 @@ enum NativeTextNewlineReplacementResolver {
     }
 }
 
+enum NativeTextPasteSplitPolicy {
+    static func shouldRouteToBlockPaste(text: String, blockType: BlockType) -> Bool {
+        text.rangeOfCharacter(from: .newlines) != nil
+            && !PastedTextBlockLineResolver.lines(from: text).isEmpty
+            && BlockKeyboardShortcutResolver.insertsBlockAfter(
+                keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                modifiers: [],
+                blockType: blockType
+            )
+    }
+}
+
 enum MarkdownInlineFormatKeyboardResolver {
     static func format(
         input: String?,
@@ -950,6 +962,7 @@ struct NativeTextBlockEditor: View {
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
     let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
+    let onPasteTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onSlashCommandNavigationByKeyboard: (BlockKeyboardMoveDirection) -> Bool
@@ -984,6 +997,7 @@ struct NativeTextBlockEditor: View {
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onInsertBlockAfter: @escaping (EditorTextSelection) -> EditorTextSelection? = { _ in nil },
         onReplaceTextAtSelection: @escaping (EditorTextSelection, String) -> EditorTextSelection? = { _, _ in nil },
+        onPasteTextAtSelection: @escaping (EditorTextSelection, String) -> EditorTextSelection? = { _, _ in nil },
         onMergeBlockWithPrevious: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onMergeBlockWithNext: @escaping (EditorTextSelection) -> Bool = { _ in false },
         onSlashCommandNavigationByKeyboard: @escaping (BlockKeyboardMoveDirection) -> Bool = { _ in false },
@@ -1016,6 +1030,7 @@ struct NativeTextBlockEditor: View {
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
         self.onInsertBlockAfter = onInsertBlockAfter
         self.onReplaceTextAtSelection = onReplaceTextAtSelection
+        self.onPasteTextAtSelection = onPasteTextAtSelection
         self.onMergeBlockWithPrevious = onMergeBlockWithPrevious
         self.onMergeBlockWithNext = onMergeBlockWithNext
         self.onSlashCommandNavigationByKeyboard = onSlashCommandNavigationByKeyboard
@@ -1052,6 +1067,7 @@ struct NativeTextBlockEditor: View {
                 onInsertLinkByKeyboard: onInsertLinkByKeyboard,
                 onInsertBlockAfter: onInsertBlockAfter,
                 onReplaceTextAtSelection: onReplaceTextAtSelection,
+                onPasteTextAtSelection: onPasteTextAtSelection,
                 onMergeBlockWithPrevious: onMergeBlockWithPrevious,
                 onMergeBlockWithNext: onMergeBlockWithNext,
                 onSlashCommandNavigationByKeyboard: onSlashCommandNavigationByKeyboard,
@@ -1299,6 +1315,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
     let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
+    let onPasteTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onSlashCommandNavigationByKeyboard: (BlockKeyboardMoveDirection) -> Bool
@@ -1378,6 +1395,16 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                     location: selectedRange.location,
                     length: selectedRange.length
                 )
+            ) != nil
+        }
+        textView.onPasteTextAtSelection = { selectedRange, pasteText in
+            onPasteTextAtSelection(
+                EditorTextSelection(
+                    blockID: blockID,
+                    location: selectedRange.location,
+                    length: selectedRange.length
+                ),
+                pasteText
             ) != nil
         }
         textView.onMergeBlockWithPrevious = { selectedRange in
@@ -1482,6 +1509,16 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                         location: selectedRange.location,
                         length: selectedRange.length
                     )
+                ) != nil
+            }
+            textView.onPasteTextAtSelection = { selectedRange, pasteText in
+                onPasteTextAtSelection(
+                    EditorTextSelection(
+                        blockID: blockID,
+                        location: selectedRange.location,
+                        length: selectedRange.length
+                    ),
+                    pasteText
                 ) != nil
             }
             textView.onMergeBlockWithPrevious = { selectedRange in
@@ -1993,6 +2030,7 @@ private final class EditorNSTextView: NSTextView {
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
     var onInsertBlockAfter: ((NSRange) -> Bool)?
+    var onPasteTextAtSelection: ((NSRange, String) -> Bool)?
     var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
     var onMergeBlockWithNext: ((NSRange) -> Bool)?
     var onPasteAttachmentURLs: (([URL]) -> Bool)?
@@ -2264,6 +2302,12 @@ private final class EditorNSTextView: NSTextView {
             return
         }
 
+        if let pasteText = NSPasteboard.general.string(forType: .string),
+           NativeTextPasteSplitPolicy.shouldRouteToBlockPaste(text: pasteText, blockType: blockType),
+           onPasteTextAtSelection?(selectedRange(), pasteText) == true {
+            return
+        }
+
         super.paste(sender)
     }
 
@@ -2406,6 +2450,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
     let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
     let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
+    let onPasteTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onMergeBlockWithPrevious: (EditorTextSelection) -> Bool
     let onMergeBlockWithNext: (EditorTextSelection) -> Bool
     let onSlashCommandNavigationByKeyboard: (BlockKeyboardMoveDirection) -> Bool
@@ -2462,6 +2507,16 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                     location: selectedRange.location,
                     length: selectedRange.length
                 )
+            ) != nil
+        }
+        textView.onPasteTextAtSelection = { selectedRange, pasteText in
+            onPasteTextAtSelection(
+                EditorTextSelection(
+                    blockID: blockID,
+                    location: selectedRange.location,
+                    length: selectedRange.length
+                ),
+                pasteText
             ) != nil
         }
         textView.onMergeBlockWithPrevious = { selectedRange in
@@ -2575,6 +2630,16 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                         location: selectedRange.location,
                         length: selectedRange.length
                     )
+                ) != nil
+            }
+            textView.onPasteTextAtSelection = { selectedRange, pasteText in
+                onPasteTextAtSelection(
+                    EditorTextSelection(
+                        blockID: blockID,
+                        location: selectedRange.location,
+                        length: selectedRange.length
+                    ),
+                    pasteText
                 ) != nil
             }
             textView.onMergeBlockWithPrevious = { selectedRange in
@@ -3076,22 +3141,14 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             }
 
             if !NativeTextNewlineReplacementResolver.isSingleNewline(text),
-               let replacement = NativeTextNewlineReplacementResolver.replacement(
-                   currentText: textView.text,
-                   range: range,
-                   replacementText: text
-            ) {
-                parent.session.updateDraft(blockID: parent.blockID, text: replacement.updatedText)
-                parent.onTextChange(replacement.updatedText)
-                guard let nextSelection = parent.onInsertBlockAfter(
-                    EditorTextSelection(
-                        blockID: parent.blockID,
-                        location: replacement.newlineRange.location,
-                        length: replacement.newlineRange.length
-                    )
-                ) else {
-                    return false
-                }
+               let nextSelection = parent.onPasteTextAtSelection(
+                   EditorTextSelection(
+                       blockID: parent.blockID,
+                       location: range.location,
+                       length: range.length
+                   ),
+                   text
+               ) {
                 pendingPostSplitTextSelection = nextSelection
                 return false
             }
@@ -3337,6 +3394,7 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
     var onInsertBlockAfter: ((NSRange) -> Bool)?
+    var onPasteTextAtSelection: ((NSRange, String) -> Bool)?
     var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
     var onMergeBlockWithNext: ((NSRange) -> Bool)?
     var onSelectCurrentTextByKeyboard: (() -> Bool)?
@@ -3572,6 +3630,11 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
 
     override func paste(_ sender: Any?) {
         if pasteAttachmentsFromGeneralPasteboard() {
+            return
+        }
+        if let pasteText = UIPasteboard.general.string,
+           NativeTextPasteSplitPolicy.shouldRouteToBlockPaste(text: pasteText, blockType: blockType),
+           onPasteTextAtSelection?(selectedRange, pasteText) == true {
             return
         }
         super.paste(sender)

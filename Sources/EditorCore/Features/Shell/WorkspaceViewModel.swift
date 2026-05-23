@@ -2695,6 +2695,94 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     @discardableResult
+    func pasteTextAtSelection(
+        selection: EditorTextSelection,
+        pasteText: String
+    ) throws -> EditorTextSelection? {
+        guard let block = snapshot.blocks.first(where: { $0.id == selection.blockID && $0.type.isTextEditable }) else {
+            return nil
+        }
+
+        let pastedLines = PastedTextBlockLineResolver.lines(from: pasteText)
+        guard !pastedLines.isEmpty else {
+            return nil
+        }
+
+        guard pastedLines.count > 1,
+              BlockKeyboardShortcutResolver.insertsBlockAfter(
+                  keyCode: BlockKeyboardShortcutResolver.returnKeyCode,
+                  modifiers: [],
+                  blockType: block.type
+              ) else {
+            return try replaceTextAtSelection(selection: selection, replacementText: pastedLines[0])
+        }
+
+        let nsText = block.textPlain as NSString
+        guard selection.location >= 0,
+              selection.length >= 0,
+              selection.location <= nsText.length,
+              selection.length <= nsText.length - selection.location else {
+            return nil
+        }
+
+        guard let repository else {
+            throw WorkspaceViewModelError.missingRepository
+        }
+
+        let selectedRange = NSRange(location: selection.location, length: selection.length)
+        let leadingText = nsText.substring(to: selectedRange.location)
+        let trailingText = nsText.substring(from: NSMaxRange(selectedRange))
+        let insertedBlockType = TextBlockSplitPolicy.insertedBlockType(after: block.type)
+        let lastPastedLine = pastedLines[pastedLines.count - 1]
+        let subsequentLines = Array(pastedLines.dropFirst())
+        var lastInsertedBlock: BlockSnapshot?
+
+        try performPageEdit(pageID: block.pageID, focusBlockID: nil) {
+            try repository.updateBlock(
+                blockID: block.id,
+                type: block.type,
+                text: leadingText + pastedLines[0],
+                taskItemIsCompleted: block.taskItemIsCompleted,
+                toggleIsExpanded: block.toggleIsExpanded,
+                codeBlockLineWrapping: block.codeBlockLineWrapping
+            )
+
+            var anchorBlockID = block.id
+            for (index, line) in subsequentLines.enumerated() {
+                let isLastInsertedLine = index == subsequentLines.count - 1
+                let insertedText = isLastInsertedLine ? line + trailingText : line
+                let insertedBlock = try repository.insertParagraphBlock(after: anchorBlockID, text: insertedText)
+                if insertedBlockType != .paragraph {
+                    try repository.updateBlock(
+                        blockID: insertedBlock.id,
+                        type: insertedBlockType,
+                        text: insertedText,
+                        taskItemIsCompleted: false
+                    )
+                }
+                anchorBlockID = insertedBlock.id
+                lastInsertedBlock = insertedBlock
+            }
+
+            try load()
+        }
+
+        guard let lastInsertedBlock else {
+            return nil
+        }
+        updateLastPageEditFocusBlockID(pageID: block.pageID, focusBlockID: lastInsertedBlock.id)
+        pendingFocusBlockID = lastInsertedBlock.id
+        EditorLog.focus.debug(
+            "editor_focus_request_queued block_id=\(lastInsertedBlock.id, privacy: .public) source=paste_text_split"
+        )
+        return EditorTextSelection(
+            blockID: lastInsertedBlock.id,
+            location: (lastPastedLine as NSString).length,
+            length: 0
+        )
+    }
+
+    @discardableResult
     func mergeTextBlockWithPreviousAtSelection(
         blockID: String,
         selection: EditorTextSelection
@@ -3018,6 +3106,26 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.input.error(
                 "text_replace_at_selection_failed block_id=\(selection.blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func pasteTextAtSelectionForUI(
+        selection: EditorTextSelection,
+        pasteText: String
+    ) -> EditorTextSelection? {
+        do {
+            let nextSelection = try pasteTextAtSelection(selection: selection, pasteText: pasteText)
+            if let nextSelection {
+                EditorLog.input.debug(
+                    "text_pasted_at_selection block_id=\(selection.blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public) paste_length=\(pasteText.count, privacy: .public) focus_block_id=\(nextSelection.blockID, privacy: .public)"
+                )
+            }
+            return nextSelection
+        } catch {
+            EditorLog.input.error(
+                "text_paste_at_selection_failed block_id=\(selection.blockID, privacy: .public) location=\(selection.location, privacy: .public) length=\(selection.length, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return nil
         }
@@ -4772,6 +4880,15 @@ enum TextBlockSplitPolicy {
         default:
             return .paragraph
         }
+    }
+}
+
+enum PastedTextBlockLineResolver {
+    static func lines(from text: String) -> [String] {
+        text
+            .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { !$0.isEmpty }
     }
 }
 

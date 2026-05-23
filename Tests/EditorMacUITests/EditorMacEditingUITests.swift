@@ -1447,15 +1447,17 @@ final class EditorMacEditingUITests: XCTestCase {
     }
 
     @MainActor
-    func testPastedMultilineTextExpandsNativeTextViewHeight() {
+    func testPastedMultilineTextCreatesOneBlockPerLine() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
         app.launch()
 
+        openWelcomePageForPageToolbarActions(in: app)
+
         let textView = app.textViews["editor.text.block-welcome-001"]
         XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before paste")
-        let initialHeight = textView.frame.height
-        let multilineText = (1...8)
+        let initialTextViewCount = app.textViews.count
+        let multilineText = (1...3)
             .map { "Pasted line \($0)" }
             .joined(separator: "\n")
         NSPasteboard.general.clearContents()
@@ -1469,14 +1471,24 @@ final class EditorMacEditingUITests: XCTestCase {
         textView.typeKey("a", modifierFlags: .command)
         textView.typeKey("v", modifierFlags: .command)
 
+        let secondPastedTextView = app.textViews.element(boundBy: initialTextViewCount)
+        let thirdPastedTextView = app.textViews.element(boundBy: initialTextViewCount + 1)
+
         XCTAssertTrue(
-            textView.waitForValue(containing: "Pasted line 8", timeout: 5),
-            "Pasting multiline text should update the native text view value"
+            textView.waitForValue(equalTo: "Pasted line 1", timeout: 5),
+            "The original block should keep the first pasted line"
         )
-        XCTAssertGreaterThan(
-            textView.frame.height,
-            initialHeight + 72,
-            "Native text view should grow enough to show multiline pasted text without internal clipping"
+        XCTAssertTrue(
+            secondPastedTextView.waitForValue(equalTo: "Pasted line 2", timeout: 5),
+            "The second pasted line should become its own block"
+        )
+        XCTAssertTrue(
+            thirdPastedTextView.waitForValue(equalTo: "Pasted line 3", timeout: 5),
+            "The third pasted line should become its own block"
+        )
+        XCTAssertTrue(
+            thirdPastedTextView.waitForKeyboardFocus(timeout: 5),
+            "Keyboard focus should land at the end of the last pasted block"
         )
     }
 

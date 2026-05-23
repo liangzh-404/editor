@@ -1174,6 +1174,36 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPasteMultilineTextAtSelectionCreatesOneBlockPerLine() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        try viewModel.updateBlockText(blockID: blockID, text: "Prefix Tail")
+
+        let nextSelection = try XCTUnwrap(
+            try viewModel.pasteTextAtSelection(
+                selection: EditorTextSelection(
+                    blockID: blockID,
+                    location: ("Prefix " as NSString).length,
+                    length: 0
+                ),
+                pasteText: "One\nTwo\nThree"
+            )
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), ["Prefix One", "Two", "ThreeTail"])
+        XCTAssertEqual(nextSelection.blockID, viewModel.visibleBlocks[2].id)
+        XCTAssertEqual(nextSelection.location, ("Three" as NSString).length)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, viewModel.visibleBlocks[2].id)
+    }
+
+    @MainActor
     func testPageEditUndoHistoryKeepsMostRecentOneHundredOperations() throws {
         let database = try migratedDatabase()
         defer { database.close() }
