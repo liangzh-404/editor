@@ -352,6 +352,38 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneFocusedEditorDismissesKeyboardWhenCanvasScrollContinuesUpward() {
+        let app = makeApp(extraEnvironment: ["EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT": "40"])
+        app.launch()
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The first text block should be editable before checking focused scrolling")
+        firstTextView.tap()
+
+        let toolbar = app.otherElements["editor.mobile-keyboard-toolbar"]
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 5), "The focused editor should show the keyboard toolbar before scrolling")
+        XCTAssertTrue(
+            waitForKeyboardFocus(firstTextView, timeout: 5),
+            "The first text block should hold keyboard focus before the long upward canvas scroll"
+        )
+
+        let canvas = app.scrollViews["editor.canvas-scroll"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5), "The editor canvas should be scrollable")
+        canvas.swipeUp(velocity: .fast)
+
+        XCTAssertTrue(
+            waitForNonExistence(toolbar, timeout: 5),
+            "A continued upward canvas scroll from a focused editor should dismiss the keyboard instead of sticking to the cursor"
+        )
+        XCTAssertFalse(
+            waitForKeyboardFocus(firstTextView, timeout: 0.5),
+            "After the long upward scroll, the original text view should no longer force the cursor to stay active"
+        )
+    }
+
+    @MainActor
     func testIPhoneKeyboardHeadingButtonOpensH1H2H3Palette() {
         let app = makeApp()
         app.launch()

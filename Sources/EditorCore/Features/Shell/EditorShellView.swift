@@ -8876,6 +8876,9 @@ private struct EditorCanvasView: View {
             )
             }
             .accessibilityIdentifier("editor.canvas-scroll")
+#if os(iOS)
+            .scrollDismissesKeyboard(.interactively)
+#endif
             .coordinateSpace(name: EditorCanvasCoordinateSpace.blockSelection)
             .onPreferenceChange(BlockRowFramePreferenceKey.self) { frames in
 #if os(macOS)
