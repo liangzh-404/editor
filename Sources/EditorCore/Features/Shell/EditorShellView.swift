@@ -71,13 +71,13 @@ enum EditorDesignTokens {
 
     enum Layout {
         static let editorMaxWidth: Double = 680
-        static let editorExpandedMaxWidth: Double = 860
-        static let sidebarMinWidth: Double = 180
-        static let sidebarIdealWidth: Double = 220
-        static let sidebarMaxWidth: Double = 320
-        static let documentListMinWidth: Double = 240
-        static let documentListIdealWidth: Double = 300
-        static let documentListMaxWidth: Double = 420
+        static let editorExpandedMaxWidth: Double = 688
+        static let sidebarMinWidth: Double = 240
+        static let sidebarIdealWidth: Double = 288
+        static let sidebarMaxWidth: Double = 360
+        static let documentListMinWidth: Double = 300
+        static let documentListIdealWidth: Double = 360
+        static let documentListMaxWidth: Double = 460
         static let documentListRowMinHeight: Double = 72
         static let documentListSelectedAccentWidth: Double = 3
         static let rowCornerRadius: Double = 8
@@ -219,41 +219,41 @@ enum EditorCanvasWidthPolicy {
         EditorDesignTokens.Layout.editorExpandedMaxWidth
     }
 
-    static func leadingGap(
+    static func editorColumnWidth(
         containerWidth: CGFloat,
-        editorMaxWidth: CGFloat,
-        horizontalPadding: CGFloat
+        horizontalPadding: CGFloat,
+        editorMaxWidth: CGFloat
     ) -> CGFloat {
-        max(0, (containerWidth - centeredContentWidth(
+        max(0, min(editorMaxWidth, containerWidth - horizontalPadding * 2))
+    }
+
+    static func centeredContentFrameWidth(
+        containerWidth: CGFloat,
+        horizontalPadding: CGFloat,
+        editorMaxWidth: CGFloat
+    ) -> CGFloat {
+        editorColumnWidth(
             containerWidth: containerWidth,
-            editorMaxWidth: editorMaxWidth,
-            horizontalPadding: horizontalPadding
-        )) / 2)
+            horizontalPadding: horizontalPadding,
+            editorMaxWidth: editorMaxWidth
+        ) + horizontalPadding * 2
     }
 
-    static func trailingGap(
+    static func centeredSideInset(
         containerWidth: CGFloat,
-        editorMaxWidth: CGFloat,
-        horizontalPadding: CGFloat
+        contentFrameWidth: CGFloat
     ) -> CGFloat {
-        leadingGap(
-            containerWidth: containerWidth,
-            editorMaxWidth: editorMaxWidth,
-            horizontalPadding: horizontalPadding
-        )
+        max(0, (containerWidth - contentFrameWidth) / 2)
     }
+}
 
-    static func scrollContentFrameWidth(containerWidth: CGFloat) -> CGFloat {
-        max(0, containerWidth)
-    }
+#if os(macOS)
+enum DesktopInlineOutlineUserPreference: String, Equatable, Sendable {
+    static let appStorageKey = "editor.desktopInlineOutline.userPreference"
 
-    private static func centeredContentWidth(
-        containerWidth: CGFloat,
-        editorMaxWidth: CGFloat,
-        horizontalPadding: CGFloat
-    ) -> CGFloat {
-        min(max(0, containerWidth), editorMaxWidth + horizontalPadding * 2)
-    }
+    case automatic
+    case expanded
+    case collapsed
 }
 
 enum DesktopInlineOutlinePresentation: Equatable, Sendable {
@@ -262,24 +262,33 @@ enum DesktopInlineOutlinePresentation: Equatable, Sendable {
     case collapsed
 }
 
-enum DesktopInlineOutlineUserPreference: String, Equatable, Sendable {
-    case automatic
-    case expanded
-    case collapsed
-
-    static let appStorageKey = "editor.desktopInlineOutline.userPreference"
+enum DesktopInlineOutlineToggleAction: Equatable, Sendable {
+    case persist(DesktopInlineOutlineUserPreference)
+    case togglePopover
 }
 
 enum DesktopInlineOutlinePlacementPolicy {
-    static let expandedWidth: CGFloat = 180
-    static let collapsedWidth: CGFloat = 42
-    private static let contentSpacing: CGFloat = 18
-    private static let minimumWindowEdgeInset: CGFloat = 12
-    private static let minimumReadableLeftGap: CGFloat = 120
-    private static let preferredTopOffset: CGFloat = 112
+    static let expandedWidth: CGFloat = 184
+    static let collapsedWidth: CGFloat = 28
+    static let contentSpacing: CGFloat = 20
+    static let minimumWindowEdgeInset: CGFloat = 12
+    static let minimumReadableLeftGap: CGFloat = 120
+    static let preferredTopOffset: CGFloat = 86
 
-    static var minimumExpandedLeadingGap: CGFloat {
-        minimumReadableLeftGap
+    static func leadingGap(
+        containerWidth: CGFloat,
+        horizontalPadding: CGFloat,
+        editorMaxWidth: CGFloat
+    ) -> CGFloat {
+        let frameWidth = EditorCanvasWidthPolicy.centeredContentFrameWidth(
+            containerWidth: containerWidth,
+            horizontalPadding: horizontalPadding,
+            editorMaxWidth: editorMaxWidth
+        )
+        return EditorCanvasWidthPolicy.centeredSideInset(
+            containerWidth: containerWidth,
+            contentFrameWidth: frameWidth
+        )
     }
 
     static func presentation(
@@ -304,14 +313,8 @@ enum DesktopInlineOutlinePlacementPolicy {
     }
 
     static func canExpand(leadingGap: CGFloat) -> Bool {
-        leadingGap >= minimumExpandedLeadingGap
-    }
-
-    static func showsPopover(
-        presentation: DesktopInlineOutlinePresentation,
-        isTriggerHovered: Bool
-    ) -> Bool {
-        presentation == .collapsed && isTriggerHovered
+        leadingGap >= expandedWidth + contentSpacing + minimumWindowEdgeInset
+            && leadingGap >= minimumReadableLeftGap
     }
 
     static func xOffset(
@@ -320,7 +323,7 @@ enum DesktopInlineOutlinePlacementPolicy {
     ) -> CGFloat {
         switch presentation {
         case .hidden:
-            return 0
+            return minimumWindowEdgeInset
         case .expanded:
             return max(minimumWindowEdgeInset, leadingGap - expandedWidth - contentSpacing)
         case .collapsed:
@@ -333,9 +336,19 @@ enum DesktopInlineOutlinePlacementPolicy {
     }
 
     static func topOffset(containerHeight: CGFloat) -> CGFloat {
-        min(preferredTopOffset, max(84, containerHeight * 0.12))
+        min(preferredTopOffset, max(64, containerHeight * 0.09))
     }
 }
+
+enum DesktopInlineOutlineTogglePolicy {
+    static func triggerAction(leadingGap: CGFloat) -> DesktopInlineOutlineToggleAction {
+        if DesktopInlineOutlinePlacementPolicy.canExpand(leadingGap: leadingGap) {
+            return .persist(.expanded)
+        }
+        return .togglePopover
+    }
+}
+#endif
 
 enum DesktopInlineOutlineActiveHeadingResolver {
     static let activationY: CGFloat = 160
@@ -1241,9 +1254,9 @@ private struct ThreeColumnEditorShell: View {
 enum DesktopColumnDividerChrome {
     static let hitWidth: Double = 9
     static let lineWidth: Double = 1
-    static let idleOpacity: Double = 0.18
-    static let hoverOpacity: Double = 0.34
-    static let draggingOpacity: Double = 0.50
+    static let idleOpacity: Double = 0.24
+    static let hoverOpacity: Double = 0.40
+    static let draggingOpacity: Double = 0.58
 }
 
 enum CompactPagePushAnimationPolicy {
@@ -8886,15 +8899,17 @@ private struct EditorCanvasView: View {
                     return moveDroppedBlocksToEnd(draggedBlockIDs)
                 }
             }
-            .frame(maxWidth: activeEditorMaxWidth, alignment: .leading)
+            .frame(
+                width: EditorCanvasWidthPolicy.editorColumnWidth(
+                    containerWidth: canvasProxy.size.width,
+                    horizontalPadding: CGFloat(EditorCanvasChromeLayout.horizontalPadding),
+                    editorMaxWidth: activeEditorMaxWidth
+                ),
+                alignment: .leading
+            )
             .padding(.horizontal, CGFloat(EditorCanvasChromeLayout.horizontalPadding))
             .padding(.vertical, CGFloat(EditorCanvasChromeLayout.verticalPadding))
-            .frame(
-                width: EditorCanvasWidthPolicy.scrollContentFrameWidth(
-                    containerWidth: canvasProxy.size.width
-                ),
-                alignment: .center
-            )
+            .frame(width: canvasProxy.size.width, alignment: .center)
             }
             .accessibilityIdentifier("editor.canvas-scroll")
 #if os(iOS)
@@ -9440,76 +9455,73 @@ private struct EditorCanvasView: View {
 
     @ViewBuilder
     private func desktopInlineOutlineLayer(containerSize: CGSize) -> some View {
-        let leadingGap = EditorCanvasWidthPolicy.leadingGap(
+        let horizontalPadding = CGFloat(EditorCanvasChromeLayout.horizontalPadding)
+        let leadingGap = DesktopInlineOutlinePlacementPolicy.leadingGap(
             containerWidth: containerSize.width,
-            editorMaxWidth: activeEditorMaxWidth,
-            horizontalPadding: CGFloat(EditorCanvasChromeLayout.horizontalPadding)
+            horizontalPadding: horizontalPadding,
+            editorMaxWidth: activeEditorMaxWidth
         )
         let presentation = DesktopInlineOutlinePlacementPolicy.presentation(
             outlineItemCount: outlineItems.count,
             leadingGap: leadingGap,
             userPreference: desktopOutlineUserPreference
         )
-        let outlineTopOffset = DesktopInlineOutlinePlacementPolicy.topOffset(containerHeight: containerSize.height)
-        let isPopoverPresented = DesktopInlineOutlinePlacementPolicy.showsPopover(
-            presentation: presentation,
-            isTriggerHovered: isDesktopOutlineTriggerHovered
-                || isDesktopOutlinePopoverHovered
-                || isDesktopOutlinePopoverPinned
-        )
+        let canExpand = DesktopInlineOutlinePlacementPolicy.canExpand(leadingGap: leadingGap)
+        let topOffset = DesktopInlineOutlinePlacementPolicy.topOffset(containerHeight: containerSize.height)
+        let shouldShowPopover = !canExpand
+            && (isDesktopOutlineTriggerHovered || isDesktopOutlinePopoverHovered || isDesktopOutlinePopoverPinned)
 
         ZStack(alignment: .topLeading) {
-            switch presentation {
-            case .hidden:
-                EmptyView()
-            case .expanded:
-                DesktopInlineOutline(
-                    style: .inline,
-                    outlineItems: outlineItems,
-                    activeBlockID: desktopOutlineActiveBlockID,
-                    onSelectOutlineItem: selectDesktopOutlineItem,
-                    onCollapse: {
-                        desktopOutlineUserPreferenceRawValue = DesktopInlineOutlineUserPreference.collapsed.rawValue
-                    }
-                )
-                .offset(
-                    x: DesktopInlineOutlinePlacementPolicy.xOffset(
-                        leadingGap: leadingGap,
-                        presentation: presentation
-                    ),
-                    y: outlineTopOffset
-                )
-            case .collapsed:
-                DesktopInlineOutlineTriggerButton(isPopoverPresented: isPopoverPresented) {
-                    toggleDesktopInlineOutline(leadingGap: leadingGap)
-                }
-                .onHover { isHovered in
-                    isDesktopOutlineTriggerHovered = isHovered
-                }
-                .offset(
-                    x: DesktopInlineOutlinePlacementPolicy.xOffset(
-                        leadingGap: leadingGap,
-                        presentation: presentation
-                    ),
-                    y: outlineTopOffset
-                )
-
-                if isPopoverPresented {
+            if presentation != .hidden {
+                if presentation == .expanded {
                     DesktopInlineOutline(
-                        style: .popover,
                         outlineItems: outlineItems,
                         activeBlockID: desktopOutlineActiveBlockID,
+                        style: .inline,
                         onSelectOutlineItem: selectDesktopOutlineItem,
-                        onCollapse: nil
+                        onCollapse: collapseDesktopInlineOutline
                     )
-                    .onHover { isHovered in
-                        isDesktopOutlinePopoverHovered = isHovered
-                    }
                     .offset(
-                        x: DesktopInlineOutlinePlacementPolicy.popoverXOffset(leadingGap: leadingGap),
-                        y: outlineTopOffset
+                        x: DesktopInlineOutlinePlacementPolicy.xOffset(
+                            leadingGap: leadingGap,
+                            presentation: .expanded
+                        ),
+                        y: topOffset
                     )
-                    .transition(.opacity)
+                } else {
+                    DesktopInlineOutlineTriggerButton(
+                        isPopoverPresented: shouldShowPopover,
+                        onToggle: {
+                            toggleDesktopInlineOutlineTrigger(leadingGap: leadingGap)
+                        },
+                        onHoverChange: { isHovering in
+                            isDesktopOutlineTriggerHovered = isHovering
+                        }
+                    )
+                    .offset(
+                        x: DesktopInlineOutlinePlacementPolicy.xOffset(
+                            leadingGap: leadingGap,
+                            presentation: .collapsed
+                        ),
+                        y: topOffset
+                    )
+
+                    if shouldShowPopover {
+                        DesktopInlineOutline(
+                            outlineItems: outlineItems,
+                            activeBlockID: desktopOutlineActiveBlockID,
+                            style: .popover,
+                            onSelectOutlineItem: selectDesktopOutlineItem,
+                            onCollapse: nil
+                        )
+                        .onHover { isHovering in
+                            isDesktopOutlinePopoverHovered = isHovering
+                        }
+                        .offset(
+                            x: DesktopInlineOutlinePlacementPolicy.popoverXOffset(leadingGap: leadingGap),
+                            y: topOffset
+                        )
+                    }
                 }
             }
         }
@@ -9528,22 +9540,22 @@ private struct EditorCanvasView: View {
 
     private func selectDesktopOutlineItem(_ item: PageOutlineItem) {
         desktopOutlineSelectedBlockID = item.blockID
-        isDesktopOutlineTriggerHovered = false
-        isDesktopOutlinePopoverHovered = false
         isDesktopOutlinePopoverPinned = false
+        isDesktopOutlineTriggerHovered = false
         onSelectOutlineItem(item)
     }
 
-    private func toggleDesktopInlineOutline(leadingGap: CGFloat) {
-        if DesktopInlineOutlinePlacementPolicy.canExpand(leadingGap: leadingGap),
-           desktopOutlineUserPreference == .collapsed {
-            desktopOutlineUserPreferenceRawValue = DesktopInlineOutlineUserPreference.expanded.rawValue
+    private func collapseDesktopInlineOutline() {
+        desktopOutlineUserPreferenceRawValue = DesktopInlineOutlineUserPreference.collapsed.rawValue
+        isDesktopOutlinePopoverPinned = false
+    }
+
+    private func toggleDesktopInlineOutlineTrigger(leadingGap: CGFloat) {
+        switch DesktopInlineOutlineTogglePolicy.triggerAction(leadingGap: leadingGap) {
+        case let .persist(preference):
+            desktopOutlineUserPreferenceRawValue = preference.rawValue
             isDesktopOutlinePopoverPinned = false
-        } else if DesktopInlineOutlinePlacementPolicy.canExpand(leadingGap: leadingGap),
-                  desktopOutlineUserPreference == .automatic {
-            desktopOutlineUserPreferenceRawValue = DesktopInlineOutlineUserPreference.collapsed.rawValue
-            isDesktopOutlinePopoverPinned = false
-        } else {
+        case .togglePopover:
             isDesktopOutlinePopoverPinned.toggle()
         }
     }
@@ -11372,67 +11384,61 @@ private enum DesktopInlineOutlineStyle {
 }
 
 private struct DesktopInlineOutline: View {
-    let style: DesktopInlineOutlineStyle
     let outlineItems: [PageOutlineItem]
     let activeBlockID: String?
+    let style: DesktopInlineOutlineStyle
     let onSelectOutlineItem: (PageOutlineItem) -> Void
     let onCollapse: (() -> Void)?
 
     var body: some View {
-        switch style {
-        case .inline:
-            outlineContent
-                .padding(.vertical, 4)
-                .padding(.horizontal, 0)
-                .frame(width: DesktopInlineOutlinePlacementPolicy.expandedWidth, alignment: .leading)
-                .accessibilityIdentifier("editor.desktop-inline-outline")
-        case .popover:
-            outlineContent
-                .padding(.vertical, 12)
-                .padding(.horizontal, 10)
-                .frame(width: DesktopInlineOutlinePlacementPolicy.expandedWidth, alignment: .leading)
-                .background(
-                    EditorDesignTokens.Colors.editorBackground.color.opacity(0.96),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(EditorDesignTokens.Colors.border.color.opacity(0.80), lineWidth: 1)
-                )
-                .shadow(
-                    color: EditorDesignTokens.Shadows.popoverSmall.swiftUIColor,
-                    radius: CGFloat(EditorDesignTokens.Shadows.popoverSmall.radius),
-                    x: CGFloat(EditorDesignTokens.Shadows.popoverSmall.x),
-                    y: CGFloat(EditorDesignTokens.Shadows.popoverSmall.y)
-                )
-                .accessibilityIdentifier("editor.desktop-inline-outline-popover")
-        }
-    }
-
-    private var outlineContent: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let onCollapse {
-                HStack {
-                    Spacer(minLength: 0)
-                    Button(action: onCollapse) {
-                        Image(systemName: "chevron.left.2")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
-                            .frame(width: 26, height: 26)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("收起大纲")
-                    .accessibilityIdentifier("editor.desktop-inline-outline.collapse")
+        VStack(alignment: .leading, spacing: 6) {
+            if style == .inline, let onCollapse {
+                Button(action: onCollapse) {
+                    Image(systemName: "chevron.left.2")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color.opacity(0.74))
+                        .frame(width: 22, height: 22, alignment: .leading)
                 }
-                .padding(.trailing, 4)
+                .buttonStyle(.plain)
+                .help("收起大纲")
+                .accessibilityLabel("收起大纲")
+                .accessibilityIdentifier("editor.desktop-inline-outline-collapse")
             }
 
             OutlinePanel(
                 outlineItems: outlineItems,
                 activeBlockID: activeBlockID,
+                style: style == .inline ? .inline : .popover,
                 onSelectOutlineItem: onSelectOutlineItem
             )
+        }
+        .padding(.vertical, style == .inline ? 0 : 10)
+        .padding(.horizontal, style == .inline ? 0 : 10)
+        .frame(width: DesktopInlineOutlinePlacementPolicy.expandedWidth, alignment: .leading)
+        .background(background)
+        .overlay(border)
+        .shadow(
+            color: style == .popover ? EditorDesignTokens.Shadows.popoverSmall.swiftUIColor : .clear,
+            radius: style == .popover ? CGFloat(EditorDesignTokens.Shadows.popoverSmall.radius) : 0,
+            x: style == .popover ? CGFloat(EditorDesignTokens.Shadows.popoverSmall.x) : 0,
+            y: style == .popover ? CGFloat(EditorDesignTokens.Shadows.popoverSmall.y) : 0
+        )
+        .accessibilityIdentifier(style == .inline ? "editor.desktop-inline-outline" : "editor.desktop-inline-outline-popover")
+    }
+
+    @ViewBuilder
+    private var background: some View {
+        if style == .popover {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(EditorDesignTokens.Colors.editorBackground.color.opacity(0.96))
+        }
+    }
+
+    @ViewBuilder
+    private var border: some View {
+        if style == .popover {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(EditorDesignTokens.Colors.border.color.opacity(0.70), lineWidth: 1)
         }
     }
 }
@@ -11440,27 +11446,39 @@ private struct DesktopInlineOutline: View {
 private struct DesktopInlineOutlineTriggerButton: View {
     let isPopoverPresented: Bool
     let onToggle: () -> Void
+    let onHoverChange: (Bool) -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
         Button(action: onToggle) {
-            Image(systemName: isPopoverPresented ? "list.bullet.rectangle.fill" : "list.bullet.rectangle")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(
+                    EditorDesignTokens.Colors.secondaryText.color.opacity(
+                        isHovering || isPopoverPresented ? 0.78 : 0.34
+                    )
+                )
                 .frame(
                     width: DesktopInlineOutlinePlacementPolicy.collapsedWidth,
-                    height: 42
+                    height: 30
                 )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            Capsule(style: .continuous)
                 .fill(
-                    isPopoverPresented
-                        ? EditorDesignTokens.Colors.border.color.opacity(0.42)
-                        : Color.clear
+                    EditorDesignTokens.Colors.border.color.opacity(
+                        isHovering || isPopoverPresented ? 0.18 : 0
+                    )
                 )
         )
+        .onHover { hovering in
+            isHovering = hovering
+            onHoverChange(hovering)
+        }
+        .help("显示大纲")
         .accessibilityLabel("显示大纲")
         .accessibilityIdentifier("editor.desktop-inline-outline-trigger")
     }
@@ -11607,50 +11625,103 @@ private struct ExternalLinksPanel: View {
     }
 }
 
+private enum OutlinePanelStyle {
+    case standard
+    case inline
+    case popover
+
+    var showsTitle: Bool {
+        self == .standard
+    }
+
+    var showsLevelBadges: Bool {
+        self == .standard
+    }
+
+    var topPadding: CGFloat {
+        switch self {
+        case .standard:
+            return 10
+        case .inline, .popover:
+            return 0
+        }
+    }
+
+    var rowHorizontalPadding: CGFloat {
+        switch self {
+        case .standard:
+            return 8
+        case .inline:
+            return 0
+        case .popover:
+            return 6
+        }
+    }
+
+    var rowVerticalPadding: CGFloat {
+        switch self {
+        case .standard:
+            return 7
+        case .inline, .popover:
+            return 4
+        }
+    }
+
+    var indentWidth: CGFloat {
+        switch self {
+        case .standard:
+            return 12
+        case .inline, .popover:
+            return 14
+        }
+    }
+}
+
 private struct OutlinePanel: View {
     let outlineItems: [PageOutlineItem]
     let activeBlockID: String?
+    var style: OutlinePanelStyle = .standard
     let onSelectOutlineItem: (PageOutlineItem) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("大纲")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("editor.outline")
+        VStack(alignment: .leading, spacing: style == .standard ? 8 : 3) {
+            if style.showsTitle {
+                Text("大纲")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("editor.outline")
+            }
 
             ForEach(outlineItems) { item in
                 let isActive = item.blockID == activeBlockID
                 Button {
                     onSelectOutlineItem(item)
                 } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("H\(min(max(item.level, 1), 6))")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
-                            .frame(width: 22, height: 18)
-                            .background(EditorDesignTokens.Colors.border.color.opacity(0.62))
-                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    HStack(alignment: .firstTextBaseline, spacing: style.showsLevelBadges ? 8 : 0) {
+                        if style.showsLevelBadges {
+                            Text("H\(min(max(item.level, 1), 6))")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                                .frame(width: 22, height: 18)
+                                .background(EditorDesignTokens.Colors.border.color.opacity(0.62))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        }
 
                         Text(item.title)
-                            .font(.callout)
+                            .font(style == .standard ? .callout : .caption)
                             .lineLimit(1)
-                            .foregroundStyle(
-                                isActive
-                                    ? EditorDesignTokens.Colors.primaryText.color
-                                    : EditorDesignTokens.Colors.secondaryText.color
-                            )
+                            .foregroundStyle(titleColor(isActive: isActive))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.leading, CGFloat(max(item.level - 1, 0)) * 12)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 7)
+                    .padding(.leading, CGFloat(max(item.level - 1, 0)) * style.indentWidth)
+                    .padding(.horizontal, style.rowHorizontalPadding)
+                    .padding(.vertical, style.rowVerticalPadding)
                     .background(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(isActive ? EditorDesignTokens.Colors.accent.color.opacity(0.12) : Color.clear)
+                            .fill(activeBackground(isActive: isActive))
                     )
                     .overlay(alignment: .leading) {
-                        if isActive {
+                        if isActive && style == .standard {
                             RoundedRectangle(cornerRadius: 2, style: .continuous)
                                 .fill(EditorDesignTokens.Colors.accent.color.opacity(0.78))
                                 .frame(width: 3)
@@ -11665,9 +11736,36 @@ private struct OutlinePanel: View {
                 .accessibilityIdentifier("editor.outline.\(item.blockID)")
             }
         }
-        .padding(.top, 10)
+        .padding(.top, style.topPadding)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("editor.outline")
+    }
+
+    private func titleColor(isActive: Bool) -> Color {
+        switch style {
+        case .standard:
+            return isActive
+                ? EditorDesignTokens.Colors.primaryText.color
+                : EditorDesignTokens.Colors.secondaryText.color
+        case .inline, .popover:
+            return isActive
+                ? EditorDesignTokens.Colors.accent.color
+                : EditorDesignTokens.Colors.secondaryText.color.opacity(0.78)
+        }
+    }
+
+    private func activeBackground(isActive: Bool) -> Color {
+        guard isActive else {
+            return .clear
+        }
+        switch style {
+        case .standard:
+            return EditorDesignTokens.Colors.accent.color.opacity(0.12)
+        case .inline:
+            return .clear
+        case .popover:
+            return EditorDesignTokens.Colors.accent.color.opacity(0.08)
+        }
     }
 }
 
