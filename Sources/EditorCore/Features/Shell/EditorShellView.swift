@@ -741,6 +741,9 @@ private struct ThreeColumnEditorShell: View {
                             displayWidth: displayWidth
                         )
                     },
+                    onDrawingBlockDataChange: { blockID, data in
+                        viewModel.updateDrawingBlockForUI(blockID: blockID, data: data)
+                    },
                     onMobileRevealPageList: nil,
                     onPendingBlockFocusHandled: {
                         _ = viewModel.consumePendingFocusBlockID()
@@ -1085,6 +1088,9 @@ private struct ThreeColumnEditorShell: View {
                         blockID: blockID,
                         displayWidth: displayWidth
                     )
+                },
+                onDrawingBlockDataChange: { blockID, data in
+                    viewModel.updateDrawingBlockForUI(blockID: blockID, data: data)
                 },
                 onMobileRevealPageList: nil,
                 onPendingBlockFocusHandled: {
@@ -4921,6 +4927,9 @@ private struct CompactPageDestination: View {
                         displayWidth: displayWidth
                     )
                 },
+                onDrawingBlockDataChange: { blockID, data in
+                    viewModel.updateDrawingBlockForUI(blockID: blockID, data: data)
+                },
                 onMobileRevealPageList: onRevealPageList,
                 onPendingBlockFocusHandled: {
                     _ = viewModel.consumePendingFocusBlockID()
@@ -8240,12 +8249,15 @@ private struct EditorCanvasView: View {
     let onRetryAttachmentPreview: (String) -> Void
     let onRenameAttachmentImage: (String, String) -> Void
     let onAttachmentImageDisplayWidthChange: (String, Double) -> Void
+    let onDrawingBlockDataChange: (String, Data) -> Void
     let onMobileRevealPageList: (() -> Void)?
     let onPendingBlockFocusHandled: () -> Void
     var onPendingPageTitleFocusHandled: () -> Void = {}
     var onRemoveTagFromSelectedPage: (String) -> Bool = { _ in false }
     var onCreateAndAssignTagToSelectedPage: (String) -> Bool = { _ in false }
     @State private var isAttachmentImporterPresented = false
+    @State private var attachmentImporterAllowedContentTypes: [UTType] = [.image, .movie, .data, .item]
+    @State private var pendingAttachmentImportAnchorBlockID: String?
     @State private var isMarkdownImporterPresented = false
     @State private var isObsidianVaultImporterPresented = false
     @State private var isMarkdownExporterPresented = false
@@ -8554,6 +8566,15 @@ private struct EditorCanvasView: View {
                         },
                         onAttachmentImageDisplayWidthChange: { displayWidth in
                             onAttachmentImageDisplayWidthChange(block.id, displayWidth)
+                        },
+                        onRequestAttachmentImport: { type in
+                            requestAttachmentImport(afterBlockID: block.id, type: type)
+                        },
+                        onCreateDrawingBlock: {
+                            createDrawingBlock(afterBlockID: block.id)
+                        },
+                        onDrawingDataChange: { data in
+                            onDrawingBlockDataChange(block.id, data)
                         },
                         isToggleBlockExpanded: isToggleBlockExpanded(block.id),
                         isMobileOutlinePresented: isMobileOutlinePresented,
@@ -9009,7 +9030,7 @@ private struct EditorCanvasView: View {
         }
         .fileImporter(
             isPresented: $isAttachmentImporterPresented,
-            allowedContentTypes: [.image, .movie, .data, .item],
+            allowedContentTypes: attachmentImporterAllowedContentTypes,
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let sourceURL = urls.first {
@@ -9019,7 +9040,9 @@ private struct EditorCanvasView: View {
                         sourceURL.stopAccessingSecurityScopedResource()
                     }
                 }
-                onImportAttachment(sourceURL)
+                importAttachment(sourceURL)
+            } else {
+                pendingAttachmentImportAnchorBlockID = nil
             }
         }
     }
@@ -9636,13 +9659,70 @@ private struct EditorCanvasView: View {
     }
 
     private func handleAttachmentImportButton() {
+        pendingAttachmentImportAnchorBlockID = nil
+        attachmentImporterAllowedContentTypes = [.image, .movie, .data, .item]
 #if DEBUG
         if let sourceURL = makeUITestAttachmentImportSourceURL() {
-            onImportAttachment(sourceURL)
+            importAttachment(sourceURL)
             return
         }
 #endif
         isAttachmentImporterPresented = true
+    }
+
+    private func requestAttachmentImport(afterBlockID blockID: String, type: BlockType) {
+        pendingAttachmentImportAnchorBlockID = blockID
+        attachmentImporterAllowedContentTypes = attachmentImporterContentTypes(for: type)
+#if DEBUG
+        if let sourceURL = makeUITestAttachmentImportSourceURL() {
+            importAttachment(sourceURL, anchorBlockID: blockID)
+            return
+        }
+#endif
+        isAttachmentImporterPresented = true
+    }
+
+    private func importAttachment(_ sourceURL: URL, anchorBlockID explicitAnchorBlockID: String? = nil) {
+        let anchorBlockID = explicitAnchorBlockID ?? pendingAttachmentImportAnchorBlockID
+        pendingAttachmentImportAnchorBlockID = nil
+        if let anchorBlockID {
+            _ = onImportAttachmentsAfterBlock([sourceURL], anchorBlockID)
+        } else {
+            onImportAttachment(sourceURL)
+        }
+    }
+
+    private func createDrawingBlock(afterBlockID blockID: String) {
+        do {
+            let sourceURL = try makeBlankDrawingImportSourceURL()
+            _ = onImportAttachmentsAfterBlock([sourceURL], blockID)
+        } catch {
+            EditorLog.attachment.error(
+                "drawing_block_fixture_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    private func attachmentImporterContentTypes(for type: BlockType) -> [UTType] {
+        switch type {
+        case .attachmentImage:
+            return [.image]
+        case .attachmentVideo:
+            return [.movie]
+        case .attachmentFile:
+            return [.item]
+        default:
+            return [.image, .movie, .data, .item]
+        }
+    }
+
+    private func makeBlankDrawingImportSourceURL() throws -> URL {
+        let importDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EditorDrawingImports", isDirectory: true)
+        try FileManager.default.createDirectory(at: importDirectory, withIntermediateDirectories: true)
+        let sourceURL = importDirectory.appendingPathComponent("Untitled-\(UUID().uuidString).drawing")
+        try EditorDrawingDocument.empty.dataRepresentation().write(to: sourceURL, options: .atomic)
+        return sourceURL
     }
 
 #if DEBUG
@@ -12080,6 +12160,9 @@ private struct BlockRowView: View {
     let onRetryAttachmentPreview: (String) -> Void
     let onRenameAttachmentImage: (String) -> Void
     let onAttachmentImageDisplayWidthChange: (Double) -> Void
+    let onRequestAttachmentImport: (BlockType) -> Void
+    let onCreateDrawingBlock: () -> Void
+    let onDrawingDataChange: (Data) -> Void
     let isToggleBlockExpanded: Bool
     let isMobileOutlinePresented: Bool
     let onRevealPageList: () -> Void
@@ -12152,6 +12235,9 @@ private struct BlockRowView: View {
         onRetryAttachmentPreview: @escaping (String) -> Void = { _ in },
         onRenameAttachmentImage: @escaping (String) -> Void = { _ in },
         onAttachmentImageDisplayWidthChange: @escaping (Double) -> Void = { _ in },
+        onRequestAttachmentImport: @escaping (BlockType) -> Void = { _ in },
+        onCreateDrawingBlock: @escaping () -> Void = {},
+        onDrawingDataChange: @escaping (Data) -> Void = { _ in },
         isToggleBlockExpanded: Bool = true,
         isMobileOutlinePresented: Bool = false,
         onRevealPageList: @escaping () -> Void = {},
@@ -12212,6 +12298,9 @@ private struct BlockRowView: View {
         self.onRetryAttachmentPreview = onRetryAttachmentPreview
         self.onRenameAttachmentImage = onRenameAttachmentImage
         self.onAttachmentImageDisplayWidthChange = onAttachmentImageDisplayWidthChange
+        self.onRequestAttachmentImport = onRequestAttachmentImport
+        self.onCreateDrawingBlock = onCreateDrawingBlock
+        self.onDrawingDataChange = onDrawingDataChange
         self.isToggleBlockExpanded = isToggleBlockExpanded
         self.isMobileOutlinePresented = isMobileOutlinePresented
         self.onRevealPageList = onRevealPageList
@@ -12380,6 +12469,12 @@ private struct BlockRowView: View {
                 .accessibilityLabel(descriptor.accessibilityLabel)
                 .accessibilityValue(descriptor.accessibilityValue)
                 .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+        } else if block.type == .drawing {
+            DrawingBlockRow(
+                block: block,
+                attachment: attachment,
+                onDataChange: onDrawingDataChange
+            )
         } else {
             AttachmentBlockRow(
                 block: block,
@@ -13280,7 +13375,13 @@ private struct BlockRowView: View {
             onTextChange("")
             onConvertToPage()
         case .attachmentFile, .attachmentImage, .attachmentVideo:
-            break
+            onClearTransientSelections(nil)
+            onTextChange("")
+            onRequestAttachmentImport(command.type)
+        case .drawing:
+            onClearTransientSelections(nil)
+            onTextChange("")
+            onCreateDrawingBlock()
         default:
             onClearTransientSelections(nil)
             onTextChange("")
@@ -13782,7 +13883,6 @@ private struct SlashCommandMenu: View {
                         }
                         .id(command.id)
                         .buttonStyle(.plain)
-                        .disabled(command.type == .attachmentFile)
                         .onHover { hovering in
                             if hovering {
                                 onHover(index)
@@ -14948,6 +15048,8 @@ private extension BlockType {
             return "视频"
         case .attachmentFile:
             return "文件"
+        case .drawing:
+            return "画板"
         }
     }
 
@@ -14989,6 +15091,254 @@ private extension BlockType {
             return "film"
         case .attachmentFile:
             return "doc"
+        case .drawing:
+            return "scribble"
+        }
+    }
+}
+
+private struct DrawingBlockRow: View {
+    let block: BlockSnapshot
+    let attachment: AttachmentSnapshot?
+    let onDataChange: (Data) -> Void
+
+    @State private var document = EditorDrawingDocument.empty
+    @State private var loadedAttachmentID: String?
+    @State private var loadedAttachmentPath: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            EditorDrawingCanvas(document: $document) { nextDocument in
+                onDataChange(nextDocument.dataRepresentation())
+            }
+            .frame(minHeight: 220)
+            .background(Color(red: 0.985, green: 0.988, blue: 0.992))
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+            .accessibilityLabel("画板")
+            .accessibilityValue(drawingTitle)
+            .accessibilityIdentifier("editor.drawing.\(block.id).canvas")
+
+            HStack(spacing: 8) {
+                Label(drawingTitle, systemImage: "scribble")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    document = .empty
+                    onDataChange(document.dataRepresentation())
+                } label: {
+                    Image(systemName: "trash")
+                        .accessibilityHidden(true)
+                }
+                .buttonStyle(.borderless)
+                .help("清空画板")
+                .accessibilityLabel("清空画板")
+                .accessibilityIdentifier("editor.drawing.\(block.id).clear")
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor.drawing.\(block.id)")
+        .onAppear {
+            loadDrawingDocumentIfNeeded(force: true)
+        }
+        .onChange(of: attachment?.id) { _, _ in
+            loadDrawingDocumentIfNeeded(force: true)
+        }
+        .onChange(of: attachment?.localPath) { _, _ in
+            loadDrawingDocumentIfNeeded(force: true)
+        }
+    }
+
+    private var drawingTitle: String {
+        let trimmed = block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return attachment?.originalFilename ?? "画板"
+    }
+
+    private func loadDrawingDocumentIfNeeded(force: Bool = false) {
+        let nextAttachmentID = attachment?.id
+        let nextAttachmentPath = attachment?.localPath
+        guard force
+            || nextAttachmentID != loadedAttachmentID
+            || nextAttachmentPath != loadedAttachmentPath else {
+            return
+        }
+
+        loadedAttachmentID = nextAttachmentID
+        loadedAttachmentPath = nextAttachmentPath
+        document = EditorDrawingDocument(data: drawingData)
+    }
+
+    private var drawingData: Data {
+        guard let path = attachment?.localPath, !path.isEmpty else {
+            return Data()
+        }
+        return (try? Data(contentsOf: URL(fileURLWithPath: path))) ?? Data()
+    }
+}
+
+private struct EditorDrawingCanvas: View {
+    @Binding var document: EditorDrawingDocument
+    let onCommit: (EditorDrawingDocument) -> Void
+
+    @State private var activeStroke: EditorDrawingDocument.Stroke?
+
+    var body: some View {
+        GeometryReader { proxy in
+            Canvas { context, _ in
+                for stroke in document.strokes {
+                    draw(stroke, in: &context, opacity: 0.86)
+                }
+                if let activeStroke {
+                    draw(activeStroke, in: &context, opacity: 0.72)
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        appendPoint(
+                            EditorDrawingDocument.Point(
+                                location: value.location,
+                                canvasSize: proxy.size
+                            )
+                        )
+                    }
+                    .onEnded { _ in
+                        commitActiveStroke()
+                    }
+            )
+        }
+    }
+
+    private func appendPoint(_ point: EditorDrawingDocument.Point) {
+        if var stroke = activeStroke {
+            guard stroke.shouldAppend(point) else {
+                return
+            }
+            stroke.points.append(point)
+            activeStroke = stroke
+        } else {
+            activeStroke = EditorDrawingDocument.Stroke(points: [point])
+        }
+    }
+
+    private func commitActiveStroke() {
+        guard let activeStroke else {
+            return
+        }
+        var nextDocument = document
+        nextDocument.strokes.append(activeStroke)
+        document = nextDocument
+        self.activeStroke = nil
+        onCommit(nextDocument)
+    }
+
+    private func draw(
+        _ stroke: EditorDrawingDocument.Stroke,
+        in context: inout GraphicsContext,
+        opacity: Double
+    ) {
+        guard let firstPoint = stroke.points.first else {
+            return
+        }
+        guard stroke.points.count > 1 else {
+            context.fill(
+                Path(ellipseIn: CGRect(
+                    x: firstPoint.x - stroke.lineWidth / 2,
+                    y: firstPoint.y - stroke.lineWidth / 2,
+                    width: stroke.lineWidth,
+                    height: stroke.lineWidth
+                )),
+                with: .color(Color.primary.opacity(opacity))
+            )
+            return
+        }
+
+        var path = Path()
+        path.move(to: firstPoint.cgPoint)
+        for point in stroke.points.dropFirst() {
+            path.addLine(to: point.cgPoint)
+        }
+        context.stroke(
+            path,
+            with: .color(Color.primary.opacity(opacity)),
+            style: StrokeStyle(
+                lineWidth: stroke.lineWidth,
+                lineCap: .round,
+                lineJoin: .round
+            )
+        )
+    }
+}
+
+private struct EditorDrawingDocument: Codable, Equatable {
+    var version = 1
+    var strokes: [Stroke] = []
+
+    static let empty = EditorDrawingDocument()
+
+    init(strokes: [Stroke] = []) {
+        self.strokes = strokes
+    }
+
+    init(data: Data) {
+        guard !data.isEmpty,
+              let decoded = try? JSONDecoder().decode(EditorDrawingDocument.self, from: data) else {
+            self = .empty
+            return
+        }
+        self = decoded
+    }
+
+    func dataRepresentation() -> Data {
+        (try? JSONEncoder().encode(self)) ?? Data()
+    }
+
+    struct Stroke: Codable, Equatable, Identifiable {
+        var id = UUID()
+        var points: [Point]
+        var lineWidth: CGFloat = 2.4
+
+        func shouldAppend(_ point: Point) -> Bool {
+            guard let lastPoint = points.last else {
+                return true
+            }
+            return lastPoint.distance(to: point) > 0.75
+        }
+    }
+
+    struct Point: Codable, Equatable {
+        var x: CGFloat
+        var y: CGFloat
+
+        init(x: CGFloat, y: CGFloat) {
+            self.x = x
+            self.y = y
+        }
+
+        init(location: CGPoint, canvasSize: CGSize) {
+            x = min(max(location.x, 0), max(canvasSize.width, 0))
+            y = min(max(location.y, 0), max(canvasSize.height, 0))
+        }
+
+        var cgPoint: CGPoint {
+            CGPoint(x: x, y: y)
+        }
+
+        func distance(to point: Point) -> CGFloat {
+            hypot(x - point.x, y - point.y)
         }
     }
 }

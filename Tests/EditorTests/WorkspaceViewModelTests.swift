@@ -1329,6 +1329,42 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testDrawingImportCanInsertAfterFocusedTextBlockAndRemainEditable() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let sourceURL = try makeSourceFile(name: "concept.drawing", data: Data("drawing-v1".utf8))
+
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil
+        )
+        try viewModel.load()
+        let anchorBlockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        let result = try XCTUnwrap(
+            viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL, afterBlockID: anchorBlockID)
+        )
+
+        XCTAssertEqual(result.block.type.rawValue, "drawing")
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.id).prefix(2), [anchorBlockID, result.block.id])
+        XCTAssertEqual(viewModel.visibleBlocks[1].attachmentID, result.attachment.id)
+
+        try viewModel.updateDrawingBlock(blockID: result.block.id, data: Data("drawing-v2".utf8))
+
+        let updatedAttachment = try XCTUnwrap(viewModel.snapshot.attachments.first { $0.id == result.attachment.id })
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: updatedAttachment.localPath)), Data("drawing-v2".utf8))
+        XCTAssertEqual(viewModel.visibleBlocks[1].type.rawValue, "drawing")
+    }
+
+    @MainActor
     func testAttachmentImageResizePersistsDisplayWidthWithoutChangingName() throws {
         let database = try migratedDatabase()
         defer { database.close() }

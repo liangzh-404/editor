@@ -41,7 +41,7 @@ final class AttachmentRepository: @unchecked Sendable {
         let attachmentID = "attachment-\(UUID().uuidString.lowercased())"
         let blockID = "block-\(UUID().uuidString.lowercased())"
         let originalFilename = sourceURL.lastPathComponent
-        let utiType = UTType(filenameExtension: sourceURL.pathExtension)?.identifier ?? UTType.data.identifier
+        let utiType = Self.utiTypeIdentifier(for: sourceURL)
         let kind = AttachmentKind(utiType: utiType)
         let targetDirectory = attachmentsDirectory
             .appendingPathComponent(workspaceID, isDirectory: true)
@@ -108,6 +108,86 @@ final class AttachmentRepository: @unchecked Sendable {
     }
 
     @discardableResult
+    func updateDrawingAttachment(attachmentID: String, data: Data) throws -> AttachmentSnapshot {
+        let rows = try database.query(
+            """
+            SELECT id,
+                   workspace_id,
+                   original_filename,
+                   uti_type,
+                   local_path,
+                   thumbnail_path
+            FROM attachments
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(attachmentID)]
+        )
+        guard let row = rows.first else {
+            throw AttachmentRepositoryError.attachmentNotFound(attachmentID)
+        }
+
+        let utiType = row["uti_type"] ?? UTType.data.identifier
+        let kind = AttachmentKind(utiType: utiType)
+        guard kind == .drawing else {
+            throw AttachmentRepositoryError.attachmentNotFound(attachmentID)
+        }
+
+        let localPath = row["local_path"] ?? ""
+        guard !localPath.isEmpty else {
+            throw AttachmentRepositoryError.attachmentNotFound(attachmentID)
+        }
+
+        let localURL = URL(fileURLWithPath: localPath)
+        try fileManager.createDirectory(
+            at: localURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: localURL, options: .atomic)
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        let contentHash = sha256Hex(data)
+        try database.execute(
+            """
+            UPDATE attachments
+            SET byte_size = ?,
+                content_hash = ?,
+                thumbnail_path = NULL,
+                sync_state = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .integer(data.count),
+                .text(contentHash),
+                .text("local"),
+                .text(now),
+                .text(attachmentID)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "attachment",
+            entityID: attachmentID,
+            changeType: "update"
+        )
+
+        EditorLog.attachment.debug(
+            "drawing_attachment_updated id=\(attachmentID, privacy: .public) bytes=\(data.count, privacy: .public)"
+        )
+        return AttachmentSnapshot(
+            id: attachmentID,
+            workspaceID: row["workspace_id"] ?? "",
+            originalFilename: row["original_filename"] ?? "",
+            utiType: utiType,
+            byteSize: data.count,
+            contentHash: contentHash,
+            localPath: localPath,
+            thumbnailPath: nil,
+            kind: kind
+        )
+    }
+
+    @discardableResult
     func generateMissingThumbnail(attachmentID: String) throws -> String? {
         let rows = try database.query(
             """
@@ -132,7 +212,7 @@ final class AttachmentRepository: @unchecked Sendable {
 
         let utiType = row["uti_type"] ?? UTType.data.identifier
         let kind = AttachmentKind(utiType: utiType)
-        guard kind != .file else {
+        guard kind != .file, kind != .drawing else {
             return nil
         }
 
@@ -424,6 +504,14 @@ final class AttachmentRepository: @unchecked Sendable {
             .appendingPathComponent(attachmentID, isDirectory: true)
     }
 
+    private static func utiTypeIdentifier(for sourceURL: URL) -> String {
+        if sourceURL.pathExtension.lowercased() == "drawing" {
+            return AttachmentKind.drawingUTIType
+        }
+
+        return UTType(filenameExtension: sourceURL.pathExtension)?.identifier ?? UTType.data.identifier
+    }
+
     private func repairedManagedFilePath(currentPath: String, expectedURL: URL) -> String? {
         guard !currentPath.isEmpty,
               !fileManager.fileExists(atPath: currentPath),
@@ -499,6 +587,8 @@ final class AttachmentRepository: @unchecked Sendable {
                 targetDirectory: targetDirectory
             )
         case .file:
+            return nil
+        case .drawing:
             return nil
         }
     }
