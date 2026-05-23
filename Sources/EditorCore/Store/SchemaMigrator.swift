@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 13
+    static let currentVersion = 14
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -323,6 +323,19 @@ enum SchemaMigrator {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+            );
+            """
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attachment_text_recognition (
+                attachment_id TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL,
+                recognized_text TEXT NOT NULL,
+                regions_json TEXT NOT NULL,
+                recognized_at TEXT NOT NULL,
+                FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
             );
             """
         )

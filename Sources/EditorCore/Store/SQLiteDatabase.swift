@@ -25,7 +25,7 @@ enum SQLiteDatabaseError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-final class SQLiteDatabase {
+final class SQLiteDatabase: @unchecked Sendable {
     private var handle: OpaquePointer?
 
     private init(handle: OpaquePointer) {

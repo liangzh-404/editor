@@ -189,6 +189,27 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(pageColumns.contains("is_pinned"))
     }
 
+    func testMigrationCreatesAttachmentTextRecognitionTable() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let tableNames = Set(try database.queryStrings(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ))
+        let columns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('attachment_text_recognition')"))
+
+        XCTAssertTrue(tableNames.contains("attachment_text_recognition"))
+        XCTAssertTrue(columns.isSuperset(of: [
+            "attachment_id",
+            "content_hash",
+            "recognized_text",
+            "regions_json",
+            "recognized_at"
+        ]))
+    }
+
     func testMigrationCreatesTagAndDiaryTables() throws {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         defer { database.close() }

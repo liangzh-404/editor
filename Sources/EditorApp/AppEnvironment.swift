@@ -96,7 +96,12 @@ enum AppEnvironment {
             diaryRepository: DiaryRepository(database: database),
             tagRepository: TagRepository(database: database),
             attachmentRepository: attachmentRepository,
-            searchRepository: SearchRepository(database: database),
+            attachmentTextRecognitionRepository: AttachmentTextRecognitionRepository(database: database),
+            imageTextRecognizer: VisionImageTextRecognizer(),
+            searchRepository: SearchRepository(
+                database: database,
+                semanticProvider: LocalSemanticSearchProvider(database: database)
+            ),
             backlinkRepository: BacklinkRepository(database: database),
             conflictRepository: ConflictRepository(database: database),
             obsidianImporter: ObsidianVaultImporter(
@@ -107,7 +112,8 @@ enum AppEnvironment {
                 database: database,
                 attachmentsDirectory: attachmentsDirectory
             ),
-            cloudKitAccountMetadataService: makeCloudKitAccountMetadataService()
+            cloudKitAccountMetadataService: makeCloudKitAccountMetadataService(),
+            searchDebounceNanoseconds: 180_000_000
         )
         try viewModel.load()
         return viewModel

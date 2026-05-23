@@ -550,6 +550,7 @@ private struct ThreeColumnEditorShell: View {
                     availableTags: viewModel.snapshot.tags,
                     selectedPageTagIDs: viewModel.selectedPageTagIDs,
                     pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                    pendingSearchHighlight: viewModel.pendingSearchHighlight,
                     pendingFocusRequestID: viewModel.pendingFocusRequestID,
                     pendingPageTitleFocusPageID: viewModel.pendingPageTitleFocusPageID,
                     canUndoTextEdit: viewModel.canUndoTextEdit,
@@ -895,6 +896,7 @@ private struct ThreeColumnEditorShell: View {
                 availableTags: viewModel.snapshot.tags,
                 selectedPageTagIDs: viewModel.selectedPageTagIDs,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                pendingSearchHighlight: viewModel.pendingSearchHighlight,
                 pendingFocusRequestID: viewModel.pendingFocusRequestID,
                 pendingPageTitleFocusPageID: viewModel.pendingPageTitleFocusPageID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
@@ -4427,16 +4429,6 @@ enum CompactLibraryNavigationModel {
                 identifier: "editor.compact.encrypted"
             ),
             CompactLibraryNavigationItem(
-                id: "search",
-                title: "搜索",
-                systemImage: "magnifyingglass",
-                count: 0,
-                showsCount: false,
-                collection: .search,
-                route: .collection(.search),
-                identifier: "editor.compact.search"
-            ),
-            CompactLibraryNavigationItem(
                 id: "archive",
                 title: "归档",
                 systemImage: "archivebox",
@@ -4620,7 +4612,7 @@ enum CompactShellRoutePlanner {
 
     static func documentListCollection(selectedCollection: WorkspaceCollection) -> WorkspaceCollection {
         switch selectedCollection {
-        case .recent:
+        case .recent, .search:
             return .allDocuments
         default:
             return selectedCollection
@@ -4674,10 +4666,6 @@ enum CompactShellRoutePlanner {
         snapshot: WorkspaceSnapshot,
         selectedCollection: WorkspaceCollection
     ) -> WorkspaceCollection {
-        if selectedCollection == .search {
-            return .search
-        }
-
         let selectedCollectionPages = CompactCollectionPageListModel.pages(
             snapshot: snapshot,
             collection: selectedCollection
@@ -4733,6 +4721,7 @@ private struct CompactPageDestination: View {
                 availableTags: viewModel.snapshot.tags,
                 selectedPageTagIDs: viewModel.selectedPageTagIDs,
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
+                pendingSearchHighlight: viewModel.pendingSearchHighlight,
                 pendingFocusRequestID: viewModel.pendingFocusRequestID,
                 pendingPageTitleFocusPageID: viewModel.pendingPageTitleFocusPageID,
                 canUndoTextEdit: viewModel.canUndoTextEdit,
@@ -5065,16 +5054,6 @@ struct SidebarNavigationModel: Equatable, Sendable {
         }
 
         utilityItems = [
-            SidebarNavigationItem(
-                id: "search",
-                title: "搜索",
-                systemImage: "magnifyingglass",
-                count: 0,
-                showsCount: false,
-                collection: .search,
-                identifier: "editor.collection.search",
-                isSelected: selectedCollection == .search
-            ),
             SidebarNavigationItem(
                 id: "archive",
                 title: "归档",
@@ -5577,6 +5556,12 @@ private struct PageListView: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
                     .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if viewModel.isSearchActive {
+                            viewModel.clearSearchForUI()
+                        }
+                    }
 
                 Spacer(minLength: 0)
 
@@ -5602,13 +5587,10 @@ private struct PageListView: View {
                 TextField("搜索", text: pageListSearchBinding)
                     .textFieldStyle(.plain)
                     .accessibilityIdentifier("editor.page-list.search-field")
-                    .onSubmit {
-                        viewModel.selectCollection(.search)
-                    }
 
                 if !viewModel.searchQuery.isEmpty {
                     Button {
-                        viewModel.updateSearchQuery("")
+                        viewModel.clearSearchForUI()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
@@ -5637,9 +5619,6 @@ private struct PageListView: View {
             viewModel.searchQuery
         } set: { query in
             viewModel.updateSearchQuery(query)
-            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                viewModel.selectCollection(.search)
-            }
         }
     }
 #endif
@@ -6537,7 +6516,14 @@ private struct CompactCollectionPageListView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                collectionContent
+                compactSearchField
+                    .padding(.bottom, 12)
+
+                if viewModel.isSearchActive {
+                    SearchSectionView(viewModel: viewModel, showsSearchField: false)
+                } else {
+                    collectionContent
+                }
             }
             .padding(.horizontal, CompactDocumentListChrome.horizontalPadding)
             .padding(.vertical, CompactDocumentListChrome.verticalPadding)
@@ -6580,6 +6566,44 @@ private struct CompactCollectionPageListView: View {
                 }
         )
 #endif
+    }
+
+    private var compactSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+
+            TextField("搜索", text: compactSearchBinding)
+                .textFieldStyle(.plain)
+                .accessibilityIdentifier("editor.compact.search-field")
+
+            if !viewModel.searchQuery.isEmpty {
+                Button {
+                    viewModel.clearSearchForUI()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清空搜索")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(EditorDesignTokens.Colors.sidebarBackground.color, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(EditorDesignTokens.Colors.border.color, lineWidth: 1)
+        )
+    }
+
+    private var compactSearchBinding: Binding<String> {
+        Binding {
+            viewModel.searchQuery
+        } set: { query in
+            viewModel.updateSearchQuery(query)
+        }
     }
 
     @ViewBuilder
@@ -7223,7 +7247,7 @@ private struct SearchSectionView: View {
 
                     if !viewModel.searchQuery.isEmpty {
                         Button {
-                            viewModel.updateSearchQuery("")
+                            viewModel.clearSearchForUI()
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
@@ -7289,6 +7313,10 @@ private struct SearchResultRow: View {
                     .font(.caption)
                     .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
                     .lineLimit(2)
+                Text(matchKindTitle)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
@@ -7307,6 +7335,19 @@ private struct SearchResultRow: View {
             return "paperclip"
         default:
             return "text.alignleft"
+        }
+    }
+
+    private var matchKindTitle: String {
+        switch result.matchKind {
+        case .exact:
+            return "精准匹配"
+        case .fullText:
+            return "全文匹配"
+        case .fuzzy:
+            return "模糊匹配"
+        case .semantic:
+            return "语义匹配"
         }
     }
 }
@@ -8178,6 +8219,7 @@ private struct EditorCanvasView: View {
     var availableTags: [TagSummary] = []
     var selectedPageTagIDs: [String] = []
     let pendingFocusBlockID: String?
+    var pendingSearchHighlight: SearchTransientHighlight? = nil
     var pendingFocusRequestID: UUID? = nil
     var pendingPageTitleFocusPageID: String? = nil
     let canUndoTextEdit: Bool
@@ -8295,7 +8337,8 @@ private struct EditorCanvasView: View {
 
     private var unlockedCanvasBody: some View {
         ZStack(alignment: .topTrailing) {
-            ScrollView(.vertical, showsIndicators: false) {
+            ScrollViewReader { scrollProxy in
+                ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
                 HStack(alignment: .center, spacing: 12) {
 #if os(iOS)
@@ -8401,6 +8444,7 @@ private struct EditorCanvasView: View {
                         rootBlockID: block.id,
                         blocks: blocks
                     )
+                    let searchHighlight = pendingSearchHighlight?.blockID == block.id ? pendingSearchHighlight : nil
 
                     if index == 0 {
                         BlockDropSlot(
@@ -8416,6 +8460,7 @@ private struct EditorCanvasView: View {
                         block: block,
                         attachment: attachment(for: block),
                         attachmentPreviewGenerationStatus: attachmentPreviewGenerationStatus(for: block),
+                        searchHighlight: searchHighlight,
                         pageReferencePreviewText: PageReferencePreviewResolver.previewText(
                             targetPageID: block.pageReferenceTargetPageID,
                             blocks: allBlocks
@@ -8622,6 +8667,7 @@ private struct EditorCanvasView: View {
                     ) { text in
                         onBlockTextChange(block.id, text)
                     }
+                    .id(block.id)
                     .background(blockSelectionFrameReporter(block.id))
                     .onAppear {
                         scheduleVisibleBlockAppeared(block.id, index: index)
@@ -8734,6 +8780,19 @@ private struct EditorCanvasView: View {
                 desktopInlineOutlineLayer
             }
 #endif
+            .onAppear {
+                scrollToPendingFocusBlockIfNeeded(pendingFocusBlockID, proxy: scrollProxy)
+            }
+            .onChange(of: page?.id) { _, _ in
+                scrollToPendingFocusBlockIfNeeded(pendingFocusBlockID, proxy: scrollProxy)
+            }
+            .onChange(of: pendingFocusBlockID) { _, blockID in
+                scrollToPendingFocusBlockIfNeeded(blockID, proxy: scrollProxy)
+            }
+            .onChange(of: pendingFocusRequestID) { _, _ in
+                scrollToPendingFocusBlockIfNeeded(pendingFocusBlockID, proxy: scrollProxy)
+            }
+            }
 #if os(macOS)
             macCanvasToolbar
                 .padding(.top, 24)
@@ -9911,6 +9970,17 @@ private struct EditorCanvasView: View {
 
         setPendingFocusRequest(blockID: blockID, reason: reason)
         schedulePendingFocusRetriesIfNeeded(blockID: blockID, requestID: requestID, reason: reason)
+    }
+
+    private func scrollToPendingFocusBlockIfNeeded(_ blockID: String?, proxy: ScrollViewProxy) {
+        guard let blockID,
+              blocks.contains(where: { $0.id == blockID }) else {
+            return
+        }
+
+        withAnimation(.easeInOut(duration: 0.22)) {
+            proxy.scrollTo(blockID, anchor: .center)
+        }
     }
 
     private func setPendingFocusRequest(
@@ -12039,10 +12109,62 @@ private struct MobileBlockRowDropTargetModifier: ViewModifier {
 }
 #endif
 
+enum SearchHighlightOverlayPolicy {
+    static let rectCornerRadius: CGFloat = 3
+
+    static var rowFillColor: Color {
+        Color(red: 1.0, green: 0.84, blue: 0.26).opacity(0.24)
+    }
+
+    static var rectFillColor: Color {
+        Color(red: 1.0, green: 0.84, blue: 0.26).opacity(0.30)
+    }
+
+    static var rectStrokeColor: Color {
+        Color(red: 0.86, green: 0.54, blue: 0.04).opacity(0.56)
+    }
+
+    static func highlightsWholeRow(rectCount: Int) -> Bool {
+        rectCount == 0
+    }
+
+    static func displayRects(
+        highlightRects: [SearchResultHighlightRect],
+        imageSize: CGSize
+    ) -> [CGRect] {
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return []
+        }
+
+        return highlightRects.map { rect in
+            let x = clamped(rect.x)
+            let y = clamped(rect.y)
+            let width = clamped(rect.width)
+            let height = clamped(rect.height)
+            let maxWidth = max(0, 1 - x)
+            let maxHeight = max(0, 1 - y)
+            let resolvedWidth = min(width, maxWidth)
+            let resolvedHeight = min(height, maxHeight)
+
+            return CGRect(
+                x: x * imageSize.width,
+                y: (1 - y - resolvedHeight) * imageSize.height,
+                width: resolvedWidth * imageSize.width,
+                height: resolvedHeight * imageSize.height
+            )
+        }
+    }
+
+    private static func clamped(_ value: Double) -> CGFloat {
+        CGFloat(min(max(value, 0), 1))
+    }
+}
+
 private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
     let attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus
+    let searchHighlight: SearchTransientHighlight?
     let pageReferencePreviewText: String?
     let contentFont: EditorContentFont
     @ObservedObject var editorSession: EditorSession
@@ -12115,6 +12237,7 @@ private struct BlockRowView: View {
         block: BlockSnapshot,
         attachment: AttachmentSnapshot? = nil,
         attachmentPreviewGenerationStatus: AttachmentPreviewGenerationStatus = .idle,
+        searchHighlight: SearchTransientHighlight? = nil,
         pageReferencePreviewText: String? = nil,
         contentFont: EditorContentFont = EditorContentFont.defaultFont,
         editorSession: EditorSession,
@@ -12175,6 +12298,7 @@ private struct BlockRowView: View {
         self.block = block
         self.attachment = attachment
         self.attachmentPreviewGenerationStatus = attachmentPreviewGenerationStatus
+        self.searchHighlight = searchHighlight
         self.pageReferencePreviewText = pageReferencePreviewText
         self.contentFont = contentFont
         self.editorSession = editorSession
@@ -12319,6 +12443,7 @@ private struct BlockRowView: View {
 #endif
         .animation(.easeInOut(duration: 0.12), value: isRowActive)
         .animation(.easeInOut(duration: 0.12), value: isBlockSelected)
+        .animation(.easeInOut(duration: 0.16), value: searchHighlight?.id)
         .onAppear {
             handleNonEditableFocusRequestIfNeeded(effectiveFocusRequestID)
         }
@@ -12385,6 +12510,7 @@ private struct BlockRowView: View {
                 block: block,
                 attachment: attachment,
                 generationStatus: attachmentPreviewGenerationStatus,
+                searchHighlight: searchHighlight,
                 isBlockSelected: isBlockSelected,
                 onRetryPreview: onRetryAttachmentPreview,
                 onImageResizeActiveChange: { isActive in
@@ -12410,6 +12536,10 @@ private struct BlockRowView: View {
     }
 
     private var rowBackgroundColor: Color {
+        if let searchHighlight,
+           SearchHighlightOverlayPolicy.highlightsWholeRow(rectCount: searchHighlight.rects.count) {
+            return SearchHighlightOverlayPolicy.rowFillColor
+        }
         let opacity = BlockRowBackgroundPolicy.opacity(
             blockType: block.type,
             isSelected: isBlockSelected,
@@ -14997,6 +15127,7 @@ private struct AttachmentBlockRow: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
     let generationStatus: AttachmentPreviewGenerationStatus
+    let searchHighlight: SearchTransientHighlight?
     let isBlockSelected: Bool
     let onRetryPreview: (String) -> Void
     let onImageResizeActiveChange: (Bool) -> Void
@@ -15067,6 +15198,9 @@ private struct AttachmentBlockRow: View {
                             .scaledToFit()
                             .frame(width: resolvedWidth, height: imageHeight, alignment: .leading)
                             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .overlay(alignment: .topLeading) {
+                                imageSearchHighlightOverlay(width: resolvedWidth, height: imageHeight)
+                            }
                             .overlay(
                                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                                     .stroke(
@@ -15111,6 +15245,37 @@ private struct AttachmentBlockRow: View {
         .accessibilityIdentifier(descriptor.accessibilityIdentifier)
         .accessibilityLabel(descriptor.accessibilityLabel)
         .accessibilityValue(descriptor.accessibilityValue)
+    }
+
+    @ViewBuilder
+    private func imageSearchHighlightOverlay(width: CGFloat, height: CGFloat) -> some View {
+        if let searchHighlight,
+           searchHighlight.attachmentID == attachment?.id,
+           !searchHighlight.rects.isEmpty {
+            let displayRects = SearchHighlightOverlayPolicy.displayRects(
+                highlightRects: searchHighlight.rects,
+                imageSize: CGSize(width: width, height: height)
+            )
+
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(displayRects.enumerated()), id: \.offset) { _, rect in
+                    RoundedRectangle(cornerRadius: SearchHighlightOverlayPolicy.rectCornerRadius, style: .continuous)
+                        .fill(SearchHighlightOverlayPolicy.rectFillColor)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: SearchHighlightOverlayPolicy.rectCornerRadius, style: .continuous)
+                                .stroke(SearchHighlightOverlayPolicy.rectStrokeColor, lineWidth: 1)
+                        )
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
+                }
+            }
+            .frame(width: width, height: height, alignment: .topLeading)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("图片搜索命中高亮")
+            .accessibilityIdentifier("editor.attachment.\(block.id).ocr-highlight")
+            .transition(.opacity)
+        }
     }
 
     private func imageBodyHeight(for thumbnailImage: AttachmentPreviewImage) -> CGFloat {

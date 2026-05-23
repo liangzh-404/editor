@@ -232,7 +232,7 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHomeScreenQuickSearchActionQueuesCompactSearchNavigation() throws {
+    func testHomeScreenQuickSearchActionQueuesCompactDocumentListNavigation() throws {
         let database = try migratedDatabase()
         defer { database.close() }
         let repository = PageRepository(database: database)
@@ -242,9 +242,9 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertTrue(viewModel.performHomeScreenQuickAction(.quickSearch))
 
-        XCTAssertEqual(viewModel.selectedCollection, .search)
-        XCTAssertEqual(viewModel.pendingCompactCollectionNavigation, .search)
-        XCTAssertEqual(viewModel.consumePendingCompactCollectionNavigation(), .search)
+        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+        XCTAssertEqual(viewModel.pendingCompactCollectionNavigation, .allDocuments)
+        XCTAssertEqual(viewModel.consumePendingCompactCollectionNavigation(), .allDocuments)
         XCTAssertNil(viewModel.pendingCompactCollectionNavigation)
     }
 
@@ -1221,6 +1221,162 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedPage?.title, "Editable Title")
         XCTAssertEqual(viewModel.searchResults.first?.entityType, "page")
         XCTAssertEqual(viewModel.searchResults.first?.snippet, "Editable Title")
+    }
+
+    @MainActor
+    func testSearchQueryEntersSearchModeAndClearRestoresPreviousCollection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            searchRepository: SearchRepository(database: database)
+        )
+        try viewModel.load()
+        viewModel.selectCollection(.allDocuments)
+
+        viewModel.updateSearchQuery("welcome")
+
+        XCTAssertTrue(viewModel.isSearchActive)
+        XCTAssertEqual(viewModel.selectedCollection, .search)
+
+        viewModel.clearSearchForUI()
+
+        XCTAssertFalse(viewModel.isSearchActive)
+        XCTAssertEqual(viewModel.searchQuery, "")
+        XCTAssertEqual(viewModel.searchResults, [])
+        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+    }
+
+    @MainActor
+    func testSelectingImageTextSearchResultQueuesTargetBlockAndHighlight() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        _ = viewModel.consumePendingFocusBlockID()
+
+        viewModel.selectSearchResult(
+            SearchResult(
+                entityType: "attachment",
+                entityID: "attachment-whiteboard",
+                title: "whiteboard.png",
+                snippet: "Launch budget Q4",
+                destinationPageID: pageID,
+                destinationBlockID: blockID,
+                highlight: SearchResultHighlight(
+                    blockID: blockID,
+                    attachmentID: "attachment-whiteboard",
+                    rects: [
+                        SearchResultHighlightRect(x: 0.12, y: 0.20, width: 0.34, height: 0.08)
+                    ]
+                )
+            )
+        )
+
+        XCTAssertEqual(viewModel.selectedPageID, pageID)
+        XCTAssertEqual(viewModel.pendingCompactPageNavigationID, pageID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        XCTAssertEqual(viewModel.pendingSearchHighlight?.blockID, blockID)
+        XCTAssertEqual(viewModel.pendingSearchHighlight?.attachmentID, "attachment-whiteboard")
+        XCTAssertEqual(viewModel.pendingSearchHighlight?.rects.first?.x, 0.12)
+    }
+
+    @MainActor
+    func testSearchResultHighlightClearsAfterConfiguredDuration() async throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            searchHighlightDurationNanoseconds: 1_000_000
+        )
+        try viewModel.load()
+
+        viewModel.selectSearchResult(
+            SearchResult(
+                entityType: "attachment",
+                entityID: "attachment-whiteboard",
+                title: "whiteboard.png",
+                snippet: "Launch budget Q4",
+                destinationPageID: pageID,
+                destinationBlockID: blockID,
+                highlight: SearchResultHighlight(
+                    blockID: blockID,
+                    attachmentID: "attachment-whiteboard",
+                    rects: [
+                        SearchResultHighlightRect(x: 0.12, y: 0.20, width: 0.34, height: 0.08)
+                    ]
+                )
+            )
+        )
+        XCTAssertNotNil(viewModel.pendingSearchHighlight)
+
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertNil(viewModel.pendingSearchHighlight)
+    }
+
+    @MainActor
+    func testUIAttachmentImportSchedulesBackgroundImageTextRecognitionAndRefreshesSearch() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        let textRecognitionScheduler = CapturingAttachmentTextRecognitionScheduler()
+        let sourceURL = try makeSourceFile(name: "whiteboard.png", data: Self.onePixelPNGData)
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil,
+            attachmentTextRecognitionRepository: AttachmentTextRecognitionRepository(database: database),
+            attachmentTextRecognitionScheduler: textRecognitionScheduler,
+            imageTextRecognizer: StaticImageTextRecognizer(
+                observations: [
+                    AttachmentRecognizedTextObservation(
+                        text: "kanban launch board",
+                        confidence: 0.93,
+                        boundingBox: AttachmentRecognizedTextBoundingBox(
+                            x: 0.18,
+                            y: 0.22,
+                            width: 0.31,
+                            height: 0.09
+                        )
+                    )
+                ]
+            ),
+            searchRepository: SearchRepository(database: database)
+        )
+        try viewModel.load()
+
+        let importResult = try XCTUnwrap(viewModel.importAttachmentForCurrentPage(sourceURL: sourceURL))
+        viewModel.updateSearchQuery("kanban")
+
+        XCTAssertEqual(textRecognitionScheduler.scheduledAttachmentIDs, [importResult.attachment.id])
+        XCTAssertFalse(viewModel.searchResults.contains { $0.entityID == importResult.attachment.id })
+
+        try textRecognitionScheduler.runScheduledTextRecognition(at: 0)
+
+        let searchResult = try XCTUnwrap(viewModel.searchResults.first { $0.entityID == importResult.attachment.id })
+        XCTAssertEqual(searchResult.destinationBlockID, importResult.block.id)
+        XCTAssertEqual(searchResult.highlight?.rects.first?.x, 0.18)
     }
 
     @MainActor
@@ -2638,6 +2794,34 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         viewModel.updateSearchQuery("Alpha")
 
+        XCTAssertEqual(viewModel.searchResults.map(\.snippet), ["Alpha searchable block"])
+    }
+
+    @MainActor
+    func testSearchQueryCanDebounceRepositoryRefreshForLargeVaultInput() async throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            searchRepository: SearchRepository(database: database),
+            searchDebounceNanoseconds: 30_000_000
+        )
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+        try viewModel.updateBlockText(blockID: blockID, text: "Alpha searchable block")
+
+        viewModel.updateSearchQuery("Alpha")
+
+        XCTAssertTrue(viewModel.isSearchRefreshPending)
+        XCTAssertEqual(viewModel.searchResults, [])
+
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        XCTAssertFalse(viewModel.isSearchRefreshPending)
         XCTAssertEqual(viewModel.searchResults.map(\.snippet), ["Alpha searchable block"])
     }
 
@@ -4586,6 +4770,52 @@ private final class CapturingAttachmentThumbnailScheduler: AttachmentThumbnailSc
         with result: Result<String?, Error>
     ) {
         scheduledThumbnailGenerations[index].completion(result)
+    }
+}
+
+private final class CapturingAttachmentTextRecognitionScheduler: AttachmentTextRecognitionScheduling {
+    private struct ScheduledTextRecognition {
+        let attachmentID: String
+        let recognize: () throws -> Void
+        let completion: @MainActor (Result<Void, Error>) -> Void
+    }
+
+    private var scheduledTextRecognitions: [ScheduledTextRecognition] = []
+
+    var scheduledAttachmentIDs: [String] {
+        scheduledTextRecognitions.map(\.attachmentID)
+    }
+
+    func scheduleTextRecognition(
+        attachmentID: String,
+        recognize: @escaping @Sendable () throws -> Void,
+        completion: @MainActor @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        scheduledTextRecognitions.append(
+            ScheduledTextRecognition(
+                attachmentID: attachmentID,
+                recognize: recognize,
+                completion: completion
+            )
+        )
+    }
+
+    @MainActor
+    func runScheduledTextRecognition(at index: Int) throws {
+        let scheduledTextRecognition = scheduledTextRecognitions[index]
+        scheduledTextRecognition.completion(
+            Result {
+                try scheduledTextRecognition.recognize()
+            }
+        )
+    }
+}
+
+private struct StaticImageTextRecognizer: ImageTextRecognizing {
+    let observations: [AttachmentRecognizedTextObservation]
+
+    func recognizeText(in imageURL: URL) throws -> [AttachmentRecognizedTextObservation] {
+        observations
     }
 }
 

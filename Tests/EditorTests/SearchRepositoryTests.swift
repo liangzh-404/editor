@@ -62,6 +62,84 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertEqual(results.first?.entityID, titledPage.id)
     }
 
+    func testSearchLabelsAndRanksExactMatchesBeforeBodyMatches() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Roadmap appears in this block body")
+        let exactPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Roadmap")
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        let results = try repository.search("Roadmap")
+
+        XCTAssertEqual(results.first?.entityType, "page")
+        XCTAssertEqual(results.first?.entityID, exactPage.id)
+        XCTAssertEqual(results.first?.matchKind, .exact)
+    }
+
+    func testSearchUsesFuzzyRecallAfterExactAndFullTextMatches() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Searchable vault import checklist")
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        let results = try repository.search("serchable")
+
+        XCTAssertTrue(results.contains { result in
+            result.entityType == "block"
+                && result.entityID == blockID
+                && result.matchKind == .fuzzy
+        })
+    }
+
+    func testSearchMergesSemanticProviderResultsAfterExactMatches() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let exactPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Vehicle")
+        let semanticPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Car Maintenance")
+
+        let repository = SearchRepository(
+            database: database,
+            semanticProvider: StaticSearchSemanticProvider(
+                candidatesByQuery: [
+                    "vehicle": [
+                        SearchSemanticCandidate(
+                            entityType: "page",
+                            entityID: semanticPage.id,
+                            score: 0.88,
+                            snippet: "Car Maintenance"
+                        )
+                    ]
+                ]
+            )
+        )
+        try repository.rebuildIndex()
+
+        let results = try repository.search("vehicle")
+
+        XCTAssertEqual(results.first?.entityID, exactPage.id)
+        XCTAssertEqual(results.first?.matchKind, .exact)
+        XCTAssertTrue(results.contains { result in
+            result.entityID == semanticPage.id && result.matchKind == .semantic
+        })
+    }
+
     func testSearchSnippetUsesContextAroundMatch() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -133,6 +211,54 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertEqual(results.first?.entityID, blockID)
         XCTAssertEqual(results.first?.destinationPageID, pageID)
         XCTAssertTrue(results.first?.snippet.contains("赶紧") == true)
+    }
+
+    func testSearchFindsRecognizedImageTextAndTargetsAttachmentBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let importResult = try AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        ).importAttachment(
+            sourceURL: try makeSourceFile(name: "whiteboard.png", data: Self.onePixelPNGData),
+            workspaceID: workspaceID,
+            pageID: pageID,
+            thumbnailPolicy: .deferred
+        )
+        try AttachmentTextRecognitionRepository(database: database).upsertRecognizedText(
+            attachmentID: importResult.attachment.id,
+            contentHash: importResult.attachment.contentHash,
+            observations: [
+                AttachmentRecognizedTextObservation(
+                    text: "Launch budget Q4",
+                    confidence: 0.91,
+                    boundingBox: AttachmentRecognizedTextBoundingBox(
+                        x: 0.12,
+                        y: 0.20,
+                        width: 0.34,
+                        height: 0.08
+                    )
+                )
+            ]
+        )
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        let result = try XCTUnwrap(try repository.search("budget").first { $0.entityID == importResult.attachment.id })
+
+        XCTAssertEqual(result.entityType, "attachment")
+        XCTAssertEqual(result.destinationPageID, pageID)
+        XCTAssertEqual(result.destinationBlockID, importResult.block.id)
+        XCTAssertTrue(result.snippet.contains("Launch budget Q4"))
+        XCTAssertEqual(result.highlight?.blockID, importResult.block.id)
+        XCTAssertEqual(result.highlight?.attachmentID, importResult.attachment.id)
+        XCTAssertEqual(result.highlight?.rects.first?.x, 0.12)
     }
 
     func testSearchDoesNotReturnArchivedPageBlocks() throws {
@@ -255,6 +381,50 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertFalse(try repository.search("private-invoice").contains { $0.entityID == attachment.id })
     }
 
+    func testRecognizedImageTextOnEncryptedPagesStaysOutOfSearchIndex() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let encryptedPage = try pageRepository.createPage(
+            workspaceID: workspaceID,
+            title: "Hidden Screenshot",
+            isEncrypted: true
+        )
+        let importResult = try AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        ).importAttachment(
+            sourceURL: try makeSourceFile(name: "private-whiteboard.png", data: Self.onePixelPNGData),
+            workspaceID: workspaceID,
+            pageID: encryptedPage.id,
+            thumbnailPolicy: .deferred
+        )
+        try AttachmentTextRecognitionRepository(database: database).upsertRecognizedText(
+            attachmentID: importResult.attachment.id,
+            contentHash: importResult.attachment.contentHash,
+            observations: [
+                AttachmentRecognizedTextObservation(
+                    text: "sealed roadmap image phrase",
+                    confidence: 0.88,
+                    boundingBox: AttachmentRecognizedTextBoundingBox(
+                        x: 0.10,
+                        y: 0.10,
+                        width: 0.42,
+                        height: 0.10
+                    )
+                )
+            ]
+        )
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        XCTAssertEqual(try repository.search("sealed roadmap"), [])
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)
@@ -276,6 +446,13 @@ final class SearchRepositoryTests: XCTestCase {
         let directory = makeTemporaryDirectory()
         let fileURL = directory.appendingPathComponent(name)
         try contents.data(using: .utf8)?.write(to: fileURL)
+        return fileURL
+    }
+
+    private func makeSourceFile(name: String, data: Data) throws -> URL {
+        let directory = makeTemporaryDirectory()
+        let fileURL = directory.appendingPathComponent(name)
+        try data.write(to: fileURL)
         return fileURL
     }
 
@@ -314,4 +491,16 @@ final class SearchRepositoryTests: XCTestCase {
             storedValue.hasPrefix(EncryptedNoteCipher.ciphertextPrefix)
         }
     }
+
+    private struct StaticSearchSemanticProvider: SearchSemanticProvider {
+        let candidatesByQuery: [String: [SearchSemanticCandidate]]
+
+        func candidates(for query: String, limit: Int) throws -> [SearchSemanticCandidate] {
+            Array((candidatesByQuery[query.lowercased()] ?? []).prefix(limit))
+        }
+    }
+
+    private static let onePixelPNGData = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l3pK6wAAAABJRU5ErkJggg=="
+    )!
 }

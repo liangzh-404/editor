@@ -74,6 +74,21 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(PageTitleDisplayPolicy.editingText(for: "真实标题"), "真实标题")
     }
 
+    func testSearchHighlightOverlayPolicyMapsVisionRectsOntoDisplayedImage() {
+        let rects = SearchHighlightOverlayPolicy.displayRects(
+            highlightRects: [
+                SearchResultHighlightRect(x: 0.10, y: 0.20, width: 0.30, height: 0.10)
+            ],
+            imageSize: CGSize(width: 200, height: 100)
+        )
+
+        XCTAssertEqual(rects, [
+            CGRect(x: 20, y: 70, width: 60, height: 10)
+        ])
+        XCTAssertFalse(SearchHighlightOverlayPolicy.highlightsWholeRow(rectCount: 1))
+        XCTAssertTrue(SearchHighlightOverlayPolicy.highlightsWholeRow(rectCount: 0))
+    }
+
     func testPageTitleFieldChromeUsesAccentCursorAndHidesPlaceholderWhileEditing() {
         XCTAssertEqual(PageTitleFieldChrome.cursorColorToken, EditorDesignTokens.Colors.accent)
         XCTAssertEqual(PageTitleFieldChrome.placeholderText(isFocused: false, text: ""), "未命名")
@@ -2012,7 +2027,7 @@ final class EditorBlockChromeTests: XCTestCase {
                 pendingPageID: diaryPage.id,
                 didPushInitialPage: true
             ),
-            [.collection(.search)]
+            [.collection(.allDocuments)]
         )
     }
 
@@ -2540,6 +2555,8 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(model.tagItems.map(\.nestingLevel), [0, 1, 0])
         XCTAssertEqual(model.primaryItems.last?.identifier, "editor.collection.encrypted")
         XCTAssertEqual(model.primaryItems.last?.collection, .encrypted)
+        XCTAssertEqual(model.utilityItems.map(\.identifier), ["editor.collection.archive"])
+        XCTAssertFalse(model.utilityItems.contains { $0.collection == .search })
     }
 
     func testSidebarChromeUsesCompactBearLikeRailMetrics() {
@@ -2600,9 +2617,9 @@ final class EditorBlockChromeTests: XCTestCase {
 
         let items = CompactLibraryNavigationModel.items(snapshot: snapshot)
 
-        XCTAssertEqual(items.map(\.title), ["全部文档", "日记", "收藏", "加密", "搜索", "归档"])
-        XCTAssertEqual(items.map(\.collection), [.allDocuments, .diary, .favorites, .encrypted, .search, .archive])
-        XCTAssertEqual(items.map(\.count), [3, 1, 1, 1, 0, 1])
+        XCTAssertEqual(items.map(\.title), ["全部文档", "日记", "收藏", "加密", "归档"])
+        XCTAssertEqual(items.map(\.collection), [.allDocuments, .diary, .favorites, .encrypted, .archive])
+        XCTAssertEqual(items.map(\.count), [3, 1, 1, 1, 1])
         XCTAssertEqual(
             items.map(\.route),
             [
@@ -2610,7 +2627,6 @@ final class EditorBlockChromeTests: XCTestCase {
                 .collection(.diary),
                 .collection(.favorites),
                 .collection(.encrypted),
-                .collection(.search),
                 .collection(.archive)
             ]
         )
@@ -2641,7 +2657,7 @@ final class EditorBlockChromeTests: XCTestCase {
                 snapshot: snapshot,
                 selectedCollection: .search
             ),
-            [.collection(.search), .page("page-a")]
+            [.collection(.allDocuments), .page("page-a")]
         )
     }
 

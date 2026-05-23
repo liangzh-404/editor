@@ -32,6 +32,20 @@ struct WorkspaceForegroundSyncSummary: Equatable, Sendable {
     let fetchSummary: SyncFetchSummary
 }
 
+struct SearchTransientHighlight: Equatable, Sendable {
+    let id: UUID
+    let blockID: String
+    let attachmentID: String?
+    let rects: [SearchResultHighlightRect]
+
+    init(id: UUID = UUID(), blockID: String, attachmentID: String?, rects: [SearchResultHighlightRect]) {
+        self.id = id
+        self.blockID = blockID
+        self.attachmentID = attachmentID
+        self.rects = rects
+    }
+}
+
 enum WorkspaceForegroundSyncResult: Sendable {
     case success(WorkspaceForegroundSyncSummary)
     case failure(String)
@@ -170,6 +184,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var activeDiaryEntry: DiaryEntrySnapshot?
     @Published private(set) var searchQuery = ""
     @Published private(set) var searchResults: [SearchResult] = []
+    @Published private(set) var isSearchRefreshPending = false
     @Published private(set) var selectedPageBacklinks: [Backlink] = []
     @Published private(set) var selectedPageExternalLinks: [ExternalLink] = []
     @Published private(set) var selectedPageConflicts: [ConflictSnapshot] = []
@@ -180,6 +195,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var pendingPageTitleFocusPageID: String?
     @Published private(set) var pendingCompactPageNavigationID: String?
     @Published private(set) var pendingCompactCollectionNavigation: WorkspaceCollection?
+    @Published private(set) var pendingSearchHighlight: SearchTransientHighlight?
     @Published private(set) var canUndoTextEdit = false
     @Published private(set) var canRedoTextEdit = false
     @Published private(set) var canUndoPageArchive = false
@@ -198,6 +214,9 @@ final class WorkspaceViewModel: ObservableObject {
     private let tagRepository: TagRepository?
     private let attachmentRepository: AttachmentRepository?
     private let attachmentThumbnailScheduler: AttachmentThumbnailScheduling?
+    private let attachmentTextRecognitionRepository: AttachmentTextRecognitionRepository?
+    private let attachmentTextRecognitionScheduler: AttachmentTextRecognitionScheduling?
+    private let imageTextRecognizer: ImageTextRecognizing?
     private let searchRepository: SearchRepository?
     private let backlinkRepository: BacklinkRepository?
     private let conflictRepository: ConflictRepository?
@@ -210,6 +229,8 @@ final class WorkspaceViewModel: ObservableObject {
     private let encryptedPageAuthenticator: EncryptedPageAuthenticating
     private let currentDateProvider: () -> Date
     private let diaryCalendar: Calendar
+    private let searchDebounceNanoseconds: UInt64
+    private let searchHighlightDurationNanoseconds: UInt64
     private var hasLoadedSnapshot = false
     private var didRequestInitialEditorFocus = false
     private var didRequestInitialCompactPageNavigation = false
@@ -219,6 +240,10 @@ final class WorkspaceViewModel: ObservableObject {
     private var pageArchiveUndoStack: [PageArchiveUndoSnapshot] = []
     private var pageNavigationBackStack: [PageNavigationHistoryEntry] = []
     private var pageNavigationForwardStack: [PageNavigationHistoryEntry] = []
+    private var searchRestorationCollection: WorkspaceCollection?
+    private var searchRefreshTask: Task<Void, Never>?
+    private var searchHighlightClearTask: Task<Void, Never>?
+    private var pendingTextRecognitionAttachmentIDs: Set<String> = []
     private var isForegroundSyncRunning = false
     private var isForegroundSyncRerunPending = false
     private var isCloudKitAccountStatusRefreshRunning = false
@@ -334,6 +359,10 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    var isSearchActive: Bool {
+        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var selectedPageOutline: [PageOutlineItem] {
         visibleBlocks.compactMap { block in
             let title = block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -368,6 +397,9 @@ final class WorkspaceViewModel: ObservableObject {
         tagRepository: TagRepository? = nil,
         attachmentRepository: AttachmentRepository? = nil,
         attachmentThumbnailScheduler: AttachmentThumbnailScheduling? = DispatchAttachmentThumbnailScheduler(),
+        attachmentTextRecognitionRepository: AttachmentTextRecognitionRepository? = nil,
+        attachmentTextRecognitionScheduler: AttachmentTextRecognitionScheduling? = DispatchAttachmentTextRecognitionScheduler(),
+        imageTextRecognizer: ImageTextRecognizing? = nil,
         searchRepository: SearchRepository? = nil,
         backlinkRepository: BacklinkRepository? = nil,
         conflictRepository: ConflictRepository? = nil,
@@ -379,13 +411,18 @@ final class WorkspaceViewModel: ObservableObject {
         cloudKitAccountStatusScheduler: CloudKitAccountStatusScheduling = BackgroundCloudKitAccountStatusScheduler(),
         encryptedPageAuthenticator: EncryptedPageAuthenticating = SystemEncryptedPageAuthenticator(),
         currentDateProvider: @escaping () -> Date = Date.init,
-        diaryCalendar: Calendar = .current
+        diaryCalendar: Calendar = .current,
+        searchDebounceNanoseconds: UInt64 = 0,
+        searchHighlightDurationNanoseconds: UInt64 = 1_600_000_000
     ) {
         self.repository = repository
         self.diaryRepository = diaryRepository
         self.tagRepository = tagRepository
         self.attachmentRepository = attachmentRepository
         self.attachmentThumbnailScheduler = attachmentThumbnailScheduler
+        self.attachmentTextRecognitionRepository = attachmentTextRecognitionRepository
+        self.attachmentTextRecognitionScheduler = attachmentTextRecognitionScheduler
+        self.imageTextRecognizer = imageTextRecognizer
         self.searchRepository = searchRepository
         self.backlinkRepository = backlinkRepository
         self.conflictRepository = conflictRepository
@@ -398,6 +435,8 @@ final class WorkspaceViewModel: ObservableObject {
         self.encryptedPageAuthenticator = encryptedPageAuthenticator
         self.currentDateProvider = currentDateProvider
         self.diaryCalendar = diaryCalendar
+        self.searchDebounceNanoseconds = searchDebounceNanoseconds
+        self.searchHighlightDurationNanoseconds = searchHighlightDurationNanoseconds
         snapshot = .empty
         selectedWorkspaceID = nil
         selectedNotebookID = nil
@@ -409,6 +448,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingPageTitleFocusPageID = nil
         pendingCompactPageNavigationID = nil
         pendingCompactCollectionNavigation = nil
+        pendingSearchHighlight = nil
         canUndoTextEdit = false
         canRedoTextEdit = false
         canUndoPageArchive = false
@@ -419,6 +459,8 @@ final class WorkspaceViewModel: ObservableObject {
         encryptedPageLastOpenedAt = [:]
         encryptedPageAutoLockTask?.cancel()
         encryptedPageAutoLockTask = nil
+        searchHighlightClearTask?.cancel()
+        searchHighlightClearTask = nil
         startObservingSyncChangesIfNeeded()
     }
 
@@ -428,6 +470,9 @@ final class WorkspaceViewModel: ObservableObject {
         tagRepository = nil
         attachmentRepository = nil
         attachmentThumbnailScheduler = nil
+        attachmentTextRecognitionRepository = nil
+        attachmentTextRecognitionScheduler = nil
+        imageTextRecognizer = nil
         searchRepository = nil
         backlinkRepository = nil
         conflictRepository = nil
@@ -440,6 +485,8 @@ final class WorkspaceViewModel: ObservableObject {
         encryptedPageAuthenticator = SystemEncryptedPageAuthenticator()
         currentDateProvider = Date.init
         diaryCalendar = .current
+        searchDebounceNanoseconds = 0
+        searchHighlightDurationNanoseconds = 1_600_000_000
         self.snapshot = snapshot
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
@@ -451,6 +498,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingPageTitleFocusPageID = nil
         pendingCompactPageNavigationID = nil
         pendingCompactCollectionNavigation = nil
+        pendingSearchHighlight = nil
         canUndoTextEdit = false
         canRedoTextEdit = false
         canUndoPageArchive = false
@@ -460,6 +508,7 @@ final class WorkspaceViewModel: ObservableObject {
         authenticatingEncryptedPageID = nil
         encryptedPageLastOpenedAt = [:]
         encryptedPageAutoLockTask = nil
+        searchHighlightClearTask = nil
         requestInitialCompactPageNavigationIfNeeded(source: "snapshot")
     }
 
@@ -487,6 +536,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
         hasLoadedSnapshot = true
         try refreshDerivedState(rebuildSearchIndex: true)
+        schedulePendingImageTextRecognition()
         requestInitialEditorFocusIfNeeded(source: "load")
         requestInitialCompactPageNavigationIfNeeded(source: "load")
     }
@@ -1071,6 +1121,10 @@ final class WorkspaceViewModel: ObservableObject {
         selectedNotebookID = snapshot.pages.first { $0.id == destinationPageID }?.notebookID ?? selectedNotebookID
         selectedCollection = previousCollection == .search ? .search : defaultCollectionForOpeningPage(id: destinationPageID)
         pendingCompactPageNavigationID = destinationPageID
+        if let destinationBlockID = result.destinationBlockID {
+            pendingFocusBlockID = destinationBlockID
+            queueSearchHighlight(for: result, blockID: destinationBlockID)
+        }
         refreshBacklinksForSelectedPage()
         refreshExternalLinksForSelectedPage()
         refreshConflictsForSelectedPage()
@@ -1197,11 +1251,11 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func openQuickSearchForUI() -> Bool {
-        selectedCollection = .search
-        updateSearchQuery("")
+        clearSearchForUI()
+        selectedCollection = .allDocuments
         pendingCompactPageNavigationID = nil
-        pendingCompactCollectionNavigation = .search
-        EditorLog.render.debug("compact_collection_navigation_queued collection=search source=quick_search")
+        pendingCompactCollectionNavigation = .allDocuments
+        EditorLog.render.debug("compact_collection_navigation_queued collection=all_documents source=quick_search")
         return true
     }
 
@@ -3383,6 +3437,7 @@ final class WorkspaceViewModel: ObservableObject {
         markdownImportStatusText = Self.markdownImportStatusText(missingAttachmentNames: missingAttachmentNames)
         for result in importedAttachments {
             scheduleMissingAttachmentThumbnail(attachmentID: result.attachment.id)
+            scheduleAttachmentTextRecognitionIfNeeded(attachmentID: result.attachment.id)
         }
     }
 
@@ -3568,7 +3623,24 @@ final class WorkspaceViewModel: ObservableObject {
 
     func updateSearchQuery(_ query: String) {
         searchQuery = query
+        guard isSearchActive else {
+            clearSearchForUI()
+            return
+        }
+        enterSearchModeIfNeeded()
         refreshSearchResults()
+    }
+
+    func clearSearchForUI() {
+        searchRefreshTask?.cancel()
+        searchRefreshTask = nil
+        searchHighlightClearTask?.cancel()
+        searchHighlightClearTask = nil
+        isSearchRefreshPending = false
+        searchQuery = ""
+        searchResults = []
+        pendingSearchHighlight = nil
+        restoreCollectionAfterSearchIfNeeded()
     }
 
     @discardableResult
@@ -3585,6 +3657,7 @@ final class WorkspaceViewModel: ObservableObject {
                 try moveImportedAttachmentBlock(result.block.id, afterBlockID: afterBlockID)
             }
             scheduleMissingAttachmentThumbnail(attachmentID: result.attachment.id)
+            scheduleAttachmentTextRecognitionIfNeeded(attachmentID: result.attachment.id)
             EditorLog.attachment.debug("attachment_import_visible source=\(sourceURL.lastPathComponent, privacy: .public)")
             return result
         } catch {
@@ -3726,6 +3799,87 @@ final class WorkspaceViewModel: ObservableObject {
                 }
             }
         )
+    }
+
+    private func schedulePendingImageTextRecognition() {
+        guard let attachmentTextRecognitionRepository else {
+            return
+        }
+
+        do {
+            let attachmentIDs = try attachmentTextRecognitionRepository.pendingImageAttachmentIDs()
+            for attachmentID in attachmentIDs {
+                scheduleAttachmentTextRecognitionIfNeeded(attachmentID: attachmentID)
+            }
+        } catch {
+            EditorLog.attachment.error(
+                "attachment_text_recognition_pending_failed error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    private func scheduleAttachmentTextRecognitionIfNeeded(attachmentID: String) {
+        guard let attachmentTextRecognitionRepository,
+              let attachmentTextRecognitionScheduler,
+              let imageTextRecognizer,
+              !pendingTextRecognitionAttachmentIDs.contains(attachmentID) else {
+            return
+        }
+
+        pendingTextRecognitionAttachmentIDs.insert(attachmentID)
+        let searchRepository = searchRepository
+        attachmentTextRecognitionScheduler.scheduleTextRecognition(
+            attachmentID: attachmentID,
+            recognize: {
+                try attachmentTextRecognitionRepository.recognizeImageAttachmentIfNeeded(
+                    attachmentID: attachmentID,
+                    recognizer: imageTextRecognizer
+                )
+                try searchRepository?.updateAttachmentIndex(attachmentID: attachmentID)
+            },
+            completion: { [weak self] result in
+                guard let self else {
+                    return
+                }
+                self.pendingTextRecognitionAttachmentIDs.remove(attachmentID)
+                switch result {
+                case .success:
+                    EditorLog.attachment.debug(
+                        "attachment_text_recognition_indexed id=\(attachmentID, privacy: .public)"
+                    )
+                case .failure(let error):
+                    EditorLog.attachment.error(
+                        "attachment_text_recognition_failed id=\(attachmentID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    )
+                }
+                self.refreshSearchResults()
+            }
+        )
+    }
+
+    private func queueSearchHighlight(for result: SearchResult, blockID: String) {
+        let transientHighlight = SearchTransientHighlight(
+            blockID: blockID,
+            attachmentID: result.highlight?.attachmentID,
+            rects: result.highlight?.rects ?? []
+        )
+        pendingSearchHighlight = transientHighlight
+        scheduleSearchHighlightClear(id: transientHighlight.id)
+    }
+
+    private func scheduleSearchHighlightClear(id: UUID) {
+        searchHighlightClearTask?.cancel()
+        searchHighlightClearTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: self?.searchHighlightDurationNanoseconds ?? 0)
+            } catch {
+                return
+            }
+            guard self?.pendingSearchHighlight?.id == id else {
+                return
+            }
+            self?.pendingSearchHighlight = nil
+        }
     }
 
     func purgeUnreferencedAttachmentsForUI() {
@@ -4005,18 +4159,91 @@ final class WorkspaceViewModel: ObservableObject {
     private func refreshSearchResults() {
         guard !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let searchRepository else {
+            searchRefreshTask?.cancel()
+            searchRefreshTask = nil
+            isSearchRefreshPending = false
             searchResults = []
             return
         }
 
+        let query = searchQuery
+        guard searchDebounceNanoseconds > 0 else {
+            refreshSearchResultsImmediately(query: query, searchRepository: searchRepository)
+            return
+        }
+
+        searchRefreshTask?.cancel()
+        isSearchRefreshPending = true
+        searchRefreshTask = Task { [weak self, searchRepository, query, searchDebounceNanoseconds] in
+            do {
+                try await Task.sleep(nanoseconds: searchDebounceNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            let result = await Task.detached(priority: .userInitiated) {
+                Result {
+                    try searchRepository.search(query)
+                }
+            }.value
+
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.searchQuery == query,
+                      !Task.isCancelled else {
+                    return
+                }
+                self.isSearchRefreshPending = false
+                switch result {
+                case .success(let searchResults):
+                    self.searchResults = searchResults
+                case .failure(let error):
+                    self.searchResults = []
+                    EditorLog.render.error(
+                        "search_failed query=\(self.searchQuery, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
+        }
+    }
+
+    private func refreshSearchResultsImmediately(query: String, searchRepository: SearchRepository) {
         do {
-            searchResults = try searchRepository.search(searchQuery)
+            searchResults = try searchRepository.search(query)
         } catch {
             searchResults = []
             EditorLog.render.error(
                 "search_failed query=\(self.searchQuery, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
+    }
+
+    private func enterSearchModeIfNeeded() {
+        if selectedCollection != .search {
+            searchRestorationCollection = selectedCollection
+        } else if searchRestorationCollection == nil {
+            searchRestorationCollection = .allDocuments
+        }
+        selectedCollection = .search
+    }
+
+    private func restoreCollectionAfterSearchIfNeeded() {
+        guard selectedCollection == .search else {
+            searchRestorationCollection = nil
+            return
+        }
+        let restoredCollection = searchRestorationCollection ?? .allDocuments
+        searchRestorationCollection = nil
+        selectedCollection = restoredCollection
+        if let selectedPageID,
+           !canRestoreSelection(pageID: selectedPageID, in: restoredCollection) {
+            self.selectedPageID = visibleDocumentPages.first?.id
+        }
+        refreshBacklinksForSelectedPage()
+        refreshExternalLinksForSelectedPage()
+        refreshConflictsForSelectedPage()
     }
 
     private func refreshBacklinksForSelectedPage() {
