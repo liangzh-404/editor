@@ -287,6 +287,27 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertEqual(try database.queryInt("SELECT COUNT(*) FROM items"), 1)
     }
 
+    func testImmediateTransactionReusesExistingTransaction() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try database.execute("CREATE TABLE items (id TEXT PRIMARY KEY)")
+        try database.withImmediateTransaction("outer") {
+            try database.execute(
+                "INSERT INTO items (id) VALUES (?)",
+                bindings: [.text("outer")]
+            )
+            try database.withImmediateTransaction("inner") {
+                try database.execute(
+                    "INSERT INTO items (id) VALUES (?)",
+                    bindings: [.text("inner")]
+                )
+            }
+        }
+
+        XCTAssertEqual(try database.queryInt("SELECT COUNT(*) FROM items"), 2)
+    }
+
     func testImmediateTransactionRollsBackFailedOperation() throws {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         defer { database.close() }

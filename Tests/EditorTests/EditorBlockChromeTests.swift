@@ -370,6 +370,128 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testEditorCanvasCentersExpandedContentWithEqualSideGaps() {
+        let leadingGap = EditorCanvasWidthPolicy.leadingGap(
+            containerWidth: 1440,
+            editorMaxWidth: 860,
+            horizontalPadding: 40
+        )
+
+        XCTAssertEqual(leadingGap, 250)
+        XCTAssertEqual(
+            leadingGap,
+            EditorCanvasWidthPolicy.trailingGap(
+                containerWidth: 1440,
+                editorMaxWidth: 860,
+                horizontalPadding: 40
+            ),
+            "When the third column is wider than the editor, the content should sit in the center with equal side gaps."
+        )
+    }
+
+    func testEditorCanvasScrollContentUsesViewportWidthForCentering() {
+        XCTAssertEqual(
+            EditorCanvasWidthPolicy.scrollContentFrameWidth(containerWidth: 1454),
+            1454,
+            "The scroll content must fill the third-column viewport before the capped editor width can be centered."
+        )
+    }
+
+    func testDesktopInlineOutlineDefaultsToExpandedOnlyWhenLeftGapCanFitQuietOutline() {
+        XCTAssertEqual(
+            DesktopInlineOutlinePlacementPolicy.presentation(
+                outlineItemCount: 4,
+                leadingGap: 280,
+                userPreference: .automatic
+            ),
+            .expanded
+        )
+        XCTAssertEqual(
+            DesktopInlineOutlinePlacementPolicy.presentation(
+                outlineItemCount: 4,
+                leadingGap: 96,
+                userPreference: .automatic
+            ),
+            .collapsed,
+            "When the editor gets narrow, the catalog should hide by default instead of overlapping the page."
+        )
+    }
+
+    func testDesktopInlineOutlineDefaultsToExpandedWhenGapFitsOutlineExactly() {
+        XCTAssertEqual(
+            DesktopInlineOutlinePlacementPolicy.presentation(
+                outlineItemCount: 3,
+                leadingGap: 132,
+                userPreference: .automatic
+            ),
+            .expanded,
+            "The fullscreen mac editor has enough combined left gutter and page padding for the quiet outline, so it should not default to the trigger button."
+        )
+    }
+
+    func testDesktopInlineOutlineRespectsUserCollapseButDoesNotForceExpansionIntoNarrowGap() {
+        XCTAssertEqual(
+            DesktopInlineOutlinePlacementPolicy.presentation(
+                outlineItemCount: 4,
+                leadingGap: 320,
+                userPreference: .collapsed
+            ),
+            .collapsed
+        )
+        XCTAssertEqual(
+            DesktopInlineOutlinePlacementPolicy.presentation(
+                outlineItemCount: 4,
+                leadingGap: 96,
+                userPreference: .expanded
+            ),
+            .collapsed,
+            "A manual expansion request should not place the full outline over the document when the left gap is too small."
+        )
+        XCTAssertEqual(
+            DesktopInlineOutlinePlacementPolicy.presentation(
+                outlineItemCount: 0,
+                leadingGap: 320,
+                userPreference: .expanded
+            ),
+            .hidden
+        )
+    }
+
+    func testDesktopInlineOutlineUserPreferenceUsesStableStorageValues() {
+        XCTAssertEqual(DesktopInlineOutlineUserPreference.automatic.rawValue, "automatic")
+        XCTAssertEqual(DesktopInlineOutlineUserPreference.expanded.rawValue, "expanded")
+        XCTAssertEqual(DesktopInlineOutlineUserPreference.collapsed.rawValue, "collapsed")
+    }
+
+    func testDesktopInlineOutlineUsesTopReadingPositionInsteadOfVerticalCenter() {
+        XCTAssertEqual(
+            DesktopInlineOutlinePlacementPolicy.topOffset(containerHeight: 1056),
+            112,
+            "The outline should sit near the document heading instead of floating in the vertical center of the canvas."
+        )
+    }
+
+    func testCollapsedDesktopInlineOutlineShowsPopoverOnlyFromTrigger() {
+        XCTAssertTrue(
+            DesktopInlineOutlinePlacementPolicy.showsPopover(
+                presentation: .collapsed,
+                isTriggerHovered: true
+            )
+        )
+        XCTAssertFalse(
+            DesktopInlineOutlinePlacementPolicy.showsPopover(
+                presentation: .collapsed,
+                isTriggerHovered: false
+            )
+        )
+        XCTAssertFalse(
+            DesktopInlineOutlinePlacementPolicy.showsPopover(
+                presentation: .expanded,
+                isTriggerHovered: true
+            )
+        )
+    }
+
     func testEditorDisplayModesProgressivelyHideSecondaryChrome() {
         XCTAssertTrue(EditorDisplayMode.standard.showsSidebar)
         XCTAssertTrue(EditorDisplayMode.standard.showsDocumentList)
@@ -412,6 +534,28 @@ final class EditorBlockChromeTests: XCTestCase {
             ),
             "heading-2",
             "When the user scrolls past a heading, the inline outline should keep the current section highlighted."
+        )
+    }
+
+    func testDesktopInlineOutlineActivatesHeadingBeforeItReachesTopEdge() {
+        let outlineItems = [
+            PageOutlineItem(blockID: "heading-1", title: "Intro", level: 1),
+            PageOutlineItem(blockID: "heading-2", title: "Details", level: 2)
+        ]
+        let visibleBlockFrames: [String: CGRect] = [
+            "heading-1": CGRect(x: 0, y: -220, width: 400, height: 36),
+            "heading-2": CGRect(x: 0, y: 148, width: 400, height: 36)
+        ]
+
+        XCTAssertEqual(
+            DesktopInlineOutlineActiveHeadingResolver.activeBlockID(
+                outlineItems: outlineItems,
+                visibleBlockFrames: visibleBlockFrames,
+                blockIDsInDocumentOrder: ["heading-1", "paragraph-1", "heading-2"],
+                focusedBlockID: nil
+            ),
+            "heading-2",
+            "The current section should advance once a heading is near the reading band, not only after it sticks to the top edge."
         )
     }
 

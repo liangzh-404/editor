@@ -2773,6 +2773,9 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.selectOutlineItem(overviewItem)
 
         XCTAssertEqual(viewModel.pendingFocusBlockID, overviewItem.blockID)
+        let firstRequestID = try XCTUnwrap(viewModel.pendingFocusRequestID)
+        viewModel.selectOutlineItem(overviewItem)
+        XCTAssertNotEqual(viewModel.pendingFocusRequestID, firstRequestID)
         XCTAssertEqual(viewModel.pendingCompactPageNavigationID, viewModel.selectedPageID)
     }
 

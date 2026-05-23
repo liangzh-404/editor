@@ -1959,6 +1959,7 @@ enum MarkdownTransformer {
         let label = String(content[..<separatorRange.lowerBound])
         let target = String(content[separatorRange.upperBound...])
         guard !label.isEmpty,
+              !target.contains("]("),
               isLocalAttachmentTarget(target) else {
             return nil
         }

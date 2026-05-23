@@ -76,6 +76,25 @@ final class ObsidianVaultImporterTests: XCTestCase {
         )
     }
 
+    func testDottedObsidianNoteEmbedsStayWikiLinks() throws {
+        let document = ObsidianMarkdownDocument.parse(
+            """
+            ![[复盘-2022.5.22]]
+            ![[6.824-lecture1]]
+            ![[image.png]]
+            """
+        )
+
+        XCTAssertEqual(
+            document.markdownForImport,
+            """
+            [[复盘-2022.5.22]]
+            [[6.824-lecture1]]
+            ![image.png](image.png)
+            """
+        )
+    }
+
     func testDiaryResolverMatchesObservedObsidianDateNamingVariants() {
         XCTAssertEqual(
             ObsidianDiaryDateResolver.match(relativePath: "日记/2025年/一月/3周/2025年1月15日 星期三.md"),
@@ -362,6 +381,133 @@ final class ObsidianVaultImporterTests: XCTestCase {
                 && row["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == false
         })
         XCTAssertTrue(encryptedRawBlockRows.contains { $0["text_plain"] == "Secret body" })
+    }
+
+    func testVaultImporterRollsBackPreviouslyImportedPagesWhenImportFails() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let workspaceID = try XCTUnwrap(try repository.bootstrapWorkspaceIfNeeded().selectedWorkspaceID)
+        let vaultURL = try makeTemporaryDirectory().appendingPathComponent("空", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        try write("Good body", to: vaultURL.appendingPathComponent("01-good.md"))
+        try writeData(Data([0xFF, 0xFF]), to: vaultURL.appendingPathComponent("02-invalid.md"))
+
+        XCTAssertThrowsError(
+            try ObsidianVaultImporter(database: database).importVault(
+                vaultURL: vaultURL,
+                workspaceID: workspaceID
+            )
+        ) { error in
+            XCTAssertFalse(String(describing: error).contains("cannot start a transaction"))
+        }
+
+        XCTAssertEqual(
+            try database.queryInt("SELECT COUNT(*) FROM page_import_metadata WHERE source_type = 'obsidian'"),
+            0
+        )
+        XCTAssertEqual(
+            try database.queryInt("SELECT COUNT(*) FROM pages WHERE title = '01-good'"),
+            0
+        )
+    }
+
+    func testVaultImporterResolvesPercentEncodedAttachmentFilenames() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let workspaceID = try XCTUnwrap(try repository.bootstrapWorkspaceIfNeeded().selectedWorkspaceID)
+        let vaultURL = try makeTemporaryDirectory().appendingPathComponent("空", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        let encodedFilename = "Eug%C3%A8ne_Delacroix.webp"
+        try write(
+            "![[\(encodedFilename)]]",
+            to: vaultURL.appendingPathComponent("Art.md")
+        )
+        try writeData(
+            Data([0x89, 0x50, 0x4E, 0x47]),
+            to: vaultURL.appendingPathComponent("attachments/\(encodedFilename)")
+        )
+
+        let summary = try ObsidianVaultImporter(
+            database: database,
+            attachmentsDirectory: try makeTemporaryDirectory()
+        ).importVault(
+            vaultURL: vaultURL,
+            workspaceID: workspaceID
+        )
+
+        XCTAssertEqual(summary.importedAttachmentCount, 1)
+        let attachmentRows = try database.query(
+            "SELECT original_filename FROM attachments ORDER BY original_filename ASC"
+        )
+        XCTAssertEqual(attachmentRows.map { $0["original_filename"] ?? "" }, [encodedFilename])
+    }
+
+    func testVaultImporterResolvesExcalidrawEmbedsToMarkdownDrawingFiles() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let workspaceID = try XCTUnwrap(try repository.bootstrapWorkspaceIfNeeded().selectedWorkspaceID)
+        let vaultURL = try makeTemporaryDirectory().appendingPathComponent("空", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        try write(
+            "![[Sketch 2026-05-23 17.00.00.excalidraw]]",
+            to: vaultURL.appendingPathComponent("Note.md")
+        )
+        try write(
+            "# Excalidraw Data",
+            to: vaultURL.appendingPathComponent("attachments/Sketch 2026-05-23 17.00.00.excalidraw.md")
+        )
+
+        let summary = try ObsidianVaultImporter(
+            database: database,
+            attachmentsDirectory: try makeTemporaryDirectory()
+        ).importVault(
+            vaultURL: vaultURL,
+            workspaceID: workspaceID
+        )
+
+        XCTAssertEqual(summary.importedAttachmentCount, 1)
+        let attachmentRows = try database.query(
+            "SELECT original_filename FROM attachments ORDER BY original_filename ASC"
+        )
+        XCTAssertEqual(attachmentRows.map { $0["original_filename"] ?? "" }, ["Sketch 2026-05-23 17.00.00.excalidraw.md"])
+    }
+
+    func testVaultImporterResolvesImageLinksToConvertedWebPFiles() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let workspaceID = try XCTUnwrap(try repository.bootstrapWorkspaceIfNeeded().selectedWorkspaceID)
+        let vaultURL = try makeTemporaryDirectory().appendingPathComponent("空", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        try write(
+            "![[assets/IMG_5249.png]]",
+            to: vaultURL.appendingPathComponent("Textbundle/Note.md")
+        )
+        try writeData(
+            Data([0x52, 0x49, 0x46, 0x46]),
+            to: vaultURL.appendingPathComponent("Textbundle/assets/IMG_5249.webp")
+        )
+
+        let summary = try ObsidianVaultImporter(
+            database: database,
+            attachmentsDirectory: try makeTemporaryDirectory()
+        ).importVault(
+            vaultURL: vaultURL,
+            workspaceID: workspaceID
+        )
+
+        XCTAssertEqual(summary.importedAttachmentCount, 1)
+        let attachmentRows = try database.query(
+            "SELECT original_filename FROM attachments ORDER BY original_filename ASC"
+        )
+        XCTAssertEqual(attachmentRows.map { $0["original_filename"] ?? "" }, ["IMG_5249.webp"])
     }
 
     func testConfiguredVaultPathCanBeOverridden() throws {

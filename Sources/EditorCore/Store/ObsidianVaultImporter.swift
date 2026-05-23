@@ -82,6 +82,13 @@ struct ObsidianEncryptedEnvelope: Equatable, Sendable, Decodable {
 
 struct ObsidianMarkdownDocument: Equatable, Sendable {
     static let encryptedBodyMarker = "CRYPTO_NOTE_BODY_V1"
+    private static let attachmentEmbedExtensions: Set<String> = [
+        "7z", "aiff", "avi", "avif", "bin", "bmp", "csv", "doc", "docx", "excalidraw",
+        "flac", "gif", "heic", "heif", "jpeg", "jpg", "json", "m4a", "m4v", "mkv",
+        "mov", "mp3", "mp4", "ogg", "pdf", "png", "ppt", "pptx", "rar", "rtf",
+        "svg", "tif", "tiff", "tsv", "txt", "wav", "webm", "webp", "xls", "xlsx",
+        "xml", "yaml", "yml", "zip"
+    ]
 
     let frontmatter: ObsidianFrontmatter?
     let bodyMarkdown: String
@@ -258,7 +265,7 @@ struct ObsidianMarkdownDocument: Equatable, Sendable {
             .first
             .map(String.init) ?? target
         let pathExtension = URL(fileURLWithPath: path).pathExtension.lowercased()
-        return !pathExtension.isEmpty && pathExtension != "md"
+        return attachmentEmbedExtensions.contains(pathExtension)
     }
 }
 
@@ -602,78 +609,81 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
     }
 
     func importVault(vaultURL: URL, workspaceID: String) throws -> ObsidianVaultImportSummary {
-        var summary = ObsidianVaultImportSummary()
         let attachmentIndex = try makeAttachmentIndex(vaultURL: vaultURL)
-        let rootNotebookID = try ensureNotebookPath(
-            workspaceID: workspaceID,
-            components: [vaultURL.lastPathComponent]
-        )
 
-        guard let enumerator = fileManager.enumerator(
-            at: vaultURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .creationDateKey, .contentModificationDateKey],
-            options: [.skipsPackageDescendants]
-        ) else {
-            throw ObsidianVaultImporterError.unreadableVault(vaultURL.path)
-        }
-
-        while let item = enumerator.nextObject() as? URL {
-            let relativePath = try self.relativePath(for: item, vaultURL: vaultURL)
-            let values = try item.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
-            if values.isDirectory == true {
-                if isHidden(relativePath: relativePath) {
-                    enumerator.skipDescendants()
-                }
-                continue
-            }
-            guard values.isRegularFile == true,
-                  !isHidden(relativePath: relativePath) else {
-                continue
-            }
-            guard item.pathExtension.lowercased() == "md" else {
-                summary.ignoredNonMarkdownFileCount += 1
-                continue
-            }
-
-            summary.markdownFileCount += 1
-            if configuration.skipsPreviouslyImportedSources,
-               try importedPageID(sourcePath: relativePath) != nil {
-                summary.skippedPageCount += 1
-                continue
-            }
-
-            let notebookID = try ensureNotebookPath(
+        return try database.withImmediateTransaction("obsidian_vault_import") {
+            var summary = ObsidianVaultImportSummary()
+            let rootNotebookID = try ensureNotebookPath(
                 workspaceID: workspaceID,
-                components: [vaultURL.lastPathComponent] + directoryComponents(relativePath: relativePath),
-                fallbackNotebookID: rootNotebookID
+                components: [vaultURL.lastPathComponent]
             )
-            let importResult = try importMarkdownFile(
-                item,
-                relativePath: relativePath,
-                vaultURL: vaultURL,
-                workspaceID: workspaceID,
-                notebookID: notebookID,
-                attachmentIndex: attachmentIndex
-            )
-            summary.importedPageCount += 1
-            summary.importedAttachmentCount += importResult.importedAttachmentCount
-            if importResult.isEncrypted {
-                summary.encryptedPageCount += 1
+
+            guard let enumerator = fileManager.enumerator(
+                at: vaultURL,
+                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .creationDateKey, .contentModificationDateKey],
+                options: [.skipsPackageDescendants]
+            ) else {
+                throw ObsidianVaultImporterError.unreadableVault(vaultURL.path)
             }
-            if let diaryMatch = importResult.diaryMatch {
-                summary.diaryPatterns[diaryMatch.pattern, default: 0] += 1
-                if diaryMatch.dateString != nil {
-                    summary.diaryPageCount += 1
+
+            while let item = enumerator.nextObject() as? URL {
+                let relativePath = try self.relativePath(for: item, vaultURL: vaultURL)
+                let values = try item.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+                if values.isDirectory == true {
+                    if isHidden(relativePath: relativePath) {
+                        enumerator.skipDescendants()
+                    }
+                    continue
+                }
+                guard values.isRegularFile == true,
+                      !isHidden(relativePath: relativePath) else {
+                    continue
+                }
+                guard item.pathExtension.lowercased() == "md" else {
+                    summary.ignoredNonMarkdownFileCount += 1
+                    continue
+                }
+
+                summary.markdownFileCount += 1
+                if configuration.skipsPreviouslyImportedSources,
+                   try importedPageID(sourcePath: relativePath) != nil {
+                    summary.skippedPageCount += 1
+                    continue
+                }
+
+                let notebookID = try ensureNotebookPath(
+                    workspaceID: workspaceID,
+                    components: [vaultURL.lastPathComponent] + directoryComponents(relativePath: relativePath),
+                    fallbackNotebookID: rootNotebookID
+                )
+                let importResult = try importMarkdownFile(
+                    item,
+                    relativePath: relativePath,
+                    vaultURL: vaultURL,
+                    workspaceID: workspaceID,
+                    notebookID: notebookID,
+                    attachmentIndex: attachmentIndex
+                )
+                summary.importedPageCount += 1
+                summary.importedAttachmentCount += importResult.importedAttachmentCount
+                if importResult.isEncrypted {
+                    summary.encryptedPageCount += 1
+                }
+                if let diaryMatch = importResult.diaryMatch {
+                    summary.diaryPatterns[diaryMatch.pattern, default: 0] += 1
+                    if diaryMatch.dateString != nil {
+                        summary.diaryPageCount += 1
+                    }
                 }
             }
-        }
 
-        try pageRepository.relinkObsidianBlockReferenceBlocks()
-        try SearchRepository(database: database).rebuildIndex()
-        EditorLog.store.debug(
-            "obsidian_vault_imported markdown_files=\(summary.markdownFileCount, privacy: .public) imported=\(summary.importedPageCount, privacy: .public) encrypted=\(summary.encryptedPageCount, privacy: .public) diary=\(summary.diaryPageCount, privacy: .public)"
-        )
-        return summary
+            try pageRepository.relinkObsidianBlockReferenceBlocks()
+            try SearchRepository(database: database).rebuildIndex()
+            EditorLog.store.debug(
+                "obsidian_vault_imported markdown_files=\(summary.markdownFileCount, privacy: .public) imported=\(summary.importedPageCount, privacy: .public) encrypted=\(summary.encryptedPageCount, privacy: .public) diary=\(summary.diaryPageCount, privacy: .public)"
+            )
+            return summary
+        }
     }
 
     private func importMarkdownFile(
@@ -1066,8 +1076,8 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
                 continue
             }
 
-            if index[item.lastPathComponent] == nil {
-                index[item.lastPathComponent] = item
+            for filenameKey in Self.attachmentFilenameCandidates(for: item.lastPathComponent) where index[filenameKey] == nil {
+                index[filenameKey] = item
             }
         }
         return index
@@ -1094,22 +1104,31 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
         }
 
         let filename = pathComponents.last ?? decodedPath
+        let pathComponentCandidates = Self.attachmentPathComponentCandidates(pathComponents)
+        let filenameCandidates = Self.attachmentFilenameCandidates(for: filename)
         let markdownDirectory = markdownURL.deletingLastPathComponent()
-        var candidates: [URL] = [
-            url(byAppending: pathComponents, to: markdownDirectory)
-        ]
-        for directory in configuration.attachmentSearchDirectories {
-            candidates.append(url(byAppending: pathComponents, to: directory))
-            candidates.append(directory.appendingPathComponent(filename))
+        var candidates: [URL] = pathComponentCandidates.map {
+            url(byAppending: $0, to: markdownDirectory)
         }
-        candidates.append(url(byAppending: pathComponents, to: vaultURL))
-        candidates.append(
-            vaultURL
-                .appendingPathComponent("attachments", isDirectory: true)
-                .appendingPathComponent(filename)
-        )
-        if let indexedURL = attachmentIndex[filename] {
-            candidates.append(indexedURL)
+        for directory in configuration.attachmentSearchDirectories {
+            for components in pathComponentCandidates {
+                candidates.append(url(byAppending: components, to: directory))
+            }
+            for filenameCandidate in filenameCandidates {
+                candidates.append(directory.appendingPathComponent(filenameCandidate))
+            }
+        }
+        for components in pathComponentCandidates {
+            candidates.append(url(byAppending: components, to: vaultURL))
+        }
+        let vaultAttachmentsDirectory = vaultURL.appendingPathComponent("attachments", isDirectory: true)
+        for filenameCandidate in filenameCandidates {
+            candidates.append(vaultAttachmentsDirectory.appendingPathComponent(filenameCandidate))
+        }
+        for filenameCandidate in filenameCandidates {
+            if let indexedURL = attachmentIndex[filenameCandidate] {
+                candidates.append(indexedURL)
+            }
         }
 
         return candidates.first { url in
@@ -1117,6 +1136,61 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
             return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
                 && !isDirectory.boolValue
         }
+    }
+
+    private static func attachmentPathComponentCandidates(_ pathComponents: [String]) -> [[String]] {
+        guard let filename = pathComponents.last else {
+            return [pathComponents]
+        }
+
+        var candidates: [[String]] = []
+        var seen: Set<String> = []
+        for filenameCandidate in attachmentFilenameCandidates(for: filename) {
+            var candidate = pathComponents
+            candidate[candidate.count - 1] = filenameCandidate
+            let key = candidate.joined(separator: "/")
+            guard !seen.contains(key) else {
+                continue
+            }
+            seen.insert(key)
+            candidates.append(candidate)
+        }
+        return candidates
+    }
+
+    private static func attachmentFilenameCandidates(for filename: String) -> [String] {
+        var candidates: [String] = []
+        var seen: Set<String> = []
+        func append(_ value: String) {
+            guard !seen.contains(value) else {
+                return
+            }
+            seen.insert(value)
+            candidates.append(value)
+        }
+
+        for value in [filename, filename.removingPercentEncoding ?? filename] {
+            append(value)
+            let lowercasedValue = value.lowercased()
+            if lowercasedValue.hasSuffix(".excalidraw") {
+                append(value + ".md")
+            }
+            if lowercasedValue.hasSuffix(".excalidraw.md") {
+                append(String(value.dropLast(3)))
+            }
+            if let webPFallback = webPFallbackFilename(for: value) {
+                append(webPFallback)
+            }
+        }
+        return candidates
+    }
+
+    private static func webPFallbackFilename(for filename: String) -> String? {
+        let lowercasedFilename = filename.lowercased()
+        for imageExtension in ["png", "jpg", "jpeg"] where lowercasedFilename.hasSuffix(".\(imageExtension)") {
+            return String(filename.dropLast(imageExtension.count + 1)) + ".webp"
+        }
+        return nil
     }
 
     private static func url(byAppending pathComponents: [String], to rootURL: URL) -> URL {

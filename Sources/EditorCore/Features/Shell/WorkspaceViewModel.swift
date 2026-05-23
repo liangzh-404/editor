@@ -1142,7 +1142,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func selectOutlineItem(_ item: PageOutlineItem) {
-        pendingFocusBlockID = item.blockID
+        requestBlockFocus(item.blockID)
         pendingCompactPageNavigationID = selectedPageID
         EditorLog.focus.debug(
             "outline_item_selected block_id=\(item.blockID, privacy: .public)"

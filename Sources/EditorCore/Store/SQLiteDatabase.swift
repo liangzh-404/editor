@@ -144,6 +144,11 @@ final class SQLiteDatabase: @unchecked Sendable {
         _ label: String,
         operation: () throws -> T
     ) throws -> T {
+        let handle = try requireHandle()
+        if sqlite3_get_autocommit(handle) == 0 {
+            return try operation()
+        }
+
         let startedAt = DispatchTime.now().uptimeNanoseconds
         try execute("BEGIN IMMEDIATE TRANSACTION")
         do {

@@ -210,6 +210,18 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownSplitsAdjacentInlineAttachmentLinksIntoOrderedBlocks() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown: "![first](first.webp)![second](second.webp)"
+            ),
+            [
+                MarkdownBlockDraft(type: .attachmentImage, textPlain: "first", attachmentRelativePath: "first.webp"),
+                MarkdownBlockDraft(type: .attachmentImage, textPlain: "second", attachmentRelativePath: "second.webp")
+            ]
+        )
+    }
+
     func testImportMarkdownSupportsCompletedTaskItems() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(
