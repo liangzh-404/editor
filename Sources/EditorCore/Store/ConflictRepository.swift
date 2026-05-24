@@ -413,6 +413,8 @@ final class ConflictRepository {
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: snapshot.blockID,
                 text: snapshot.textPlain,
+                pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
+                blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON),
                 inlineInternalLinks: InlineInternalLinkTarget.pruned(
                     payloadJSON: payloadJSON,
                     visibleText: snapshot.textPlain
@@ -515,6 +517,8 @@ final class ConflictRepository {
             SELECT conflict_versions.id,
                    conflict_versions.block_id,
                    blocks.text_plain AS local_text_plain,
+                   blocks.payload_json AS local_payload_json,
+                   conflict_versions.payload_json AS remote_payload_json,
                    conflict_versions.text_plain,
                    conflict_versions.remote_revision
             FROM conflict_versions
@@ -534,7 +538,11 @@ final class ConflictRepository {
             remoteTextPlain: row["text_plain"] ?? "",
             remoteRevision: Int(row["remote_revision"] ?? "") ?? 0
         )
-        let payloadJSON = try blockPayloadJSON(text: text)
+        let payloadJSON = try AutomaticTextMerge.payloadJSON(
+            updating: row["local_payload_json"] ?? "",
+            text: text,
+            preservingInlineLinksFrom: [row["remote_payload_json"] ?? ""]
+        )
         let now = ISO8601DateFormatter().string(from: Date())
 
         try database.withImmediateTransaction("resolve_manual_conflict") {
@@ -566,6 +574,8 @@ final class ConflictRepository {
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: snapshot.blockID,
                 text: text,
+                pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
+                blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON),
                 inlineInternalLinks: InlineInternalLinkTarget.pruned(
                     payloadJSON: payloadJSON,
                     visibleText: text
@@ -678,6 +688,8 @@ final class ConflictRepository {
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: snapshot.blockID,
                 text: mergedText,
+                pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
+                blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON),
                 inlineInternalLinks: InlineInternalLinkTarget.pruned(
                     payloadJSON: payloadJSON,
                     visibleText: mergedText
@@ -732,19 +744,28 @@ final class ConflictRepository {
         )
         return rows.first != nil
     }
-}
 
-private func blockPayloadJSON(text: String) throws -> String {
-    let data = try JSONSerialization.data(
-        withJSONObject: ["text": text],
-        options: [.sortedKeys]
-    )
+    private static func pageReferenceTargetPageID(payloadJSON: String) -> String? {
+        guard let data = payloadJSON.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let targetPageID = payload["target_page_id"] as? String,
+              !targetPageID.isEmpty else {
+            return nil
+        }
 
-    guard let payload = String(data: data, encoding: .utf8) else {
-        throw PageRepositoryError.invalidPayloadEncoding
+        return targetPageID
     }
 
-    return payload
+    private static func blockReferenceTargetBlockID(payloadJSON: String) -> String? {
+        guard let data = payloadJSON.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let targetBlockID = payload["target_block_id"] as? String,
+              !targetBlockID.isEmpty else {
+            return nil
+        }
+
+        return targetBlockID
+    }
 }
 
 enum ConflictRepositoryError: Error, Equatable {

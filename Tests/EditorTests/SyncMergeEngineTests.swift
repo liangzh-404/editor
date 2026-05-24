@@ -327,6 +327,128 @@ final class SyncMergeEngineTests: XCTestCase {
         )
     }
 
+    func testResolveManualConflictPreservesStableInlinePageOnlyTarget() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Specs")
+        _ = try pageRepository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+        try pageRepository.updateBlockText(blockID: blockID, text: "Local edit")
+        try storeConflict(
+            database: database,
+            blockID: blockID,
+            text: "Remote edit",
+            payloadJSON: """
+            {"inline_links":[{"label":"Specs#API contract","target_page_id":"\(targetPage.id)"}],"text":"Remote edit"}
+            """
+        )
+        let conflictRepository = ConflictRepository(database: database)
+        let conflict = try XCTUnwrap(try conflictRepository.conflicts(pageID: pageID).first)
+
+        _ = try conflictRepository.resolveManually(
+            conflictID: conflict.id,
+            text: "See [[Specs#API contract]]"
+        )
+
+        let row = try XCTUnwrap(try database.query(
+            """
+            SELECT target_page_id, target_block_id, link_text
+            FROM links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(blockID)]
+        ).first)
+        XCTAssertEqual(row["target_page_id"], targetPage.id)
+        XCTAssertNil(row["target_block_id"] ?? nil)
+        XCTAssertEqual(row["link_text"], "Specs#API contract")
+    }
+
+    func testAcceptRemotePageReferenceConflictIndexesBlockReferenceLinkKind() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Specs")
+        try pageRepository.updateBlock(blockID: blockID, type: .pageReference, text: "Local ref")
+        try storeConflict(
+            database: database,
+            blockID: blockID,
+            text: "Specs",
+            payloadJSON: "{\"target_page_id\":\"\(targetPage.id)\",\"text\":\"Specs\"}"
+        )
+        let conflictRepository = ConflictRepository(database: database)
+        let conflict = try XCTUnwrap(try conflictRepository.conflicts(pageID: pageID).first)
+
+        _ = try conflictRepository.acceptRemoteVersion(conflictID: conflict.id)
+
+        let row = try XCTUnwrap(try database.query(
+            """
+            SELECT target_page_id, link_kind
+            FROM links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(blockID)]
+        ).first)
+        XCTAssertEqual(row["target_page_id"], targetPage.id)
+        XCTAssertEqual(row["link_kind"], "block_reference")
+    }
+
+    func testResolveAutomaticBlockReferenceConflictIndexesBlockReferenceLinkKind() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Specs")
+        let targetBlock = try pageRepository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+        try pageRepository.updateBlock(blockID: blockID, type: .blockReference, text: "Specs")
+        try database.execute(
+            """
+            UPDATE blocks
+            SET payload_json = ?
+            WHERE id = ?
+            """,
+            bindings: [
+                .text("{\"target_block_id\":\"\(targetBlock.id)\",\"target_page_id\":\"\(targetPage.id)\",\"text\":\"Specs\"}"),
+                .text(blockID)
+            ]
+        )
+        try storeConflict(
+            database: database,
+            blockID: blockID,
+            text: "Specs remote",
+            payloadJSON: "{\"target_block_id\":\"\(targetBlock.id)\",\"target_page_id\":\"\(targetPage.id)\",\"text\":\"Specs remote\"}"
+        )
+        let conflictRepository = ConflictRepository(database: database)
+        let conflict = try XCTUnwrap(try conflictRepository.conflicts(pageID: pageID).first)
+
+        _ = try conflictRepository.resolveAutomatically(conflictID: conflict.id)
+
+        let row = try XCTUnwrap(try database.query(
+            """
+            SELECT target_page_id, target_block_id, link_kind
+            FROM links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(blockID)]
+        ).first)
+        XCTAssertEqual(row["target_page_id"], targetPage.id)
+        XCTAssertEqual(row["target_block_id"], targetBlock.id)
+        XCTAssertEqual(row["link_kind"], "block_reference")
+    }
+
     func testRemotePageReferenceBlockRebuildsPageParentLink() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -531,12 +653,13 @@ final class SyncMergeEngineTests: XCTestCase {
         database: SQLiteDatabase,
         blockID: String,
         text: String,
+        payloadJSON: String? = nil,
         revision: Int = 2
     ) throws {
         try ConflictRepository(database: database).storeConflict(
             ConflictVersion(
                 blockID: blockID,
-                payloadJSON: "{\"text\":\"\(text)\"}",
+                payloadJSON: payloadJSON ?? "{\"text\":\"\(text)\"}",
                 textPlain: text,
                 remoteRevision: revision
             )
