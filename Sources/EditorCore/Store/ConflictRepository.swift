@@ -144,13 +144,26 @@ enum AutomaticTextMerge {
         ).joined(separator: "\n")
     }
 
-    static func payloadJSON(updating payloadJSON: String, text: String) throws -> String {
+    static func payloadJSON(
+        updating payloadJSON: String,
+        text: String,
+        preservingInlineLinksFrom additionalPayloadJSONs: [String] = []
+    ) throws -> String {
         let data = payloadJSON.data(using: .utf8) ?? Data()
         var payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         if payload["filename"] != nil && payload["text"] == nil {
             payload["filename"] = text
         } else {
             payload["text"] = text
+        }
+        let inlineLinks = InlineInternalLinkTarget.pruned(
+            payloadJSONs: [payloadJSON] + additionalPayloadJSONs,
+            visibleText: text
+        )
+        if inlineLinks.isEmpty {
+            payload.removeValue(forKey: "inline_links")
+        } else {
+            payload["inline_links"] = InlineInternalLinkTarget.payloadRows(for: inlineLinks)
         }
 
         let updatedData = try JSONSerialization.data(
@@ -399,7 +412,11 @@ final class ConflictRepository {
             )
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: snapshot.blockID,
-                text: snapshot.textPlain
+                text: snapshot.textPlain,
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: payloadJSON,
+                    visibleText: snapshot.textPlain
+                )
             )
         }
 
@@ -548,7 +565,11 @@ final class ConflictRepository {
             )
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: snapshot.blockID,
-                text: text
+                text: text,
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: payloadJSON,
+                    visibleText: text
+                )
             )
             if try !hasPendingBlockUpdate(blockID: snapshot.blockID) {
                 try SyncRepository(database: database).enqueue(
@@ -594,6 +615,7 @@ final class ConflictRepository {
                    blocks.text_plain AS local_text_plain,
                    blocks.payload_json AS local_payload_json,
                    blocks.revision AS local_revision,
+                   conflict_versions.payload_json AS remote_payload_json,
                    conflict_versions.text_plain,
                    conflict_versions.remote_revision
             FROM conflict_versions
@@ -619,7 +641,8 @@ final class ConflictRepository {
         )
         let payloadJSON = try AutomaticTextMerge.payloadJSON(
             updating: row["local_payload_json"] ?? "",
-            text: mergedText
+            text: mergedText,
+            preservingInlineLinksFrom: [row["remote_payload_json"] ?? ""]
         )
         let localRevision = Int(row["local_revision"] ?? "") ?? 0
         let mergedRevision = max(localRevision, snapshot.remoteRevision) + 1
@@ -654,7 +677,11 @@ final class ConflictRepository {
             )
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: snapshot.blockID,
-                text: mergedText
+                text: mergedText,
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: payloadJSON,
+                    visibleText: mergedText
+                )
             )
             if try !hasPendingBlockUpdate(blockID: snapshot.blockID) {
                 try SyncRepository(database: database).enqueue(

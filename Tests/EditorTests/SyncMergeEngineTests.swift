@@ -364,6 +364,46 @@ final class SyncMergeEngineTests: XCTestCase {
         )
     }
 
+    func testRemoteBlockIndexesStableInlinePageOnlyTargetWithoutFallbackBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Specs")
+        _ = try pageRepository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+        try database.execute("DELETE FROM sync_changes")
+
+        try SyncMergeEngine(database: database).applyRemoteBlock(
+            RemoteBlockChange(
+                blockID: sourceBlockID,
+                pageID: sourcePageID,
+                type: .paragraph,
+                textPlain: "See [[Specs#API contract]]",
+                payloadJSON: """
+                {"inline_links":[{"label":"Specs#API contract","target_page_id":"\(targetPage.id)"}],"text":"See [[Specs#API contract]]"}
+                """,
+                revision: 2,
+                orderKey: "000001"
+            )
+        )
+
+        let row = try XCTUnwrap(try database.query(
+            """
+            SELECT target_page_id, target_block_id, link_text
+            FROM links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(sourceBlockID)]
+        ).first)
+        XCTAssertEqual(row["target_page_id"], targetPage.id)
+        XCTAssertNil(row["target_block_id"] ?? nil)
+        XCTAssertEqual(row["link_text"], "Specs#API contract")
+    }
+
     func testConflictTextDiffHighlightsChangedMiddleLine() {
         XCTAssertEqual(
             ConflictTextDiff.segments(

@@ -1620,6 +1620,71 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertNil(payload["inline_links"])
     }
 
+    func testUpdateBlockTextPrunesRemovedInlineInternalLinkTargets() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let currentText = "See [[Specs]]"
+        let currentPayloadJSON = """
+        {"inline_links":[{"label":"Specs","target_page_id":"\(targetPage.id)"}],"text":"\(currentText)"}
+        """
+        try database.execute(
+            """
+            UPDATE blocks
+            SET text_plain = ?,
+                payload_json = ?
+            WHERE id = ?
+            """,
+            bindings: [.text(currentText), .text(currentPayloadJSON), .text(sourceBlockID)]
+        )
+
+        try repository.updateBlockText(blockID: sourceBlockID, text: "No link now")
+
+        let block = try XCTUnwrap(try repository.loadWorkspaceSnapshot().blocks.first { $0.id == sourceBlockID })
+        XCTAssertEqual(block.inlineInternalLinks, [])
+
+        let payloadJSON = try XCTUnwrap(try database.query(
+            "SELECT payload_json FROM blocks WHERE id = ? LIMIT 1",
+            bindings: [.text(sourceBlockID)]
+        ).first?["payload_json"])
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(payloadJSON.utf8)) as? [String: Any])
+        XCTAssertNil(payload["inline_links"])
+    }
+
+    func testTaskItemCompletionPreservesInlineInternalLinkTargets() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let block = try repository.appendBlock(pageID: pageID, type: .taskItem, text: "Read [[Specs]]")
+        let payloadJSON = """
+        {"completed":false,"inline_links":[{"label":"Specs","target_page_id":"\(targetPage.id)"}],"text":"Read [[Specs]]"}
+        """
+        try database.execute(
+            """
+            UPDATE blocks
+            SET payload_json = ?
+            WHERE id = ?
+            """,
+            bindings: [.text(payloadJSON), .text(block.id)]
+        )
+
+        try repository.updateTaskItemCompletion(blockID: block.id, isCompleted: true)
+
+        let reloadedBlock = try XCTUnwrap(try repository.loadWorkspaceSnapshot().blocks.first { $0.id == block.id })
+        XCTAssertEqual(reloadedBlock.inlineInternalLinks, [
+            InlineInternalLinkTarget(label: "Specs", targetPageID: targetPage.id, targetBlockID: nil)
+        ])
+        XCTAssertEqual(reloadedBlock.taskItemIsCompleted, true)
+    }
+
     func testLargePageImportLoadAndSearchIndexRemainUsable() throws {
         let database = try migratedDatabase()
         defer { database.close() }

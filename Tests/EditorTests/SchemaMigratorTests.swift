@@ -273,6 +273,58 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(columns.contains("link_kind"))
     }
 
+    func testMigrationBackfillsReferenceBlockLinkKind() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+        try database.execute(
+            """
+            INSERT INTO workspaces (id, name, created_at, updated_at)
+            VALUES ('workspace', 'Workspace', '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z');
+            INSERT INTO pages (
+                id, workspace_id, notebook_id, title, order_key, is_archived, is_favorite,
+                is_pinned, is_encrypted, created_at, updated_at
+            )
+            VALUES
+                ('source-page', 'workspace', NULL, 'Source', '000001', 0, 0, 0, 0, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z'),
+                ('target-page', 'workspace', NULL, 'Target', '000002', 0, 0, 0, 0, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z');
+            INSERT INTO blocks (
+                id, page_id, parent_block_id, order_key, type, payload_json, text_plain,
+                revision, sync_state, is_deleted, created_at, updated_at
+            )
+            VALUES
+                ('page-ref-block', 'source-page', NULL, '000001', 'pageReference', '{"text":"Target","target_page_id":"target-page"}', 'Target', 1, 'synced', 0, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z'),
+                ('paragraph-block', 'source-page', NULL, '000002', 'paragraph', '{"text":"Target"}', 'Target', 1, 'synced', 0, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z');
+            INSERT INTO links (
+                id, source_page_id, source_block_id, target_page_id, target_block_id,
+                target_url, link_text, link_kind, created_at
+            )
+            VALUES
+                ('reference-link', 'source-page', 'page-ref-block', 'target-page', NULL, NULL, 'Target', 'inline', '2026-05-24T00:00:00Z'),
+                ('inline-link', 'source-page', 'paragraph-block', 'target-page', NULL, NULL, 'Target', 'inline', '2026-05-24T00:00:00Z');
+            """
+        )
+
+        try SchemaMigrator.migrate(database: database)
+
+        let linkKindsByID = Dictionary(
+            uniqueKeysWithValues: try database.query(
+                """
+                SELECT id, link_kind
+                FROM links
+                ORDER BY id ASC
+                """
+            ).map { row in
+                (row["id"] ?? "", row["link_kind"] ?? "")
+            }
+        )
+        XCTAssertEqual(linkKindsByID, [
+            "inline-link": "inline",
+            "reference-link": "block_reference"
+        ])
+    }
+
     func testMigrationCreatesLookupIndexesForLargeVaultPerformance() throws {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         defer { database.close() }

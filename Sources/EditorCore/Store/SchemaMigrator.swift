@@ -403,6 +403,17 @@ enum SchemaMigrator {
             column: "link_kind",
             definition: "TEXT NOT NULL DEFAULT 'inline'"
         )
+        try database.execute(
+            """
+            UPDATE links
+            SET link_kind = 'block_reference'
+            WHERE source_block_id IN (
+                SELECT id
+                FROM blocks
+                WHERE type IN ('pageReference', 'blockReference')
+            );
+            """
+        )
 
         try database.execute(
             """
