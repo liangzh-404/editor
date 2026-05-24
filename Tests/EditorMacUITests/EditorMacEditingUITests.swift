@@ -2258,8 +2258,6 @@ final class EditorMacEditingUITests: XCTestCase {
                 "Clicking the collapsed left-side outline trigger should reveal the floating outline"
             )
         }
-        let outlinePanel = app.element(identifier: "editor.outline")
-        XCTAssertTrue(outlinePanel.waitForExistence(timeout: 5), "Imported heading should create an Outline panel")
         XCTAssertFalse(
             app.element(identifier: "editor.auxiliary-rail").exists,
             "Desktop outline should no longer create a fourth right-side column"

@@ -2464,6 +2464,64 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(metrics.runtimeSummary.contains("peak_last_visible_block_index=79"))
     }
 
+    func testEditorCanvasScrollMetricsPublicationIsThrottledOutsideUITests() {
+        XCTAssertTrue(
+            EditorCanvasScrollMetricsPublicationPolicy.shouldPublish(
+                eventCount: 0,
+                reason: .reset,
+                isUITestProbeEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            EditorCanvasScrollMetricsPublicationPolicy.shouldPublish(
+                eventCount: 1,
+                reason: .visibleEvent,
+                isUITestProbeEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            EditorCanvasScrollMetricsPublicationPolicy.shouldPublish(
+                eventCount: EditorCanvasScrollMetricsPublicationPolicy.runtimeEventInterval - 1,
+                reason: .visibleEvent,
+                isUITestProbeEnabled: false
+            )
+        )
+        XCTAssertTrue(
+            EditorCanvasScrollMetricsPublicationPolicy.shouldPublish(
+                eventCount: EditorCanvasScrollMetricsPublicationPolicy.runtimeEventInterval,
+                reason: .visibleEvent,
+                isUITestProbeEnabled: false
+            )
+        )
+        XCTAssertTrue(
+            EditorCanvasScrollMetricsPublicationPolicy.shouldPublish(
+                eventCount: 1,
+                reason: .visibleEvent,
+                isUITestProbeEnabled: true
+            )
+        )
+    }
+
+    func testEditorCanvasScrollMetricsRecorderIgnoresDuplicateVisibilityEvents() {
+        let recorder = EditorCanvasScrollMetricsRecorder(
+            pageID: "page-1",
+            blockCount: 760,
+            nowNanoseconds: 1_000_000_000
+        )
+
+        let firstEvent = recorder.blockAppeared("block-1", index: 0, nowNanoseconds: 1_010_000_000)
+        let duplicateEvent = recorder.blockAppeared("block-1", index: 0, nowNanoseconds: 1_020_000_000)
+        let secondEvent = recorder.blockAppeared("block-2", index: 40, nowNanoseconds: 1_030_000_000)
+        let disappearEvent = recorder.blockDisappeared("block-1", nowNanoseconds: 1_040_000_000)
+
+        XCTAssertEqual(firstEvent?.eventCount, 1)
+        XCTAssertNil(duplicateEvent)
+        XCTAssertEqual(secondEvent?.eventCount, 2)
+        XCTAssertEqual(disappearEvent?.eventCount, 3)
+        XCTAssertEqual(recorder.metrics.visibleBlockCount, 1)
+        XCTAssertEqual(recorder.metrics.visibleBlockChurnCount, 3)
+    }
+
     private func block(
         id: String,
         type: BlockType,

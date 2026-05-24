@@ -463,12 +463,13 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testDesktopInlineOutlineDefaultsToExpandedOnlyWhenLeftGutterCanHostIt() {
-        XCTAssertEqual(DesktopInlineOutlinePlacementPolicy.expandedWidth, 244)
+        XCTAssertEqual(DesktopInlineOutlinePlacementPolicy.expandedWidth, 188)
         XCTAssertEqual(DesktopInlineOutlinePlacementPolicy.collapsedWidth, 34)
+        XCTAssertEqual(DesktopInlineOutlinePlacementPolicy.minimumReadableLeftGap, 224)
         XCTAssertEqual(
             DesktopInlineOutlinePlacementPolicy.presentation(
                 outlineItemCount: 3,
-                leadingGap: 290,
+                leadingGap: 236,
                 userPreference: .automatic
             ),
             .expanded
@@ -476,7 +477,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(
             DesktopInlineOutlinePlacementPolicy.presentation(
                 outlineItemCount: 3,
-                leadingGap: 260,
+                leadingGap: 220,
                 userPreference: .automatic
             ),
             .collapsed
@@ -495,21 +496,26 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testDesktopInlineOutlineUsesLargerCompactTypography() {
+        XCTAssertEqual(DesktopInlineOutlineTypography.inlineTitleFontSize, 13.5)
+        XCTAssertEqual(DesktopInlineOutlineTypography.inlineTitleWeight, .medium)
+    }
+
     func testDesktopInlineOutlinePersistsClosedAndClickingWideTriggerPinsItOpen() {
         XCTAssertEqual(
             DesktopInlineOutlinePlacementPolicy.presentation(
                 outlineItemCount: 2,
-                leadingGap: 290,
+                leadingGap: 236,
                 userPreference: .collapsed
             ),
             .collapsed
         )
         XCTAssertEqual(
-            DesktopInlineOutlineTogglePolicy.triggerAction(leadingGap: 290),
+            DesktopInlineOutlineTogglePolicy.triggerAction(leadingGap: 236),
             .persist(.expanded)
         )
         XCTAssertEqual(
-            DesktopInlineOutlineTogglePolicy.triggerAction(leadingGap: 260),
+            DesktopInlineOutlineTogglePolicy.triggerAction(leadingGap: 220),
             .togglePopover
         )
     }
@@ -2815,16 +2821,59 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(model.tagItems.map(\.title), ["工作", "项目", "生活"])
         XCTAssertEqual(model.tagItems.map(\.count), [2, 2, 1])
         XCTAssertEqual(model.tagItems.map(\.nestingLevel), [0, 1, 0])
+        XCTAssertEqual(model.tagItems.map(\.parentTagID), [nil, "tag-work", nil])
+        XCTAssertEqual(model.tagItems.map(\.hasChildren), [true, false, false])
         XCTAssertEqual(model.primaryItems.last?.identifier, "editor.collection.encrypted")
         XCTAssertEqual(model.primaryItems.last?.collection, .encrypted)
         XCTAssertEqual(model.utilityItems.map(\.identifier), ["editor.collection.archive"])
         XCTAssertFalse(model.utilityItems.contains { $0.collection == .search })
     }
 
-    func testSidebarTagSectionDefaultsCollapsedAndExpandsForTaggedSelection() {
+    func testSidebarTagSectionDefaultsCollapsedAndStaysUserControlled() {
         XCTAssertFalse(SidebarTagSectionExpansionPolicy.defaultIsExpanded)
         XCTAssertFalse(SidebarTagSectionExpansionPolicy.shouldAutoExpand(selectedPageTagIDs: []))
-        XCTAssertTrue(SidebarTagSectionExpansionPolicy.shouldAutoExpand(selectedPageTagIDs: ["tag-work"]))
+        XCTAssertFalse(SidebarTagSectionExpansionPolicy.shouldAutoExpand(selectedPageTagIDs: ["tag-work"]))
+    }
+
+    func testSidebarTagVisibilityDefaultsToRootTagsAndRevealsExpandedBranches() {
+        let workspaceID = "workspace"
+        let tags = [
+            TagSummary(id: "tag-work", workspaceID: workspaceID, parentTagID: nil, name: "工作", path: "工作"),
+            TagSummary(id: "tag-project", workspaceID: workspaceID, parentTagID: "tag-work", name: "项目", path: "工作/项目"),
+            TagSummary(id: "tag-sprint", workspaceID: workspaceID, parentTagID: "tag-project", name: "冲刺", path: "工作/项目/冲刺"),
+            TagSummary(id: "tag-life", workspaceID: workspaceID, parentTagID: nil, name: "生活", path: "生活")
+        ]
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [],
+            blocks: [],
+            attachments: [],
+            tags: tags,
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: nil
+        )
+        let model = SidebarNavigationModel(snapshot: snapshot, selectedCollection: .allDocuments)
+
+        XCTAssertEqual(
+            SidebarTagVisibilityPolicy.visibleItems(model.tagItems, expandedTagIDs: []).map(\.title),
+            ["工作", "生活"]
+        )
+        XCTAssertEqual(
+            SidebarTagVisibilityPolicy.visibleItems(model.tagItems, expandedTagIDs: ["tag-work"]).map(\.title),
+            ["工作", "项目", "生活"]
+        )
+        XCTAssertEqual(
+            SidebarTagVisibilityPolicy.visibleItems(
+                model.tagItems,
+                expandedTagIDs: ["tag-work", "tag-project"]
+            ).map(\.title),
+            ["工作", "项目", "冲刺", "生活"]
+        )
+        XCTAssertEqual(
+            SidebarTagVisibilityPolicy.visibleItems(model.tagItems, expandedTagIDs: ["tag-project"]).map(\.title),
+            ["工作", "生活"],
+            "Expanding a hidden child should not reveal it until its parent branch is open."
+        )
     }
 
     func testSidebarHighlightsTagsAttachedToTheSelectedPage() {

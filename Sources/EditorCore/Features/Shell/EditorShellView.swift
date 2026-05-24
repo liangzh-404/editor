@@ -461,11 +461,11 @@ enum DesktopInlineOutlineToggleAction: Equatable, Sendable {
 }
 
 enum DesktopInlineOutlinePlacementPolicy {
-    static let expandedWidth: CGFloat = 244
+    static let expandedWidth: CGFloat = 188
     static let collapsedWidth: CGFloat = 34
     static let contentSpacing: CGFloat = 24
     static let minimumWindowEdgeInset: CGFloat = 12
-    static let minimumReadableLeftGap: CGFloat = 280
+    static let minimumReadableLeftGap: CGFloat = 224
     static let preferredTopOffset: CGFloat = 86
 
     static func leadingGap(
@@ -531,6 +531,11 @@ enum DesktopInlineOutlinePlacementPolicy {
     static func topOffset(containerHeight: CGFloat) -> CGFloat {
         min(preferredTopOffset, max(64, containerHeight * 0.09))
     }
+}
+
+enum DesktopInlineOutlineTypography {
+    static let inlineTitleFontSize: CGFloat = 13.5
+    static let inlineTitleWeight: Font.Weight = .medium
 }
 
 enum DesktopInlineOutlineTogglePolicy {
@@ -4757,6 +4762,97 @@ struct EditorCanvasScrollMetrics: Equatable, Sendable {
     }
 }
 
+enum EditorCanvasScrollMetricsPublicationReason: Equatable, Sendable {
+    case reset
+    case visibleEvent
+}
+
+enum EditorCanvasScrollMetricsPublicationPolicy {
+    static let runtimeEventInterval = 12
+
+    static func shouldPublish(
+        eventCount: Int,
+        reason: EditorCanvasScrollMetricsPublicationReason,
+        isUITestProbeEnabled: Bool
+    ) -> Bool {
+        switch reason {
+        case .reset:
+            return true
+        case .visibleEvent:
+            if isUITestProbeEnabled {
+                return true
+            }
+            return eventCount > 0 && eventCount.isMultiple(of: runtimeEventInterval)
+        }
+    }
+}
+
+struct EditorCanvasScrollMetricsRecorderEvent: Equatable, Sendable {
+    let metrics: EditorCanvasScrollMetrics
+    let eventCount: Int
+}
+
+final class EditorCanvasScrollMetricsRecorder {
+    private var tracker: EditorCanvasScrollMetricsTracker
+    private var eventCount = 0
+
+    init(
+        pageID: String?,
+        blockCount: Int,
+        nowNanoseconds: UInt64 = EditorCanvasScrollMetricsTracker.currentNanoseconds()
+    ) {
+        self.tracker = EditorCanvasScrollMetricsTracker(
+            pageID: pageID,
+            blockCount: blockCount,
+            nowNanoseconds: nowNanoseconds
+        )
+    }
+
+    var metrics: EditorCanvasScrollMetrics {
+        tracker.metrics
+    }
+
+    @discardableResult
+    func reset(
+        pageID: String?,
+        blockCount: Int,
+        nowNanoseconds: UInt64 = EditorCanvasScrollMetricsTracker.currentNanoseconds()
+    ) -> EditorCanvasScrollMetricsRecorderEvent {
+        tracker.reset(
+            pageID: pageID,
+            blockCount: blockCount,
+            nowNanoseconds: nowNanoseconds
+        )
+        eventCount = 0
+        return EditorCanvasScrollMetricsRecorderEvent(metrics: tracker.metrics, eventCount: eventCount)
+    }
+
+    @discardableResult
+    func blockAppeared(
+        _ blockID: String,
+        index: Int,
+        nowNanoseconds: UInt64 = EditorCanvasScrollMetricsTracker.currentNanoseconds()
+    ) -> EditorCanvasScrollMetricsRecorderEvent? {
+        guard tracker.blockAppeared(blockID, index: index, nowNanoseconds: nowNanoseconds) else {
+            return nil
+        }
+        eventCount += 1
+        return EditorCanvasScrollMetricsRecorderEvent(metrics: tracker.metrics, eventCount: eventCount)
+    }
+
+    @discardableResult
+    func blockDisappeared(
+        _ blockID: String,
+        nowNanoseconds: UInt64 = EditorCanvasScrollMetricsTracker.currentNanoseconds()
+    ) -> EditorCanvasScrollMetricsRecorderEvent? {
+        guard tracker.blockDisappeared(blockID, nowNanoseconds: nowNanoseconds) else {
+            return nil
+        }
+        eventCount += 1
+        return EditorCanvasScrollMetricsRecorderEvent(metrics: tracker.metrics, eventCount: eventCount)
+    }
+}
+
 struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
     private var pageID: String?
     private var blockCount: Int
@@ -4818,13 +4914,14 @@ struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
         blockDisappearanceCount = 0
     }
 
+    @discardableResult
     mutating func blockAppeared(
         _ blockID: String,
         index: Int,
         nowNanoseconds: UInt64 = Self.currentNanoseconds()
-    ) {
+    ) -> Bool {
         if visibleBlockIndexesByID[blockID] == index {
-            return
+            return false
         }
 
         let wasVisible = visibleBlockIndexesByID[blockID] != nil
@@ -4836,20 +4933,23 @@ struct EditorCanvasScrollMetricsTracker: Equatable, Sendable {
         peakVisibleBlockCount = max(peakVisibleBlockCount, visibleBlockIndexesByID.count)
         peakLastVisibleBlockIndex = max(peakLastVisibleBlockIndex ?? index, index)
         peakVisibleBlockIndexSpan = max(peakVisibleBlockIndexSpan, metrics.visibleBlockIndexSpan)
+        return true
     }
 
+    @discardableResult
     mutating func blockDisappeared(
         _ blockID: String,
         nowNanoseconds: UInt64 = Self.currentNanoseconds()
-    ) {
+    ) -> Bool {
         guard visibleBlockIndexesByID.removeValue(forKey: blockID) != nil else {
-            return
+            return false
         }
         lastEventNanoseconds = nowNanoseconds
         blockDisappearanceCount += 1
+        return true
     }
 
-    private static func currentNanoseconds() -> UInt64 {
+    static func currentNanoseconds() -> UInt64 {
         DispatchTime.now().uptimeNanoseconds
     }
 
@@ -5461,6 +5561,8 @@ struct SidebarNavigationItem: Identifiable, Equatable, Sendable {
     let identifier: String
     let isSelected: Bool
     let nestingLevel: Int
+    let parentTagID: String?
+    let hasChildren: Bool
 
     init(
         id: String,
@@ -5471,7 +5573,9 @@ struct SidebarNavigationItem: Identifiable, Equatable, Sendable {
         collection: WorkspaceCollection,
         identifier: String,
         isSelected: Bool,
-        nestingLevel: Int = 0
+        nestingLevel: Int = 0,
+        parentTagID: String? = nil,
+        hasChildren: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -5482,6 +5586,8 @@ struct SidebarNavigationItem: Identifiable, Equatable, Sendable {
         self.identifier = identifier
         self.isSelected = isSelected
         self.nestingLevel = nestingLevel
+        self.parentTagID = parentTagID
+        self.hasChildren = hasChildren
     }
 }
 
@@ -5502,6 +5608,9 @@ struct SidebarNavigationModel: Equatable, Sendable {
             Set(assignments.map(\.pageID))
         }
         let tagDescendants = Self.descendantTagIDsByTagID(tags: snapshot.tags)
+        let childrenByParentTagID = Dictionary(grouping: snapshot.tags) { tag in
+            tag.parentTagID ?? ""
+        }
 
         primaryItems = [
             SidebarNavigationItem(
@@ -5548,7 +5657,9 @@ struct SidebarNavigationModel: Equatable, Sendable {
                 collection: .tag(tag.id),
                 identifier: "editor.collection.tag.\(tag.id)",
                 isSelected: selectedCollection == .tag(tag.id),
-                nestingLevel: nestingLevel
+                nestingLevel: nestingLevel,
+                parentTagID: tag.parentTagID,
+                hasChildren: !(childrenByParentTagID[tag.id] ?? []).isEmpty
             )
         }
 
@@ -5677,11 +5788,50 @@ enum SidebarDropTargetChromePolicy {
 }
 
 enum SidebarTagSectionExpansionPolicy {
-    static let appStorageKey = "editor.sidebar.tags.expanded.v2"
+    static let appStorageKey = "editor.sidebar.tags.expanded.v3"
     static let defaultIsExpanded = false
 
     static func shouldAutoExpand(selectedPageTagIDs: [String]) -> Bool {
-        !selectedPageTagIDs.isEmpty
+        false
+    }
+}
+
+enum SidebarTagVisibilityPolicy {
+    static func visibleItems(
+        _ items: [SidebarNavigationItem],
+        expandedTagIDs: Set<String>
+    ) -> [SidebarNavigationItem] {
+        var hiddenBranchTagIDs = Set<String>()
+        var visibleItems: [SidebarNavigationItem] = []
+
+        for item in items {
+            guard let tagID = tagID(for: item) else {
+                visibleItems.append(item)
+                continue
+            }
+
+            if let parentTagID = item.parentTagID {
+                if hiddenBranchTagIDs.contains(parentTagID) || !expandedTagIDs.contains(parentTagID) {
+                    hiddenBranchTagIDs.insert(tagID)
+                    continue
+                }
+            }
+
+            visibleItems.append(item)
+
+            if item.hasChildren && !expandedTagIDs.contains(tagID) {
+                hiddenBranchTagIDs.insert(tagID)
+            }
+        }
+
+        return visibleItems
+    }
+
+    static func tagID(for item: SidebarNavigationItem) -> String? {
+        if case .tag(let tagID) = item.collection {
+            return tagID
+        }
+        return nil
     }
 }
 
@@ -5698,6 +5848,7 @@ private struct WorkspaceSidebar: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     @Binding var activePageDragIDs: Set<String>
     @AppStorage(SidebarTagSectionExpansionPolicy.appStorageKey) private var isTagsExpanded = SidebarTagSectionExpansionPolicy.defaultIsExpanded
+    @State private var expandedTagIDs: Set<String> = []
 
     var body: some View {
         let model = sidebarModel
@@ -5799,6 +5950,11 @@ private struct WorkspaceSidebar: View {
     @ViewBuilder
     private func tagGroup(model: SidebarNavigationModel) -> some View {
         if !model.tagItems.isEmpty {
+            let visibleTagItems = SidebarTagVisibilityPolicy.visibleItems(
+                model.tagItems,
+                expandedTagIDs: expandedTagIDs
+            )
+
             VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.rowSpacing)) {
                 SidebarDisclosureHeader(
                     title: "标签",
@@ -5809,13 +5965,17 @@ private struct WorkspaceSidebar: View {
                 }
 
                 if isTagsExpanded {
-                    ForEach(model.tagItems) { item in
-                        CollectionRailButton(
+                    ForEach(visibleTagItems) { item in
+                        SidebarTagRailButton(
                             item: item,
+                            isExpanded: isTagExpanded(item),
                             isRelatedToSelectedPage: SidebarTagHighlightPolicy.isHighlighted(
                                 item: item,
                                 selectedPageTagIDs: viewModel.selectedPageTagIDs
                             ),
+                            onToggleExpansion: {
+                                toggleTagExpansion(item)
+                            },
                             onDropPageIDs: { pageIDs in
                                 defer { activePageDragIDs = [] }
                                 guard case .tag(let tagID) = item.collection else {
@@ -5857,6 +6017,26 @@ private struct WorkspaceSidebar: View {
             isTagsExpanded = true
         }
     }
+
+    private func isTagExpanded(_ item: SidebarNavigationItem) -> Bool {
+        guard let tagID = SidebarTagVisibilityPolicy.tagID(for: item) else {
+            return false
+        }
+        return expandedTagIDs.contains(tagID)
+    }
+
+    private func toggleTagExpansion(_ item: SidebarNavigationItem) {
+        guard item.hasChildren,
+              let tagID = SidebarTagVisibilityPolicy.tagID(for: item) else {
+            return
+        }
+
+        if expandedTagIDs.contains(tagID) {
+            expandedTagIDs.remove(tagID)
+        } else {
+            expandedTagIDs.insert(tagID)
+        }
+    }
 }
 
 private struct SidebarDisclosureHeader: View {
@@ -5885,6 +6065,161 @@ private struct SidebarDisclosureHeader: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(title)，\(isExpanded ? "已展开" : "已收起")")
+    }
+}
+
+private struct SidebarTagRailButton: View {
+    let item: SidebarNavigationItem
+    let isExpanded: Bool
+    var isRelatedToSelectedPage = false
+    let onToggleExpansion: () -> Void
+    var onDropPageIDs: (([String]) -> Bool)? = nil
+    let action: () -> Void
+    @State private var isDropTargeted = false
+
+    var body: some View {
+        HStack(spacing: 7) {
+            disclosureButton
+
+            Button(action: action) {
+                HStack(spacing: 11) {
+                    Image(systemName: item.systemImage)
+                        .font(.callout.weight(.medium))
+                        .frame(width: 20)
+                        .foregroundStyle(iconColor)
+                    Text(item.title)
+                        .font(item.isSelected || isRelatedToSelectedPage ? .callout.weight(.semibold) : .callout.weight(.medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    if item.showsCount {
+                        Text("\(item.count)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(countColor)
+                            .monospacedDigit()
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(item.identifier)
+            .accessibilityValue(accessibilityValue)
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 12)
+        .padding(.vertical, CGFloat(SidebarChrome.rowVerticalPadding))
+        .foregroundStyle(foregroundColor)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
+                .fill(backgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
+                .stroke(
+                    EditorDesignTokens.Colors.border.color.opacity(
+                        SidebarDropTargetChromePolicy.strokeOpacity(
+                            isSelected: item.isSelected,
+                            isDropTargeted: isDropTargeted
+                        )
+                    ),
+                    lineWidth: 1
+                )
+        )
+        .dropDestination(for: String.self) { payloads, _ in
+            guard let onDropPageIDs else {
+                return false
+            }
+            let pageIDs = PageDragPayloadResolver.pageIDs(from: payloads)
+            guard !pageIDs.isEmpty else {
+                return false
+            }
+            return onDropPageIDs(pageIDs)
+        } isTargeted: { isTargeted in
+            isDropTargeted = isTargeted && onDropPageIDs != nil
+        }
+    }
+
+    @ViewBuilder
+    private var disclosureButton: some View {
+        if item.hasChildren {
+            Button(action: onToggleExpansion) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 14, height: 18)
+                    .foregroundStyle(SidebarChrome.mutedForegroundColor.opacity(0.78))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "收起标签" : "展开标签")
+            .accessibilityLabel("\(item.title)，\(isExpanded ? "已展开" : "已收起")")
+            .accessibilityIdentifier("\(item.identifier).disclosure")
+        } else {
+            Color.clear
+                .frame(width: 14, height: 18)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var foregroundColor: Color {
+        if item.isSelected {
+            return SidebarChrome.selectedForegroundColor
+        }
+        if isRelatedToSelectedPage {
+            return EditorDesignTokens.Colors.accent.color
+        }
+        return SidebarChrome.foregroundColor
+    }
+
+    private var iconColor: Color {
+        if item.isSelected {
+            return SidebarChrome.selectedForegroundColor
+        }
+        if isRelatedToSelectedPage {
+            return EditorDesignTokens.Colors.accent.color.opacity(0.86)
+        }
+        return SidebarChrome.mutedForegroundColor
+    }
+
+    private var countColor: Color {
+        if item.isSelected {
+            return SidebarChrome.selectedForegroundColor.opacity(0.80)
+        }
+        if isRelatedToSelectedPage {
+            return EditorDesignTokens.Colors.accent.color.opacity(0.72)
+        }
+        return SidebarChrome.mutedForegroundColor
+    }
+
+    private var backgroundColor: Color {
+        let selectedOpacity = SidebarDropTargetChromePolicy.fillOpacity(
+            isSelected: item.isSelected,
+            isDropTargeted: isDropTargeted
+        )
+        if selectedOpacity > 0 {
+            return SidebarChrome.selectedFillColor.opacity(selectedOpacity)
+        }
+        if isRelatedToSelectedPage {
+            return EditorDesignTokens.Colors.accent.color.opacity(0.10)
+        }
+        return Color.clear
+    }
+
+    private var accessibilityValue: String {
+        let selectionText: String
+        if item.isSelected {
+            selectionText = "已选中"
+        } else if isRelatedToSelectedPage {
+            selectionText = "当前笔记标签"
+        } else {
+            selectionText = "未选中"
+        }
+
+        if item.hasChildren {
+            return "\(selectionText)，\(item.count)，\(isExpanded ? "已展开" : "已收起")"
+        }
+        return "\(selectionText)，\(item.count)"
     }
 }
 
@@ -9038,7 +9373,13 @@ private struct EditorCanvasView: View {
     @State private var pendingFocusRequest: BlockFocusRequest?
     @State private var activeBlockDropTarget: BlockDropTarget?
     @State private var transientSelectionResetRequest = TransientSelectionResetRequest.none
-    @State private var scrollMetricsTracker = EditorCanvasScrollMetricsTracker(pageID: nil, blockCount: 0)
+    @State private var scrollMetricsRecorder = EditorCanvasScrollMetricsRecorder(pageID: nil, blockCount: 0)
+#if DEBUG
+    @State private var scrollMetricsDebugSummary = EditorCanvasScrollMetricsRecorder(
+        pageID: nil,
+        blockCount: 0
+    ).metrics.runtimeSummary
+#endif
     @State private var isAuxiliaryRailCollapsed = false
     @State private var isMobileOutlinePresented = false
     @State private var blockRowFrames: [String: CGRect] = [:]
@@ -11349,8 +11690,8 @@ private struct EditorCanvasView: View {
     }
 
     private func resetScrollMetrics() {
-        scrollMetricsTracker.reset(pageID: page?.id, blockCount: blocks.count)
-        logScrollMetrics(reason: "reset")
+        let event = scrollMetricsRecorder.reset(pageID: page?.id, blockCount: blocks.count)
+        publishScrollMetrics(event, reason: .reset)
     }
 
     private func scheduleScrollMetricsReset() {
@@ -11376,17 +11717,48 @@ private struct EditorCanvasView: View {
               blocks[index].id == blockID else {
             return
         }
-        scrollMetricsTracker.blockAppeared(blockID, index: index)
-        logScrollMetrics(reason: "appear")
+        guard let event = scrollMetricsRecorder.blockAppeared(blockID, index: index) else {
+            return
+        }
+        publishScrollMetrics(event, reason: .visibleEvent)
     }
 
     private func recordVisibleBlockDisappeared(_ blockID: String) {
-        scrollMetricsTracker.blockDisappeared(blockID)
-        logScrollMetrics(reason: "disappear")
+        guard let event = scrollMetricsRecorder.blockDisappeared(blockID) else {
+            return
+        }
+        publishScrollMetrics(event, reason: .visibleEvent)
     }
 
-    private func logScrollMetrics(reason: String) {
-        let metrics = scrollMetricsTracker.metrics
+    private func publishScrollMetrics(
+        _ event: EditorCanvasScrollMetricsRecorderEvent,
+        reason: EditorCanvasScrollMetricsPublicationReason
+    ) {
+        guard EditorCanvasScrollMetricsPublicationPolicy.shouldPublish(
+            eventCount: event.eventCount,
+            reason: reason,
+            isUITestProbeEnabled: isScrollMetricsUITestProbeEnabled
+        ) else {
+            return
+        }
+        let reasonDescription: String
+        switch reason {
+        case .reset:
+            reasonDescription = "reset"
+        case .visibleEvent:
+            reasonDescription = "visible_event"
+        }
+        logScrollMetrics(reason: reasonDescription, metrics: event.metrics)
+#if DEBUG
+        scrollMetricsDebugSummary = event.metrics.runtimeSummary
+#endif
+    }
+
+    private var isScrollMetricsUITestProbeEnabled: Bool {
+        ProcessInfo.processInfo.environment["EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT"] != nil
+    }
+
+    private func logScrollMetrics(reason: String, metrics: EditorCanvasScrollMetrics) {
         EditorLog.scroll.debug(
             "editor_canvas_scroll_visible reason=\(reason, privacy: .public) \(metrics.runtimeSummary, privacy: .public)"
         )
@@ -11394,7 +11766,7 @@ private struct EditorCanvasView: View {
 
 #if DEBUG
     private var scrollMetricsDebugProbe: some View {
-        let summary = scrollMetricsTracker.metrics.runtimeSummary
+        let summary = scrollMetricsDebugSummary
         return Text(summary)
             .font(.system(size: 1))
             .opacity(0.01)
@@ -12343,7 +12715,7 @@ private struct OutlinePanel: View {
                         }
 
                         Text(item.title)
-                            .font(style == .standard ? .callout : .caption)
+                            .font(titleFont)
                             .lineLimit(1)
                             .foregroundStyle(titleColor(isActive: isActive))
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -12374,6 +12746,22 @@ private struct OutlinePanel: View {
         .padding(.top, style.topPadding)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("editor.outline")
+    }
+
+    private var titleFont: Font {
+        switch style {
+        case .standard:
+            return .callout
+        case .inline, .popover:
+#if os(macOS)
+            return .system(
+                size: DesktopInlineOutlineTypography.inlineTitleFontSize,
+                weight: DesktopInlineOutlineTypography.inlineTitleWeight
+            )
+#else
+            return .caption
+#endif
+        }
     }
 
     private func titleColor(isActive: Bool) -> Color {
