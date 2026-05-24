@@ -315,6 +315,44 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(MobileNativeTextBlockDragPolicy.disablesSystemTextDropInteraction)
     }
 
+    func testNativeInlineLinkResolverFindsInternalWikiLinkAtCharacterIndex() {
+        let text = "See [[Specs]] today"
+        let activation = NativeInlineLinkActivationResolver.activation(
+            text: text,
+            characterIndex: ("See [[Spe" as NSString).length
+        )
+
+        XCTAssertEqual(
+            activation,
+            NativeInlineLinkActivation(
+                range: NSRange(location: ("See " as NSString).length, length: ("[[Specs]]" as NSString).length),
+                destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+            )
+        )
+    }
+
+    func testNativeInlineLinkResolverFindsExternalURLAtCharacterIndex() {
+        let text = "Read [Swift](https://swift.org)"
+        let activation = NativeInlineLinkActivationResolver.activation(
+            text: text,
+            characterIndex: ("Read [Sw" as NSString).length
+        )
+
+        XCTAssertEqual(
+            activation?.destination,
+            .externalURL("https://swift.org")
+        )
+    }
+
+    func testNativeInlineLinkResolverIgnoresNonLinkCharacter() {
+        XCTAssertNil(
+            NativeInlineLinkActivationResolver.activation(
+                text: "See [[Specs]] today",
+                characterIndex: ("See [[Specs]] to" as NSString).length
+            )
+        )
+    }
+
     func testNativeTextInsertionPointRectResolverClampsTallCaretToFontLineHeight() {
         let originalRect = CGRect(x: 12, y: 4, width: 2, height: 28)
 

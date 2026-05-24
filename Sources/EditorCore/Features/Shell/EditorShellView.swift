@@ -9,6 +9,26 @@ import AppKit
 import UIKit
 #endif
 
+enum InlineLinkActivationRoute: Equatable {
+    case internalLink(targetPageID: String, targetBlockID: String?)
+    case externalURL(URL)
+}
+
+enum InlineLinkActivationRouter {
+    static func route(
+        _ route: InlineLinkActivationRoute,
+        openInternal: (String, String?) -> Void,
+        openExternal: (URL) -> Void
+    ) {
+        switch route {
+        case .internalLink(let targetPageID, let targetBlockID):
+            openInternal(targetPageID, targetBlockID)
+        case .externalURL(let url):
+            openExternal(url)
+        }
+    }
+}
+
 enum EditorThemeScheme: Equatable, Sendable {
     case light
     case dark
@@ -1031,6 +1051,14 @@ private struct ThreeColumnEditorShell: View {
                     onOpenBlockReference: { targetPageID, targetBlockID in
                         viewModel.openBlockReference(targetPageID: targetPageID, targetBlockID: targetBlockID)
                     },
+                    onOpenInlineInternalLink: { sourceBlockID, targetPageID, targetBlockID, sourceSelection in
+                        viewModel.openInlineInternalLinkForUI(
+                            sourceBlockID: sourceBlockID,
+                            targetPageID: targetPageID,
+                            targetBlockID: targetBlockID,
+                            sourceSelection: sourceSelection
+                        )
+                    },
                     onAcceptConflict: { conflict in
                         viewModel.acceptRemoteConflictForUI(id: conflict.id)
                     },
@@ -1123,6 +1151,9 @@ private struct ThreeColumnEditorShell: View {
                     },
                     onPendingPageTitleFocusHandled: {
                         _ = viewModel.consumePendingPageTitleFocusPageID()
+                    },
+                    onConsumePendingNavigationFocusSelection: { blockID in
+                        viewModel.consumePendingNavigationFocusSelection(for: blockID)
                     },
                     onRemoveTagFromSelectedPage: { tagID in
                         viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
@@ -1383,6 +1414,14 @@ private struct ThreeColumnEditorShell: View {
                 onOpenBlockReference: { targetPageID, targetBlockID in
                     viewModel.openBlockReference(targetPageID: targetPageID, targetBlockID: targetBlockID)
                 },
+                onOpenInlineInternalLink: { sourceBlockID, targetPageID, targetBlockID, sourceSelection in
+                    viewModel.openInlineInternalLinkForUI(
+                        sourceBlockID: sourceBlockID,
+                        targetPageID: targetPageID,
+                        targetBlockID: targetBlockID,
+                        sourceSelection: sourceSelection
+                    )
+                },
                 onAcceptConflict: { conflict in
                     viewModel.acceptRemoteConflictForUI(id: conflict.id)
                 },
@@ -1475,6 +1514,9 @@ private struct ThreeColumnEditorShell: View {
                 },
                 onPendingPageTitleFocusHandled: {
                     _ = viewModel.consumePendingPageTitleFocusPageID()
+                },
+                onConsumePendingNavigationFocusSelection: { blockID in
+                    viewModel.consumePendingNavigationFocusSelection(for: blockID)
                 },
                 onRemoveTagFromSelectedPage: { tagID in
                     viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
@@ -8749,6 +8791,8 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
 #endif
 
 private struct EditorCanvasView: View {
+    @Environment(\.openURL) private var openURL
+
     let page: PageSummary?
     let pages: [PageSummary]
     let blocks: [BlockSnapshot]
@@ -8805,6 +8849,7 @@ private struct EditorCanvasView: View {
     let onOpenPageReference: (String) -> Void
     let onOpenParentPage: () -> Bool
     let onOpenBlockReference: (String, String) -> Void
+    var onOpenInlineInternalLink: (String, String, String?, EditorTextSelection?) -> Bool = { _, _, _, _ in false }
     let onAcceptConflict: (ConflictSnapshot) -> Void
     let onAcceptAllConflicts: () -> Void
     let onAcceptLocalConflict: (ConflictSnapshot) -> Void
@@ -8833,6 +8878,7 @@ private struct EditorCanvasView: View {
     let onMobileRevealPageList: (() -> Void)?
     let onPendingBlockFocusHandled: () -> Void
     var onPendingPageTitleFocusHandled: () -> Void = {}
+    var onConsumePendingNavigationFocusSelection: (String) -> EditorTextSelection? = { _ in nil }
     var onRemoveTagFromSelectedPage: (String) -> Bool = { _ in false }
     var onCreateAndAssignTagToSelectedPage: (String) -> Bool = { _ in false }
     @State private var isAttachmentImporterPresented = false
@@ -9139,6 +9185,13 @@ private struct EditorCanvasView: View {
                         },
                         onOpenBlockReference: { targetPageID, targetBlockID in
                             onOpenBlockReference(targetPageID, targetBlockID)
+                        },
+                        onInlineLinkActivation: { activation, selectedRange in
+                            handleInlineLinkActivation(
+                                activation,
+                                selectedRange: selectedRange,
+                                in: block
+                            )
                         },
                         onChangeType: { type in
                             onBlockTypeChange(block.id, type)
@@ -10737,6 +10790,63 @@ private struct EditorCanvasView: View {
         )
     }
 
+    private func handleInlineLinkActivation(
+        _ activation: NativeInlineLinkActivation,
+        selectedRange: NSRange,
+        in block: BlockSnapshot
+    ) -> Bool {
+        guard let route = inlineLinkActivationRoute(for: activation, in: block) else {
+            return false
+        }
+        let sourceSelection = EditorTextSelection(
+            blockID: block.id,
+            location: selectedRange.location,
+            length: selectedRange.length
+        )
+        var didRoute = false
+        InlineLinkActivationRouter.route(
+            route,
+            openInternal: { targetPageID, targetBlockID in
+                didRoute = onOpenInlineInternalLink(block.id, targetPageID, targetBlockID, sourceSelection)
+            },
+            openExternal: { url in
+                openURL(url)
+                didRoute = true
+            }
+        )
+        return didRoute
+    }
+
+    private func inlineLinkActivationRoute(
+        for activation: NativeInlineLinkActivation,
+        in block: BlockSnapshot
+    ) -> InlineLinkActivationRoute? {
+        switch activation.destination {
+        case .internalLink(let label, let pageTitle, let blockText):
+            if let storedTarget = block.inlineInternalLinks.first(where: { $0.label == label }) {
+                return .internalLink(
+                    targetPageID: storedTarget.targetPageID,
+                    targetBlockID: storedTarget.targetBlockID
+                )
+            }
+            guard let targetPage = pages.first(where: { $0.title == pageTitle }) else {
+                return nil
+            }
+            let targetBlockID = blockText.flatMap { text in
+                allBlocks.first {
+                    $0.pageID == targetPage.id
+                        && $0.textPlain.trimmingCharacters(in: .whitespacesAndNewlines) == text
+                }?.id
+            }
+            return .internalLink(targetPageID: targetPage.id, targetBlockID: targetBlockID)
+        case .externalURL(let urlString):
+            guard let url = URL(string: urlString) else {
+                return nil
+            }
+            return .externalURL(url)
+        }
+    }
+
     private func schedulePendingFocusIfNeeded(
         _ blockID: String?,
         requestID: UUID?,
@@ -10782,6 +10892,9 @@ private struct EditorCanvasView: View {
             reasonLabel = "page_changed"
         case .retry:
             reasonLabel = "retry"
+        }
+        if let selection = onConsumePendingNavigationFocusSelection(blockID) {
+            pendingFocusRequest = BlockFocusRequest(blockID: blockID, selection: selection)
         }
         EditorLog.focus.debug(
             "editor_focus_request_scheduled block_id=\(blockID, privacy: .public) source=view_model reason=\(reasonLabel, privacy: .public)"
@@ -13147,6 +13260,7 @@ private struct BlockRowView: View {
     let onUndoTextEdit: () -> Void
     let onOpenPageReference: (String) -> Void
     let onOpenBlockReference: (String, String) -> Void
+    let onInlineLinkActivation: (NativeInlineLinkActivation, NSRange) -> Bool
     let onChangeType: (BlockType) -> Void
     let onConvertToPage: () -> Void
     let onTaskItemCompletionChange: (Bool) -> Void
@@ -13224,6 +13338,7 @@ private struct BlockRowView: View {
         onUndoTextEdit: @escaping () -> Void = {},
         onOpenPageReference: @escaping (String) -> Void = { _ in },
         onOpenBlockReference: @escaping (String, String) -> Void = { _, _ in },
+        onInlineLinkActivation: @escaping (NativeInlineLinkActivation, NSRange) -> Bool = { _, _ in false },
         onChangeType: @escaping (BlockType) -> Void = { _ in },
         onConvertToPage: @escaping () -> Void = {},
         onTaskItemCompletionChange: @escaping (Bool) -> Void = { _ in },
@@ -13289,6 +13404,7 @@ private struct BlockRowView: View {
         self.onUndoTextEdit = onUndoTextEdit
         self.onOpenPageReference = onOpenPageReference
         self.onOpenBlockReference = onOpenBlockReference
+        self.onInlineLinkActivation = onInlineLinkActivation
         self.onChangeType = onChangeType
         self.onConvertToPage = onConvertToPage
         self.onTaskItemCompletionChange = onTaskItemCompletionChange
@@ -14012,6 +14128,7 @@ private struct BlockRowView: View {
             onExtendBlockSelectionByKeyboard: onExtendBlockSelectionByKeyboard,
             onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
             onInsertLinkByKeyboard: onInsertLinkByKeyboard,
+            onInlineLinkActivation: onInlineLinkActivation,
             onInsertBlockAfter: onInsertBlockAfter,
             onReplaceTextAtSelection: onReplaceTextAtSelection,
             onPasteTextAtSelection: onPasteTextAtSelection,

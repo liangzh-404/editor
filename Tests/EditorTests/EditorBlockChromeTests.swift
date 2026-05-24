@@ -1,6 +1,29 @@
 import XCTest
 
 final class EditorBlockChromeTests: XCTestCase {
+    func testInlineLinkActivationRoutesInternalAndExternalDestinations() {
+        var openedInternal: (String, String?)?
+        var openedExternal: URL?
+
+        InlineLinkActivationRouter.route(
+            .internalLink(targetPageID: "page-specs", targetBlockID: "block-api"),
+            openInternal: { pageID, blockID in openedInternal = (pageID, blockID) },
+            openExternal: { url in openedExternal = url }
+        )
+
+        XCTAssertEqual(openedInternal?.0, "page-specs")
+        XCTAssertEqual(openedInternal?.1, "block-api")
+        XCTAssertNil(openedExternal)
+
+        InlineLinkActivationRouter.route(
+            .externalURL(URL(string: "https://swift.org")!),
+            openInternal: { pageID, blockID in openedInternal = (pageID, blockID) },
+            openExternal: { url in openedExternal = url }
+        )
+
+        XCTAssertEqual(openedExternal?.absoluteString, "https://swift.org")
+    }
+
     func testCraftThingsDesignTokensMatchDesktopEditorialPalette() {
         assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF7, green: 0xF7, blue: 0xF5)
         assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF2, green: 0xF2, blue: 0xEF)
