@@ -789,13 +789,44 @@ final class MarkdownTransformerTests: XCTestCase {
     func testMarkdownInlineStyleScannerStylesWikiLinks() {
         let text = "See [[Specs]] and [Swift](https://swift.org)"
 
-        XCTAssertTrue(
-            MarkdownInlineStyleScanner.runs(in: text).contains(
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text).filter { $0.kind == .link },
+            [
                 MarkdownInlineStyleRun(
                     kind: .link,
                     range: NSRange(location: ("See [[" as NSString).length, length: ("Specs" as NSString).length)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .link,
+                    range: NSRange(location: ("See [[Specs]] and [" as NSString).length, length: ("Swift" as NSString).length)
                 )
-            )
+            ]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerStylesWikiAndMarkdownLinkSyntaxMarkers() {
+        let text = "See [[Specs]] and [Swift](https://swift.org)"
+
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text, includingSyntaxMarkers: true).filter { $0.kind != .link },
+            [
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("See " as NSString).length, length: ("[[" as NSString).length)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("See [[Specs" as NSString).length, length: ("]]" as NSString).length)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("See [[Specs]] and " as NSString).length, length: ("[" as NSString).length)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("See [[Specs]] and [Swift" as NSString).length, length: ("](https://swift.org)" as NSString).length)
+                )
+            ]
         )
     }
 

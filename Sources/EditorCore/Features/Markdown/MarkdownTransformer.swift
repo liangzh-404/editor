@@ -910,6 +910,11 @@ enum MarkdownInlineStyleScanner {
         let nsText = text as NSString
         let codeRuns = codeStyleRuns(in: nsText)
         let codeRanges = codeRuns.map(\.range)
+        let wikiRanges = wikiLinkRanges(in: nsText, excluding: codeRanges)
+        let wikiFullRanges = wikiRanges.map {
+            NSRange(location: $0.openingRange.location, length: NSMaxRange($0.closingRange) - $0.openingRange.location)
+        }
+        let markdownLinkExcludedRanges = codeRanges + wikiFullRanges
         var runs = codeRuns +
             boldStyleRuns(marker: "**", in: nsText, excluding: codeRanges) +
             boldStyleRuns(marker: "__", in: nsText, excluding: codeRanges) +
@@ -917,9 +922,9 @@ enum MarkdownInlineStyleScanner {
             underscoreItalicStyleRuns(in: nsText, excluding: codeRanges) +
             strikethroughStyleRuns(in: nsText, excluding: codeRanges) +
             highlightStyleRuns(in: nsText, excluding: codeRanges) +
-            linkStyleRuns(in: nsText, excluding: codeRanges) +
+            linkStyleRuns(in: nsText, excluding: markdownLinkExcludedRanges) +
             autolinkStyleRuns(in: nsText, excluding: codeRanges) +
-            wikiLinkStyleRuns(in: nsText, excluding: codeRanges)
+            wikiLinkStyleRuns(ranges: wikiRanges)
         if includingSyntaxMarkers {
             runs += codeSyntaxRuns(in: nsText)
             runs += pairedSyntaxRuns(marker: "**", in: nsText, excluding: codeRanges)
@@ -928,9 +933,9 @@ enum MarkdownInlineStyleScanner {
             runs += underscoreItalicSyntaxRuns(in: nsText, excluding: codeRanges)
             runs += pairedSyntaxRuns(marker: "~~", in: nsText, excluding: codeRanges)
             runs += pairedSyntaxRuns(marker: "==", in: nsText, excluding: codeRanges)
-            runs += linkSyntaxRuns(in: nsText, excluding: codeRanges)
+            runs += linkSyntaxRuns(in: nsText, excluding: markdownLinkExcludedRanges)
             runs += autolinkSyntaxRuns(in: nsText, excluding: codeRanges)
-            runs += wikiLinkSyntaxRuns(in: nsText, excluding: codeRanges)
+            runs += wikiLinkSyntaxRuns(ranges: wikiRanges)
         }
         return runs.sorted { lhs, rhs in
             if lhs.range.location == rhs.range.location {
@@ -1437,13 +1442,17 @@ enum MarkdownInlineStyleScanner {
         return ranges
     }
 
-    private static func wikiLinkStyleRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
-        wikiLinkRanges(in: text, excluding: excludedRanges)
+    private static func wikiLinkStyleRuns(
+        ranges: [(openingRange: NSRange, contentRange: NSRange, closingRange: NSRange)]
+    ) -> [MarkdownInlineStyleRun] {
+        ranges
             .map { MarkdownInlineStyleRun(kind: .link, range: $0.contentRange) }
     }
 
-    private static func wikiLinkSyntaxRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
-        wikiLinkRanges(in: text, excluding: excludedRanges).flatMap { range in
+    private static func wikiLinkSyntaxRuns(
+        ranges: [(openingRange: NSRange, contentRange: NSRange, closingRange: NSRange)]
+    ) -> [MarkdownInlineStyleRun] {
+        ranges.flatMap { range in
             [
                 MarkdownInlineStyleRun(kind: .syntax, range: range.openingRange),
                 MarkdownInlineStyleRun(kind: .syntax, range: range.closingRange)
