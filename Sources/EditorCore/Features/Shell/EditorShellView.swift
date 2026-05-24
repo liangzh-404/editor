@@ -3246,6 +3246,12 @@ enum TableBlockChrome {
     static let selectorSelectedIndicatorThickness: Double = 1.5
     static let selectorSelectedIndicatorInset: Double = 10
     static let headerBackgroundToken = EditorDesignTokens.Colors.tableHeaderBackground
+
+    static func viewportWidth(columnCount: Int, availableWidth: Double) -> Double {
+        let contentWidth = Double(max(columnCount, 1)) * cellWidth
+        let safeAvailableWidth = availableWidth.isFinite ? max(1, availableWidth) : maxViewportWidth
+        return min(contentWidth, maxViewportWidth, safeAvailableWidth)
+    }
 }
 
 enum TableBlockDefaultGridResolver {
@@ -6009,6 +6015,13 @@ struct PageListDateSection: Identifiable, Equatable, Sendable {
 }
 
 enum PageListDateSectionModel {
+    private static let utcTimeZone = TimeZone(secondsFromGMT: 0)!
+    private static let utcCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = utcTimeZone
+        return calendar
+    }()
+
     static func sections(
         pages: [PageSummary],
         now: Date = Date(),
@@ -6081,16 +6094,98 @@ enum PageListDateSectionModel {
             return nil
         }
 
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractionalFormatter.date(from: value) {
-            return date
+        return parseCommonISO8601Date(value)
+    }
+
+    private static func parseCommonISO8601Date(_ value: String) -> Date? {
+        let bytes = Array(value.utf8)
+        guard bytes.count >= 20,
+              bytes[4] == CharacterByte.hyphen,
+              bytes[7] == CharacterByte.hyphen,
+              bytes[10] == CharacterByte.uppercaseT,
+              bytes[13] == CharacterByte.colon,
+              bytes[16] == CharacterByte.colon,
+              let year = fourDigitNumber(bytes, at: 0),
+              let month = twoDigitNumber(bytes, at: 5),
+              let day = twoDigitNumber(bytes, at: 8),
+              let hour = twoDigitNumber(bytes, at: 11),
+              let minute = twoDigitNumber(bytes, at: 14),
+              let second = twoDigitNumber(bytes, at: 17) else {
+            return nil
         }
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
+        var timezoneIndex = 19
+        if bytes[timezoneIndex] == CharacterByte.period {
+            timezoneIndex += 1
+            while timezoneIndex < bytes.count, isDigit(bytes[timezoneIndex]) {
+                timezoneIndex += 1
+            }
+        }
+
+        guard timezoneIndex < bytes.count,
+              let offsetSeconds = timezoneOffsetSeconds(bytes, at: timezoneIndex) else {
+            return nil
+        }
+
+        var components = DateComponents()
+        components.calendar = utcCalendar
+        components.timeZone = utcTimeZone
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        components.second = second
+        return utcCalendar.date(from: components)?.addingTimeInterval(TimeInterval(-offsetSeconds))
     }
+
+    private static func timezoneOffsetSeconds(_ bytes: [UInt8], at index: Int) -> Int? {
+        if bytes[index] == CharacterByte.uppercaseZ {
+            return 0
+        }
+        guard bytes[index] == CharacterByte.plus || bytes[index] == CharacterByte.hyphen,
+              index + 5 < bytes.count,
+              bytes[index + 3] == CharacterByte.colon,
+              let hour = twoDigitNumber(bytes, at: index + 1),
+              let minute = twoDigitNumber(bytes, at: index + 4) else {
+            return nil
+        }
+        let sign = bytes[index] == CharacterByte.plus ? 1 : -1
+        return sign * (hour * 3600 + minute * 60)
+    }
+
+    private static func fourDigitNumber(_ bytes: [UInt8], at index: Int) -> Int? {
+        guard let first = twoDigitNumber(bytes, at: index),
+              let second = twoDigitNumber(bytes, at: index + 2) else {
+            return nil
+        }
+        return first * 100 + second
+    }
+
+    private static func twoDigitNumber(_ bytes: [UInt8], at index: Int) -> Int? {
+        guard index + 1 < bytes.count,
+              isDigit(bytes[index]),
+              isDigit(bytes[index + 1]) else {
+            return nil
+        }
+        return Int(bytes[index] - CharacterByte.zero) * 10
+            + Int(bytes[index + 1] - CharacterByte.zero)
+    }
+
+    private static func isDigit(_ byte: UInt8) -> Bool {
+        byte >= CharacterByte.zero && byte <= CharacterByte.nine
+    }
+}
+
+private enum CharacterByte {
+    static let zero = UInt8(ascii: "0")
+    static let nine = UInt8(ascii: "9")
+    static let colon = UInt8(ascii: ":")
+    static let hyphen = UInt8(ascii: "-")
+    static let period = UInt8(ascii: ".")
+    static let plus = UInt8(ascii: "+")
+    static let uppercaseT = UInt8(ascii: "T")
+    static let uppercaseZ = UInt8(ascii: "Z")
 }
 
 private struct PageListView: View {
@@ -15128,51 +15223,58 @@ private struct StructuredTableBlockEditor: View {
     var body: some View {
         let rows = editableRows
         let tableDimensions = tableDimensionAccessibilityValue(rows: rows)
-        let viewportWidth = tableViewportWidth(rows: rows)
         let contentHeight = tableContentHeight(rows: rows)
         let columnCount = tableColumnCount(rows: rows)
 
-        ZStack(alignment: .topLeading) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                ZStack(alignment: .topLeading) {
-                    tableGrid(rows: rows, columnCount: columnCount)
-                    tableSelectionHitLayer(rows: rows, columnCount: columnCount)
+        GeometryReader { geometry in
+            let viewportWidth = tableViewportWidth(
+                rows: rows,
+                availableWidth: geometry.size.width
+            )
+            ZStack(alignment: .topLeading) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    ZStack(alignment: .topLeading) {
+                        tableGrid(rows: rows, columnCount: columnCount)
+                        tableSelectionHitLayer(rows: rows, columnCount: columnCount)
+                    }
+                    .fixedSize()
                 }
-                .fixedSize()
+                .frame(
+                    width: viewportWidth,
+                    height: contentHeight
+                )
+                .background(EditorDesignTokens.Colors.editorBackground.color)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CGFloat(TableBlockChrome.cornerRadius), style: .continuous)
+                        .stroke(Color.secondary.opacity(TableBlockChrome.outerBorderOpacity), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CGFloat(TableBlockChrome.cornerRadius), style: .continuous))
             }
-            .frame(
-                width: viewportWidth,
-                height: contentHeight
-            )
-            .background(EditorDesignTokens.Colors.editorBackground.color)
-            .overlay(
-                RoundedRectangle(cornerRadius: CGFloat(TableBlockChrome.cornerRadius), style: .continuous)
-                    .stroke(Color.secondary.opacity(TableBlockChrome.outerBorderOpacity), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: CGFloat(TableBlockChrome.cornerRadius), style: .continuous))
+            .frame(width: viewportWidth, height: contentHeight, alignment: .topLeading)
+            .overlay(alignment: .bottom) {
+                tablePrimaryControl(
+                    systemImage: "plus",
+                    help: "新增行",
+                    accessibilityLabel: "新增表格行",
+                    accessibilityValue: tableDimensions,
+                    accessibilityIdentifier: "editor.table.\(blockID).add-row",
+                    action: appendRow
+                )
+                .offset(y: CGFloat(TableBlockChrome.insertControlEdgeOffset))
+            }
+            .overlay(alignment: .trailing) {
+                tablePrimaryControl(
+                    systemImage: "plus",
+                    help: "新增列",
+                    accessibilityLabel: "新增表格列",
+                    accessibilityValue: tableDimensions,
+                    accessibilityIdentifier: "editor.table.\(blockID).add-column",
+                    action: appendColumn
+                )
+                .offset(x: CGFloat(TableBlockChrome.insertControlEdgeOffset))
+            }
         }
-        .overlay(alignment: .bottom) {
-            tablePrimaryControl(
-                systemImage: "plus",
-                help: "新增行",
-                accessibilityLabel: "新增表格行",
-                accessibilityValue: tableDimensions,
-                accessibilityIdentifier: "editor.table.\(blockID).add-row",
-                action: appendRow
-            )
-            .offset(y: CGFloat(TableBlockChrome.insertControlEdgeOffset))
-        }
-        .overlay(alignment: .trailing) {
-            tablePrimaryControl(
-                systemImage: "plus",
-                help: "新增列",
-                accessibilityLabel: "新增表格列",
-                accessibilityValue: tableDimensions,
-                accessibilityIdentifier: "editor.table.\(blockID).add-column",
-                action: appendColumn
-            )
-            .offset(x: CGFloat(TableBlockChrome.insertControlEdgeOffset))
-        }
+        .frame(height: contentHeight)
         .padding(.vertical, 4)
         .onHover { hovering in
             isTableHovered = hovering
@@ -15230,10 +15332,12 @@ private struct StructuredTableBlockEditor: View {
         return "\(rowCount) 行，\(columnCount) 列"
     }
 
-    private func tableViewportWidth(rows: [[String]]) -> CGFloat {
+    private func tableViewportWidth(rows: [[String]], availableWidth: CGFloat) -> CGFloat {
         let columnCount = tableColumnCount(rows: rows)
-        let contentWidth = CGFloat(columnCount) * CGFloat(TableBlockChrome.cellWidth)
-        return min(contentWidth, CGFloat(TableBlockChrome.maxViewportWidth))
+        return CGFloat(TableBlockChrome.viewportWidth(
+            columnCount: columnCount,
+            availableWidth: Double(availableWidth)
+        ))
     }
 
     private func tableContentHeight(rows: [[String]]) -> CGFloat {

@@ -784,6 +784,34 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges().map(\.entityType), ["block", "block", "block", "page"])
     }
 
+    func testImportMarkdownKeepsIndentedListContinuationOutOfCodeBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+
+        try repository.importMarkdown(
+            pageID: pageID,
+            markdown:
+                """
+                - Unordered parent
+                    Unordered continuation
+
+                1. Ordered parent
+                    Ordered continuation
+                """
+        )
+        let blocks = try repository.loadWorkspaceSnapshot().blocks
+
+        XCTAssertEqual(blocks.map(\.type), [.unorderedListItem, .paragraph, .orderedListItem, .paragraph])
+        XCTAssertEqual(
+            blocks.map(\.textPlain),
+            ["Unordered parent", "Unordered continuation", "Ordered parent", "Ordered continuation"]
+        )
+    }
+
     func testImportMarkdownPersistsOuterPipeOptionalTableRows() throws {
         let database = try migratedDatabase()
         defer { database.close() }

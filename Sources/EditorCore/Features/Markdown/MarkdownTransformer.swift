@@ -1686,7 +1686,8 @@ enum MarkdownTransformer {
             }
 
             if let indentedCodeLine = indentedCodeText(for: line),
-               paragraphLines.isEmpty {
+               paragraphLines.isEmpty,
+               !isListContinuationIndentedLine(line, previousDraft: drafts.last) {
                 flushTableLines(&tableLines, into: &drafts)
                 flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
                 indentedCodeLines.append(indentedCodeLine)
@@ -2016,6 +2017,41 @@ enum MarkdownTransformer {
             return String(line.dropFirst())
         }
         return nil
+    }
+
+    private static func isListContinuationIndentedLine(
+        _ line: String,
+        previousDraft: MarkdownBlockDraft?
+    ) -> Bool {
+        guard let previousDraft,
+              isListBlockType(previousDraft.type) else {
+            return false
+        }
+        let indentWidth = leadingIndentWidth(of: line)
+        return indentWidth > 0 && indentWidth < 8
+    }
+
+    private static func isListBlockType(_ type: BlockType) -> Bool {
+        switch type {
+        case .unorderedListItem, .orderedListItem, .taskItem:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func leadingIndentWidth(of line: String) -> Int {
+        var width = 0
+        for character in line {
+            if character == " " {
+                width += 1
+            } else if character == "\t" {
+                width += 4
+            } else {
+                break
+            }
+        }
+        return width
     }
 
     private static func setextHeadingType(for line: String) -> BlockType? {

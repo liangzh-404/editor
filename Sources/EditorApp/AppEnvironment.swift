@@ -77,7 +77,7 @@ enum AppEnvironment {
         try seedTaggedPageForUITestingIfNeeded(snapshot: snapshot, tagRepository: TagRepository(database: database))
         try repairLocalStoreBeforeSync(database: database)
         let attachmentsDirectory = try attachmentsDirectory()
-        try DataProtectionService.applyNativeProtectionRecursively(to: attachmentsDirectory)
+        try prepareAttachmentsDirectoryForInteractiveStartup(attachmentsDirectory)
         let attachmentRepository = AttachmentRepository(
             database: database,
             attachmentsDirectory: attachmentsDirectory
@@ -407,6 +407,11 @@ enum AppEnvironment {
             withIntermediateDirectories: true
         )
         return directory
+    }
+
+    private static func prepareAttachmentsDirectoryForInteractiveStartup(_ attachmentsDirectory: URL) throws {
+        try DataProtectionService.applyNativeProtection(to: attachmentsDirectory)
+        EditorLog.store.debug("attachments_directory_startup_protection_applied mode=root_only")
     }
 
     private static func editorStoreDirectory() throws -> URL {

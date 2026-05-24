@@ -1188,6 +1188,12 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testTableViewportWidthShrinksToAvailableEditorWidth() {
+        XCTAssertEqual(TableBlockChrome.viewportWidth(columnCount: 6, availableWidth: 320), 320)
+        XCTAssertEqual(TableBlockChrome.viewportWidth(columnCount: 1, availableWidth: 320), TableBlockChrome.cellWidth)
+        XCTAssertEqual(TableBlockChrome.viewportWidth(columnCount: 8, availableWidth: 720), TableBlockChrome.maxViewportWidth)
+    }
+
     func testTableSelectionChromeKeepsIdleSelectorsInvisibleButSelectedFeedbackVisible() {
         XCTAssertLessThan(
             TableBlockChrome.selectorHitOpacity,
@@ -2725,6 +2731,18 @@ final class EditorBlockChromeTests: XCTestCase {
                 updatedAt: "2026-05-19T08:00:00.000Z"
             ),
             PageSummary(
+                id: "today-no-fraction",
+                workspaceID: "workspace",
+                title: "今天，无毫秒",
+                updatedAt: "2026-05-19T08:00:00Z"
+            ),
+            PageSummary(
+                id: "today-offset",
+                workspaceID: "workspace",
+                title: "今天，时区偏移",
+                updatedAt: "2026-05-19T16:00:00+08:00"
+            ),
+            PageSummary(
                 id: "yesterday",
                 workspaceID: "workspace",
                 title: "昨天",
@@ -2746,7 +2764,10 @@ final class EditorBlockChromeTests: XCTestCase {
         )
 
         XCTAssertEqual(sections.map(\.title), ["今天", "昨天", "5月12日", "较早"])
-        XCTAssertEqual(sections.map { $0.pages.map(\.id) }, [["today"], ["yesterday"], ["older"], ["unknown"]])
+        XCTAssertEqual(
+            sections.map { $0.pages.map(\.id) },
+            [["today", "today-no-fraction", "today-offset"], ["yesterday"], ["older"], ["unknown"]]
+        )
     }
 
     func testSidebarNavigationModelOmitsRecentAndFavoritesAndShowsHierarchicalTagCounts() {

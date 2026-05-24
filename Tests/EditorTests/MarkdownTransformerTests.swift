@@ -300,6 +300,27 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownTreatsIndentedParagraphsAfterListsAsParagraphs() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    - Unordered parent
+                        Unordered continuation
+
+                    1. Ordered parent
+                        Ordered continuation
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .unorderedListItem, textPlain: "Unordered parent"),
+                MarkdownBlockDraft(type: .paragraph, textPlain: "Unordered continuation"),
+                MarkdownBlockDraft(type: .orderedListItem, textPlain: "Ordered parent"),
+                MarkdownBlockDraft(type: .paragraph, textPlain: "Ordered continuation")
+            ]
+        )
+    }
+
     func testImportMarkdownSplitsInlineAttachmentLinksIntoOrderedBlocks() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(

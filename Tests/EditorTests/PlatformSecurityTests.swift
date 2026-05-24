@@ -276,6 +276,31 @@ final class PlatformSecurityTests: XCTestCase {
         XCTAssertTrue(shellSource.contains(".onChange(of: scenePhase) { _, phase in\n                if foregroundSyncActivationPolicy.shouldSync(for: phase) {\n                    viewModel.syncAfterActivation()\n                }\n            }"))
     }
 
+    func testMainWindowStartupDoesNotRecursivelyProtectAttachmentsOnMainThread() throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: projectRoot.appendingPathComponent("Sources/EditorApp/AppEnvironment.swift"),
+            encoding: .utf8
+        )
+        guard let start = source.range(
+            of: "@MainActor\n    private static func makeWorkspaceViewModel() throws -> WorkspaceViewModel {"
+        ),
+            let end = source.range(
+                of: "    private static func makeCloudKitAccountMetadataService()",
+                range: start.upperBound..<source.endIndex
+            ) else {
+            XCTFail("Could not locate makeWorkspaceViewModel in AppEnvironment.swift")
+            return
+        }
+        let startupBody = String(source[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(startupBody.contains("prepareAttachmentsDirectoryForInteractiveStartup(attachmentsDirectory)"))
+        XCTAssertFalse(startupBody.contains("applyNativeProtectionRecursively(to: attachmentsDirectory)"))
+    }
+
     func testIOSProjectDeclaresLaunchScreenForFullResolutionPhones() throws {
         let plist = try appPlist(named: "EditorIOS-Info.plist")
 
