@@ -1315,6 +1315,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         let previousCollection = selectedCollection
+        currentAnchoredNavigationEntry = nil
         recordNavigationHistoryBeforeOpening(pageID: destinationPageID)
         selectedPageID = destinationPageID
         selectedNotebookID = snapshot.pages.first { $0.id == destinationPageID }?.notebookID ?? selectedNotebookID

@@ -2535,6 +2535,52 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSamePageSearchResultDoesNotResurrectConsumedInlineTargetAnchor() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let inlineTargetBlock = try repository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+        let searchTargetBlock = try repository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "Search match")
+        let viewModel = WorkspaceViewModel(repository: repository, backlinkRepository: BacklinkRepository(database: database))
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+
+        XCTAssertTrue(
+            viewModel.openInlineInternalLinkForUI(
+                sourceBlockID: sourceBlockID,
+                targetPageID: targetPage.id,
+                targetBlockID: inlineTargetBlock.id,
+                sourceSelection: nil
+            )
+        )
+        XCTAssertEqual(viewModel.consumePendingFocusBlockID(), inlineTargetBlock.id)
+
+        viewModel.selectSearchResult(
+            SearchResult(
+                entityType: "block",
+                entityID: searchTargetBlock.id,
+                title: "Search match",
+                snippet: "Search match",
+                destinationPageID: targetPage.id,
+                destinationBlockID: searchTargetBlock.id
+            )
+        )
+        XCTAssertEqual(viewModel.pendingFocusBlockID, searchTargetBlock.id)
+
+        XCTAssertTrue(try viewModel.navigateBack())
+        XCTAssertEqual(viewModel.selectedPageID, sourcePageID)
+        XCTAssertTrue(viewModel.navigateForward())
+
+        XCTAssertEqual(viewModel.selectedPageID, targetPage.id)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, searchTargetBlock.id)
+    }
+
+    @MainActor
     func testOpenInlineInternalLinkIgnoresTargetBlockFromDifferentPage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
