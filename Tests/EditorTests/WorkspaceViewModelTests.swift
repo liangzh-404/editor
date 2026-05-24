@@ -2465,6 +2465,76 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testOpenInlineInternalLinkBackPrefersSourceAnchorWhenTargetHasParentLink() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let parentPage = try repository.createPage(workspaceID: workspaceID, title: "Parent")
+        let parentBlock = try repository.appendBlock(pageID: parentPage.id, type: .paragraph, text: "Child")
+        let targetPage = try repository.convertTextBlockToPage(blockID: parentBlock.id)
+        let viewModel = WorkspaceViewModel(repository: repository, backlinkRepository: BacklinkRepository(database: database))
+        let sourceSelection = EditorTextSelection(blockID: sourceBlockID, location: 1, length: 0)
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+
+        XCTAssertTrue(
+            viewModel.openInlineInternalLinkForUI(
+                sourceBlockID: sourceBlockID,
+                targetPageID: targetPage.id,
+                targetBlockID: nil,
+                sourceSelection: sourceSelection
+            )
+        )
+        XCTAssertEqual(viewModel.selectedPageParentLink?.parentPageID, parentPage.id)
+
+        XCTAssertTrue(try viewModel.navigateBack())
+
+        XCTAssertEqual(viewModel.selectedPageID, sourcePageID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, sourceBlockID)
+        XCTAssertEqual(viewModel.consumePendingNavigationFocusSelection(for: sourceBlockID), sourceSelection)
+    }
+
+    @MainActor
+    func testNormalPageSelectionDoesNotResurrectConsumedInlineTargetAnchor() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let targetBlock = try repository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+        let otherPage = try repository.createPage(workspaceID: workspaceID, title: "Other")
+        let viewModel = WorkspaceViewModel(repository: repository, backlinkRepository: BacklinkRepository(database: database))
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+
+        XCTAssertTrue(
+            viewModel.openInlineInternalLinkForUI(
+                sourceBlockID: sourceBlockID,
+                targetPageID: targetPage.id,
+                targetBlockID: targetBlock.id,
+                sourceSelection: nil
+            )
+        )
+        XCTAssertEqual(viewModel.consumePendingFocusBlockID(), targetBlock.id)
+
+        viewModel.selectPage(id: otherPage.id)
+        viewModel.selectPage(id: targetPage.id)
+        XCTAssertTrue(try viewModel.navigateBack())
+        XCTAssertEqual(viewModel.selectedPageID, otherPage.id)
+        XCTAssertTrue(viewModel.navigateForward())
+
+        XCTAssertEqual(viewModel.selectedPageID, targetPage.id)
+        XCTAssertNil(viewModel.pendingFocusBlockID)
+    }
+
+    @MainActor
     func testOpenInlineInternalLinkIgnoresTargetBlockFromDifferentPage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -2491,6 +2561,67 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.selectedPageID, targetPage.id)
         XCTAssertNil(viewModel.pendingFocusBlockID)
+        XCTAssertTrue(try viewModel.navigateBack())
+        XCTAssertEqual(viewModel.selectedPageID, sourcePageID)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, sourceBlockID)
+    }
+
+    @MainActor
+    func testOpenInlineInternalLinkRejectsSourceBlockOutsideSelectedPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let otherPage = try repository.createPage(workspaceID: workspaceID, title: "Other")
+        let otherBlock = try repository.appendBlock(pageID: otherPage.id, type: .paragraph, text: "Wrong page")
+        let viewModel = WorkspaceViewModel(repository: repository, backlinkRepository: BacklinkRepository(database: database))
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+        let canNavigateBackBeforeOpen = viewModel.canNavigateBack
+
+        XCTAssertFalse(
+            viewModel.openInlineInternalLinkForUI(
+                sourceBlockID: otherBlock.id,
+                targetPageID: targetPage.id,
+                targetBlockID: nil,
+                sourceSelection: nil
+            )
+        )
+
+        XCTAssertEqual(viewModel.selectedPageID, sourcePageID)
+        XCTAssertEqual(viewModel.canNavigateBack, canNavigateBackBeforeOpen)
+    }
+
+    @MainActor
+    func testOpenInlineInternalLinkRejectsMismatchedSourceSelection() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let otherBlock = try repository.appendBlock(pageID: sourcePageID, type: .paragraph, text: "Other source")
+        let viewModel = WorkspaceViewModel(repository: repository, backlinkRepository: BacklinkRepository(database: database))
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+        let canNavigateBackBeforeOpen = viewModel.canNavigateBack
+
+        XCTAssertFalse(
+            viewModel.openInlineInternalLinkForUI(
+                sourceBlockID: sourceBlockID,
+                targetPageID: targetPage.id,
+                targetBlockID: nil,
+                sourceSelection: EditorTextSelection(blockID: otherBlock.id, location: 0, length: 0)
+            )
+        )
+
+        XCTAssertEqual(viewModel.selectedPageID, sourcePageID)
+        XCTAssertEqual(viewModel.canNavigateBack, canNavigateBackBeforeOpen)
     }
 
     @MainActor

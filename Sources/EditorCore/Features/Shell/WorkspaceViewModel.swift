@@ -954,6 +954,7 @@ final class WorkspaceViewModel: ObservableObject {
         if recordHistory {
             recordNavigationHistoryBeforeOpening(pageID: id)
         }
+        currentAnchoredNavigationEntry = nil
         hydrateBlocksForPageIfNeededForUI(id)
         selectedPageID = id
         selectedCollection = collection
@@ -1359,6 +1360,19 @@ final class WorkspaceViewModel: ObservableObject {
         targetBlockID: String?,
         sourceSelection: EditorTextSelection?
     ) -> Bool {
+        guard let selectedPageID,
+              snapshot.blocks.contains(where: { $0.id == sourceBlockID && $0.pageID == selectedPageID }) else {
+            EditorLog.render.debug(
+                "inline_internal_link_open_failed reason=source_block_unavailable source_block_id=\(sourceBlockID, privacy: .public)"
+            )
+            return false
+        }
+        guard sourceSelection?.blockID == nil || sourceSelection?.blockID == sourceBlockID else {
+            EditorLog.render.debug(
+                "inline_internal_link_open_failed reason=source_selection_mismatch source_block_id=\(sourceBlockID, privacy: .public)"
+            )
+            return false
+        }
         guard snapshot.pages.contains(where: { $0.id == targetPageID }) else {
             EditorLog.render.debug(
                 "inline_internal_link_open_failed reason=target_page_unavailable target_page_id=\(targetPageID, privacy: .public)"
@@ -1367,14 +1381,11 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         let sourceEntry = PageNavigationHistoryEntry(
-            pageID: selectedPageID ?? snapshot.blocks.first { $0.id == sourceBlockID }?.pageID ?? "",
+            pageID: selectedPageID,
             collection: selectedCollection,
             blockID: sourceBlockID,
             selection: sourceSelection
         )
-        guard !sourceEntry.pageID.isEmpty else {
-            return false
-        }
 
         pageNavigationBackStack.append(sourceEntry)
         pageNavigationForwardStack.removeAll()
@@ -1536,25 +1547,23 @@ final class WorkspaceViewModel: ObservableObject {
 
     @discardableResult
     func navigateBack() throws -> Bool {
-        if let currentPageID = selectedPageID,
-           let currentParentLink = selectedPageParentLink {
-            let currentEntry = currentNavigationHistoryEntry() ?? PageNavigationHistoryEntry(
-                pageID: currentPageID,
-                collection: selectedCollection
-            )
-            let didOpenParent = try openParentPageForCurrentPage()
-            if didOpenParent {
-                if pageNavigationBackStack.last?.pageID == currentParentLink.parentPageID {
-                    _ = pageNavigationBackStack.popLast()
-                }
-                pageNavigationForwardStack.append(currentEntry)
-                return true
-            }
-        }
-
         while let previousEntry = pageNavigationBackStack.popLast() {
             guard canRestoreSelection(pageID: previousEntry.pageID, in: previousEntry.collection) else {
                 continue
+            }
+
+            if let parentLink = selectedPageParentLink,
+               previousEntry.pageID == parentLink.parentPageID,
+               previousEntry.blockID == nil,
+               previousEntry.selection == nil {
+                let currentEntry = currentNavigationHistoryEntry()
+                let didOpenParent = try openParentPageForCurrentPage()
+                if didOpenParent {
+                    if let currentEntry {
+                        pageNavigationForwardStack.append(currentEntry)
+                    }
+                    return true
+                }
             }
 
             if let currentEntry = currentNavigationHistoryEntry() {
@@ -1564,7 +1573,20 @@ final class WorkspaceViewModel: ObservableObject {
             return true
         }
 
-        return try openParentPageForCurrentPage()
+        if let currentPageID = selectedPageID,
+           selectedPageParentLink != nil {
+            let currentEntry = currentNavigationHistoryEntry() ?? PageNavigationHistoryEntry(
+                pageID: currentPageID,
+                collection: selectedCollection
+            )
+            let didOpenParent = try openParentPageForCurrentPage()
+            if didOpenParent {
+                pageNavigationForwardStack.append(currentEntry)
+                return true
+            }
+        }
+
+        return false
     }
 
     @discardableResult
