@@ -46,6 +46,26 @@ final class SyncEngineTests: XCTestCase {
         )))
     }
 
+    func testCloudKitOperationWaiterCancelsAndThrowsWhenOperationDoesNotSignal() {
+        let waiter = CloudKitOperationWaiter(timeout: 0.01)
+        let semaphore = DispatchSemaphore(value: 0)
+        var didCancel = false
+
+        XCTAssertThrowsError(
+            try waiter.wait(
+                for: semaphore,
+                operationName: "fetchRecordChanges",
+                cancel: { didCancel = true }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? CloudKitOperationTimeoutError,
+                CloudKitOperationTimeoutError(operationName: "fetchRecordChanges", timeout: 0.01)
+            )
+        }
+        XCTAssertTrue(didCancel)
+    }
+
     func testUploadPendingChangesUploadsPageCreateBeforeItsBlocksInSameRun() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -1533,6 +1553,42 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(result.appliedCount, 3)
         XCTAssertEqual(rows.first?["workspace_id"], "workspace-remote")
         XCTAssertEqual(rows.first?["diary_date"], "2026-05-21")
+    }
+
+    func testFetchRemoteChangesSkipsDiaryPageMappingWhenPageIsMissing() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        let nextToken = Data("next-token".utf8)
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            diaryPageChanges: [
+                RemoteDiaryPageChange(
+                    pageID: "page-missing",
+                    workspaceID: "workspace-remote",
+                    diaryDate: "2026-05-21"
+                )
+            ],
+            changes: [],
+            serverChangeTokenData: nextToken
+        )
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let rows = try database.query("SELECT page_id FROM diary_pages")
+        let diagnostics = try RuntimeDiagnosticRepository(database: database).recentEvents(limit: 1)
+
+        XCTAssertEqual(result.appliedCount, 0)
+        XCTAssertEqual(rows, [])
+        XCTAssertEqual(
+            try syncRepository.serverChangeTokenData(scope: "privateDatabase"),
+            nextToken
+        )
+        XCTAssertEqual(diagnostics.first?.eventName, "remote_diary_page_skipped_missing_page")
     }
 
     func testCloudKitPrivateDatabaseAdapterIgnoresRecordsFromPreviousSyncGeneration() throws {

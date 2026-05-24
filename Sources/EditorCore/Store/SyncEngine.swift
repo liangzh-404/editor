@@ -891,6 +891,7 @@ final class CloudKitPrivateDatabaseSubscriptionEnsurer: CloudKitSubscriptionEnsu
 final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordReading {
     private let database: CKDatabase
     private let zoneEnsurer: CloudKitRecordZoneEnsuring
+    private let operationWaiter: CloudKitOperationWaiter
 
     private typealias QueryFetchResponse = (
         matchResults: [(CKRecord.ID, Result<CKRecord, Error>)],
@@ -899,10 +900,12 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
 
     init(
         database: CKDatabase = CloudKitSyncConfiguration.privateDatabase,
-        zoneEnsurer: CloudKitRecordZoneEnsuring = LiveCloudKitRecordZoneEnsurer.shared
+        zoneEnsurer: CloudKitRecordZoneEnsuring = LiveCloudKitRecordZoneEnsurer.shared,
+        operationWaiter: CloudKitOperationWaiter = CloudKitOperationWaiter(timeout: 75)
     ) {
         self.database = database
         self.zoneEnsurer = zoneEnsurer
+        self.operationWaiter = operationWaiter
     }
 
     func fetch(recordID: CKRecord.ID) throws -> CKRecord {
@@ -1005,6 +1008,9 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
             configurationsByRecordZoneID: [zoneID: configuration]
         )
         operation.fetchAllChanges = true
+        let operationConfiguration = CKOperation.Configuration()
+        operationConfiguration.timeoutIntervalForResource = operationWaiter.timeout
+        operation.configuration = operationConfiguration
 
         let semaphore = DispatchSemaphore(value: 0)
         final class FetchBox: @unchecked Sendable {
@@ -1047,7 +1053,11 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
         }
 
         database.add(operation)
-        semaphore.wait()
+        try operationWaiter.wait(
+            for: semaphore,
+            operationName: "fetchRecordChanges",
+            cancel: { operation.cancel() }
+        )
 
         if let error = fetchBox.error {
             throw error
@@ -1798,6 +1808,35 @@ enum CloudKitPrivateDatabaseAdapterError: Error, Equatable {
     case unsupportedEntityType(String)
 }
 
+struct CloudKitOperationTimeoutError: Error, Equatable, CustomStringConvertible {
+    let operationName: String
+    let timeout: TimeInterval
+
+    var description: String {
+        "\(operationName) timed out after \(timeout) seconds"
+    }
+}
+
+struct CloudKitOperationWaiter: Sendable {
+    let timeout: TimeInterval
+
+    func wait(
+        for semaphore: DispatchSemaphore,
+        operationName: String,
+        cancel: () -> Void
+    ) throws {
+        let timeoutNanoseconds = max(0, Int(timeout * 1_000_000_000))
+        let result = semaphore.wait(timeout: .now() + .nanoseconds(timeoutNanoseconds))
+        if result == .timedOut {
+            cancel()
+            throw CloudKitOperationTimeoutError(
+                operationName: operationName,
+                timeout: timeout
+            )
+        }
+    }
+}
+
 struct SyncRetryPolicy: Equatable, Sendable {
     let baseDelay: TimeInterval
     let maximumDelay: TimeInterval
@@ -2114,7 +2153,23 @@ final class SyncEngine {
                 try mergeEngine.applyRemotePage(change)
             }
         }
+        var skippedRemoteDiaryPageCount = 0
         for change in changeSet.diaryPageChanges {
+            guard try syncRepository.pageRecordExists(pageID: change.pageID) else {
+                skippedRemoteDiaryPageCount += 1
+                recordRuntimeDiagnostic(
+                    eventName: "remote_diary_page_skipped_missing_page",
+                    payloadJSON: Self.diagnosticPayloadJSON([
+                        "page_id": change.pageID,
+                        "workspace_id": change.workspaceID,
+                        "diary_date": change.diaryDate
+                    ])
+                )
+                EditorLog.sync.error(
+                    "sync_remote_diary_page_skipped_missing_page page_id=\(change.pageID, privacy: .public) workspace_id=\(change.workspaceID, privacy: .public) diary_date=\(change.diaryDate, privacy: .public)"
+                )
+                continue
+            }
             try applyRemoteChange(entityType: "diaryPage", entityID: change.pageID) {
                 try mergeEngine.applyRemoteDiaryPage(change)
             }
@@ -2205,6 +2260,7 @@ final class SyncEngine {
                 + changeSet.notebookChanges.count
                 + changeSet.pageChanges.count
                 + changeSet.diaryPageChanges.count
+                - skippedRemoteDiaryPageCount
                 + changeSet.tagChanges.count
                 + changeSet.pageTagChanges.count
                 + changeSet.attachmentChanges.count
@@ -2242,6 +2298,15 @@ final class SyncEngine {
 
     private static func latestUpdatedAt(in changes: [RemoteBlockChange]) -> String? {
         changes.compactMap(\.updatedAt).max()
+    }
+
+    private static func diagnosticPayloadJSON(_ payload: [String: Any]) -> String {
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return json
     }
 
     @discardableResult

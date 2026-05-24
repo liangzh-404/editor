@@ -200,6 +200,19 @@ final class SyncRepository {
         return !rows.isEmpty
     }
 
+    func pageRecordExists(pageID: String) throws -> Bool {
+        let rows = try database.query(
+            """
+            SELECT 1
+            FROM pages
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        return !rows.isEmpty
+    }
+
     func pendingChanges() throws -> [SyncChange] {
         try database.query(
             """
