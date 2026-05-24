@@ -151,7 +151,9 @@ enum AppEnvironment {
             adapter: adapter,
             remoteChangeFetcher: adapter,
             mergeEngine: SyncMergeEngine(database: database),
-            subscriptionEnsurer: CloudKitPrivateDatabaseSubscriptionEnsurer()
+            subscriptionEnsurer: CloudKitPrivateDatabaseSubscriptionEnsurer(),
+            uploadBatchSize: 50,
+            maximumUploadsPerRun: 50
         )
     }
 

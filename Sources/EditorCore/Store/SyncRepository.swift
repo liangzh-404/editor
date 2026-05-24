@@ -448,6 +448,13 @@ final class SyncRepository {
             bindings: [.text(scope)]
         )
     }
+
+    func recordRuntimeDiagnostic(eventName: String, payloadJSON: String) throws {
+        try RuntimeDiagnosticRepository(database: database).record(
+            eventName: eventName,
+            payloadJSON: payloadJSON
+        )
+    }
 }
 
 final class RuntimeDiagnosticRepository {

@@ -271,7 +271,7 @@ final class PlatformSecurityTests: XCTestCase {
         )
 
         XCTAssertTrue(shellSource.contains(".onAppear {"))
-        XCTAssertTrue(shellSource.contains("if foregroundSyncActivationPolicy.shouldSync(for: scenePhase) {\n                    viewModel.syncAfterActivation()\n                }"))
+        XCTAssertTrue(shellSource.contains(".onAppear {\n                viewModel.syncAfterActivation()"))
         XCTAssertTrue(shellSource.contains("handleHomeScreenQuickActionIfNeeded(homeScreenQuickActionCenter.latestRequest)"))
         XCTAssertTrue(shellSource.contains(".onChange(of: scenePhase) { _, phase in\n                if foregroundSyncActivationPolicy.shouldSync(for: phase) {\n                    viewModel.syncAfterActivation()\n                }\n            }"))
     }

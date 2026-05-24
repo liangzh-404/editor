@@ -4564,6 +4564,40 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSyncAfterActivationRecordsForegroundSyncDiagnostics() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: blockID, text: "Foreground diagnostic sync")
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: SyncRepository(database: database),
+                adapter: RecordingCloudKitSyncAdapter()
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        try scheduler.runNextScheduledOperation()
+
+        let events = try RuntimeDiagnosticRepository(database: database).recentEvents(limit: 10)
+        XCTAssertTrue(events.contains { event in
+            event.eventName == "foreground_sync_scheduled"
+                && event.payloadJSON.contains(#""reason":"activation""#)
+        })
+        XCTAssertTrue(events.contains { event in
+            event.eventName == "foreground_sync_completed"
+                && event.payloadJSON.contains(#""uploaded_count":2"#)
+        })
+    }
+
+    @MainActor
     func testSyncNowSchedulesForegroundSyncWithoutRunningItInline() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -4692,6 +4726,49 @@ final class WorkspaceViewModelTests: XCTestCase {
         let fetchIndex = try XCTUnwrap(recorder.calls.firstIndex(of: .fetch))
         XCTAssertLessThan(firstUploadIndex, fetchIndex)
         XCTAssertEqual(recorder.calls.first, .ensureSubscription)
+    }
+
+    @MainActor
+    func testForegroundSyncSkipsFetchWhenUploadLimitLeavesLocalBacklog() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let syncRepository = SyncRepository(database: database)
+        try syncRepository.enqueue(entityType: "tag", entityID: "tag-one", changeType: "create")
+        try syncRepository.enqueue(entityType: "tag", entityID: "tag-two", changeType: "create")
+        let recorder = ForegroundSyncCallRecorder()
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: OrderedForegroundSyncAdapter(recorder: recorder),
+                remoteChangeFetcher: OrderedForegroundSyncFetcher(recorder: recorder),
+                mergeEngine: SyncMergeEngine(database: database),
+                subscriptionEnsurer: OrderedForegroundSyncSubscriptionEnsurer(recorder: recorder),
+                maximumUploadsPerRun: 1
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(recorder.calls, [
+            .ensureSubscription,
+            .upload(SyncChange(entityType: "tag", entityID: "tag-one", changeType: "create"))
+        ])
+        XCTAssertEqual(try syncRepository.pendingChanges(), [
+            SyncChange(entityType: "tag", entityID: "tag-two", changeType: "create")
+        ])
+        let events = try RuntimeDiagnosticRepository(database: database).recentEvents(limit: 10)
+        XCTAssertTrue(events.contains { event in
+            event.eventName == "foreground_sync_fetch_skipped"
+                && event.payloadJSON.contains("\"reason\":\"local_backlog\"")
+        })
     }
 
     @MainActor

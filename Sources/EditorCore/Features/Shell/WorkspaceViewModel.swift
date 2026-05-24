@@ -721,6 +721,10 @@ final class WorkspaceViewModel: ObservableObject {
         EditorLog.sync.debug(
             "foreground_sync_scheduled reason=\(reason, privacy: .public)"
         )
+        recordForegroundSyncDiagnostic(
+            eventName: "foreground_sync_scheduled",
+            payload: ["reason": reason]
+        )
         syncScheduler.scheduleForegroundSync(
             operation: {
                 Self.runForegroundSync(syncEngine: syncEngine)
@@ -4264,25 +4268,73 @@ final class WorkspaceViewModel: ObservableObject {
         var subscriptionDurationMilliseconds = 0
         var uploadDurationMilliseconds = 0
         var fetchDurationMilliseconds = 0
+        syncEngine.recordRuntimeDiagnostic(
+            eventName: "foreground_sync_operation_started",
+            payloadJSON: "{}"
+        )
         do {
             do {
                 let subscriptionStartedAt = Date()
+                syncEngine.recordRuntimeDiagnostic(
+                    eventName: "foreground_sync_subscription_started",
+                    payloadJSON: "{}"
+                )
                 try syncEngine.ensureRemoteChangeSubscription()
                 subscriptionDurationMilliseconds = millisecondsElapsed(since: subscriptionStartedAt)
+                syncEngine.recordRuntimeDiagnostic(
+                    eventName: "foreground_sync_subscription_completed",
+                    payloadJSON: "{\"duration_ms\":\(subscriptionDurationMilliseconds)}"
+                )
             } catch {
                 subscriptionDurationMilliseconds = millisecondsElapsed(since: syncStartedAt)
+                syncEngine.recordRuntimeDiagnostic(
+                    eventName: "foreground_sync_subscription_failed",
+                    payloadJSON: Self.diagnosticPayloadJSON([
+                        "error": CloudKitErrorDiagnostic.describe(error),
+                        "duration_ms": "\(subscriptionDurationMilliseconds)"
+                    ])
+                )
                 EditorLog.sync.error(
                     "cloudkit_subscription_ensure_failed error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
                 )
             }
 
             let uploadStartedAt = Date()
+            syncEngine.recordRuntimeDiagnostic(
+                eventName: "foreground_sync_upload_started",
+                payloadJSON: "{}"
+            )
             let uploadSummary = try syncEngine.uploadPendingChanges()
             uploadDurationMilliseconds = millisecondsElapsed(since: uploadStartedAt)
+            syncEngine.recordRuntimeDiagnostic(
+                eventName: "foreground_sync_upload_completed",
+                payloadJSON: "{\"duration_ms\":\(uploadDurationMilliseconds),\"failed_count\":\(uploadSummary.failedCount),\"uploaded_count\":\(uploadSummary.uploadedCount)}"
+            )
+            let remainingLocalChanges = try syncEngine.pendingChangeCount()
+            guard remainingLocalChanges == 0 else {
+                syncEngine.recordRuntimeDiagnostic(
+                    eventName: "foreground_sync_fetch_skipped",
+                    payloadJSON: "{\"pending_change_count\":\(remainingLocalChanges),\"reason\":\"local_backlog\"}"
+                )
+                return .success(
+                    WorkspaceForegroundSyncSummary(
+                        uploadSummary: uploadSummary,
+                        fetchSummary: SyncFetchSummary(appliedCount: 0)
+                    )
+                )
+            }
 
             let fetchStartedAt = Date()
+            syncEngine.recordRuntimeDiagnostic(
+                eventName: "foreground_sync_fetch_started",
+                payloadJSON: "{}"
+            )
             let fetchSummary = try syncEngine.fetchRemoteChanges()
             fetchDurationMilliseconds = millisecondsElapsed(since: fetchStartedAt)
+            syncEngine.recordRuntimeDiagnostic(
+                eventName: "foreground_sync_fetch_completed",
+                payloadJSON: "{\"duration_ms\":\(fetchDurationMilliseconds),\"fetched_count\":\(fetchSummary.appliedCount)}"
+            )
             EditorLog.sync.debug(
                 "foreground_sync_completed subscription_ms=\(subscriptionDurationMilliseconds, privacy: .public) upload_ms=\(uploadDurationMilliseconds, privacy: .public) fetch_ms=\(fetchDurationMilliseconds, privacy: .public) total_ms=\(millisecondsElapsed(since: syncStartedAt), privacy: .public) uploaded=\(uploadSummary.uploadedCount, privacy: .public) failed_uploads=\(uploadSummary.failedCount, privacy: .public) fetched=\(fetchSummary.appliedCount, privacy: .public)"
             )
@@ -4293,12 +4345,48 @@ final class WorkspaceViewModel: ObservableObject {
                 )
             )
         } catch {
-            return .failure(CloudKitErrorDiagnostic.describe(error))
+            let errorDescription = CloudKitErrorDiagnostic.describe(error)
+            syncEngine.recordRuntimeDiagnostic(
+                eventName: "foreground_sync_operation_failed",
+                payloadJSON: Self.diagnosticPayloadJSON(["error": errorDescription])
+            )
+            return .failure(errorDescription)
         }
     }
 
     nonisolated private static func millisecondsElapsed(since startDate: Date) -> Int {
         Int(Date().timeIntervalSince(startDate) * 1_000)
+    }
+
+    nonisolated private static func diagnosticPayloadJSON(_ values: [String: String]) -> String {
+        let escapedValues = values
+            .map { key, value in
+                "\"\(escapeJSON(key))\":\"\(escapeJSON(value))\""
+            }
+            .sorted()
+            .joined(separator: ",")
+        return "{\(escapedValues)}"
+    }
+
+    nonisolated private static func escapeJSON(_ value: String) -> String {
+        var escaped = ""
+        for character in value {
+            switch character {
+            case "\"":
+                escaped += "\\\""
+            case "\\":
+                escaped += "\\\\"
+            case "\n":
+                escaped += "\\n"
+            case "\r":
+                escaped += "\\r"
+            case "\t":
+                escaped += "\\t"
+            default:
+                escaped.append(character)
+            }
+        }
+        return escaped
     }
 
     private func finishForegroundSync(_ result: WorkspaceForegroundSyncResult) {
@@ -4329,6 +4417,14 @@ final class WorkspaceViewModel: ObservableObject {
     private func completeForegroundSync(_ result: WorkspaceForegroundSyncResult) {
         switch result {
         case .success(let summary):
+            recordForegroundSyncDiagnostic(
+                eventName: "foreground_sync_completed",
+                payload: [
+                    "uploaded_count": summary.uploadSummary.uploadedCount,
+                    "failed_upload_count": summary.uploadSummary.failedCount,
+                    "fetched_count": summary.fetchSummary.appliedCount
+                ]
+            )
             if summary.uploadSummary.failedCount > 0 {
                 syncStatusText = "已安排同步重试"
                 scheduleForegroundSyncFailureCooldown()
@@ -4350,6 +4446,10 @@ final class WorkspaceViewModel: ObservableObject {
                 )
             }
         case .failure(let errorDescription):
+            recordForegroundSyncDiagnostic(
+                eventName: "foreground_sync_failed",
+                payload: ["error": errorDescription]
+            )
             syncStatusText = "同步失败"
             scheduleForegroundSyncFailureCooldown()
             EditorLog.sync.error(
@@ -4361,6 +4461,19 @@ final class WorkspaceViewModel: ObservableObject {
     private func scheduleForegroundSyncFailureCooldown() {
         nextForegroundSyncAttemptAt = currentDateProvider()
             .addingTimeInterval(Self.foregroundSyncFailureCooldown)
+    }
+
+    private func recordForegroundSyncDiagnostic(eventName: String, payload: [String: Any]) {
+        do {
+            try repository?.recordRuntimeDiagnostic(
+                eventName: eventName,
+                payload: payload
+            )
+        } catch {
+            EditorLog.sync.error(
+                "foreground_sync_diagnostic_record_failed event_name=\(eventName, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     private func refreshDerivedState(

@@ -8,6 +8,15 @@ final class PageRepository {
         database
     }
 
+    func recordRuntimeDiagnostic(eventName: String, payload: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        let payloadJSON = String(data: data, encoding: .utf8) ?? "{}"
+        try RuntimeDiagnosticRepository(database: database).record(
+            eventName: eventName,
+            payloadJSON: payloadJSON
+        )
+    }
+
     private let defaultWorkspaceID = "workspace-local"
     private let defaultNotebookID = "notebook-local"
     private let defaultPageID = "page-welcome"

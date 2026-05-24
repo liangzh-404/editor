@@ -1224,36 +1224,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         let recordsByType = fetchedChanges.recordsByType
         let pageRecords = currentGenerationRecords(recordsByType["PageRecord"] ?? [])
         let pageChanges = pageRecords.compactMap(remotePageChange)
-        let changedBlockRecords = currentGenerationRecords(recordsByType["BlockRecord"] ?? [])
-        var fullSnapshotPageIDs = Set(pageChanges.map(\.pageID))
-        fullSnapshotPageIDs.formUnion(
-            changedBlockRecords.compactMap { $0["pageID"] as? String }
-        )
-        let blockRecords: [CKRecord]
-        if fullSnapshotPageIDs.isEmpty {
-            blockRecords = changedBlockRecords
-        } else {
-            do {
-                blockRecords = try currentGenerationRecords(
-                    recordFetcher.fetchRecords(recordType: "BlockRecord")
-                ).filter { record in
-                    guard let pageID = record["pageID"] as? String else {
-                        return false
-                    }
-                    return fullSnapshotPageIDs.contains(pageID)
-                }
-            } catch {
-                guard Self.isCloudKitQueryIndexUnavailableError(error) else {
-                    throw error
-                }
-
-                EditorLog.sync.error(
-                    "cloudkit_block_snapshot_query_unavailable action=use_changed_blocks_only error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
-                )
-                blockRecords = changedBlockRecords
-                fullSnapshotPageIDs.removeAll()
-            }
-        }
+        let blockRecords = currentGenerationRecords(recordsByType["BlockRecord"] ?? [])
+        let fullSnapshotPageIDs = Set<String>()
         let deletedRecords = Self.recordTypes.flatMap { recordType in
             (fetchedChanges.deletedRecordIDsByType[recordType] ?? []).compactMap { recordID in
                 remoteDeletedRecord(recordType: recordType, recordID: recordID)
@@ -1805,19 +1777,6 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             && nsError.code == CKError.unknownItem.rawValue
     }
 
-    private static func isCloudKitQueryIndexUnavailableError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        guard nsError.domain == CKErrorDomain,
-              nsError.code == CKError.invalidArguments.rawValue
-                || nsError.code == CKError.serverRejectedRequest.rawValue else {
-            return false
-        }
-
-        let description = CloudKitErrorDiagnostic.describe(error).lowercased()
-        return description.contains("not marked indexable")
-            || description.contains("not queryable")
-    }
-
     private func currentGenerationRecords(_ records: [CKRecord]) -> [CKRecord] {
         records.filter { record in
             record["syncGeneration"] as? String == CloudKitSyncGeneration.current
@@ -2071,6 +2030,7 @@ final class SyncEngine {
     private let subscriptionEnsurer: CloudKitSubscriptionEnsuring?
     private let retryPolicy: SyncRetryPolicy
     private let uploadBatchSize: Int
+    private let maximumUploadsPerRun: Int
     private let now: () -> Date
 
     init(
@@ -2081,6 +2041,7 @@ final class SyncEngine {
         subscriptionEnsurer: CloudKitSubscriptionEnsuring? = nil,
         retryPolicy: SyncRetryPolicy = SyncRetryPolicy(),
         uploadBatchSize: Int = 200,
+        maximumUploadsPerRun: Int = .max,
         now: @escaping () -> Date = Date.init
     ) {
         self.syncRepository = syncRepository
@@ -2090,11 +2051,29 @@ final class SyncEngine {
         self.subscriptionEnsurer = subscriptionEnsurer
         self.retryPolicy = retryPolicy
         self.uploadBatchSize = max(1, uploadBatchSize)
+        self.maximumUploadsPerRun = max(1, maximumUploadsPerRun)
         self.now = now
     }
 
     func ensureRemoteChangeSubscription() throws {
         try subscriptionEnsurer?.ensureRemoteChangeSubscription()
+    }
+
+    func recordRuntimeDiagnostic(eventName: String, payloadJSON: String) {
+        do {
+            try syncRepository.recordRuntimeDiagnostic(
+                eventName: eventName,
+                payloadJSON: payloadJSON
+            )
+        } catch {
+            EditorLog.sync.error(
+                "sync_runtime_diagnostic_record_failed event_name=\(eventName, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func pendingChangeCount() throws -> Int {
+        try syncRepository.pendingChanges().count
     }
 
     func fetchRemoteChanges() throws -> SyncFetchSummary {
@@ -2268,11 +2247,10 @@ final class SyncEngine {
     @discardableResult
     func uploadPendingChanges() throws -> SyncUploadSummary {
         try syncRepository.enqueueUnsyncedDiaryPageMappings()
-        let changes = try syncRepository.pendingChanges()
+        let changes = prioritizedUploadChanges(try syncRepository.pendingChanges())
         var uploadedCount = 0
         var failedCount = 0
-        var blockedPageIDs = Set<String>()
-        var deferredPageChanges: [String: SyncChange] = [:]
+        var attemptedCount = 0
         struct PendingUpload {
             let change: SyncChange
             let currentDate: Date
@@ -2304,10 +2282,6 @@ final class SyncEngine {
                 }
                 return nil
             } else {
-                if change.entityType == "block",
-                   let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {
-                    blockedPageIDs.insert(pageID)
-                }
                 let failureCount = pendingUpload.retryState.attemptCount + 1
                 let errorDescription = CloudKitErrorDiagnostic.describe(error)
                 try syncRepository.recordFailure(
@@ -2364,42 +2338,6 @@ final class SyncEngine {
             return affectedPageIDs
         }
 
-        func uploadDeferredPageChangeIfReady(pageID: String) throws {
-            guard let deferredPageChange = deferredPageChanges[pageID],
-                  !blockedPageIDs.contains(pageID),
-                  try !syncRepository.hasPendingBlockChanges(pageID: pageID) else {
-                return
-            }
-
-            deferredPageChanges.removeValue(forKey: pageID)
-            let retryState = try syncRepository.retryState(change: deferredPageChange)
-            let currentDate = now()
-            if let nextAttemptAt = retryState.nextAttemptAt,
-               nextAttemptAt > currentDate {
-                EditorLog.sync.debug(
-                    "sync_change_deferred entity_type=\(deferredPageChange.entityType, privacy: .public) entity_id=\(deferredPageChange.entityID, privacy: .public)"
-                )
-                return
-            }
-            readyBatch.append(PendingUpload(
-                change: deferredPageChange,
-                currentDate: currentDate,
-                retryState: retryState
-            ))
-        }
-
-        func flushAndUploadDeferredPages() throws {
-            var affectedPageIDs = try flushReadyBatch()
-            while !affectedPageIDs.isEmpty {
-                let pageIDs = affectedPageIDs
-                affectedPageIDs.removeAll()
-                for pageID in pageIDs {
-                    try uploadDeferredPageChangeIfReady(pageID: pageID)
-                }
-                affectedPageIDs = try flushReadyBatch()
-            }
-        }
-
         func enqueueReadyChange(
             _ change: SyncChange,
             currentDate: Date,
@@ -2411,35 +2349,21 @@ final class SyncEngine {
                 retryState: retryState
             ))
             if readyBatch.count >= uploadBatchSize {
-                try flushAndUploadDeferredPages()
+                try flushReadyBatch()
             }
         }
 
         for change in changes {
-            if change.entityType == "page" {
-                let hasBlockedBlocks: Bool
-                if blockedPageIDs.contains(change.entityID) {
-                    hasBlockedBlocks = true
-                } else {
-                    hasBlockedBlocks = try syncRepository.hasPendingBlockChanges(pageID: change.entityID)
-                }
-                if hasBlockedBlocks {
-                    deferredPageChanges[change.entityID] = change
-                    EditorLog.sync.debug(
-                        "sync_page_change_deferred_pending_blocks page_id=\(change.entityID, privacy: .public)"
-                    )
-                    continue
-                }
+            guard attemptedCount < maximumUploadsPerRun else {
+                EditorLog.sync.debug(
+                    "sync_upload_run_limit_reached attempted=\(attemptedCount, privacy: .public) limit=\(self.maximumUploadsPerRun, privacy: .public)"
+                )
+                break
             }
-
             let retryState = try syncRepository.retryState(change: change)
             let currentDate = now()
             if let nextAttemptAt = retryState.nextAttemptAt,
                nextAttemptAt > currentDate {
-                if change.entityType == "block",
-                   let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {
-                    blockedPageIDs.insert(pageID)
-                }
                 EditorLog.sync.debug(
                     "sync_change_deferred entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
                 )
@@ -2447,9 +2371,48 @@ final class SyncEngine {
             }
 
             try enqueueReadyChange(change, currentDate: currentDate, retryState: retryState)
+            attemptedCount += 1
         }
-        try flushAndUploadDeferredPages()
+        try flushReadyBatch()
         return SyncUploadSummary(uploadedCount: uploadedCount, failedCount: failedCount)
+    }
+
+    private func prioritizedUploadChanges(_ changes: [SyncChange]) -> [SyncChange] {
+        changes.enumerated().sorted { first, second in
+            let firstPriority = uploadPriority(first.element)
+            let secondPriority = uploadPriority(second.element)
+            if firstPriority != secondPriority {
+                return firstPriority < secondPriority
+            }
+            return first.offset < second.offset
+        }.map(\.element)
+    }
+
+    private func uploadPriority(_ change: SyncChange) -> Int {
+        if change.changeType == "delete" {
+            return 90
+        }
+
+        switch change.entityType {
+        case "workspace":
+            return 0
+        case "notebook":
+            return 10
+        case "tag":
+            return 20
+        case "page":
+            return 30
+        case "diaryPage":
+            return 40
+        case "pageTag":
+            return 50
+        case "attachment":
+            return 60
+        case "block":
+            return 70
+        default:
+            return 80
+        }
     }
 }
 

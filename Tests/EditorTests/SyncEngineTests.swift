@@ -29,7 +29,7 @@ final class SyncEngineTests: XCTestCase {
             adapter: adapter
         ).uploadPendingChanges()
 
-        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), [blockID, pageID])
+        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), [pageID, blockID])
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
         let syncRecords = try SyncRepository(database: database).syncRecords()
         XCTAssertTrue(syncRecords.contains(SyncRecord(
@@ -46,7 +46,7 @@ final class SyncEngineTests: XCTestCase {
         )))
     }
 
-    func testUploadPendingChangesUploadsDeferredPageAfterItsBlocksInSameRun() throws {
+    func testUploadPendingChangesUploadsPageCreateBeforeItsBlocksInSameRun() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -64,7 +64,7 @@ final class SyncEngineTests: XCTestCase {
             adapter: adapter
         ).uploadPendingChanges()
 
-        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), [blockID, page.id])
+        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), [page.id, blockID])
         XCTAssertFalse(
             try SyncRepository(database: database).pendingChanges().contains {
                 $0.entityType == "page" && $0.entityID == page.id
@@ -72,7 +72,7 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
-    func testUploadPendingChangesBatchesReadyBlockChangesBeforeDeferredPage() throws {
+    func testUploadPendingChangesPrioritizesPageCreatesBeforeLargeBlockBatches() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -98,8 +98,64 @@ final class SyncEngineTests: XCTestCase {
         ).uploadPendingChanges()
 
         XCTAssertTrue(adapter.batchUploads.contains { $0.count > 1 })
-        XCTAssertEqual(adapter.uploadedChanges.last, SyncChange(entityType: "page", entityID: page.id, changeType: "create"))
+        XCTAssertEqual(adapter.uploadedChanges.first, SyncChange(entityType: "page", entityID: page.id, changeType: "create"))
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
+    }
+
+    func testUploadPendingChangesPrioritizesAllPageCreatesBeforeImportedBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let firstPage = try pageRepository.createPage(workspaceID: workspaceID, title: "First import")
+        let firstBlockID = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().blocks.first { $0.pageID == firstPage.id }?.id
+        )
+        _ = try pageRepository.insertParagraphBlock(after: firstBlockID, text: "First body")
+        let secondPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Second import")
+        let secondBlockID = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().blocks.first { $0.pageID == secondPage.id }?.id
+        )
+        _ = try pageRepository.insertParagraphBlock(after: secondBlockID, text: "Second body")
+
+        let adapter = BatchRecordingCloudKitSyncAdapter()
+        try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: adapter,
+            uploadBatchSize: 2
+        ).uploadPendingChanges()
+
+        XCTAssertEqual(adapter.uploadedChanges.prefix(2), [
+            SyncChange(entityType: "page", entityID: firstPage.id, changeType: "create"),
+            SyncChange(entityType: "page", entityID: secondPage.id, changeType: "create")
+        ])
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
+    }
+
+    func testUploadPendingChangesStopsAtMaximumUploadLimit() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        try syncRepository.enqueue(entityType: "block", entityID: "block-one", changeType: "create")
+        try syncRepository.enqueue(entityType: "block", entityID: "block-two", changeType: "create")
+        try syncRepository.enqueue(entityType: "block", entityID: "block-three", changeType: "create")
+        let adapter = BatchRecordingCloudKitSyncAdapter()
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: adapter,
+            uploadBatchSize: 10,
+            maximumUploadsPerRun: 2
+        ).uploadPendingChanges()
+
+        XCTAssertEqual(result.uploadedCount, 2)
+        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), ["block-one", "block-two"])
+        XCTAssertEqual(try syncRepository.pendingChanges(), [
+            SyncChange(entityType: "block", entityID: "block-three", changeType: "create")
+        ])
     }
 
     func testUploadPendingChangesBackfillsExistingDiaryPageMappings() throws {
@@ -1343,7 +1399,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
     }
 
-    func testCloudKitPrivateDatabaseAdapterFetchesFullBlockSnapshotForChangedPage() throws {
+    func testCloudKitPrivateDatabaseAdapterDoesNotQueryAllBlocksForChangedPage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -1396,12 +1452,12 @@ final class SyncEngineTests: XCTestCase {
             recordFetcher: fetcher
         ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
 
-        XCTAssertEqual(changeSet.fullSnapshotPageIDs, ["page-remote"])
-        XCTAssertEqual(changeSet.blockChanges.map(\.blockID).sorted(), ["block-first", "block-second"])
-        XCTAssertEqual(fetcher.fetchRecordsCalls, ["BlockRecord"])
+        XCTAssertEqual(changeSet.fullSnapshotPageIDs, [])
+        XCTAssertEqual(changeSet.blockChanges, [])
+        XCTAssertEqual(fetcher.fetchRecordsCalls, [])
     }
 
-    func testCloudKitPrivateDatabaseAdapterFallsBackToChangedBlocksWhenSnapshotQueryIsNotIndexable() throws {
+    func testCloudKitPrivateDatabaseAdapterUsesChangedBlocksWithoutSnapshotQuery() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -1418,15 +1474,7 @@ final class SyncEngineTests: XCTestCase {
             changedRecordsByType: [
                 "BlockRecord": [changedBlockRecord]
             ],
-            nextServerChangeTokenData: Data("next-token".utf8),
-            fetchRecordsError: NSError(
-                domain: CKErrorDomain,
-                code: CKError.invalidArguments.rawValue,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "Invalid Arguments",
-                    "CKErrorServerDescription": "Type is not marked indexable: BlockRecord"
-                ]
-            )
+            nextServerChangeTokenData: Data("next-token".utf8)
         )
 
         let changeSet = try CloudKitPrivateDatabaseAdapter(
@@ -1436,7 +1484,7 @@ final class SyncEngineTests: XCTestCase {
 
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-remote"])
         XCTAssertEqual(changeSet.fullSnapshotPageIDs, [])
-        XCTAssertEqual(fetcher.fetchRecordsCalls, ["BlockRecord"])
+        XCTAssertEqual(fetcher.fetchRecordsCalls, [])
     }
 
     func testFetchRemoteChangesAppliesDiaryPageMappingAfterPage() throws {

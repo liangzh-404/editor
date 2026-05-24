@@ -562,9 +562,7 @@ struct EditorShellView: View {
             .containerBackground(EditorDesignTokens.Colors.appBackground.color, for: .window)
 #endif
             .onAppear {
-                if foregroundSyncActivationPolicy.shouldSync(for: scenePhase) {
-                    viewModel.syncAfterActivation()
-                }
+                viewModel.syncAfterActivation()
                 handleHomeScreenQuickActionIfNeeded(homeScreenQuickActionCenter.latestRequest)
             }
             .onChange(of: scenePhase) { _, phase in
