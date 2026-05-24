@@ -1,6 +1,6 @@
 import Foundation
 
-struct SyncChange: Equatable, Sendable {
+struct SyncChange: Equatable, Hashable, Sendable {
     let entityType: String
     let entityID: String
     let changeType: String

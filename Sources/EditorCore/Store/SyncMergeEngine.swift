@@ -47,6 +47,7 @@ struct RemotePageChange: Equatable, Sendable {
     let isFavorite: Bool
     let isPinned: Bool
     let isEncrypted: Bool
+    let createdAt: String?
     let updatedAt: String?
 
     init(
@@ -59,6 +60,7 @@ struct RemotePageChange: Equatable, Sendable {
         isFavorite: Bool = false,
         isPinned: Bool = false,
         isEncrypted: Bool = false,
+        createdAt: String? = nil,
         updatedAt: String? = nil
     ) {
         self.pageID = pageID
@@ -70,6 +72,7 @@ struct RemotePageChange: Equatable, Sendable {
         self.isFavorite = isFavorite
         self.isPinned = isPinned
         self.isEncrypted = isEncrypted
+        self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
 }
@@ -287,6 +290,7 @@ final class SyncMergeEngine {
         }
 
         let now = remote.updatedAt ?? ISO8601DateFormatter().string(from: Date())
+        let createdAt = remote.createdAt ?? now
         try database.execute(
             """
             INSERT INTO pages (
@@ -324,7 +328,7 @@ final class SyncMergeEngine {
                 .integer(remote.isFavorite ? 1 : 0),
                 .integer(remote.isPinned ? 1 : 0),
                 .integer(remote.isEncrypted ? 1 : 0),
-                .text(now),
+                .text(createdAt),
                 .text(now)
             ]
         )

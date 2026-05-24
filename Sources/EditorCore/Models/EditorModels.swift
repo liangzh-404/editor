@@ -28,6 +28,7 @@ struct PageSummary: Identifiable, Equatable, Sendable {
     let isFavorite: Bool
     let isPinned: Bool
     let isEncrypted: Bool
+    let createdAt: String?
     let updatedAt: String?
 
     init(
@@ -38,6 +39,7 @@ struct PageSummary: Identifiable, Equatable, Sendable {
         isFavorite: Bool = false,
         isPinned: Bool = false,
         isEncrypted: Bool = false,
+        createdAt: String? = nil,
         updatedAt: String? = nil
     ) {
         self.id = id
@@ -47,6 +49,7 @@ struct PageSummary: Identifiable, Equatable, Sendable {
         self.isFavorite = isFavorite
         self.isPinned = isPinned
         self.isEncrypted = isEncrypted
+        self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
 }
@@ -727,6 +730,7 @@ extension WorkspaceSnapshot {
                         isFavorite: page.isFavorite,
                         isPinned: page.isPinned,
                         isEncrypted: page.isEncrypted,
+                        createdAt: page.createdAt,
                         updatedAt: page.updatedAt
                     )
                     : page
@@ -759,6 +763,7 @@ extension WorkspaceSnapshot {
                         isFavorite: isFavorite,
                         isPinned: page.isPinned,
                         isEncrypted: page.isEncrypted,
+                        createdAt: page.createdAt,
                         updatedAt: page.updatedAt
                     )
                     : page
@@ -773,6 +778,7 @@ extension WorkspaceSnapshot {
                         isFavorite: isFavorite,
                         isPinned: page.isPinned,
                         isEncrypted: page.isEncrypted,
+                        createdAt: page.createdAt,
                         updatedAt: page.updatedAt
                     )
                     : page
@@ -804,6 +810,7 @@ extension WorkspaceSnapshot {
                         isFavorite: page.isFavorite,
                         isPinned: isPinned,
                         isEncrypted: page.isEncrypted,
+                        createdAt: page.createdAt,
                         updatedAt: page.updatedAt
                     )
                     : page
@@ -818,6 +825,7 @@ extension WorkspaceSnapshot {
                         isFavorite: page.isFavorite,
                         isPinned: isPinned,
                         isEncrypted: page.isEncrypted,
+                        createdAt: page.createdAt,
                         updatedAt: page.updatedAt
                     )
                     : page
@@ -849,6 +857,7 @@ extension WorkspaceSnapshot {
                         isFavorite: page.isFavorite,
                         isPinned: page.isPinned,
                         isEncrypted: isEncrypted,
+                        createdAt: page.createdAt,
                         updatedAt: page.updatedAt
                     )
                     : page
@@ -863,6 +872,7 @@ extension WorkspaceSnapshot {
                         isFavorite: page.isFavorite,
                         isPinned: page.isPinned,
                         isEncrypted: isEncrypted,
+                        createdAt: page.createdAt,
                         updatedAt: page.updatedAt
                     )
                     : page

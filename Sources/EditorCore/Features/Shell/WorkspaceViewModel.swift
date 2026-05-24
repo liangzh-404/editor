@@ -337,7 +337,14 @@ final class WorkspaceViewModel: ObservableObject {
             return snapshot.pages
         case .diary:
             let diaryPageIDs = diaryPageIDs
-            return snapshot.pages.filter { diaryPageIDs.contains($0.id) }
+            let diaryDatesByPageID = Dictionary(
+                uniqueKeysWithValues: snapshot.diaryPages.map { ($0.pageID, $0.diaryDate) }
+            )
+            return snapshot.pages
+                .filter { diaryPageIDs.contains($0.id) }
+                .sorted { first, second in
+                    (diaryDatesByPageID[first.id] ?? "") > (diaryDatesByPageID[second.id] ?? "")
+                }
         case .allDocuments:
             let diaryPageIDs = diaryPageIDs
             return snapshot.pages.filter { !diaryPageIDs.contains($0.id) }

@@ -407,8 +407,39 @@ struct CloudKitUploadResult: Equatable, Sendable {
     let changeTag: String?
 }
 
+struct CloudKitUploadBatchResult {
+    private(set) var successes: [SyncChange: CloudKitUploadResult] = [:]
+    private(set) var failures: [SyncChange: Error] = [:]
+
+    mutating func recordSuccess(change: SyncChange, uploadResult: CloudKitUploadResult) {
+        successes[change] = uploadResult
+    }
+
+    mutating func recordFailure(change: SyncChange, error: Error) {
+        failures[change] = error
+    }
+}
+
 protocol CloudKitSyncAdapter {
     func upload(change: SyncChange) throws -> CloudKitUploadResult
+    func upload(changes: [SyncChange]) throws -> CloudKitUploadBatchResult
+}
+
+extension CloudKitSyncAdapter {
+    func upload(changes: [SyncChange]) throws -> CloudKitUploadBatchResult {
+        var batchResult = CloudKitUploadBatchResult()
+        for change in changes {
+            do {
+                batchResult.recordSuccess(
+                    change: change,
+                    uploadResult: try upload(change: change)
+                )
+            } catch {
+                batchResult.recordFailure(change: change, error: error)
+            }
+        }
+        return batchResult
+    }
 }
 
 protocol CloudKitRemoteChangeFetching {
@@ -1091,6 +1122,96 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         )
     }
 
+    func upload(changes: [SyncChange]) throws -> CloudKitUploadBatchResult {
+        guard changes.count > 1,
+              recordSaver == nil,
+              recordDeleter == nil,
+              changes.allSatisfy({ $0.changeType != "delete" }) else {
+            return try uploadChangesOneByOne(changes)
+        }
+
+        try LiveCloudKitRecordZoneEnsurer.shared.ensureRecordZoneExists()
+
+        var batchResult = CloudKitUploadBatchResult()
+        var recordsToSave: [CKRecord] = []
+        var changesByRecordName: [String: SyncChange] = [:]
+        for change in changes {
+            do {
+                let record = try record(for: change)
+                recordsToSave.append(record)
+                changesByRecordName[record.recordID.recordName] = change
+            } catch {
+                batchResult.recordFailure(change: change, error: error)
+            }
+        }
+
+        guard !recordsToSave.isEmpty else {
+            return batchResult
+        }
+
+        let operation = CKModifyRecordsOperation(recordsToSave: recordsToSave, recordIDsToDelete: nil)
+        operation.savePolicy = .allKeys
+        operation.isAtomic = false
+
+        final class BatchSaveBox: @unchecked Sendable {
+            var savedRecordsByName: [String: CKRecord] = [:]
+            var errorsByName: [String: Error] = [:]
+            var operationError: Error?
+        }
+        let saveBox = BatchSaveBox()
+        let semaphore = DispatchSemaphore(value: 0)
+
+        operation.perRecordSaveBlock = { recordID, recordResult in
+            switch recordResult {
+            case .success(let savedRecord):
+                saveBox.savedRecordsByName[recordID.recordName] = savedRecord
+            case .failure(let error):
+                saveBox.errorsByName[recordID.recordName] = error
+            }
+        }
+        operation.modifyRecordsResultBlock = { result in
+            if case .failure(let error) = result {
+                saveBox.operationError = error
+            }
+            semaphore.signal()
+        }
+        CloudKitSyncConfiguration.privateDatabase.add(operation)
+        semaphore.wait()
+
+        for (recordName, change) in changesByRecordName {
+            if let savedRecord = saveBox.savedRecordsByName[recordName] {
+                batchResult.recordSuccess(
+                    change: change,
+                    uploadResult: CloudKitUploadResult(
+                        recordName: savedRecord.recordID.recordName,
+                        changeTag: savedRecord.recordChangeTag
+                    )
+                )
+            } else if let error = saveBox.errorsByName[recordName] ?? saveBox.operationError {
+                batchResult.recordFailure(change: change, error: error)
+            } else {
+                batchResult.recordFailure(
+                    change: change,
+                    error: CloudKitPrivateDatabaseAdapterError.missingSavedRecord
+                )
+            }
+        }
+
+        return batchResult
+    }
+
+    private func uploadChangesOneByOne(_ changes: [SyncChange]) throws -> CloudKitUploadBatchResult {
+        var batchResult = CloudKitUploadBatchResult()
+        for change in changes {
+            do {
+                batchResult.recordSuccess(change: change, uploadResult: try upload(change: change))
+            } catch {
+                batchResult.recordFailure(change: change, error: error)
+            }
+        }
+        return batchResult
+    }
+
     func fetchRemoteChanges(
         sinceServerChangeTokenData serverChangeTokenData: Data?
     ) throws -> CloudKitRemoteChangeSet {
@@ -1235,7 +1356,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
     private func pageRecord(entityID: String) throws -> CKRecord {
         let row = try requiredRow(
             """
-            SELECT id, workspace_id, notebook_id, title, order_key, is_archived, is_favorite, is_pinned, is_encrypted, updated_at
+            SELECT id, workspace_id, notebook_id, title, order_key, is_archived, is_favorite, is_pinned, is_encrypted, created_at, updated_at
             FROM pages
             WHERE id = ?
             LIMIT 1
@@ -1251,6 +1372,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         record["isFavorite"] = NSNumber(value: Int(row["is_favorite"] ?? "") ?? 0)
         record["isPinned"] = NSNumber(value: Int(row["is_pinned"] ?? "") ?? 0)
         record["isEncrypted"] = NSNumber(value: Int(row["is_encrypted"] ?? "") ?? 0)
+        record["createdAt"] = row["created_at"] as CKRecordValue?
         record["updatedAt"] = row["updated_at"] as CKRecordValue?
         return record
     }
@@ -1439,6 +1561,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             isFavorite: (record["isFavorite"] as? NSNumber)?.boolValue ?? false,
             isPinned: (record["isPinned"] as? NSNumber)?.boolValue ?? false,
             isEncrypted: (record["isEncrypted"] as? NSNumber)?.boolValue ?? false,
+            createdAt: record["createdAt"] as? String,
             updatedAt: record["updatedAt"] as? String
         )
     }
@@ -1947,6 +2070,7 @@ final class SyncEngine {
     private let mergeEngine: SyncMergeEngine?
     private let subscriptionEnsurer: CloudKitSubscriptionEnsuring?
     private let retryPolicy: SyncRetryPolicy
+    private let uploadBatchSize: Int
     private let now: () -> Date
 
     init(
@@ -1956,6 +2080,7 @@ final class SyncEngine {
         mergeEngine: SyncMergeEngine? = nil,
         subscriptionEnsurer: CloudKitSubscriptionEnsuring? = nil,
         retryPolicy: SyncRetryPolicy = SyncRetryPolicy(),
+        uploadBatchSize: Int = 200,
         now: @escaping () -> Date = Date.init
     ) {
         self.syncRepository = syncRepository
@@ -1964,6 +2089,7 @@ final class SyncEngine {
         self.mergeEngine = mergeEngine
         self.subscriptionEnsurer = subscriptionEnsurer
         self.retryPolicy = retryPolicy
+        self.uploadBatchSize = max(1, uploadBatchSize)
         self.now = now
     }
 
@@ -2147,41 +2273,95 @@ final class SyncEngine {
         var failedCount = 0
         var blockedPageIDs = Set<String>()
         var deferredPageChanges: [String: SyncChange] = [:]
+        struct PendingUpload {
+            let change: SyncChange
+            let currentDate: Date
+            let retryState: SyncRetryState
+        }
+        var readyBatch: [PendingUpload] = []
 
-        func uploadReadyChange(
-            _ change: SyncChange,
-            currentDate: Date,
-            retryState: SyncRetryState
-        ) throws {
-            do {
-                let result = try adapter.upload(change: change)
-                try syncRepository.markUploaded(change: change, uploadResult: result)
-                uploadedCount += 1
-                EditorLog.sync.debug(
-                    "sync_change_uploaded entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
-                )
-            } catch CloudKitPrivateDatabaseAdapterError.entityNotFound {
+        func handleUploadedChange(_ change: SyncChange, uploadResult: CloudKitUploadResult) throws -> String? {
+            try syncRepository.markUploaded(change: change, uploadResult: uploadResult)
+            uploadedCount += 1
+            EditorLog.sync.debug(
+                "sync_change_uploaded entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
+            )
+            if change.entityType == "block" {
+                return try syncRepository.pageIDForBlock(blockID: change.entityID)
+            }
+            return nil
+        }
+
+        func handleFailedChange(_ pendingUpload: PendingUpload, error: Error) throws -> String? {
+            let change = pendingUpload.change
+            if case CloudKitPrivateDatabaseAdapterError.entityNotFound = error {
                 try syncRepository.discard(change: change)
                 EditorLog.sync.error(
                     "sync_change_discarded_missing_local_entity entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public) change_type=\(change.changeType, privacy: .public)"
                 )
-            } catch {
+                if change.entityType == "block" {
+                    return try syncRepository.pageIDForBlock(blockID: change.entityID)
+                }
+                return nil
+            } else {
                 if change.entityType == "block",
                    let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {
                     blockedPageIDs.insert(pageID)
                 }
-                let failureCount = retryState.attemptCount + 1
+                let failureCount = pendingUpload.retryState.attemptCount + 1
                 let errorDescription = CloudKitErrorDiagnostic.describe(error)
                 try syncRepository.recordFailure(
                     change: change,
                     errorDescription: errorDescription,
-                    nextAttemptAt: retryPolicy.nextAttemptDate(afterFailureCount: failureCount, now: currentDate)
+                    nextAttemptAt: retryPolicy.nextAttemptDate(afterFailureCount: failureCount, now: pendingUpload.currentDate)
                 )
                 failedCount += 1
                 EditorLog.sync.error(
                     "sync_change_upload_failed entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public) error=\(errorDescription, privacy: .public)"
                 )
+                return nil
             }
+        }
+
+        @discardableResult
+        func flushReadyBatch() throws -> Set<String> {
+            guard !readyBatch.isEmpty else {
+                return []
+            }
+            let pendingUploads = readyBatch
+            readyBatch.removeAll(keepingCapacity: true)
+            let batchResult: CloudKitUploadBatchResult
+            do {
+                batchResult = try adapter.upload(changes: pendingUploads.map(\.change))
+            } catch {
+                var affectedPageIDs = Set<String>()
+                for pendingUpload in pendingUploads {
+                    if let pageID = try handleFailedChange(pendingUpload, error: error) {
+                        affectedPageIDs.insert(pageID)
+                    }
+                }
+                return affectedPageIDs
+            }
+
+            var affectedPageIDs = Set<String>()
+            for pendingUpload in pendingUploads {
+                let change = pendingUpload.change
+                if let uploadResult = batchResult.successes[change] {
+                    if let pageID = try handleUploadedChange(change, uploadResult: uploadResult) {
+                        affectedPageIDs.insert(pageID)
+                    }
+                } else if let error = batchResult.failures[change] {
+                    if let pageID = try handleFailedChange(pendingUpload, error: error) {
+                        affectedPageIDs.insert(pageID)
+                    }
+                } else if let pageID = try handleFailedChange(
+                    pendingUpload,
+                    error: CloudKitPrivateDatabaseAdapterError.missingSavedRecord
+                ) {
+                    affectedPageIDs.insert(pageID)
+                }
+            }
+            return affectedPageIDs
         }
 
         func uploadDeferredPageChangeIfReady(pageID: String) throws {
@@ -2201,7 +2381,38 @@ final class SyncEngine {
                 )
                 return
             }
-            try uploadReadyChange(deferredPageChange, currentDate: currentDate, retryState: retryState)
+            readyBatch.append(PendingUpload(
+                change: deferredPageChange,
+                currentDate: currentDate,
+                retryState: retryState
+            ))
+        }
+
+        func flushAndUploadDeferredPages() throws {
+            var affectedPageIDs = try flushReadyBatch()
+            while !affectedPageIDs.isEmpty {
+                let pageIDs = affectedPageIDs
+                affectedPageIDs.removeAll()
+                for pageID in pageIDs {
+                    try uploadDeferredPageChangeIfReady(pageID: pageID)
+                }
+                affectedPageIDs = try flushReadyBatch()
+            }
+        }
+
+        func enqueueReadyChange(
+            _ change: SyncChange,
+            currentDate: Date,
+            retryState: SyncRetryState
+        ) throws {
+            readyBatch.append(PendingUpload(
+                change: change,
+                currentDate: currentDate,
+                retryState: retryState
+            ))
+            if readyBatch.count >= uploadBatchSize {
+                try flushAndUploadDeferredPages()
+            }
         }
 
         for change in changes {
@@ -2235,12 +2446,9 @@ final class SyncEngine {
                 continue
             }
 
-            try uploadReadyChange(change, currentDate: currentDate, retryState: retryState)
-            if change.entityType == "block",
-               let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {
-                try uploadDeferredPageChangeIfReady(pageID: pageID)
-            }
+            try enqueueReadyChange(change, currentDate: currentDate, retryState: retryState)
         }
+        try flushAndUploadDeferredPages()
         return SyncUploadSummary(uploadedCount: uploadedCount, failedCount: failedCount)
     }
 }

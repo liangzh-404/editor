@@ -135,6 +135,7 @@ final class ObsidianVaultImporterTests: XCTestCase {
               - 日记
               - 复盘/周复盘
             创建时间: 2025-01-15 08:00
+            修改时间: 2025-01-15 21:30
             custom-field: kept
             ---
             # Daily body
@@ -235,6 +236,8 @@ final class ObsidianVaultImporterTests: XCTestCase {
         XCTAssertTrue(snapshot.pages.contains { $0.title == "2026.1.11 周复盘" })
         XCTAssertTrue(snapshot.pages.contains { $0.title == "推特账号" })
         XCTAssertEqual(snapshot.pages.first { $0.title == "推特账号" }?.isEncrypted, true)
+        XCTAssertEqual(snapshot.pages.first { $0.title == "2025年1月15日 星期三" }?.createdAt, "2025-01-15T08:00:00.000Z")
+        XCTAssertEqual(snapshot.pages.first { $0.title == "2025年1月15日 星期三" }?.updatedAt, "2025-01-15T21:30:00.000Z")
         XCTAssertFalse(snapshot.pages.contains { $0.title == "ignored" })
         XCTAssertTrue(snapshot.notebooks.contains { $0.name == "空" })
         XCTAssertTrue(snapshot.notebooks.contains { $0.name == "日记" })
@@ -387,6 +390,37 @@ final class ObsidianVaultImporterTests: XCTestCase {
                 && row["payload_json"]?.hasPrefix(EncryptedNoteCipher.ciphertextPrefix) == false
         })
         XCTAssertTrue(encryptedRawBlockRows.contains { $0["text_plain"] == "Secret body" })
+    }
+
+    func testVaultImporterNormalizesImportedDiaryTitlesAndFallsBackToFileModificationTime() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let workspaceID = try XCTUnwrap(try repository.bootstrapWorkspaceIfNeeded().selectedWorkspaceID)
+        let vaultURL = try makeTemporaryDirectory().appendingPathComponent("空", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        let fileURL = vaultURL.appendingPathComponent("日记/2023年/四月/16周/2023-04-17 星期一.md")
+        try write("Daily body", to: fileURL)
+        let fileModifiedAt = try XCTUnwrap(Self.date(year: 2023, month: 4, day: 17, hour: 22, minute: 45))
+        try FileManager.default.setAttributes([.modificationDate: fileModifiedAt], ofItemAtPath: fileURL.path)
+
+        _ = try ObsidianVaultImporter(database: database).importVault(
+            vaultURL: vaultURL,
+            workspaceID: workspaceID
+        )
+        let snapshot = try repository.loadWorkspaceSnapshot()
+        let page = try XCTUnwrap(snapshot.pages.first { $0.title == "2023年4月17日 星期一" })
+        let rawPage = try XCTUnwrap(
+            try database.query(
+                "SELECT created_at, updated_at FROM pages WHERE id = ? LIMIT 1",
+                bindings: [.text(page.id)]
+            ).first
+        )
+
+        XCTAssertFalse(snapshot.pages.contains { $0.title == "2023-04-17 星期一" })
+        XCTAssertEqual(page.updatedAt, "2023-04-17T22:45:00.000Z")
+        XCTAssertEqual(rawPage["updated_at"], "2023-04-17T22:45:00.000Z")
     }
 
     func testVaultImporterRollsBackPreviouslyImportedPagesWhenImportFails() throws {
@@ -622,6 +656,12 @@ final class ObsidianVaultImporterTests: XCTestCase {
             withIntermediateDirectories: true
         )
         try data.write(to: url)
+    }
+
+    private static func date(year: Int, month: Int, day: Int, hour: Int, minute: Int) -> Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))
     }
 }
 

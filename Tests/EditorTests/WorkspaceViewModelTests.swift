@@ -339,6 +339,44 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testDiaryCollectionOrdersPagesByDiaryDateDescending() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let diaryRepository = DiaryRepository(database: database)
+        let olderDay = try diaryRepository.openDailyPage(
+            workspaceID: workspaceID,
+            date: Self.date(year: 2026, month: 5, day: 16),
+            calendar: Self.gregorianCalendar
+        )
+        let newerDay = try diaryRepository.openDailyPage(
+            workspaceID: workspaceID,
+            date: Self.date(year: 2026, month: 5, day: 17),
+            calendar: Self.gregorianCalendar
+        )
+        let olderBlockID = try XCTUnwrap(
+            try repository.loadWorkspaceSnapshot()
+                .blocks
+                .first { $0.pageID == olderDay.id }?
+                .id
+        )
+        try repository.updateBlockText(blockID: olderBlockID, text: "旧日记后来编辑")
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: diaryRepository,
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 17) },
+            diaryCalendar: Self.gregorianCalendar
+        )
+        try viewModel.load()
+
+        viewModel.selectCollection(.diary)
+
+        XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id).prefix(2), [newerDay.id, olderDay.id])
+    }
+
+    @MainActor
     func testEncryptedCollectionShowsOnlyEncryptedPagesAndKeepsAllDocumentsVisible() throws {
         let database = try migratedDatabase()
         defer { database.close() }

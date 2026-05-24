@@ -436,6 +436,16 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(applied.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, baseFont)
         XCTAssertEqual(applied.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .systemPurple)
     }
+
+    func testMarkdownSyntaxMarkerAttributesHideMarkers() {
+        let attributes = NativeTextMarkdownSyntaxMarkerAttributes.appKit(
+            baseFont: NSFont.systemFont(ofSize: 16)
+        )
+        let markerFont = attributes[.font] as? NSFont
+
+        XCTAssertEqual(attributes[.foregroundColor] as? NSColor, .clear)
+        XCTAssertLessThanOrEqual(markerFont?.pointSize ?? 16, 1)
+    }
     #endif
 
     func testHighlightSwiftSupportsMultipleCodeLanguages() async throws {

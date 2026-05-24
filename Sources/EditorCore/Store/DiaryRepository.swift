@@ -160,6 +160,7 @@ final class DiaryRepository {
                    pages.notebook_id,
                    pages.title,
                    pages.is_favorite,
+                   pages.created_at,
                    pages.updated_at
             FROM diary_pages
             INNER JOIN pages ON pages.id = diary_pages.page_id
@@ -179,6 +180,7 @@ final class DiaryRepository {
                 notebookID: row["notebook_id"] ?? nil,
                 title: row["title"] ?? "",
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
+                createdAt: row["created_at"],
                 updatedAt: row["updated_at"]
             )
         }
@@ -193,6 +195,7 @@ final class DiaryRepository {
                    title,
                    is_favorite,
                    is_encrypted,
+                   created_at,
                    updated_at
             FROM pages
             WHERE workspace_id = ?
@@ -213,6 +216,7 @@ final class DiaryRepository {
                 title: row["title"] ?? "",
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
                 isEncrypted: Self.sqliteBool(row["is_encrypted"]),
+                createdAt: row["created_at"],
                 updatedAt: row["updated_at"]
             )
         }
@@ -352,13 +356,25 @@ final class DiaryRepository {
         return String(format: "%04d-%02d-%02d", year, month, day)
     }
 
-    private static func diaryTitle(from date: Date, calendar: Calendar) -> String {
+    static func diaryTitle(from date: Date, calendar: Calendar) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
         formatter.locale = Locale(identifier: "zh_Hans_CN")
         formatter.dateFormat = "yyyy年M月d日 EEEE"
         return formatter.string(from: date)
+    }
+
+    static func diaryTitle(diaryDateString: String, calendar: Calendar) -> String? {
+        let components = diaryDateString.split(separator: "-")
+        guard components.count == 3,
+              let year = Int(components[0]),
+              let month = Int(components[1]),
+              let day = Int(components[2]),
+              let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
+            return nil
+        }
+        return diaryTitle(from: date, calendar: calendar)
     }
 
     private static func sqliteBool(_ value: String?) -> Bool {

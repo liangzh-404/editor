@@ -278,6 +278,26 @@ enum MarkdownInlineLinkKeyboardResolver {
     }
 }
 
+enum NativeTextMarkdownSyntaxMarkerAttributes {
+#if os(macOS)
+    static func appKit(baseFont: NSFont) -> [NSAttributedString.Key: Any] {
+        [
+            .foregroundColor: NSColor.clear,
+            .font: NSFont.systemFont(ofSize: min(1, max(0.1, baseFont.pointSize * 0.05)))
+        ]
+    }
+#endif
+
+#if os(iOS)
+    static func uiKit(baseFont: UIFont) -> [NSAttributedString.Key: Any] {
+        [
+            .foregroundColor: UIColor.clear,
+            .font: UIFont.systemFont(ofSize: min(1, max(0.1, baseFont.pointSize * 0.05)))
+        ]
+    }
+#endif
+}
+
 enum BlockSelectAllStage: Equatable, Sendable {
     case currentText
     case currentBlock
@@ -1879,7 +1899,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         private func attributes(for kind: MarkdownInlineStyleKind) -> [NSAttributedString.Key: Any] {
             switch kind {
             case .syntax:
-                return [.foregroundColor: NSColor.secondaryLabelColor]
+                return NativeTextMarkdownSyntaxMarkerAttributes.appKit(baseFont: parent.nsFont)
             case .bold:
                 return [.font: boldFont]
             case .italic:
@@ -3199,7 +3219,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         private func attributes(for kind: MarkdownInlineStyleKind) -> [NSAttributedString.Key: Any] {
             switch kind {
             case .syntax:
-                return [.foregroundColor: UIColor.secondaryLabel]
+                return NativeTextMarkdownSyntaxMarkerAttributes.uiKit(baseFont: parent.uiFont)
             case .bold:
                 return [.font: boldFont]
             case .italic:

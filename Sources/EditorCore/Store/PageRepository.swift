@@ -82,16 +82,14 @@ final class PageRepository {
                    pages.is_favorite,
                    pages.is_pinned,
                    pages.is_encrypted,
-                   CASE
-                       WHEN diary_pages.page_id IS NOT NULL THEN pages.created_at
-                       ELSE pages.updated_at
-                   END AS effective_updated_at
+                   pages.created_at,
+                   pages.updated_at
             FROM pages
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
             LEFT JOIN diary_pages ON diary_pages.page_id = pages.id
             WHERE pages.workspace_id = ?
               AND pages.is_archived = 0
-            ORDER BY pages.is_pinned DESC, effective_updated_at DESC, pages.created_at DESC
+            ORDER BY pages.is_pinned DESC, pages.updated_at DESC, pages.created_at DESC
             """,
             bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
         ).map { row in
@@ -103,7 +101,8 @@ final class PageRepository {
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
                 isPinned: Self.sqliteBool(row["is_pinned"]),
                 isEncrypted: Self.sqliteBool(row["is_encrypted"]),
-                updatedAt: row["effective_updated_at"]
+                createdAt: row["created_at"],
+                updatedAt: row["updated_at"]
             )
         }
 
@@ -116,6 +115,7 @@ final class PageRepository {
                    pages.is_favorite,
                    pages.is_pinned,
                    pages.is_encrypted,
+                   pages.created_at,
                    pages.updated_at
             FROM pages
             LEFT JOIN notebooks ON notebooks.id = pages.notebook_id
@@ -133,6 +133,7 @@ final class PageRepository {
                 isFavorite: Self.sqliteBool(row["is_favorite"]),
                 isPinned: Self.sqliteBool(row["is_pinned"]),
                 isEncrypted: Self.sqliteBool(row["is_encrypted"]),
+                createdAt: row["created_at"],
                 updatedAt: row["updated_at"]
             )
         }
@@ -757,7 +758,9 @@ final class PageRepository {
         workspaceID: String,
         title: String,
         notebookID: String? = nil,
-        isEncrypted: Bool = false
+        isEncrypted: Bool = false,
+        createdAt: String? = nil,
+        updatedAt: String? = nil
     ) throws -> PageSummary {
         let workspaceRows = try database.query(
             """
@@ -792,6 +795,8 @@ final class PageRepository {
         }
 
         let now = Self.timestamp()
+        let pageCreatedAt = createdAt ?? now
+        let pageUpdatedAt = updatedAt ?? pageCreatedAt
         let pageID = "page-\(UUID().uuidString.lowercased())"
         let blockID = "block-\(UUID().uuidString.lowercased())"
         let orderKey = try nextPageOrderKey(workspaceID: workspaceID, notebookID: resolvedNotebookID)
@@ -810,8 +815,8 @@ final class PageRepository {
                     .text(storedTitle),
                     .text(orderKey),
                     .integer(isEncrypted ? 1 : 0),
-                    .text(now),
-                    .text(now)
+                    .text(pageCreatedAt),
+                    .text(pageUpdatedAt)
                 ]
             )
             try insertBlock(
@@ -821,7 +826,7 @@ final class PageRepository {
                 orderKey: "000001",
                 type: .paragraph,
                 text: "",
-                createdAt: now
+                createdAt: pageCreatedAt
             )
         }
 
@@ -841,7 +846,32 @@ final class PageRepository {
             isFavorite: false,
             isPinned: false,
             isEncrypted: isEncrypted,
-            updatedAt: now
+            createdAt: pageCreatedAt,
+            updatedAt: pageUpdatedAt
+        )
+    }
+
+    func applyImportedPageTimestamps(
+        pageID: String,
+        createdAt: String?,
+        updatedAt: String?
+    ) throws {
+        guard createdAt != nil || updatedAt != nil else {
+            return
+        }
+
+        try database.execute(
+            """
+            UPDATE pages
+            SET created_at = COALESCE(?, created_at),
+                updated_at = COALESCE(?, updated_at)
+            WHERE id = ?
+            """,
+            bindings: [
+                createdAt.map(SQLiteValue.text) ?? .null,
+                updatedAt.map(SQLiteValue.text) ?? .null,
+                .text(pageID)
+            ]
         )
     }
 
@@ -2026,6 +2056,7 @@ final class PageRepository {
             isFavorite: false,
             isPinned: false,
             isEncrypted: sourceIsEncrypted,
+            createdAt: now,
             updatedAt: now
         )
     }
@@ -2040,6 +2071,7 @@ final class PageRepository {
                    is_favorite,
                    is_pinned,
                    is_encrypted,
+                   created_at,
                    updated_at
             FROM pages
             WHERE id = ?
@@ -2059,6 +2091,7 @@ final class PageRepository {
             isFavorite: Self.sqliteBool(row["is_favorite"]),
             isPinned: Self.sqliteBool(row["is_pinned"]),
             isEncrypted: Self.sqliteBool(row["is_encrypted"]),
+            createdAt: row["created_at"],
             updatedAt: row["updated_at"]
         )
     }

@@ -443,6 +443,11 @@ struct ObsidianDiaryMatch: Equatable, Sendable {
     let pattern: String
 }
 
+struct ObsidianSourceTimestamps: Equatable, Sendable {
+    let createdAt: String?
+    let modifiedAt: String?
+}
+
 enum ObsidianDiaryDateResolver {
     static func match(relativePath: String) -> ObsidianDiaryMatch? {
         let components = relativePath.split(separator: "/").map(String.init)
@@ -700,12 +705,16 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
     ) throws -> (isEncrypted: Bool, diaryMatch: ObsidianDiaryMatch?, importedAttachmentCount: Int) {
         let markdown = try String(contentsOf: markdownURL, encoding: .utf8)
         let document = ObsidianMarkdownDocument.parse(markdown, configuration: configuration)
-        let title = markdownURL.deletingPathExtension().lastPathComponent
+        let diaryMatch = ObsidianDiaryDateResolver.match(relativePath: relativePath)
+        let sourceTimestamps = try sourceTimestamps(markdownURL: markdownURL, document: document)
+        let title = Self.importedPageTitle(markdownURL: markdownURL, diaryMatch: diaryMatch)
         let page = try pageRepository.createPage(
             workspaceID: workspaceID,
             title: title,
             notebookID: notebookID,
-            isEncrypted: document.isSecretNote
+            isEncrypted: document.isSecretNote,
+            createdAt: sourceTimestamps.createdAt,
+            updatedAt: sourceTimestamps.modifiedAt ?? sourceTimestamps.createdAt
         )
         var importedAttachmentCount = 0
         try pageRepository.importMarkdown(pageID: page.id, markdown: document.markdownForImport) { [attachmentRepository, configuration] draft in
@@ -731,6 +740,11 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
             importedAttachmentCount += 1
             return result
         }
+        try pageRepository.applyImportedPageTimestamps(
+            pageID: page.id,
+            createdAt: sourceTimestamps.createdAt,
+            updatedAt: sourceTimestamps.modifiedAt ?? sourceTimestamps.createdAt
+        )
 
         let tagNames = tagNames(for: document)
         let tagIDs = try tagNames.map { tagName in
@@ -740,7 +754,6 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
             try tagRepository.assignTags(pageID: page.id, tagIDs: tagIDs)
         }
 
-        let diaryMatch = ObsidianDiaryDateResolver.match(relativePath: relativePath)
         if let diaryDate = diaryMatch?.dateString {
             let now = Self.timestamp()
             try database.execute(
@@ -774,7 +787,8 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
             markdownURL: markdownURL,
             relativePath: relativePath,
             document: document,
-            diaryMatch: diaryMatch
+            diaryMatch: diaryMatch,
+            sourceTimestamps: sourceTimestamps
         )
 
         return (document.isEncrypted, diaryMatch, importedAttachmentCount)
@@ -801,7 +815,8 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
         markdownURL: URL,
         relativePath: String,
         document: ObsidianMarkdownDocument,
-        diaryMatch: ObsidianDiaryMatch?
+        diaryMatch: ObsidianDiaryMatch?,
+        sourceTimestamps: ObsidianSourceTimestamps
     ) throws {
         let now = Self.timestamp()
         let frontmatterFields = document.frontmatter?.fields ?? [:]
@@ -817,16 +832,6 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
                 diaryMatch: diaryMatch
             )
         )
-        let resourceValues = try markdownURL.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
-        let sourceCreatedAt = firstMetadataValue(
-            fields: frontmatterFields,
-            keys: ["创建时间", "created", "created_at", "created_day"]
-        ) ?? resourceValues.creationDate.map(Self.timestamp(from:))
-        let sourceModifiedAt = firstMetadataValue(
-            fields: frontmatterFields,
-            keys: ["修改时间", "modified", "modified_at", "modified_day"]
-        ) ?? resourceValues.contentModificationDate.map(Self.timestamp(from:))
-
         try database.execute(
             """
             INSERT OR REPLACE INTO page_import_metadata (
@@ -855,8 +860,8 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
                 .text(configuration.sourceType),
                 .text(relativePath),
                 .text(markdownURL.lastPathComponent),
-                sourceCreatedAt.map(SQLiteValue.text) ?? .null,
-                sourceModifiedAt.map(SQLiteValue.text) ?? .null,
+                sourceTimestamps.createdAt.map(SQLiteValue.text) ?? .null,
+                sourceTimestamps.modifiedAt.map(SQLiteValue.text) ?? .null,
                 .text(frontmatterJSON),
                 .text(customMetadataJSON),
                 .integer(document.isEncrypted ? 1 : 0),
@@ -1067,6 +1072,42 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
         ).first?["page_id"] ?? nil
     }
 
+    private static func importedPageTitle(
+        markdownURL: URL,
+        diaryMatch: ObsidianDiaryMatch?
+    ) -> String {
+        if let diaryDateString = diaryMatch?.dateString,
+           let title = DiaryRepository.diaryTitle(
+            diaryDateString: diaryDateString,
+            calendar: diaryCalendar
+           ) {
+            return title
+        }
+
+        return markdownURL.deletingPathExtension().lastPathComponent
+    }
+
+    private func sourceTimestamps(
+        markdownURL: URL,
+        document: ObsidianMarkdownDocument
+    ) throws -> ObsidianSourceTimestamps {
+        let frontmatterFields = document.frontmatter?.fields ?? [:]
+        let resourceValues = try markdownURL.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+        let sourceCreatedAt = firstMetadataTimestamp(
+            fields: frontmatterFields,
+            keys: ["创建时间", "created", "created_at", "created_day"]
+        ) ?? resourceValues.creationDate.map(Self.timestamp(from:))
+        let sourceModifiedAt = firstMetadataTimestamp(
+            fields: frontmatterFields,
+            keys: ["修改时间", "modified", "modified_at", "modified_day"]
+        ) ?? resourceValues.contentModificationDate.map(Self.timestamp(from:))
+
+        return ObsidianSourceTimestamps(
+            createdAt: sourceCreatedAt,
+            modifiedAt: sourceModifiedAt
+        )
+    }
+
     private func makeAttachmentIndex(vaultURL: URL) throws -> [String: URL] {
         guard let enumerator = fileManager.enumerator(
             at: vaultURL,
@@ -1265,6 +1306,48 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
         return nil
     }
 
+    private func firstMetadataTimestamp(
+        fields: [String: ObsidianFrontmatterValue],
+        keys: [String]
+    ) -> String? {
+        guard let value = firstMetadataValue(fields: fields, keys: keys) else {
+            return nil
+        }
+        return Self.normalizedTimestamp(value)
+    }
+
+    private static func normalizedTimestamp(_ rawValue: String) -> String? {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            return nil
+        }
+
+        let isoWithFractionalSeconds = ISO8601DateFormatter()
+        isoWithFractionalSeconds.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = isoWithFractionalSeconds.date(from: value) {
+            return timestamp(from: date)
+        }
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        if let date = iso.date(from: value) {
+            return timestamp(from: date)
+        }
+
+        for format in metadataTimestampFormats {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = format
+            if let date = formatter.date(from: value) {
+                return timestamp(from: date)
+            }
+        }
+
+        return nil
+    }
+
     private func jsonString(_ value: Any) throws -> String {
         let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
         guard let string = String(data: data, encoding: .utf8) else {
@@ -1278,8 +1361,29 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
     }
 
     private static func timestamp(from date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
+
+    private static var diaryCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "zh_Hans_CN")
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private static let metadataTimestampFormats = [
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd HH:mm",
+        "yyyy-MM-dd",
+        "yyyy.M.d HH:mm:ss",
+        "yyyy.M.d HH:mm",
+        "yyyy.M.d",
+        "yyyy年M月d日 HH:mm:ss",
+        "yyyy年M月d日 HH:mm",
+        "yyyy年M月d日"
+    ]
 }
 
 enum ObsidianVaultImporterError: Error, Equatable {

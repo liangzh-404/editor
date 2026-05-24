@@ -4629,7 +4629,14 @@ enum CompactCollectionPageListModel {
         case .recent:
             return snapshot.pages
         case .diary:
-            return snapshot.pages.filter { diaryPageIDs.contains($0.id) }
+            let diaryDatesByPageID = Dictionary(
+                uniqueKeysWithValues: snapshot.diaryPages.map { ($0.pageID, $0.diaryDate) }
+            )
+            return snapshot.pages
+                .filter { diaryPageIDs.contains($0.id) }
+                .sorted { first, second in
+                    (diaryDatesByPageID[first.id] ?? "") > (diaryDatesByPageID[second.id] ?? "")
+                }
         case .allDocuments:
             return snapshot.pages.filter { !diaryPageIDs.contains($0.id) }
         case .favorites:

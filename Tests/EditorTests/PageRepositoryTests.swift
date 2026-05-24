@@ -460,7 +460,7 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloaded.pages.map(\.title).prefix(2), ["Older updated last", "Newer"])
     }
 
-    func testDailyPagesExposeCreationTimestampForOrderingInsteadOfModifiedTimestamp() throws {
+    func testLoadWorkspaceSnapshotOrdersDailyPagesByModifiedTimestampForRecentList() throws {
         let database = try migratedDatabase()
         defer { database.close() }
         let repository = PageRepository(database: database)
@@ -486,15 +486,15 @@ final class PageRepositoryTests: XCTestCase {
         )
 
         Thread.sleep(forTimeInterval: 0.01)
-        try repository.updateBlockText(blockID: olderBlockID, text: "修改旧日记不应该改变日记排序")
+        try repository.updateBlockText(blockID: olderBlockID, text: "修改旧日记应该进入最近列表前面")
 
         let reloaded = try repository.loadWorkspaceSnapshot()
         let diaryPages = reloaded.pages.filter { [olderDay.id, newerDay.id].contains($0.id) }
 
-        XCTAssertEqual(diaryPages.map(\.id), [newerDay.id, olderDay.id])
-        XCTAssertLessThan(
-            try XCTUnwrap(diaryPages.last?.updatedAt),
-            try XCTUnwrap(diaryPages.first?.updatedAt)
+        XCTAssertEqual(diaryPages.map(\.id), [olderDay.id, newerDay.id])
+        XCTAssertGreaterThan(
+            try XCTUnwrap(diaryPages.first?.updatedAt),
+            try XCTUnwrap(diaryPages.last?.updatedAt)
         )
     }
 

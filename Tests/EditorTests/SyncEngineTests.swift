@@ -72,6 +72,36 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
+    func testUploadPendingChangesBatchesReadyBlockChangesBeforeDeferredPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let page = try pageRepository.createPage(workspaceID: workspaceID, title: "Large import")
+        var previousBlockID = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().blocks.first { $0.pageID == page.id }?.id
+        )
+        for index in 1...5 {
+            previousBlockID = try pageRepository.insertParagraphBlock(
+                after: previousBlockID,
+                text: "Block \(index)"
+            ).id
+        }
+
+        let adapter = BatchRecordingCloudKitSyncAdapter()
+        try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: adapter,
+            uploadBatchSize: 3
+        ).uploadPendingChanges()
+
+        XCTAssertTrue(adapter.batchUploads.contains { $0.count > 1 })
+        XCTAssertEqual(adapter.uploadedChanges.last, SyncChange(entityType: "page", entityID: page.id, changeType: "create"))
+        XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
+    }
+
     func testUploadPendingChangesBackfillsExistingDiaryPageMappings() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -887,7 +917,9 @@ final class SyncEngineTests: XCTestCase {
                     orderKey: "000001",
                     isArchived: false,
                     isFavorite: true,
-                    isPinned: true
+                    isPinned: true,
+                    createdAt: "2026-05-20T23:59:00Z",
+                    updatedAt: "2026-05-21T00:00:00Z"
                 )
             ],
             attachmentChanges: [
@@ -936,6 +968,8 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(page.title, "Roadmap")
         XCTAssertEqual(page.isFavorite, true)
         XCTAssertEqual(page.isPinned, true)
+        XCTAssertEqual(page.createdAt, "2026-05-20T23:59:00Z")
+        XCTAssertEqual(page.updatedAt, "2026-05-21T00:00:00Z")
         XCTAssertNotNil(page.updatedAt)
         XCTAssertEqual(snapshot.favoritePages.map(\.id), ["page-remote"])
         XCTAssertEqual(snapshot.blocks.map(\.textPlain), ["Remote body"])
@@ -1233,6 +1267,8 @@ final class SyncEngineTests: XCTestCase {
                     $0["isFavorite"] = NSNumber(value: true)
                     $0["isPinned"] = NSNumber(value: true)
                     $0["isEncrypted"] = NSNumber(value: true)
+                    $0["createdAt"] = "2026-05-20T23:59:00Z" as CKRecordValue
+                    $0["updatedAt"] = "2026-05-21T00:00:00Z" as CKRecordValue
                 }
             ],
             "DiaryPageRecord": [
@@ -1292,6 +1328,8 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.pageChanges.first?.isFavorite, true)
         XCTAssertEqual(changeSet.pageChanges.first?.isPinned, true)
         XCTAssertEqual(changeSet.pageChanges.first?.isEncrypted, true)
+        XCTAssertEqual(changeSet.pageChanges.first?.createdAt, "2026-05-20T23:59:00Z")
+        XCTAssertEqual(changeSet.pageChanges.first?.updatedAt, "2026-05-21T00:00:00Z")
         XCTAssertEqual(changeSet.tagChanges.map(\.tagID), ["tag-remote"])
         XCTAssertEqual(changeSet.tagChanges.first?.name, "Remote Tag")
         XCTAssertEqual(changeSet.pageTagChanges, [
@@ -1872,6 +1910,8 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual((record["isEncrypted"] as? NSNumber)?.boolValue, true)
         XCTAssertEqual((record["isArchived"] as? NSNumber)?.boolValue, false)
         XCTAssertEqual(record["title"] as? String, "欢迎")
+        let row = try XCTUnwrap(database.query("SELECT created_at FROM pages WHERE id = ?", bindings: [.text(pageID)]).first)
+        XCTAssertEqual(record["createdAt"] as? String, row["created_at"])
     }
 
     func testCloudKitPrivateDatabaseAdapterMapsTagChangeToRecord() throws {
@@ -2090,6 +2130,35 @@ final class RecordingCloudKitSyncAdapter: CloudKitSyncAdapter {
             recordName: "\(change.entityType)-\(change.entityID)",
             changeTag: "tag-\(change.entityID)"
         )
+    }
+}
+
+final class BatchRecordingCloudKitSyncAdapter: CloudKitSyncAdapter {
+    private(set) var uploadedChanges: [SyncChange] = []
+    private(set) var batchUploads: [[SyncChange]] = []
+
+    func upload(change: SyncChange) throws -> CloudKitUploadResult {
+        uploadedChanges.append(change)
+        return CloudKitUploadResult(
+            recordName: "\(change.entityType)-\(change.entityID)",
+            changeTag: "tag-\(change.entityID)"
+        )
+    }
+
+    func upload(changes: [SyncChange]) throws -> CloudKitUploadBatchResult {
+        batchUploads.append(changes)
+        var result = CloudKitUploadBatchResult()
+        for change in changes {
+            uploadedChanges.append(change)
+            result.recordSuccess(
+                change: change,
+                uploadResult: CloudKitUploadResult(
+                    recordName: "\(change.entityType)-\(change.entityID)",
+                    changeTag: "tag-\(change.entityID)"
+                )
+            )
+        }
+        return result
     }
 }
 
