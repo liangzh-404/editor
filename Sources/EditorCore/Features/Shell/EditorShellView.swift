@@ -3181,6 +3181,16 @@ enum PageListChrome {
     }
 }
 
+enum EditorScrollIndicatorPolicy {
+#if os(macOS)
+    static let showsPageListIndicators = true
+    static let showsCanvasIndicators = true
+#else
+    static let showsPageListIndicators = false
+    static let showsCanvasIndicators = false
+#endif
+}
+
 enum CompactLibraryChrome {
     static let backgroundToken = EditorDesignTokens.Colors.appBackground
     static let primaryForegroundToken = EditorDesignTokens.Colors.primaryText
@@ -6118,7 +6128,7 @@ private struct PageListView: View {
         let visiblePageIDs = visiblePages.map(\.id)
         let tagNamesByPageID = Self.tagNamesByPageID(snapshot: viewModel.snapshot)
 
-        return ScrollView(.vertical, showsIndicators: false) {
+        return ScrollView(.vertical, showsIndicators: EditorScrollIndicatorPolicy.showsPageListIndicators) {
             LazyVStack(alignment: .leading, spacing: 14) {
                 switch viewModel.selectedCollection {
                 case .recent:
@@ -8894,7 +8904,7 @@ private struct EditorCanvasView: View {
         ZStack(alignment: .topTrailing) {
             GeometryReader { canvasProxy in
                 ScrollViewReader { scrollProxy in
-                    ScrollView(.vertical, showsIndicators: false) {
+                    ScrollView(.vertical, showsIndicators: EditorScrollIndicatorPolicy.showsCanvasIndicators) {
                 LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
                 HStack(alignment: .center, spacing: 12) {
 #if os(iOS)

@@ -21,6 +21,11 @@ enum WorkspaceCollection: Equatable, Hashable, Sendable {
     case archive
 }
 
+private enum PageHydrationMode: Equatable, Sendable {
+    case synchronous
+    case deferLargePages
+}
+
 enum AttachmentPreviewGenerationStatus: Equatable, Sendable {
     case idle
     case generating
@@ -225,6 +230,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var pendingCompactPageNavigationID: String?
     @Published private(set) var pendingCompactCollectionNavigation: WorkspaceCollection?
     @Published private(set) var pendingSearchHighlight: SearchTransientHighlight?
+    @Published private(set) var hydratingPageIDs: Set<String> = []
     @Published private(set) var canUndoTextEdit = false
     @Published private(set) var canRedoTextEdit = false
     @Published private(set) var canUndoPageArchive = false
@@ -286,6 +292,11 @@ final class WorkspaceViewModel: ObservableObject {
     private var encryptedPageAutoLockTask: Task<Void, Never>?
     private var pageArchiveUndoExpirationTask: Task<Void, Never>?
     private var cachedDiaryPageIDs: Set<String> = []
+    private var cachedTagIDSet: Set<String> = []
+    private var cachedTagChildIDsByParentID: [String: [String]] = [:]
+    private var cachedPageIDsByTagID: [String: Set<String>] = [:]
+    private var deferredHydrationFocusBlockIDsByPageID: [String: String] = [:]
+    private static let deferredHydrationBlockThreshold = 300
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
     private static let foregroundSyncPartialFailureCooldown: TimeInterval = 30
 
@@ -390,11 +401,9 @@ final class WorkspaceViewModel: ObservableObject {
                 return []
             }
             let visibleTagIDs = tagIDsIncludingDescendants(of: tagID)
-            let pageIDs = Set(
-                snapshot.pageTags
-                    .filter { visibleTagIDs.contains($0.tagID) }
-                    .map(\.pageID)
-            )
+            let pageIDs = visibleTagIDs.reduce(into: Set<String>()) { pageIDs, visibleTagID in
+                pageIDs.formUnion(cachedPageIDsByTagID[visibleTagID] ?? [])
+            }
             return snapshot.pages.filter { pageIDs.contains($0.id) && !snapshot.isEmptyDiaryPage($0.id) }
         case .search:
             return []
@@ -484,7 +493,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.searchDebounceNanoseconds = searchDebounceNanoseconds
         self.searchHighlightDurationNanoseconds = searchHighlightDurationNanoseconds
         snapshot = .empty
-        cachedDiaryPageIDs = []
+        refreshSnapshotCaches(for: .empty)
         selectedWorkspaceID = nil
         selectedNotebookID = nil
         selectedPageID = nil
@@ -496,6 +505,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingCompactPageNavigationID = nil
         pendingCompactCollectionNavigation = nil
         pendingSearchHighlight = nil
+        hydratingPageIDs = []
         canUndoTextEdit = false
         canRedoTextEdit = false
         canUndoPageArchive = false
@@ -536,7 +546,7 @@ final class WorkspaceViewModel: ObservableObject {
         searchDebounceNanoseconds = 0
         searchHighlightDurationNanoseconds = 1_600_000_000
         self.snapshot = snapshot
-        cachedDiaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        refreshSnapshotCaches(for: snapshot)
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
@@ -548,6 +558,7 @@ final class WorkspaceViewModel: ObservableObject {
         pendingCompactPageNavigationID = nil
         pendingCompactCollectionNavigation = nil
         pendingSearchHighlight = nil
+        hydratingPageIDs = []
         canUndoTextEdit = false
         canRedoTextEdit = false
         canUndoPageArchive = false
@@ -802,14 +813,24 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func selectPage(id: String) {
-        selectPage(id: id, collection: defaultCollectionForOpeningPage(id: id), recordHistory: true)
+        selectPage(
+            id: id,
+            collection: defaultCollectionForOpeningPage(id: id),
+            recordHistory: true,
+            hydrationMode: .synchronous
+        )
     }
 
     func selectPageForUI(id pageID: String) async {
         guard await unlockEncryptedPageForUIIfNeeded(id: pageID) else {
             return
         }
-        selectPage(id: pageID)
+        selectPage(
+            id: pageID,
+            collection: defaultCollectionForOpeningPage(id: pageID),
+            recordHistory: true,
+            hydrationMode: .deferLargePages
+        )
     }
 
     @discardableResult
@@ -932,16 +953,26 @@ final class WorkspaceViewModel: ObservableObject {
     private func selectPage(
         id: String,
         collection: WorkspaceCollection,
-        recordHistory: Bool
+        recordHistory: Bool,
+        hydrationMode: PageHydrationMode = .synchronous,
+        deferredFocusBlockID: String? = nil
     ) {
         let previousSelectedPageID = selectedPageID
         if recordHistory {
             recordNavigationHistoryBeforeOpening(pageID: id)
         }
-        hydrateBlocksForPageIfNeededForUI(id)
+        let shouldDeferHydration = shouldDeferHydrationForUI(pageID: id, mode: hydrationMode)
+        if !shouldDeferHydration {
+            hydrateBlocksForPageIfNeededForUI(id)
+        }
         selectedPageID = id
         selectedCollection = collection
         selectedNotebookID = snapshot.pages.first { $0.id == id }?.notebookID ?? selectedNotebookID
+        if shouldDeferHydration {
+            scheduleDeferredPageHydration(pageID: id, focusBlockID: deferredFocusBlockID)
+        } else if let deferredFocusBlockID {
+            requestBlockFocus(deferredFocusBlockID)
+        }
         refreshBacklinksForSelectedPage()
         refreshExternalLinksForSelectedPage()
         refreshConflictsForSelectedPage()
@@ -1002,6 +1033,96 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    private func shouldDeferHydrationForUI(pageID: String, mode: PageHydrationMode) -> Bool {
+        guard mode == .deferLargePages,
+              !snapshot.blocks.contains(where: { $0.pageID == pageID }),
+              !hydratingPageIDs.contains(pageID),
+              let repository else {
+            return false
+        }
+
+        do {
+            return try repository.blockCount(pageID: pageID) >= Self.deferredHydrationBlockThreshold
+        } catch {
+            EditorLog.store.error(
+                "page_blocks_hydration_count_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    private func scheduleDeferredPageHydration(pageID: String, focusBlockID: String?) {
+        guard let repository,
+              !hydratingPageIDs.contains(pageID) else {
+            return
+        }
+
+        hydratingPageIDs.insert(pageID)
+        if let focusBlockID {
+            deferredHydrationFocusBlockIDsByPageID[pageID] = focusBlockID
+        }
+        let startedAt = Date()
+        EditorLog.render.debug("page_blocks_hydration_deferred page_id=\(pageID, privacy: .public)")
+
+        Task { [weak self, repository, pageID, startedAt] in
+            let result = await Task.detached(priority: .userInitiated) {
+                Result {
+                    try repository.loadBlocks(pageID: pageID)
+                }
+            }.value
+
+            await MainActor.run { [weak self] in
+                self?.finishDeferredPageHydration(
+                    pageID: pageID,
+                    result: result,
+                    startedAt: startedAt
+                )
+            }
+        }
+    }
+
+    private func finishDeferredPageHydration(
+        pageID: String,
+        result: Result<[BlockSnapshot], Error>,
+        startedAt: Date
+    ) {
+        hydratingPageIDs.remove(pageID)
+        switch result {
+        case .success(let blocks):
+            guard snapshot.pages.contains(where: { $0.id == pageID }) else {
+                deferredHydrationFocusBlockIDsByPageID[pageID] = nil
+                return
+            }
+            snapshot = snapshot.replacingBlocks(pageID: pageID, blocks: blocks)
+            let durationMilliseconds = Self.millisecondsElapsed(since: startedAt)
+            EditorLog.render.debug(
+                "page_blocks_hydrated page_id=\(pageID, privacy: .public) already_loaded=false blocks=\(blocks.count, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public) deferred=true"
+            )
+            if durationMilliseconds >= 100 {
+                try? repository?.recordRuntimeDiagnostic(
+                    eventName: "page_blocks_hydration_slow",
+                    payload: [
+                        "page_id": pageID,
+                        "already_loaded": false,
+                        "block_count": blocks.count,
+                        "duration_ms": durationMilliseconds,
+                        "deferred": true
+                    ]
+                )
+            }
+            let focusBlockID = deferredHydrationFocusBlockIDsByPageID.removeValue(forKey: pageID)
+            if selectedPageID == pageID,
+               let focusBlockID {
+                requestBlockFocus(focusBlockID)
+            }
+        case .failure(let error):
+            deferredHydrationFocusBlockIDsByPageID[pageID] = nil
+            EditorLog.store.error(
+                "page_blocks_hydration_failed page_id=\(pageID, privacy: .public) duration_ms=\(Self.millisecondsElapsed(since: startedAt), privacy: .public) deferred=true error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     private func defaultCollectionForOpeningPage(id pageID: String) -> WorkspaceCollection {
         switch selectedCollection {
         case .diary where diaryPageIDs.contains(pageID):
@@ -1024,6 +1145,9 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func selectCollection(_ collection: WorkspaceCollection) {
+        if collection != .search, isSearchActive {
+            clearSearchStateForCollectionSwitch()
+        }
         selectedCollection = collection
         if collection == .diary {
             do {
@@ -1250,18 +1374,20 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         let previousCollection = selectedCollection
-        recordNavigationHistoryBeforeOpening(pageID: destinationPageID)
-        selectedPageID = destinationPageID
-        selectedNotebookID = snapshot.pages.first { $0.id == destinationPageID }?.notebookID ?? selectedNotebookID
-        selectedCollection = previousCollection == .search ? .search : defaultCollectionForOpeningPage(id: destinationPageID)
+        let destinationCollection = previousCollection == .search
+            ? WorkspaceCollection.search
+            : defaultCollectionForOpeningPage(id: destinationPageID)
+        selectPage(
+            id: destinationPageID,
+            collection: destinationCollection,
+            recordHistory: true,
+            hydrationMode: .deferLargePages,
+            deferredFocusBlockID: result.destinationBlockID
+        )
         pendingCompactPageNavigationID = destinationPageID
         if let destinationBlockID = result.destinationBlockID {
-            pendingFocusBlockID = destinationBlockID
             queueSearchHighlight(for: result, blockID: destinationBlockID)
         }
-        refreshBacklinksForSelectedPage()
-        refreshExternalLinksForSelectedPage()
-        refreshConflictsForSelectedPage()
         EditorLog.render.debug(
             "search_result_selected page_id=\(destinationPageID, privacy: .public) entity_type=\(result.entityType, privacy: .public)"
         )
@@ -3974,6 +4100,18 @@ final class WorkspaceViewModel: ObservableObject {
         restoreCollectionAfterSearchIfNeeded()
     }
 
+    private func clearSearchStateForCollectionSwitch() {
+        searchRefreshTask?.cancel()
+        searchRefreshTask = nil
+        searchHighlightClearTask?.cancel()
+        searchHighlightClearTask = nil
+        isSearchRefreshPending = false
+        searchQuery = ""
+        searchResults = []
+        pendingSearchHighlight = nil
+        searchRestorationCollection = nil
+    }
+
     @discardableResult
     func importAttachmentForCurrentPage(
         sourceURL: URL,
@@ -4243,7 +4381,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func apply(snapshot: WorkspaceSnapshot) {
         self.snapshot = snapshot
-        cachedDiaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        refreshSnapshotCaches(for: snapshot)
         let encryptedPageIDs = Set(snapshot.pages.filter(\.isEncrypted).map(\.id))
         unlockedEncryptedPageIDs.formIntersection(encryptedPageIDs)
         encryptedPageLastOpenedAt = encryptedPageLastOpenedAt.filter { encryptedPageIDs.contains($0.key) }
@@ -5137,16 +5275,14 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func tagIDsIncludingDescendants(of tagID: String) -> Set<String> {
-        guard snapshot.tags.contains(where: { $0.id == tagID }) else {
+        guard cachedTagIDSet.contains(tagID) else {
             return []
         }
 
         var result: Set<String> = [tagID]
         var pending = [tagID]
         while let current = pending.popLast() {
-            let children = snapshot.tags
-                .filter { $0.parentTagID == current }
-                .map(\.id)
+            let children = cachedTagChildIDsByParentID[current] ?? []
             for child in children where !result.contains(child) {
                 result.insert(child)
                 pending.append(child)
@@ -5163,6 +5299,25 @@ final class WorkspaceViewModel: ObservableObject {
             ordered.append(pageID)
         }
         return ordered
+    }
+
+    private func refreshSnapshotCaches(for snapshot: WorkspaceSnapshot) {
+        cachedDiaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        cachedTagIDSet = Set(snapshot.tags.map(\.id))
+        cachedTagChildIDsByParentID = Dictionary(
+            grouping: snapshot.tags.compactMap { tag -> (parentID: String, childID: String)? in
+                guard let parentTagID = tag.parentTagID else {
+                    return nil
+                }
+                return (parentTagID, tag.id)
+            },
+            by: \.parentID
+        ).mapValues { pairs in
+            pairs.map(\.childID)
+        }
+        cachedPageIDsByTagID = snapshot.pageTags.reduce(into: [String: Set<String>]()) { pageIDsByTagID, assignment in
+            pageIDsByTagID[assignment.tagID, default: []].insert(assignment.pageID)
+        }
     }
 
     private func performPageEdit(

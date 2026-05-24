@@ -62,6 +62,54 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertEqual(results.first?.entityID, titledPage.id)
     }
 
+    func testTitleOnlyMatchDoesNotReturnEveryBlockOnThePage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let titledPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Needle Project")
+        _ = try pageRepository.appendBlock(pageID: titledPage.id, type: .paragraph, text: "First unrelated paragraph")
+        _ = try pageRepository.appendBlock(pageID: titledPage.id, type: .paragraph, text: "Second unrelated paragraph")
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        let results = try repository.search("Needle")
+
+        XCTAssertEqual(results.filter { $0.destinationPageID == titledPage.id }.map(\.entityType), ["page"])
+    }
+
+    func testBlockBodyMatchStillTargetsTheMatchedBlock() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let page = try pageRepository.createPage(workspaceID: workspaceID, title: "Project")
+        let matchingBlock = try pageRepository.appendBlock(
+            pageID: page.id,
+            type: .paragraph,
+            text: "Needle appears in this exact paragraph"
+        )
+        _ = try pageRepository.appendBlock(pageID: page.id, type: .paragraph, text: "Another unrelated paragraph")
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        let results = try repository.search("Needle")
+
+        XCTAssertTrue(results.contains { result in
+            result.entityType == "block"
+                && result.entityID == matchingBlock.id
+                && result.destinationPageID == page.id
+                && result.destinationBlockID == matchingBlock.id
+        })
+        XCTAssertFalse(results.contains { $0.entityType == "block" && $0.snippet == "Another unrelated paragraph" })
+    }
+
     func testSearchLabelsAndRanksExactMatchesBeforeBodyMatches() throws {
         let database = try migratedDatabase()
         defer { database.close() }

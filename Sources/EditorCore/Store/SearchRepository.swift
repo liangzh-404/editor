@@ -212,7 +212,12 @@ final class SearchRepository: @unchecked Sendable {
 
         if let ftsQuery = ftsQuery(for: tokens), results.count < limit {
             try appendRows(
-                fullTextSearchRows(ftsQuery: ftsQuery, titlePattern: titlePriorityPattern(for: tokens), limit: limit),
+                fullTextSearchRows(
+                    ftsQuery: ftsQuery,
+                    titlePattern: titlePriorityPattern(for: tokens),
+                    bodyTokenPatterns: bodyTokenPatterns(for: tokens),
+                    limit: limit
+                ),
                 matchKind: .fullText,
                 query: trimmedQuery,
                 to: &results,
@@ -592,13 +597,18 @@ final class SearchRepository: @unchecked Sendable {
                        ELSE title
                    END AS snippet
             FROM search_index
-            WHERE lower(title) = ?
-               OR lower(title) LIKE ? ESCAPE '\\'
+            WHERE (
+                      entity_type != 'block'
+                  AND (
+                         lower(title) = ?
+                      OR lower(title) LIKE ? ESCAPE '\\'
+                  )
+                  )
                OR lower(body) LIKE ? ESCAPE '\\'
             ORDER BY CASE
-                         WHEN lower(title) = ? THEN 0
-                         WHEN lower(title) LIKE ? ESCAPE '\\' THEN 1
-                         WHEN lower(title) LIKE ? ESCAPE '\\' THEN 2
+                         WHEN entity_type != 'block' AND lower(title) = ? THEN 0
+                         WHEN entity_type != 'block' AND lower(title) LIKE ? ESCAPE '\\' THEN 1
+                         WHEN entity_type != 'block' AND lower(title) LIKE ? ESCAPE '\\' THEN 2
                          ELSE 3
                      END ASC,
                      length(title) ASC,
@@ -623,9 +633,11 @@ final class SearchRepository: @unchecked Sendable {
     private func fullTextSearchRows(
         ftsQuery: String,
         titlePattern: String,
+        bodyTokenPatterns: [String],
         limit: Int
     ) throws -> [SQLiteRow] {
-        try database.query(
+        let bodyPredicate = Self.bodyTokenPredicate(patternCount: bodyTokenPatterns.count)
+        return try database.query(
             """
             SELECT entity_type,
                    entity_id,
@@ -633,8 +645,12 @@ final class SearchRepository: @unchecked Sendable {
                    snippet(search_index, 3, '', '', '...', 12) AS snippet
             FROM search_index
             WHERE search_index MATCH ?
+              AND (
+                     entity_type != 'block'
+                  OR \(bodyPredicate)
+                  )
             ORDER BY CASE
-                         WHEN lower(title) LIKE ? THEN 0
+                         WHEN entity_type != 'block' AND lower(title) LIKE ? THEN 0
                          ELSE 1
                      END ASC,
                      rank
@@ -642,6 +658,7 @@ final class SearchRepository: @unchecked Sendable {
             """,
             bindings: [
                 .text(ftsQuery),
+            ] + bodyTokenPatterns.map(SQLiteValue.text) + [
                 .text(titlePattern),
                 .integer(limit)
             ]
@@ -685,12 +702,17 @@ final class SearchRepository: @unchecked Sendable {
                        ELSE title
                    END AS snippet
             FROM search_index
-            WHERE lower(title) LIKE ? ESCAPE '\\'
+            WHERE (
+                      entity_type != 'block'
+                  AND (
+                         lower(title) LIKE ? ESCAPE '\\'
+                      OR lower(title) LIKE ? ESCAPE '\\'
+                  )
+                  )
                OR lower(body) LIKE ? ESCAPE '\\'
-               OR lower(title) LIKE ? ESCAPE '\\'
                OR lower(body) LIKE ? ESCAPE '\\'
             ORDER BY CASE
-                         WHEN lower(title) LIKE ? ESCAPE '\\' THEN 0
+                         WHEN entity_type != 'block' AND lower(title) LIKE ? ESCAPE '\\' THEN 0
                          ELSE 1
                      END ASC,
                      title ASC
@@ -699,8 +721,8 @@ final class SearchRepository: @unchecked Sendable {
             bindings: [
                 .text(pattern),
                 .text(pattern),
-                .text(pattern),
                 .text(fuzzyPattern),
+                .text(pattern),
                 .text(fuzzyPattern),
                 .text(pattern),
                 .integer(Self.fuzzyCandidateLimit)
@@ -732,7 +754,13 @@ final class SearchRepository: @unchecked Sendable {
         }
         let maxDistance = max(1, min(3, normalizedQuery.count / 4))
         let searchableText = [row["title"], row["body"]]
-            .compactMap { $0 }
+            .enumerated()
+            .compactMap { index, value in
+                if row["entity_type"] == "block", index == 0 {
+                    return nil
+                }
+                return value
+            }
             .joined(separator: " ")
         return fuzzyTokens(in: searchableText).contains { token in
             abs(token.count - normalizedQuery.count) <= maxDistance
@@ -831,6 +859,18 @@ final class SearchRepository: @unchecked Sendable {
 
         return "%\(firstToken.lowercased())%"
     }
+
+    private func bodyTokenPatterns(for tokens: [String]) -> [String] {
+        tokens.map(likePattern(for:))
+    }
+
+    private static func bodyTokenPredicate(patternCount: Int) -> String {
+        guard patternCount > 0 else {
+            return "1 = 0"
+        }
+        return Array(repeating: "lower(body) LIKE ? ESCAPE '\\'", count: patternCount)
+            .joined(separator: " OR ")
+    }
 }
 
 final class LocalSemanticSearchProvider: SearchSemanticProvider, @unchecked Sendable {
@@ -886,10 +926,13 @@ final class LocalSemanticSearchProvider: SearchSemanticProvider, @unchecked Send
                    title,
                    body
             FROM search_index
-            WHERE lower(title) LIKE ? ESCAPE '\\'
+            WHERE (
+                      entity_type != 'block'
+                  AND lower(title) LIKE ? ESCAPE '\\'
+                  )
                OR lower(body) LIKE ? ESCAPE '\\'
             ORDER BY CASE
-                         WHEN lower(title) LIKE ? ESCAPE '\\' THEN 0
+                         WHEN entity_type != 'block' AND lower(title) LIKE ? ESCAPE '\\' THEN 0
                          ELSE 1
                      END ASC,
                      length(title) ASC

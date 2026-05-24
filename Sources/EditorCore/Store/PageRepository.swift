@@ -1,6 +1,6 @@
 import Foundation
 
-final class PageRepository {
+final class PageRepository: @unchecked Sendable {
     private let database: SQLiteDatabase
     private let encryptedNoteCipher: EncryptedNoteCiphering
 
@@ -408,6 +408,19 @@ final class PageRepository {
 
     func loadBlocks(pageID: String) throws -> [BlockSnapshot] {
         try loadBlocks(pageIDs: [pageID])
+    }
+
+    func blockCount(pageID: String) throws -> Int {
+        let rows = try database.query(
+            """
+            SELECT COUNT(*) AS count
+            FROM blocks
+            WHERE page_id = ?
+              AND is_deleted = 0
+            """,
+            bindings: [.text(pageID)]
+        )
+        return Int(rows.first?["count"] ?? "0") ?? 0
     }
 
     func updatePageEncryption(pageID: String, isEncrypted: Bool) throws {

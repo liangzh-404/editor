@@ -1426,6 +1426,30 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectingCollectionClearsActiveSearchQuery() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            searchRepository: SearchRepository(database: database)
+        )
+        try viewModel.load()
+
+        viewModel.updateSearchQuery("welcome")
+        XCTAssertEqual(viewModel.selectedCollection, .search)
+
+        viewModel.selectCollection(.allDocuments)
+
+        XCTAssertEqual(viewModel.searchQuery, "")
+        XCTAssertEqual(viewModel.searchResults, [])
+        XCTAssertEqual(viewModel.selectedCollection, .allDocuments)
+    }
+
+    @MainActor
     func testSelectingImageTextSearchResultQueuesTargetBlockAndHighlight() throws {
         let database = try migratedDatabase()
         defer { database.close() }
