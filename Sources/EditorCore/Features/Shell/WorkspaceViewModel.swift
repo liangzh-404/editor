@@ -183,7 +183,7 @@ enum WorkspaceColdLaunchSelectionResolver {
         now: Date,
         calendar: Calendar
     ) -> String? {
-        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        let diaryPageIDs = snapshot.diaryPageIDs
         return snapshot.pages.first { page in
             guard !diaryPageIDs.contains(page.id),
                   let updatedAtString = page.updatedAt,
@@ -381,9 +381,7 @@ final class WorkspaceViewModel: ObservableObject {
             return snapshot.pages.filter { !snapshot.isEmptyDiaryPage($0.id) }
         case .diary:
             let diaryPageIDs = visibleDiaryPageIDs
-            let diaryDatesByPageID = Dictionary(
-                uniqueKeysWithValues: snapshot.diaryPages.map { ($0.pageID, $0.diaryDate) }
-            )
+            let diaryDatesByPageID = snapshot.diaryDateByPageID
             return snapshot.pages
                 .filter { diaryPageIDs.contains($0.id) }
                 .sorted { first, second in
@@ -5302,7 +5300,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func refreshSnapshotCaches(for snapshot: WorkspaceSnapshot) {
-        cachedDiaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        cachedDiaryPageIDs = snapshot.diaryPageIDs
         cachedTagIDSet = Set(snapshot.tags.map(\.id))
         cachedTagChildIDsByParentID = Dictionary(
             grouping: snapshot.tags.compactMap { tag -> (parentID: String, childID: String)? in

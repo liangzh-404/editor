@@ -263,8 +263,8 @@ enum EditorDesignTokens {
     }
 
     enum Layout {
-        static let editorMaxWidth: Double = 680
-        static let editorExpandedMaxWidth: Double = 688
+        static let editorMaxWidth: Double = 560
+        static let editorExpandedMaxWidth: Double = 560
         static let sidebarMinWidth: Double = 240
         static let sidebarIdealWidth: Double = 288
         static let sidebarMaxWidth: Double = 360
@@ -308,7 +308,7 @@ enum EditorCanvasChromeLayout {
 #if os(iOS)
         compactHorizontalPadding
 #else
-        40
+        34
 #endif
     }
 
@@ -461,11 +461,11 @@ enum DesktopInlineOutlineToggleAction: Equatable, Sendable {
 }
 
 enum DesktopInlineOutlinePlacementPolicy {
-    static let expandedWidth: CGFloat = 184
-    static let collapsedWidth: CGFloat = 28
-    static let contentSpacing: CGFloat = 20
+    static let expandedWidth: CGFloat = 244
+    static let collapsedWidth: CGFloat = 34
+    static let contentSpacing: CGFloat = 24
     static let minimumWindowEdgeInset: CGFloat = 12
-    static let minimumReadableLeftGap: CGFloat = 120
+    static let minimumReadableLeftGap: CGFloat = 280
     static let preferredTopOffset: CGFloat = 86
 
     static func leadingGap(
@@ -4940,9 +4940,7 @@ enum CompactCollectionPageListModel {
         case .recent:
             return snapshot.pages.filter { !snapshot.isEmptyDiaryPage($0.id) }
         case .diary:
-            let diaryDatesByPageID = Dictionary(
-                uniqueKeysWithValues: snapshot.diaryPages.map { ($0.pageID, $0.diaryDate) }
-            )
+            let diaryDatesByPageID = snapshot.diaryDateByPageID
             return snapshot.pages
                 .filter { visibleDiaryPageIDs.contains($0.id) }
                 .sorted { first, second in
@@ -5165,8 +5163,7 @@ enum CompactShellRoutePlanner {
             return selectedCollection
         }
 
-        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
-        if diaryPageIDs.contains(pageID) {
+        if snapshot.diaryPageIDs.contains(pageID) {
             return .diary
         }
 
@@ -5673,10 +5670,28 @@ enum SidebarDropTargetChromePolicy {
     }
 }
 
+enum SidebarTagSectionExpansionPolicy {
+    static let appStorageKey = "editor.sidebar.tags.expanded.v2"
+    static let defaultIsExpanded = false
+
+    static func shouldAutoExpand(selectedPageTagIDs: [String]) -> Bool {
+        !selectedPageTagIDs.isEmpty
+    }
+}
+
+enum SidebarTagHighlightPolicy {
+    static func isHighlighted(item: SidebarNavigationItem, selectedPageTagIDs: [String]) -> Bool {
+        guard case .tag(let tagID) = item.collection else {
+            return false
+        }
+        return selectedPageTagIDs.contains(tagID)
+    }
+}
+
 private struct WorkspaceSidebar: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     @Binding var activePageDragIDs: Set<String>
-    @AppStorage("editor.sidebar.tags.expanded") private var isTagsExpanded = true
+    @AppStorage(SidebarTagSectionExpansionPolicy.appStorageKey) private var isTagsExpanded = SidebarTagSectionExpansionPolicy.defaultIsExpanded
 
     var body: some View {
         let model = sidebarModel
@@ -5710,6 +5725,12 @@ private struct WorkspaceSidebar: View {
         .background(SidebarChrome.backgroundColor)
 #endif
         .navigationSplitViewColumnWidth(CGFloat(EditorDesignTokens.Layout.sidebarIdealWidth))
+        .onAppear {
+            expandTagsForSelectedPageIfNeeded(selectedPageTagIDs: viewModel.selectedPageTagIDs)
+        }
+        .onChange(of: viewModel.selectedPageTagIDs) { _, selectedPageTagIDs in
+            expandTagsForSelectedPageIfNeeded(selectedPageTagIDs: selectedPageTagIDs)
+        }
     }
 
     private var sidebarModel: SidebarNavigationModel {
@@ -5785,6 +5806,10 @@ private struct WorkspaceSidebar: View {
                     ForEach(model.tagItems) { item in
                         CollectionRailButton(
                             item: item,
+                            isRelatedToSelectedPage: SidebarTagHighlightPolicy.isHighlighted(
+                                item: item,
+                                selectedPageTagIDs: viewModel.selectedPageTagIDs
+                            ),
                             onDropPageIDs: { pageIDs in
                                 defer { activePageDragIDs = [] }
                                 guard case .tag(let tagID) = item.collection else {
@@ -5820,6 +5845,12 @@ private struct WorkspaceSidebar: View {
         }
         return false
     }
+
+    private func expandTagsForSelectedPageIfNeeded(selectedPageTagIDs: [String]) {
+        if SidebarTagSectionExpansionPolicy.shouldAutoExpand(selectedPageTagIDs: selectedPageTagIDs) {
+            isTagsExpanded = true
+        }
+    }
 }
 
 private struct SidebarDisclosureHeader: View {
@@ -5853,6 +5884,7 @@ private struct SidebarDisclosureHeader: View {
 
 private struct CollectionRailButton: View {
     let item: SidebarNavigationItem
+    var isRelatedToSelectedPage = false
     var onDropPageIDs: (([String]) -> Bool)? = nil
     let action: () -> Void
     @State private var isDropTargeted = false
@@ -5863,15 +5895,15 @@ private struct CollectionRailButton: View {
                 Image(systemName: item.systemImage)
                     .font(.callout.weight(.medium))
                     .frame(width: 20)
-                    .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor : SidebarChrome.mutedForegroundColor)
+                    .foregroundStyle(iconColor)
                 Text(item.title)
-                    .font(item.isSelected ? .callout.weight(.semibold) : .callout.weight(.medium))
+                    .font(item.isSelected || isRelatedToSelectedPage ? .callout.weight(.semibold) : .callout.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 if item.showsCount {
                     Text("\(item.count)")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor.opacity(0.80) : SidebarChrome.mutedForegroundColor)
+                        .foregroundStyle(countColor)
                         .monospacedDigit()
                 }
             }
@@ -5881,14 +5913,7 @@ private struct CollectionRailButton: View {
                 .contentShape(Rectangle())
                 .background(
                     RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
-                        .fill(
-                            SidebarChrome.selectedFillColor.opacity(
-                                SidebarDropTargetChromePolicy.fillOpacity(
-                                    isSelected: item.isSelected,
-                                    isDropTargeted: isDropTargeted
-                                )
-                            )
-                        )
+                        .fill(backgroundColor)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: CGFloat(SidebarChrome.rowCornerRadius), style: .continuous)
@@ -5904,10 +5929,10 @@ private struct CollectionRailButton: View {
                 )
         }
         .buttonStyle(.plain)
-        .foregroundStyle(item.isSelected ? SidebarChrome.selectedForegroundColor : SidebarChrome.foregroundColor)
+        .foregroundStyle(foregroundColor)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier(item.identifier)
-        .accessibilityValue(item.isSelected ? "已选中，\(item.count)" : "未选中，\(item.count)")
+        .accessibilityValue(accessibilityValue)
         .dropDestination(for: String.self) { payloads, _ in
             guard let onDropPageIDs else {
                 return false
@@ -5920,6 +5945,60 @@ private struct CollectionRailButton: View {
         } isTargeted: { isTargeted in
             isDropTargeted = isTargeted && onDropPageIDs != nil
         }
+    }
+
+    private var foregroundColor: Color {
+        if item.isSelected {
+            return SidebarChrome.selectedForegroundColor
+        }
+        if isRelatedToSelectedPage {
+            return EditorDesignTokens.Colors.accent.color
+        }
+        return SidebarChrome.foregroundColor
+    }
+
+    private var iconColor: Color {
+        if item.isSelected {
+            return SidebarChrome.selectedForegroundColor
+        }
+        if isRelatedToSelectedPage {
+            return EditorDesignTokens.Colors.accent.color.opacity(0.86)
+        }
+        return SidebarChrome.mutedForegroundColor
+    }
+
+    private var countColor: Color {
+        if item.isSelected {
+            return SidebarChrome.selectedForegroundColor.opacity(0.80)
+        }
+        if isRelatedToSelectedPage {
+            return EditorDesignTokens.Colors.accent.color.opacity(0.72)
+        }
+        return SidebarChrome.mutedForegroundColor
+    }
+
+    private var backgroundColor: Color {
+        let selectedOpacity = SidebarDropTargetChromePolicy.fillOpacity(
+            isSelected: item.isSelected,
+            isDropTargeted: isDropTargeted
+        )
+        if selectedOpacity > 0 {
+            return SidebarChrome.selectedFillColor.opacity(selectedOpacity)
+        }
+        if isRelatedToSelectedPage {
+            return EditorDesignTokens.Colors.accent.color.opacity(0.10)
+        }
+        return Color.clear
+    }
+
+    private var accessibilityValue: String {
+        if item.isSelected {
+            return "已选中，\(item.count)"
+        }
+        if isRelatedToSelectedPage {
+            return "当前笔记标签，\(item.count)"
+        }
+        return "未选中，\(item.count)"
     }
 }
 
@@ -12792,6 +12871,13 @@ struct ListBlockOrdinalResolver: Equatable, Sendable {
 
 struct HeadingBlockChromeDescriptor: Equatable, Sendable {
     let level: Int
+    let accentWidth: Double
+    let accentVerticalInset: Double
+    let textLeadingPadding: Double
+    let verticalPadding: Double
+    let horizontalPadding: Double
+    let backgroundOpacity: Double
+    let cornerRadius: Double
     let accessibilityLabel: String
     let accessibilityValue: String
     let accessibilityIdentifier: String
@@ -12827,6 +12913,14 @@ struct HeadingBlockChromeDescriptor: Equatable, Sendable {
             accessibilityLabel = "文本块"
             accessibilityIdentifier = "editor.block.\(block.id)"
         }
+        let resolvedLevel = max(1, level)
+        accentWidth = resolvedLevel == 1 ? 5 : resolvedLevel == 2 ? 4 : 3
+        accentVerticalInset = resolvedLevel == 1 ? 5 : resolvedLevel == 2 ? 6 : 7
+        textLeadingPadding = resolvedLevel == 1 ? 16 : resolvedLevel == 2 ? 14 : 12
+        verticalPadding = resolvedLevel <= 2 ? 6 : 4
+        horizontalPadding = 10
+        backgroundOpacity = resolvedLevel == 1 ? 0.15 : resolvedLevel == 2 ? 0.11 : 0.075
+        cornerRadius = resolvedLevel == 1 ? 7 : 6
         accessibilityValue = block.textPlain.isEmpty ? "空" : block.textPlain
     }
 }
@@ -13784,7 +13878,19 @@ private struct BlockRowView: View {
         if block.type.isHeading {
             let descriptor = HeadingBlockChromeDescriptor(block: block)
             nativeTextBlockEditor
-                .padding(.vertical, descriptor.level == 1 ? 2 : 1)
+                .padding(.leading, CGFloat(descriptor.textLeadingPadding))
+                .padding(.trailing, CGFloat(descriptor.horizontalPadding))
+                .padding(.vertical, CGFloat(descriptor.verticalPadding))
+                .background(
+                    RoundedRectangle(cornerRadius: CGFloat(descriptor.cornerRadius), style: .continuous)
+                        .fill(headingAccentColor(level: descriptor.level).opacity(descriptor.backgroundOpacity))
+                )
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: CGFloat(descriptor.accentWidth / 2), style: .continuous)
+                        .fill(headingAccentColor(level: descriptor.level))
+                        .frame(width: CGFloat(descriptor.accentWidth))
+                        .padding(.vertical, CGFloat(descriptor.accentVerticalInset))
+                }
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(descriptor.accessibilityLabel)
                 .accessibilityValue(descriptor.accessibilityValue)
@@ -13945,6 +14051,19 @@ private struct BlockRowView: View {
     private func inlineBodyTextEditor(descriptor: InlineLeadingControlFrameDescriptor) -> some View {
         nativeTextBlockEditor
             .offset(y: CGFloat(descriptor.textVerticalOffset))
+    }
+
+    private func headingAccentColor(level: Int) -> Color {
+        switch level {
+        case 1:
+            return Color(red: 0.68, green: 0.29, blue: 0.41)
+        case 2:
+            return EditorDesignTokens.Colors.accent.color
+        case 3:
+            return EditorDesignTokens.Colors.warningText.color
+        default:
+            return EditorDesignTokens.Colors.secondaryText.color
+        }
     }
 
     private var taskItemCompletionButton: some View {
