@@ -1584,6 +1584,38 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(block.textPlain, "[[Specs]]开始用块写作。")
     }
 
+    func testInsertInlineInternalBlockLinkStoresStableTargetAndReadableText() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let targetBlock = try repository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+
+        let selection = try XCTUnwrap(
+            try repository.insertInlineInternalLink(
+                blockID: sourceBlockID,
+                targetPageID: targetPage.id,
+                targetBlockID: targetBlock.id,
+                selection: EditorTextSelection(blockID: sourceBlockID, location: 2, length: 1)
+            )
+        )
+
+        let block = try XCTUnwrap(try repository.loadWorkspaceSnapshot().blocks.first { $0.id == sourceBlockID })
+        XCTAssertEqual(block.textPlain, "开始[[Specs#API contract]]块写作。")
+        XCTAssertEqual(block.inlineInternalLinks, [
+            InlineInternalLinkTarget(label: "Specs#API contract", targetPageID: targetPage.id, targetBlockID: targetBlock.id)
+        ])
+        XCTAssertEqual(selection, EditorTextSelection(blockID: sourceBlockID, location: ("开始[[" as NSString).length, length: ("Specs#API contract" as NSString).length))
+        XCTAssertEqual(
+            try BacklinkRepository(database: database).backlinks(targetPageID: targetPage.id).first?.sourcePageID,
+            sourcePageID
+        )
+    }
+
     func testUpdateBlockToNonInlineMarkdownTypeClearsInlineInternalLinkTargets() throws {
         let database = try migratedDatabase()
         defer { database.close() }

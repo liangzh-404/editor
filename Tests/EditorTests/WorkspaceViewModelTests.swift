@@ -3348,6 +3348,36 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testInsertInlineInternalLinkForUIRefreshesBacklinksAndFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let viewModel = WorkspaceViewModel(repository: repository, backlinkRepository: BacklinkRepository(database: database))
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        let selection = try XCTUnwrap(
+            try viewModel.insertInlineInternalLink(
+                blockID: blockID,
+                targetPageID: targetPage.id,
+                targetBlockID: nil,
+                selection: EditorTextSelection(blockID: blockID, location: 0, length: 0)
+            )
+        )
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "[[Specs]]开始用块写作。")
+        XCTAssertEqual(selection, EditorTextSelection(blockID: blockID, location: 2, length: 5))
+        XCTAssertEqual(viewModel.pendingFocusBlockID, blockID)
+        viewModel.selectPage(id: targetPage.id)
+        XCTAssertEqual(viewModel.selectedPageBacklinks.first?.sourcePageID, sourcePageID)
+    }
+
+    @MainActor
     func testUpdateExistingMarkdownLinkAtSelectionRefreshesExternalLinksAndReturnsLabelSelection() throws {
         let database = try migratedDatabase()
         defer { database.close() }

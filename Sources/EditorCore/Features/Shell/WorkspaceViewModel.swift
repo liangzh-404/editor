@@ -1720,6 +1720,58 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func insertInlineInternalLink(
+        blockID: String,
+        targetPageID: String,
+        targetBlockID: String?,
+        selection: EditorTextSelection
+    ) throws -> EditorTextSelection? {
+        guard let repository,
+              let block = snapshot.blocks.first(where: { $0.id == blockID }),
+              block.type.supportsInlineMarkdownStyling else {
+            return nil
+        }
+        guard let nextSelection = try repository.insertInlineInternalLink(
+            blockID: blockID,
+            targetPageID: targetPageID,
+            targetBlockID: targetBlockID,
+            selection: selection
+        ) else {
+            return nil
+        }
+
+        try hydrateBlocksForPageIfNeeded(block.pageID)
+        let blocks = try repository.loadBlocks(pageID: block.pageID)
+        snapshot = snapshot.replacingBlocks(pageID: block.pageID, blocks: blocks)
+        pendingFocusBlockID = blockID
+        pendingFocusRequestID = UUID()
+        refreshBacklinksForSelectedPage()
+        refreshExternalLinksForSelectedPage()
+        return nextSelection
+    }
+
+    func insertInlineInternalLinkForUI(
+        blockID: String,
+        targetPageID: String,
+        targetBlockID: String?,
+        selection: EditorTextSelection
+    ) -> EditorTextSelection? {
+        do {
+            return try insertInlineInternalLink(
+                blockID: blockID,
+                targetPageID: targetPageID,
+                targetBlockID: targetBlockID,
+                selection: selection
+            )
+        } catch {
+            EditorLog.input.error(
+                "inline_internal_link_insert_failed block_id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
     func removeMarkdownLinkForUI(blockID: String, selection: EditorTextSelection) -> EditorTextSelection? {
         do {
             let nextSelection = try removeMarkdownLink(blockID: blockID, selection: selection)
