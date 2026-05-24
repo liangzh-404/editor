@@ -777,6 +777,18 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testInlineLinkScannerFindsMixedWikiAndMarkdownLinks() {
+        let text = "See [[Specs]] and [Swift](https://swift.org)"
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text).map(\.kind),
+            [
+                .internalWiki(label: "Specs", pageTitle: "Specs", blockText: nil),
+                .external(label: "Swift", url: "https://swift.org")
+            ]
+        )
+    }
+
     func testInlineLinkScannerIgnoresCodeSpansAndImages() {
         let text = "`[[Specs]]` ![Logo](https://example.com/logo.png) [[Live]]"
 
@@ -784,6 +796,12 @@ final class MarkdownTransformerTests: XCTestCase {
             InlineLinkScanner.links(in: text).map(\.kind),
             [.internalWiki(label: "Live", pageTitle: "Live", blockText: nil)]
         )
+    }
+
+    func testMarkdownInlineStyleScannerIgnoresUnsupportedLinkSchemes() {
+        let text = "Use [Script](javascript:alert(1)), <javascript:alert(1)>, and javascript:alert(1)"
+
+        XCTAssertEqual(MarkdownInlineStyleScanner.runs(in: text), [])
     }
 
     func testMarkdownInlineStyleScannerStylesWikiLinks() {

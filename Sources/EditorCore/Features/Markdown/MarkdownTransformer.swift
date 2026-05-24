@@ -739,6 +739,10 @@ enum InlineLinkScanner {
                 range: NSRange(location: searchStart, length: text.length - searchStart)
             )
             guard opening.location != NSNotFound else { break }
+            if overlaps(opening, excludedRanges) {
+                searchStart = NSMaxRange(opening)
+                continue
+            }
             if opening.location > 0,
                text.substring(with: NSRange(location: opening.location - 1, length: 1)) == "!" {
                 searchStart = NSMaxRange(opening)
@@ -858,8 +862,7 @@ enum InlineLinkScanner {
     }
 
     private static func hasValidScheme(_ urlString: String) -> Bool {
-        let scheme = URLComponents(string: urlString)?.scheme?.lowercased()
-        return scheme == "http" || scheme == "https" || scheme == "mailto"
+        MarkdownInlineLinkSchemeValidator.hasValidScheme(urlString)
     }
 
     private static func overlaps(_ range: NSRange, _ excludedRanges: [NSRange]) -> Bool {
@@ -887,6 +890,13 @@ enum InlineLinkScanner {
         }
         let beforeLabel = text.substring(with: NSRange(location: 0, length: prefixLocation))
         return beforeLabel.range(of: "[", options: .backwards) != nil
+    }
+}
+
+enum MarkdownInlineLinkSchemeValidator {
+    static func hasValidScheme(_ urlString: String) -> Bool {
+        let scheme = URLComponents(string: urlString)?.scheme?.lowercased()
+        return scheme == "http" || scheme == "https" || scheme == "mailto"
     }
 }
 
@@ -1322,7 +1332,7 @@ enum MarkdownInlineStyleScanner {
             let urlRange = NSRange(location: urlLocation, length: urlEnd.location - urlLocation)
             let url = text.substring(with: urlRange)
             if labelRange.length > 0,
-               URLComponents(string: url)?.scheme != nil,
+               MarkdownInlineLinkSchemeValidator.hasValidScheme(url),
                !overlapsAny(labelRange, excludedRanges) {
                 runs.append(MarkdownInlineStyleRun(kind: .link, range: labelRange))
             }
@@ -1367,7 +1377,7 @@ enum MarkdownInlineStyleScanner {
             let urlRange = NSRange(location: urlLocation, length: urlEnd.location - urlLocation)
             let url = text.substring(with: urlRange)
             if labelRange.length > 0,
-               URLComponents(string: url)?.scheme != nil,
+               MarkdownInlineLinkSchemeValidator.hasValidScheme(url),
                !overlapsAny(labelRange, excludedRanges) {
                 runs.append(MarkdownInlineStyleRun(kind: .syntax, range: opening))
                 runs.append(
@@ -1432,7 +1442,7 @@ enum MarkdownInlineStyleScanner {
             )
             let content = text.substring(with: contentRange)
             if contentRange.length > 0,
-               URLComponents(string: content)?.scheme != nil,
+               MarkdownInlineLinkSchemeValidator.hasValidScheme(content),
                !overlapsAny(contentRange, excludedRanges) {
                 ranges.append((opening, contentRange, closing))
             }
