@@ -30,7 +30,8 @@ enum InlineLinkActivationRouter {
 }
 
 enum InlineInternalLinkTrigger {
-    static func query(text: String, selection: EditorTextSelection) -> String? {
+    static func query(text: String, selection: EditorTextSelection, isComposing: Bool = false) -> String? {
+        guard !isComposing else { return nil }
         guard selection.length == 0 else { return nil }
         let nsText = text as NSString
         guard selection.location <= nsText.length else { return nil }
@@ -43,8 +44,12 @@ enum InlineInternalLinkTrigger {
         return query
     }
 
-    static func replacementSelection(text: String, selection: EditorTextSelection) -> EditorTextSelection? {
-        guard query(text: text, selection: selection) != nil else { return nil }
+    static func replacementSelection(
+        text: String,
+        selection: EditorTextSelection,
+        isComposing: Bool = false
+    ) -> EditorTextSelection? {
+        guard query(text: text, selection: selection, isComposing: isComposing) != nil else { return nil }
         let prefix = (text as NSString).substring(to: selection.location) as NSString
         let openingRange = prefix.range(of: "[[", options: [.backwards])
         guard openingRange.location != NSNotFound else { return nil }
@@ -10679,10 +10684,15 @@ private struct EditorCanvasView: View {
         guard let selection = editorSession.textSelection,
               let block = blocks.first(where: { $0.id == selection.blockID && $0.type.supportsInlineMarkdownStyling }),
               isValid(selection: selection, for: block),
-              let query = InlineInternalLinkTrigger.query(text: block.textPlain, selection: selection),
+              let query = InlineInternalLinkTrigger.query(
+                text: block.textPlain,
+                selection: selection,
+                isComposing: editorSession.composingBlockID == selection.blockID
+              ),
               let replacementSelection = InlineInternalLinkTrigger.replacementSelection(
                 text: block.textPlain,
-                selection: selection
+                selection: selection,
+                isComposing: editorSession.composingBlockID == selection.blockID
               ) else {
             return nil
         }

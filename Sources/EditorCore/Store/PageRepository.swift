@@ -1182,8 +1182,8 @@ final class PageRepository {
                 displayWidth: displayWidth
             )
         } else {
-            let inlineInternalLinks = explicitInlineInternalLinks ?? InlineInternalLinkTarget.pruned(
-                payloadJSON: currentPayloadJSON,
+            let inlineInternalLinks = try explicitInlineInternalLinks ?? resolvedInlineInternalLinks(
+                currentPayloadJSON: currentPayloadJSON,
                 visibleText: text
             )
             payloadJSON = try blockPayloadJSON(
@@ -3265,6 +3265,71 @@ final class PageRepository {
             payloadJSON: try decryptedStoredValue(row["payload_json"] ?? "", isEncrypted: isEncrypted),
             isEncrypted: isEncrypted
         )
+    }
+
+    private func resolvedInlineInternalLinks(
+        currentPayloadJSON: String,
+        visibleText: String
+    ) throws -> [InlineInternalLinkTarget] {
+        var inlineLinks = InlineInternalLinkTarget.pruned(
+            payloadJSON: currentPayloadJSON,
+            visibleText: visibleText
+        )
+        var resolvedLabels = Set(inlineLinks.map(\.label))
+
+        for run in InlineLinkScanner.links(in: visibleText) {
+            guard case .internalWiki(let label, let pageTitle, let blockText) = run.kind,
+                  !resolvedLabels.contains(label),
+                  let target = try resolvedInlineInternalLinkTarget(pageTitle: pageTitle, blockText: blockText) else {
+                continue
+            }
+            inlineLinks.append(
+                InlineInternalLinkTarget(
+                    label: label,
+                    targetPageID: target.pageID,
+                    targetBlockID: target.blockID
+                )
+            )
+            resolvedLabels.insert(label)
+        }
+
+        return inlineLinks
+    }
+
+    private func resolvedInlineInternalLinkTarget(
+        pageTitle: String,
+        blockText: String?
+    ) throws -> (pageID: String, blockID: String?)? {
+        guard let pageID = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE title = ? AND is_archived = 0
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            bindings: [.text(pageTitle)]
+        ).first?["id"] ?? nil else {
+            return nil
+        }
+
+        guard let blockText,
+              !blockText.isEmpty else {
+            return (pageID, nil)
+        }
+
+        let blockID = try database.query(
+            """
+            SELECT id
+            FROM blocks
+            WHERE page_id = ? AND text_plain = ? AND is_deleted = 0
+            ORDER BY order_key ASC
+            LIMIT 1
+            """,
+            bindings: [.text(pageID), .text(blockText)]
+        ).first?["id"] ?? nil
+
+        return (pageID, blockID)
     }
 
     private func inlineInternalLinkRawLabel(targetPageID: String, targetBlockID: String?) throws -> String {

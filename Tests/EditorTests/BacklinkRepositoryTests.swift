@@ -195,7 +195,7 @@ final class BacklinkRepositoryTests: XCTestCase {
     func testExternalMarkdownLinksIgnoreImagesAndLocalTargets() throws {
         XCTAssertEqual(
             BacklinkRepository.externalMarkdownLinks(
-                in: "![Logo](https://example.com/logo.png) [Guide](README.md) [Swift](https://swift.org)"
+                in: "![Logo](https://example.com/logo.png) [Guide](README.md) [Script](javascript:alert(1)) [Swift](https://swift.org)"
             ).map(\.url),
             ["https://swift.org"]
         )

@@ -1584,6 +1584,37 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(block.textPlain, "[[Specs]]开始用块写作。")
     }
 
+    func testUpdateBlockTextStabilizesTypedInlineInternalLinkTargetWithDuplicateTitles() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let firstTarget = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        _ = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+
+        try repository.updateBlockText(blockID: sourceBlockID, text: "See [[Specs]]")
+
+        let block = try XCTUnwrap(try repository.loadWorkspaceSnapshot().blocks.first { $0.id == sourceBlockID })
+        XCTAssertEqual(block.inlineInternalLinks, [
+            InlineInternalLinkTarget(label: "Specs", targetPageID: firstTarget.id, targetBlockID: nil)
+        ])
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: ("See " as NSString).length, length: ("[[Specs]]" as NSString).length),
+            destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+        )
+        XCTAssertEqual(
+            InlineInternalLinkActivationRouteResolver.route(
+                activation: activation,
+                sourceBlock: block,
+                pages: try repository.loadWorkspaceSnapshot().pages,
+                blocks: try repository.loadWorkspaceSnapshot().blocks
+            ),
+            .internalLink(targetPageID: firstTarget.id, targetBlockID: nil)
+        )
+    }
+
     func testInsertInlineInternalBlockLinkStoresStableTargetAndReadableText() throws {
         let database = try migratedDatabase()
         defer { database.close() }

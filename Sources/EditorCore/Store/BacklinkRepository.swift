@@ -338,14 +338,6 @@ final class BacklinkRepository {
     }
 
     private static func isExternalURL(_ url: String) -> Bool {
-        guard !url.isEmpty,
-              let schemeEnd = url.firstIndex(of: ":"),
-              schemeEnd > url.startIndex else {
-            return false
-        }
-
-        return url[..<schemeEnd].allSatisfy { character in
-            character.isLetter || character.isNumber || character == "+" || character == "-" || character == "."
-        }
+        MarkdownInlineLinkSchemeValidator.hasValidScheme(url)
     }
 }

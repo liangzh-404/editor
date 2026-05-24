@@ -409,7 +409,7 @@ enum MarkdownInlineLinkComposer {
         let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedLabel.isEmpty,
               !trimmedURL.isEmpty,
-              URLComponents(string: trimmedURL)?.scheme != nil else {
+              MarkdownInlineLinkSchemeValidator.hasValidScheme(trimmedURL) else {
             return nil
         }
 
@@ -895,9 +895,17 @@ enum InlineLinkScanner {
 
 enum MarkdownInlineLinkSchemeValidator {
     static func hasValidScheme(_ urlString: String) -> Bool {
-        let scheme = URLComponents(string: urlString)?.scheme?.lowercased()
-        return scheme == "http" || scheme == "https" || scheme == "mailto"
+        guard let scheme = URLComponents(string: urlString)?.scheme?.lowercased(),
+              !scheme.isEmpty,
+              !blockedSchemes.contains(scheme) else {
+            return false
+        }
+        return scheme.allSatisfy { character in
+            character.isLetter || character.isNumber || character == "+" || character == "-" || character == "."
+        }
     }
+
+    private static let blockedSchemes: Set<String> = ["javascript"]
 }
 
 enum MarkdownInlineStyleKind: Equatable {

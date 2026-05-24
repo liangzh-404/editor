@@ -39,6 +39,30 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testInternalLinkTriggerIgnoresOpenWikiPrefixDuringTextComposition() {
+        let triggerText = "See [[Spe"
+        let triggerSelection = EditorTextSelection(
+            blockID: "block",
+            location: (triggerText as NSString).length,
+            length: 0
+        )
+
+        XCTAssertNil(
+            InlineInternalLinkTrigger.query(
+                text: triggerText,
+                selection: triggerSelection,
+                isComposing: true
+            )
+        )
+        XCTAssertNil(
+            InlineInternalLinkTrigger.replacementSelection(
+                text: triggerText,
+                selection: triggerSelection,
+                isComposing: true
+            )
+        )
+    }
+
     func testInternalLinkChoiceBuildsReadableLabels() {
         let page = PageSummary(id: "page-specs", workspaceID: "workspace", title: "Specs")
         let block = BlockSnapshot(

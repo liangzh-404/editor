@@ -625,8 +625,13 @@ final class MarkdownTransformerTests: XCTestCase {
             MarkdownInlineLinkComposer.markdown(label: " Swift ", url: " https://swift.org "),
             "[Swift](https://swift.org)"
         )
+        XCTAssertEqual(
+            MarkdownInlineLinkComposer.markdown(label: " Local ", url: " x-editor://page/specs "),
+            "[Local](x-editor://page/specs)"
+        )
         XCTAssertNil(MarkdownInlineLinkComposer.markdown(label: "", url: "https://swift.org"))
         XCTAssertNil(MarkdownInlineLinkComposer.markdown(label: "Swift", url: "swift.org"))
+        XCTAssertNil(MarkdownInlineLinkComposer.markdown(label: "Script", url: "javascript:alert(1)"))
     }
 
     func testMarkdownInlineLinkInserterReplacesSelectionAndSelectsLabel() throws {
@@ -773,6 +778,26 @@ final class MarkdownTransformerTests: XCTestCase {
                 .external(label: "Swift", url: "https://swift.org"),
                 .external(label: "https://example.com", url: "https://example.com"),
                 .external(label: "https://apple.com", url: "https://apple.com")
+            ]
+        )
+    }
+
+    func testInlineLinkScannerFindsMarkdownLinksWithCustomExternalSchemes() {
+        let text = "Open [Local](x-editor://page/specs) now"
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text).map(\.kind),
+            [
+                .external(label: "Local", url: "x-editor://page/specs")
+            ]
+        )
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text).filter { $0.kind == .link },
+            [
+                MarkdownInlineStyleRun(
+                    kind: .link,
+                    range: NSRange(location: ("Open [" as NSString).length, length: ("Local" as NSString).length)
+                )
             ]
         )
     }
