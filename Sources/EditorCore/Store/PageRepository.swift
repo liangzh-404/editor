@@ -305,6 +305,7 @@ final class PageRepository {
             payloadJSON: source.payloadJSON,
             visibleText: textWithoutSelection
         )
+        let visibleLabelCounts = Self.inlineInternalLinkLabelCounts(in: textWithoutSelection)
         let rawLabel = try inlineInternalLinkRawLabel(targetPageID: targetPageID, targetBlockID: targetBlockID)
         guard let baseLabel = Self.normalizedInlineInternalLinkLabel(rawLabel) else {
             return nil
@@ -313,7 +314,8 @@ final class PageRepository {
             baseLabel: baseLabel,
             targetPageID: targetPageID,
             targetBlockID: targetBlockID,
-            existingInlineLinks: existingInlineLinks
+            existingInlineLinks: existingInlineLinks,
+            visibleLabelCounts: visibleLabelCounts
         )
         let markdown = "[[\(label)]]"
 
@@ -3323,19 +3325,37 @@ final class PageRepository {
         baseLabel: String,
         targetPageID: String,
         targetBlockID: String?,
-        existingInlineLinks: [InlineInternalLinkTarget]
+        existingInlineLinks: [InlineInternalLinkTarget],
+        visibleLabelCounts: [String: Int]
     ) -> String {
         var candidate = baseLabel
         var suffix = 2
-        while let existingLink = existingInlineLinks.first(where: { $0.label == candidate }) {
-            if existingLink.targetPageID == targetPageID,
-               existingLink.targetBlockID == targetBlockID {
+        while true {
+            let matchingLinks = existingInlineLinks.filter { $0.label == candidate }
+            let visibleCount = visibleLabelCounts[candidate] ?? 0
+            if matchingLinks.contains(where: {
+                $0.targetPageID == targetPageID && $0.targetBlockID == targetBlockID
+            }) {
+                if visibleCount <= matchingLinks.count {
+                    return candidate
+                }
+            } else if matchingLinks.isEmpty && visibleCount == 0 {
                 return candidate
             }
             candidate = "\(baseLabel) (\(suffix))"
             suffix += 1
         }
-        return candidate
+    }
+
+    private static func inlineInternalLinkLabelCounts(in text: String) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for run in InlineLinkScanner.links(in: text) {
+            guard case .internalWiki(let label, _, _) = run.kind else {
+                continue
+            }
+            counts[label, default: 0] += 1
+        }
+        return counts
     }
 
     private func siblingBlocks(pageID: String, parentBlockID: String?) throws -> [String] {

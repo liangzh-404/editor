@@ -1661,6 +1661,50 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(try BacklinkRepository(database: database).backlinks(targetPageID: secondTarget.id).map(\.linkText), ["Specs (2)"])
     }
 
+    func testInsertInlineInternalLinkReservesManualVisibleWikiLabelsWithoutMetadata() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try repository.updateBlockText(blockID: sourceBlockID, text: "")
+        let firstTarget = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let secondTarget = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+
+        _ = try XCTUnwrap(
+            try repository.insertInlineInternalLink(
+                blockID: sourceBlockID,
+                targetPageID: firstTarget.id,
+                targetBlockID: nil,
+                selection: EditorTextSelection(blockID: sourceBlockID, location: 0, length: 0)
+            )
+        )
+        try repository.updateBlockText(blockID: sourceBlockID, text: "[[Specs]][[Specs (2)]]")
+
+        _ = try XCTUnwrap(
+            try repository.insertInlineInternalLink(
+                blockID: sourceBlockID,
+                targetPageID: secondTarget.id,
+                targetBlockID: nil,
+                selection: EditorTextSelection(
+                    blockID: sourceBlockID,
+                    location: ("[[Specs]][[Specs (2)]]" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+
+        let block = try XCTUnwrap(try repository.loadWorkspaceSnapshot().blocks.first { $0.id == sourceBlockID })
+        XCTAssertEqual(block.textPlain, "[[Specs]][[Specs (2)]][[Specs (3)]]")
+        XCTAssertEqual(block.inlineInternalLinks, [
+            InlineInternalLinkTarget(label: "Specs", targetPageID: firstTarget.id, targetBlockID: nil),
+            InlineInternalLinkTarget(label: "Specs (3)", targetPageID: secondTarget.id, targetBlockID: nil)
+        ])
+        XCTAssertEqual(try BacklinkRepository(database: database).backlinks(targetPageID: firstTarget.id).map(\.linkText), ["Specs"])
+        XCTAssertEqual(try BacklinkRepository(database: database).backlinks(targetPageID: secondTarget.id).map(\.linkText), ["Specs (3)"])
+    }
+
     func testInsertInlineInternalLinkNormalizesDelimiterLabelIntoParseableWikiText() throws {
         let database = try migratedDatabase()
         defer { database.close() }
