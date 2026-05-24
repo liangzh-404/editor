@@ -4984,13 +4984,14 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testForegroundSyncContinuesDrainingRemoteBacklogWithoutWaitingForPollingInterval() throws {
+    func testForegroundSyncDefersRemoteBacklogDrainToAvoidForegroundSpin() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
         try markExistingLocalRecordsSynced(database: database)
+        var currentDate = Self.date(year: 2026, month: 5, day: 24, hour: 12, minute: 0)
         let recorder = ForegroundSyncCallRecorder()
         let scheduler = DeferredWorkspaceSyncScheduler()
         let viewModel = WorkspaceViewModel(
@@ -5005,18 +5006,32 @@ final class WorkspaceViewModelTests: XCTestCase {
                 mergeEngine: SyncMergeEngine(database: database),
                 subscriptionEnsurer: OrderedForegroundSyncSubscriptionEnsurer(recorder: recorder)
             ),
-            syncScheduler: scheduler
+            syncScheduler: scheduler,
+            currentDateProvider: { currentDate }
         )
         try viewModel.load()
 
         viewModel.syncAfterActivation()
         try scheduler.runNextScheduledOperation()
 
+        XCTAssertEqual(
+            scheduler.scheduledOperationCount,
+            0,
+            "Remote CloudKit backlog should not spin another foreground sync immediately after a fetch reports more changes"
+        )
+
+        viewModel.syncAfterForegroundInterval()
+        XCTAssertEqual(
+            scheduler.scheduledOperationCount,
+            0,
+            "Foreground polling should respect the remote-backlog cooldown"
+        )
+
+        currentDate = currentDate.addingTimeInterval(30)
+        viewModel.syncAfterForegroundInterval()
         XCTAssertEqual(scheduler.scheduledOperationCount, 1)
 
         try scheduler.runNextScheduledOperation()
-
-        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
         XCTAssertEqual(recorder.calls, [
             .ensureSubscription,
             .fetch,

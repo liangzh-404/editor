@@ -30,6 +30,28 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(snapshot.selectedPageID, snapshot.pages.first?.id)
     }
 
+    func testBootstrapCanSkipBlockHydrationForStartupMetadata() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let page = try repository.createPage(workspaceID: workspaceID, title: "Large startup page")
+        for index in 0..<50 {
+            _ = try repository.appendBlock(pageID: page.id, type: .paragraph, text: "Startup block \(index)")
+        }
+
+        let startupSnapshot = try repository.bootstrapWorkspaceIfNeeded(blockPageIDs: [])
+
+        XCTAssertFalse(startupSnapshot.pages.isEmpty)
+        XCTAssertEqual(
+            startupSnapshot.blocks,
+            [],
+            "App startup bootstrap only needs workspace/page metadata; selected page blocks should be hydrated later by WorkspaceViewModel.load()."
+        )
+    }
+
     func testBootstrapIsIdempotent() throws {
         let database = try migratedDatabase()
         defer { database.close() }

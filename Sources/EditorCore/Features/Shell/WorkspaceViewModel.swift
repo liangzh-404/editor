@@ -287,6 +287,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var shouldSyncAfterObsidianImport = false
     private var isCloudKitAccountStatusRefreshRunning = false
     private var nextForegroundSyncAttemptAt: Date?
+    private var nextRemoteBacklogSyncAttemptAt: Date?
     private var syncChangeObservation: SyncChangeObservation?
     private var encryptedPageLastOpenedAt: [String: Date] = [:]
     private var encryptedPageAutoLockTask: Task<Void, Never>?
@@ -299,6 +300,7 @@ final class WorkspaceViewModel: ObservableObject {
     private static let deferredHydrationBlockThreshold = 300
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
     private static let foregroundSyncPartialFailureCooldown: TimeInterval = 30
+    private static let foregroundRemoteBacklogCooldown: TimeInterval = 30
 
     var canNavigateBack: Bool {
         !pageNavigationBackStack.isEmpty || selectedPageParentLink != nil
@@ -757,6 +759,9 @@ final class WorkspaceViewModel: ObservableObject {
             )
             return
         }
+        if shouldDeferRemoteBacklogDrain(reason: reason) {
+            return
+        }
         guard !isForegroundSyncRunning else {
             if reason == "local_change" {
                 isForegroundSyncRerunPending = true
@@ -768,6 +773,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         isForegroundSyncRunning = true
+        clearRemoteBacklogCooldownIfDue(reason: reason)
         syncStatusText = "同步中..."
         let syncEngine = syncEngine!
         EditorLog.sync.debug(
@@ -4661,12 +4667,11 @@ final class WorkspaceViewModel: ObservableObject {
         isForegroundSyncRunning = false
         let shouldRunPendingSync = shouldRunPendingForegroundSync(after: result)
         let shouldContinueBacklogDrain = shouldContinueForegroundBacklogDrain(after: result)
-        let shouldContinueRemoteDrain = shouldContinueForegroundRemoteDrain(after: result)
         completeForegroundSync(result)
         let hasPendingLocalChangeRerun = isForegroundSyncRerunPending
         isForegroundSyncRerunPending = false
 
-        guard hasPendingLocalChangeRerun || shouldContinueBacklogDrain || shouldContinueRemoteDrain else {
+        guard hasPendingLocalChangeRerun || shouldContinueBacklogDrain else {
             return
         }
 
@@ -4675,7 +4680,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         scheduleForegroundSyncIfNeeded(
-            reason: shouldContinueBacklogDrain ? "local_backlog" : (shouldContinueRemoteDrain ? "remote_backlog" : "pending_local_change")
+            reason: shouldContinueBacklogDrain ? "local_backlog" : "pending_local_change"
         )
     }
 
@@ -4701,17 +4706,6 @@ final class WorkspaceViewModel: ObservableObject {
     private func shouldContinueForegroundBacklogDrain(_ summary: WorkspaceForegroundSyncSummary) -> Bool {
         summary.uploadSummary.uploadedCount > 0
             && summary.remainingLocalChangeCount > summary.uploadSummary.failedCount
-    }
-
-    private func shouldContinueForegroundRemoteDrain(after result: WorkspaceForegroundSyncResult) -> Bool {
-        switch result {
-        case .success(let summary):
-            summary.uploadSummary.failedCount == 0
-                && summary.remainingLocalChangeCount == 0
-                && summary.fetchSummary.hasMoreChanges
-        case .failure:
-            false
-        }
     }
 
     private func completeForegroundSync(_ result: WorkspaceForegroundSyncResult) {
@@ -4745,13 +4739,15 @@ final class WorkspaceViewModel: ObservableObject {
                 }
                 nextForegroundSyncAttemptAt = nil
             } else if summary.fetchSummary.hasMoreChanges {
-                syncStatusText = "继续同步远端变更"
-                nextForegroundSyncAttemptAt = nil
+                syncStatusText = "远端变更较多，稍后继续同步"
+                scheduleForegroundSyncRemoteBacklogCooldown()
             } else if summary.fetchSummary.appliedCount > 0 {
                 syncStatusText = "已同步 \(summary.fetchSummary.appliedCount) 条远端变更"
+                nextRemoteBacklogSyncAttemptAt = nil
                 nextForegroundSyncAttemptAt = nil
             } else {
                 syncStatusText = "已同步 \(summary.uploadSummary.uploadedCount) 条变更"
+                nextRemoteBacklogSyncAttemptAt = nil
                 nextForegroundSyncAttemptAt = nil
             }
 
@@ -4787,6 +4783,53 @@ final class WorkspaceViewModel: ObservableObject {
         scheduleForegroundSyncCooldown(after: Self.foregroundSyncPartialFailureCooldown)
     }
 
+    private func scheduleForegroundSyncRemoteBacklogCooldown() {
+        nextRemoteBacklogSyncAttemptAt = currentDateProvider()
+            .addingTimeInterval(Self.foregroundRemoteBacklogCooldown)
+        recordForegroundSyncDiagnostic(
+            eventName: "foreground_sync_remote_backlog_deferred",
+            payload: [
+                "retry_after_seconds": Int(Self.foregroundRemoteBacklogCooldown)
+            ]
+        )
+    }
+
+    private func shouldDeferRemoteBacklogDrain(reason: String) -> Bool {
+        guard let nextRemoteBacklogSyncAttemptAt,
+              shouldRespectRemoteBacklogCooldown(reason: reason),
+              nextRemoteBacklogSyncAttemptAt > currentDateProvider() else {
+            return false
+        }
+
+        syncStatusText = "远端变更较多，稍后继续同步"
+        EditorLog.sync.debug(
+            "foreground_sync_skipped reason=remote_backlog_cooldown trigger=\(reason, privacy: .public) next_attempt_at=\(nextRemoteBacklogSyncAttemptAt.timeIntervalSince1970, privacy: .public)"
+        )
+        recordForegroundSyncDiagnostic(
+            eventName: "foreground_sync_skipped",
+            payload: [
+                "reason": "remote_backlog_cooldown",
+                "trigger": reason,
+                "next_attempt_at": nextRemoteBacklogSyncAttemptAt.timeIntervalSince1970
+            ]
+        )
+        return true
+    }
+
+    private func clearRemoteBacklogCooldownIfDue(reason: String) {
+        guard let nextRemoteBacklogSyncAttemptAt,
+              shouldRespectRemoteBacklogCooldown(reason: reason),
+              nextRemoteBacklogSyncAttemptAt <= currentDateProvider() else {
+            return
+        }
+
+        self.nextRemoteBacklogSyncAttemptAt = nil
+    }
+
+    private func shouldRespectRemoteBacklogCooldown(reason: String) -> Bool {
+        reason == "activation" || reason == "foreground_interval" || reason == "remote_backlog"
+    }
+
     private func scheduleForegroundSyncCooldown(after interval: TimeInterval) {
         nextForegroundSyncAttemptAt = currentDateProvider()
             .addingTimeInterval(interval)
@@ -4807,6 +4850,19 @@ final class WorkspaceViewModel: ObservableObject {
         } catch {
             EditorLog.sync.error(
                 "foreground_sync_diagnostic_record_failed event_name=\(eventName, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    func recordEditorUIDiagnosticForUI(eventName: String, payload: [String: Any]) {
+        do {
+            try repository?.recordRuntimeDiagnostic(
+                eventName: eventName,
+                payload: payload
+            )
+        } catch {
+            EditorLog.render.error(
+                "editor_ui_diagnostic_record_failed event_name=\(eventName, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }

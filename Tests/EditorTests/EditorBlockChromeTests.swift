@@ -372,6 +372,47 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testCompactEditorInitialFocusKeepsContentPagesAtTop() {
+        let blocks = [
+            BlockSnapshot(
+                id: "block-1",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "1",
+                type: .paragraph,
+                textPlain: "Existing content"
+            ),
+            BlockSnapshot(
+                id: "block-2",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "2",
+                type: .paragraph,
+                textPlain: "More content"
+            )
+        ]
+
+        XCTAssertFalse(
+            CompactEditorInitialFocusPolicy.shouldFocusCanvasOnAppear(blocks: blocks),
+            "Opening an existing content page should not auto-focus the bottom block and scroll the title away."
+        )
+    }
+
+    func testCompactEditorInitialFocusKeepsSingleEmptyPageEditable() {
+        let blocks = [
+            BlockSnapshot(
+                id: "block-empty",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "1",
+                type: .paragraph,
+                textPlain: ""
+            )
+        ]
+
+        XCTAssertTrue(CompactEditorInitialFocusPolicy.shouldFocusCanvasOnAppear(blocks: blocks))
+    }
+
     func testDesktopColumnDividerCreatesVisibleColumnBoundary() {
         XCTAssertEqual(DesktopColumnDividerChrome.hitWidth, 9)
         XCTAssertEqual(DesktopColumnDividerChrome.lineWidth, 1)
@@ -2170,7 +2211,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(CompactShellRoutePlanner.defaultActiveScreen, .editor)
     }
 
-    func testCompactShellInitialPathRoutesThroughDocumentListToEditor() {
+    func testCompactShellInitialPathRoutesDirectlyToEditorForColdLaunchSpeed() {
         let workspaceID = "workspace"
         let page = PageSummary(id: "page-a", workspaceID: workspaceID, title: "A")
         let snapshot = WorkspaceSnapshot(
@@ -2184,11 +2225,11 @@ final class EditorBlockChromeTests: XCTestCase {
 
         XCTAssertEqual(
             CompactShellRoutePlanner.initialPath(snapshot: snapshot, selectedCollection: .recent),
-            [.collection(.allDocuments), .page(page.id)]
+            [.page(page.id)]
         )
     }
 
-    func testCompactShellInitialPathUsesRuntimeSelectionWhenSnapshotSelectionIsStale() {
+    func testCompactShellInitialPathUsesRuntimeSelectionDirectlyWhenSnapshotSelectionIsStale() {
         let workspaceID = "workspace"
         let stalePage = PageSummary(id: "page-stale", workspaceID: workspaceID, title: "Stale")
         let diaryPage = PageSummary(id: "page-diary", workspaceID: workspaceID, title: "Diary")
@@ -2214,7 +2255,39 @@ final class EditorBlockChromeTests: XCTestCase {
                 selectedPageID: diaryPage.id,
                 selectedCollection: .diary
             ),
-            [.collection(.diary), .page(diaryPage.id)]
+            [.page(diaryPage.id)]
+        )
+    }
+
+    func testCompactShellOnAppearInitialPendingPageSkipsDocumentListForColdLaunchSpeed() {
+        let workspaceID = "workspace"
+        let diaryPage = PageSummary(id: "page-diary", workspaceID: workspaceID, title: "Diary")
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [diaryPage],
+            blocks: [],
+            attachments: [],
+            diaryPages: [
+                DiaryPageSnapshot(
+                    pageID: diaryPage.id,
+                    workspaceID: workspaceID,
+                    diaryDate: "2026-05-22"
+                )
+            ],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: diaryPage.id
+        )
+
+        XCTAssertEqual(
+            CompactShellPendingNavigationPlanner.onAppearPath(
+                snapshot: snapshot,
+                selectedPageID: diaryPage.id,
+                selectedCollection: .diary,
+                pendingCollection: nil,
+                pendingPageID: diaryPage.id,
+                didPushInitialPage: false
+            ),
+            [.page(diaryPage.id)]
         )
     }
 
@@ -2291,6 +2364,35 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(
             CompactShellRoutePlanner.documentListRoute(selectedCollection: .recent),
             .collection(.allDocuments)
+        )
+    }
+
+    func testCompactShellRevealPageListFindsOwningCollectionAfterDirectEditorLaunch() {
+        let workspaceID = "workspace"
+        let diaryPage = PageSummary(id: "page-diary", workspaceID: workspaceID, title: "Diary")
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [diaryPage],
+            blocks: [],
+            attachments: [],
+            diaryPages: [
+                DiaryPageSnapshot(
+                    pageID: diaryPage.id,
+                    workspaceID: workspaceID,
+                    diaryDate: "2026-05-22"
+                )
+            ],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: diaryPage.id
+        )
+
+        XCTAssertEqual(
+            CompactShellRoutePlanner.documentListPathForPage(
+                diaryPage.id,
+                snapshot: snapshot,
+                selectedCollection: .recent
+            ),
+            [.collection(.diary)]
         )
     }
 

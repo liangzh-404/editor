@@ -1724,7 +1724,7 @@ private struct CompactEditorShell: View {
         ) else {
             return
         }
-        pushPageIfNeeded(pageID)
+        setCompactPath(CompactShellRoutePlanner.initialEditorPath(pageID))
         didPushInitialPage = true
     }
 
@@ -1743,21 +1743,24 @@ private struct CompactEditorShell: View {
         }
 
         guard CompactPagePushAnimationPolicy.disablesProgrammaticPushAnimation else {
-            path = nextPath
+            setCompactPath(nextPath)
             return
         }
 
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            path = nextPath
-        }
+        setCompactPath(nextPath)
     }
 
     private func revealPreviousScreen() {
         let previousPath = CompactShellRoutePlanner.previousScreenPath(currentPath: path)
         if previousPath.isEmpty, path.count > 1 {
             path = [CompactShellRoutePlanner.documentListRoute(selectedCollection: viewModel.selectedCollection)]
+        } else if previousPath.isEmpty,
+                  case .page(let pageID)? = path.last {
+            path = CompactShellRoutePlanner.documentListPathForPage(
+                pageID,
+                snapshot: viewModel.snapshot,
+                selectedCollection: viewModel.selectedCollection
+            )
         } else {
             path = previousPath
         }
@@ -1769,6 +1772,19 @@ private struct CompactEditorShell: View {
             snapshot: viewModel.snapshot,
             selectedCollection: viewModel.selectedCollection
         )
+    }
+
+    private func setCompactPath(_ nextPath: [CompactRoute]) {
+        guard CompactPagePushAnimationPolicy.disablesProgrammaticPushAnimation else {
+            path = nextPath
+            return
+        }
+
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            path = nextPath
+        }
     }
 }
 
@@ -5116,6 +5132,21 @@ enum CompactShellScreen: Int, Equatable, Sendable {
     case editor = 3
 }
 
+enum CompactEditorInitialFocusPolicy {
+    static func shouldFocusCanvasOnAppear(blocks: [BlockSnapshot]) -> Bool {
+        if blocks.isEmpty {
+            return true
+        }
+
+        guard blocks.count == 1, let onlyBlock = blocks.first else {
+            return false
+        }
+
+        return onlyBlock.type.isTextEditable &&
+            onlyBlock.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 enum CompactShellPendingNavigationPlanner {
     static func onAppearPath(
         snapshot: WorkspaceSnapshot,
@@ -5131,6 +5162,10 @@ enum CompactShellPendingNavigationPlanner {
 
         if let pendingPageID,
            snapshot.pages.contains(where: { $0.id == pendingPageID }) {
+            guard didPushInitialPage else {
+                return CompactShellRoutePlanner.initialEditorPath(pendingPageID)
+            }
+
             return CompactShellRoutePlanner.pathForPage(
                 pendingPageID,
                 snapshot: snapshot,
@@ -5176,11 +5211,11 @@ enum CompactShellRoutePlanner {
             return []
         }
 
-        return pathForPage(
-            pageID,
-            snapshot: snapshot,
-            selectedCollection: selectedCollection
-        )
+        return initialEditorPath(pageID)
+    }
+
+    static func initialEditorPath(_ pageID: String) -> [CompactRoute] {
+        [.page(pageID)]
     }
 
     static func pathForPage(
@@ -5202,6 +5237,22 @@ enum CompactShellRoutePlanner {
 
     static func documentListRoute(selectedCollection: WorkspaceCollection) -> CompactRoute {
         .collection(documentListCollection(selectedCollection: selectedCollection))
+    }
+
+    static func documentListPathForPage(
+        _ pageID: String,
+        snapshot: WorkspaceSnapshot,
+        selectedCollection: WorkspaceCollection
+    ) -> [CompactRoute] {
+        [
+            documentListRoute(
+                selectedCollection: collectionForPage(
+                    pageID,
+                    snapshot: snapshot,
+                    selectedCollection: selectedCollection
+                )
+            )
+        ]
     }
 
     static func documentListCollection(selectedCollection: WorkspaceCollection) -> WorkspaceCollection {
@@ -5524,6 +5575,14 @@ private struct CompactPageDestination: View {
                 }
             )
             .onAppear {
+                viewModel.recordEditorUIDiagnosticForUI(
+                    eventName: "compact_editor_page_appeared",
+                    payload: [
+                        "loaded_block_count": viewModel.editorVisibleBlocks(for: page.id).count,
+                        "page_count": viewModel.snapshot.pages.count,
+                        "page_id": page.id
+                    ]
+                )
                 if viewModel.pendingPageTitleFocusPageID == page.id {
                     didRequestInitialFocus = true
                 }
@@ -5547,6 +5606,9 @@ private struct CompactPageDestination: View {
             return
         }
         didRequestInitialFocus = true
+        guard CompactEditorInitialFocusPolicy.shouldFocusCanvasOnAppear(blocks: viewModel.visibleBlocks) else {
+            return
+        }
         _ = viewModel.focusEditorCanvasForUI()
     }
 }
@@ -7561,6 +7623,17 @@ private struct CompactCollectionDestination: View {
             onRevealNextScreen: onRevealNextScreen
         )
         .onAppear {
+            viewModel.recordEditorUIDiagnosticForUI(
+                eventName: "compact_document_list_appeared",
+                payload: [
+                    "collection": String(describing: collection),
+                    "item_count": CompactCollectionPageListModel.items(
+                        snapshot: viewModel.snapshot,
+                        collection: collection
+                    ).count,
+                    "page_count": viewModel.snapshot.pages.count
+                ]
+            )
             guard !didSelectCollection else {
                 return
             }
@@ -9061,7 +9134,7 @@ private struct EncryptedPageLockedView: View {
 }
 
 #if os(iOS)
-private struct PageTitleUIKitTextField: UIViewRepresentable {
+private struct PageTitleUIKitTextView: UIViewRepresentable {
     @Binding var text: String
     let focusRequestID: UUID?
     let contentFont: EditorContentFont
@@ -9070,91 +9143,149 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
     let onEditingBegan: () -> Void
     let onEditingEnded: () -> Void
     let onReturn: () -> Void
+    let onHeightChange: (CGFloat) -> Void
     let onFocusRequestFinished: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
-    func makeUIView(context: Context) -> UITextField {
-        let textField = UITextField()
-        textField.borderStyle = .none
-        textField.backgroundColor = .clear
-        textField.placeholder = PageTitleFieldChrome.placeholderText(isFocused: false, text: "")
-        textField.font = Self.titleFont(contentFont: contentFont)
-        textField.textColor = EditorDesignTokens.Colors.primaryText.uiColor
-        textField.tintColor = PageTitleFieldChrome.cursorColorToken.uiColor
-        textField.adjustsFontForContentSizeCategory = true
-        textField.returnKeyType = .next
-        textField.delegate = context.coordinator
-        textField.addTarget(
-            context.coordinator,
-            action: #selector(Coordinator.textFieldTouchDown(_:)),
-            for: .touchDown
-        )
-        textField.accessibilityIdentifier = "editor.page-title"
-        return textField
+    func makeUIView(context: Context) -> DynamicHeightTitleTextView {
+        let textView = DynamicHeightTitleTextView()
+        textView.backgroundColor = .clear
+        textView.font = Self.titleFont(contentFont: contentFont)
+        textView.textColor = EditorDesignTokens.Colors.primaryText.uiColor
+        textView.tintColor = PageTitleFieldChrome.cursorColorToken.uiColor
+        textView.adjustsFontForContentSizeCategory = true
+        textView.returnKeyType = .next
+        textView.delegate = context.coordinator
+        textView.isScrollEnabled = false
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.lineBreakMode = .byWordWrapping
+        textView.setContentHuggingPriority(.required, for: .vertical)
+        textView.setContentCompressionResistancePriority(.required, for: .vertical)
+        textView.accessibilityIdentifier = "editor.page-title"
+        textView.configurePlaceholderLabel()
+        return textView
     }
 
-    func updateUIView(_ textField: UITextField, context: Context) {
+    func updateUIView(_ textView: DynamicHeightTitleTextView, context: Context) {
         context.coordinator.parent = self
-        textField.isEnabled = isEnabled
-        textField.font = Self.titleFont(contentFont: contentFont)
-        textField.tintColor = PageTitleFieldChrome.cursorColorToken.uiColor
-        if !textField.isFirstResponder, textField.text != PageTitleDisplayPolicy.editingText(for: text) {
-            textField.text = PageTitleDisplayPolicy.editingText(for: text)
+        textView.isEditable = isEnabled
+        textView.isSelectable = isEnabled
+        textView.isUserInteractionEnabled = isEnabled
+        textView.font = Self.titleFont(contentFont: contentFont)
+        textView.placeholderLabel.font = textView.font
+        textView.tintColor = PageTitleFieldChrome.cursorColorToken.uiColor
+        if !textView.isFirstResponder, textView.text != PageTitleDisplayPolicy.editingText(for: text) {
+            textView.text = PageTitleDisplayPolicy.editingText(for: text)
         }
-        context.coordinator.updatePlaceholder(for: textField)
+        context.coordinator.updatePlaceholder(for: textView)
+        textView.invalidateIntrinsicContentSize()
+        context.coordinator.measureHeight(for: textView)
         context.coordinator.handleFocusRequestIfNeeded(
-            textField: textField,
+            textView: textView,
             focusRequestID: focusRequestID
         )
     }
 
-    final class Coordinator: NSObject, UITextFieldDelegate {
-        var parent: PageTitleUIKitTextField
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: PageTitleUIKitTextView
         private var handledFocusRequestID: UUID?
         private var scheduledFocusRequestID: UUID?
+        private var isHeightMeasurementScheduled = false
 
-        init(parent: PageTitleUIKitTextField) {
+        init(parent: PageTitleUIKitTextView) {
             self.parent = parent
         }
 
-        @objc func textFieldTouchDown(_ textField: UITextField) {
+        func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
             parent.onInteractionBegan()
+            return true
         }
 
-        func textFieldDidBeginEditing(_ textField: UITextField) {
-            updatePlaceholder(for: textField)
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            updatePlaceholder(for: textView)
             parent.onEditingBegan()
         }
 
-        func textFieldDidEndEditing(_ textField: UITextField) {
-            let title = textField.text ?? ""
+        func textViewDidChange(_ textView: UITextView) {
+            updatePlaceholder(for: textView)
+            textView.invalidateIntrinsicContentSize()
+            textView.superview?.setNeedsLayout()
+            measureHeight(for: textView)
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            let title = textView.text ?? ""
             if title != parent.text {
                 parent.text = title
             }
             parent.onEditingEnded()
-            updatePlaceholder(for: textField)
+            updatePlaceholder(for: textView)
+            measureHeight(for: textView)
         }
 
-        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-            let title = textField.text ?? ""
+        func textView(
+            _ textView: UITextView,
+            shouldChangeTextIn _: NSRange,
+            replacementText: String
+        ) -> Bool {
+            guard replacementText.contains("\n") else {
+                return true
+            }
+
+            let title = textView.text ?? ""
             if title != parent.text {
                 parent.text = title
             }
+            updatePlaceholder(for: textView)
+            measureHeight(for: textView)
             parent.onReturn()
             return false
         }
 
-        func updatePlaceholder(for textField: UITextField) {
-            textField.placeholder = PageTitleFieldChrome.placeholderText(
-                isFocused: textField.isFirstResponder,
-                text: textField.text ?? ""
+        func measureHeight(for textView: UITextView) {
+            let width = textView.bounds.width
+            guard width > 1 else {
+                guard !isHeightMeasurementScheduled else {
+                    return
+                }
+                isHeightMeasurementScheduled = true
+                DispatchQueue.main.async { [weak textView, weak self] in
+                    guard let textView, let self else {
+                        return
+                    }
+                    self.isHeightMeasurementScheduled = false
+                    self.measureHeight(for: textView)
+                }
+                return
+            }
+
+            isHeightMeasurementScheduled = false
+            let fittingSize = textView.sizeThatFits(
+                CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
             )
+            let minimumHeight = textView.font.map { ceil($0.lineHeight) } ?? 34
+            let measuredHeight = max(minimumHeight, ceil(fittingSize.height))
+            DispatchQueue.main.async { [parent] in
+                parent.onHeightChange(measuredHeight)
+            }
         }
 
-        func handleFocusRequestIfNeeded(textField: UITextField, focusRequestID: UUID?) {
+        func updatePlaceholder(for textView: UITextView) {
+            let placeholder = PageTitleFieldChrome.placeholderText(
+                isFocused: textView.isFirstResponder,
+                text: textView.text ?? ""
+            )
+            if let titleTextView = textView as? DynamicHeightTitleTextView {
+                titleTextView.placeholderLabel.text = placeholder
+                titleTextView.placeholderLabel.isHidden = placeholder == nil
+            }
+        }
+
+        func handleFocusRequestIfNeeded(textView: UITextView, focusRequestID: UUID?) {
             guard let focusRequestID,
                   handledFocusRequestID != focusRequestID,
                   scheduledFocusRequestID != focusRequestID else {
@@ -9163,25 +9294,25 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
 
             scheduledFocusRequestID = focusRequestID
             scheduleFocusAttempt(
-                textField: textField,
+                textView: textView,
                 focusRequestID: focusRequestID,
                 remainingAttempts: 24
             )
         }
 
         private func scheduleFocusAttempt(
-            textField: UITextField,
+            textView: UITextView,
             focusRequestID: UUID,
             remainingAttempts: Int
         ) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + focusDelay(for: remainingAttempts)) { [weak textField, weak self] in
-                guard let textField, let self else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + focusDelay(for: remainingAttempts)) { [weak textView, weak self] in
+                guard let textView, let self else {
                     return
                 }
 
-                if self.performFocus(textField: textField) {
+                if self.performFocus(textView: textView) {
                     self.scheduleFocusConfirmation(
-                        textField: textField,
+                        textView: textView,
                         focusRequestID: focusRequestID,
                         remainingAttempts: remainingAttempts
                     )
@@ -9195,34 +9326,34 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
                 }
 
                 self.scheduleFocusAttempt(
-                    textField: textField,
+                    textView: textView,
                     focusRequestID: focusRequestID,
                     remainingAttempts: remainingAttempts - 1
                 )
             }
         }
 
-        private func performFocus(textField: UITextField) -> Bool {
-            let didFocus = textField.window != nil && textField.becomeFirstResponder()
+        private func performFocus(textView: UITextView) -> Bool {
+            let didFocus = textView.window != nil && textView.becomeFirstResponder()
             if didFocus {
-                textField.selectAll(nil)
+                textView.selectAll(nil)
             }
             return didFocus
         }
 
         private func scheduleFocusConfirmation(
-            textField: UITextField,
+            textView: UITextView,
             focusRequestID: UUID,
             remainingAttempts: Int
         ) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak textField, weak self] in
-                guard let textField else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak textView, weak self] in
+                guard let textView else {
                     return
                 }
                 guard let self else {
                     return
                 }
-                if textField.isFirstResponder {
+                if textView.isFirstResponder {
                     self.finishFocusRequest(focusRequestID, didFocus: true)
                     return
                 }
@@ -9234,7 +9365,7 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
                 }
 
                 self.scheduleFocusAttempt(
-                    textField: textField,
+                    textView: textView,
                     focusRequestID: focusRequestID,
                     remainingAttempts: remainingAttempts - 1
                 )
@@ -9263,6 +9394,37 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
             return font
         }
         return UIFont.systemFont(ofSize: size, weight: .semibold)
+    }
+
+    final class DynamicHeightTitleTextView: UITextView {
+        let placeholderLabel = UILabel()
+
+        override var intrinsicContentSize: CGSize {
+            let fittingWidth = bounds.width > 0 ? bounds.width : UIScreen.main.bounds.width
+            let fittingSize = sizeThatFits(
+                CGSize(width: fittingWidth, height: CGFloat.greatestFiniteMagnitude)
+            )
+            let minimumHeight = font.map { ceil($0.lineHeight) } ?? 34
+            return CGSize(
+                width: UIView.noIntrinsicMetric,
+                height: max(minimumHeight, ceil(fittingSize.height))
+            )
+        }
+
+        func configurePlaceholderLabel() {
+            guard placeholderLabel.superview == nil else {
+                return
+            }
+            placeholderLabel.textColor = .placeholderText
+            placeholderLabel.numberOfLines = 1
+            placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(placeholderLabel)
+            NSLayoutConstraint.activate([
+                placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+                placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+                placeholderLabel.topAnchor.constraint(equalTo: topAnchor)
+            ])
+        }
     }
 }
 #endif
@@ -9402,6 +9564,7 @@ private struct EditorCanvasView: View {
     @State private var mobileNavigationTitleState = MobileNavigationTitleVisibilityState()
     @State private var isPageTitleInteractionActive = false
     @State private var isPageTitleFocusRequestActive = false
+    @State private var pageTitleTextViewHeight: CGFloat = 44
 #endif
 
     var body: some View {
@@ -9423,7 +9586,7 @@ private struct EditorCanvasView: View {
                 LazyVStack(alignment: .leading, spacing: CGFloat(EditorBlockChrome.blockSpacing)) {
                 HStack(alignment: .center, spacing: 12) {
 #if os(iOS)
-                    PageTitleUIKitTextField(
+                    PageTitleUIKitTextView(
                         text: pageTitleBinding,
                         focusRequestID: pageTitleFocusRequestID,
                         contentFont: contentFont,
@@ -9440,12 +9603,19 @@ private struct EditorCanvasView: View {
                         onReturn: {
                             focusFirstEditableBlockFromPageTitle()
                         },
+                        onHeightChange: { height in
+                            if abs(pageTitleTextViewHeight - height) > 0.5 {
+                                pageTitleTextViewHeight = height
+                            }
+                        },
                         onFocusRequestFinished: { _ in
                             isPageTitleFocusRequestActive = false
                         }
                     )
                     .padding(.leading, CGFloat(EditorCanvasChromeLayout.pageTitleLeadingPadding))
+                    .frame(height: pageTitleTextViewHeight, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipped()
                     .background(titleFrameReporter)
 #else
                     TextField(PageTitleDisplayPolicy.emptyTitlePlaceholder, text: pageTitleBinding)
@@ -10083,6 +10253,18 @@ private struct EditorCanvasView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if onMobileRevealPageList != nil {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        revealMobilePageList()
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                    }
+                    .accessibilityLabel("页面列表")
+                    .accessibilityIdentifier("editor.mobile-reveal-page-list")
+                }
+            }
+
             ToolbarItem(placement: .principal) {
                 mobileNavigationTitleView
             }
@@ -10091,6 +10273,7 @@ private struct EditorCanvasView: View {
                 pageActionsMenu
             }
         }
+        .navigationBarBackButtonHidden(onMobileRevealPageList != nil)
         .toolbarBackground(EditorDesignTokens.Colors.editorBackground.color, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
 #else
@@ -15081,6 +15264,9 @@ private struct BlockRowView: View {
             return
         }
 
+#if os(iOS)
+        editorSession.beginEditing(blockID: block.id, reason: .programmatic)
+#endif
         DispatchQueue.main.async {
             let selection = editorSession.textSelection?.blockID == block.id ? editorSession.textSelection : nil
             rowFocusRequest = BlockFocusRequest(blockID: block.id, selection: selection)

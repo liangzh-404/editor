@@ -31,7 +31,7 @@ final class PageRepository: @unchecked Sendable {
     }
 
     @discardableResult
-    func bootstrapWorkspaceIfNeeded() throws -> WorkspaceSnapshot {
+    func bootstrapWorkspaceIfNeeded(blockPageIDs: [String]? = nil) throws -> WorkspaceSnapshot {
         let workspaceCount = try database.queryInt("SELECT COUNT(*) FROM workspaces")
         if workspaceCount == 0 {
             try insertDefaultContent()
@@ -39,7 +39,7 @@ final class PageRepository: @unchecked Sendable {
             try localizeDefaultSeedContentIfUnmodified()
         }
 
-        return try loadWorkspaceSnapshot()
+        return try loadWorkspaceSnapshot(blockPageIDs: blockPageIDs)
     }
 
     func loadWorkspaceSnapshot(blockPageIDs: [String]? = nil) throws -> WorkspaceSnapshot {

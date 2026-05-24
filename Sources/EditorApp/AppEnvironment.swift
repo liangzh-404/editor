@@ -63,6 +63,7 @@ enum AppEnvironment {
 
     @MainActor
     private static func makeWorkspaceViewModel() throws -> WorkspaceViewModel {
+        let startupStartedAt = Date()
         try resetApplicationDataForUITestingIfNeeded()
         let databasePath = try databasePath()
         let database = try SQLiteDatabase.open(path: databasePath)
@@ -70,19 +71,18 @@ enum AppEnvironment {
         try DataProtectionService.applyNativeProtection(to: URL(fileURLWithPath: databasePath))
 
         let repository = PageRepository(database: database)
-        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded(blockPageIDs: [])
+        try seedTodayDiaryForUITestingIfNeeded(database: database, snapshot: snapshot)
         try seedLargePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         try seedReferenceTargetsForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         try seedFavoritePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         try seedTaggedPageForUITestingIfNeeded(snapshot: snapshot, tagRepository: TagRepository(database: database))
-        try repairLocalStoreBeforeSync(database: database)
         let attachmentsDirectory = try attachmentsDirectory()
         try prepareAttachmentsDirectoryForInteractiveStartup(attachmentsDirectory)
         let attachmentRepository = AttachmentRepository(
             database: database,
             attachmentsDirectory: attachmentsDirectory
         )
-        try attachmentRepository.repairAttachmentFilePaths()
         try seedAttachmentForUITestingIfNeeded(
             attachmentRepository: attachmentRepository,
             snapshot: snapshot
@@ -118,6 +118,15 @@ enum AppEnvironment {
             searchDebounceNanoseconds: 180_000_000
         )
         try viewModel.load()
+        try recordStartupReadyDiagnostic(
+            database: database,
+            snapshot: viewModel.snapshot,
+            startedAt: startupStartedAt
+        )
+        schedulePostLaunchMaintenanceIfNeeded(
+            databasePath: databasePath,
+            attachmentsDirectory: attachmentsDirectory
+        )
         return viewModel
     }
 
@@ -138,6 +147,78 @@ enum AppEnvironment {
                 "local_store_repaired duplicate_tags=\(repairedTagCount, privacy: .public)"
             )
         }
+    }
+
+    private static func recordStartupReadyDiagnostic(
+        database: SQLiteDatabase,
+        snapshot: WorkspaceSnapshot,
+        startedAt: Date
+    ) throws {
+        let durationMilliseconds = millisecondsElapsed(since: startedAt)
+        EditorLog.render.info(
+            "app_startup_view_model_ready duration_ms=\(durationMilliseconds, privacy: .public) pages=\(snapshot.pages.count, privacy: .public) blocks=\(snapshot.blocks.count, privacy: .public) attachments=\(snapshot.attachments.count, privacy: .public)"
+        )
+        try PageRepository(database: database).recordRuntimeDiagnostic(
+            eventName: "app_startup_view_model_ready",
+            payload: [
+                "duration_ms": durationMilliseconds,
+                "page_count": snapshot.pages.count,
+                "loaded_block_count": snapshot.blocks.count,
+                "attachment_count": snapshot.attachments.count
+            ]
+        )
+    }
+
+    private static func schedulePostLaunchMaintenanceIfNeeded(
+        databasePath: String,
+        attachmentsDirectory: URL
+    ) {
+#if DEBUG
+        guard ProcessInfo.processInfo.environment["EDITOR_UI_TEST_RESET_STORE"] != "1" else {
+            return
+        }
+#endif
+
+        Task.detached(priority: .utility) {
+            do {
+                try await Task.sleep(nanoseconds: 20_000_000_000)
+            } catch {
+                return
+            }
+
+            let startedAt = Date()
+            do {
+                let database = try SQLiteDatabase.open(path: databasePath)
+                defer { database.close() }
+
+                try repairLocalStoreBeforeSync(database: database)
+                try DataProtectionService.applyNativeProtectionRecursively(to: attachmentsDirectory)
+                let repairedAttachmentPathCount = try AttachmentRepository(
+                    database: database,
+                    attachmentsDirectory: attachmentsDirectory
+                ).repairAttachmentFilePaths()
+                let durationMilliseconds = millisecondsElapsed(since: startedAt)
+                EditorLog.render.info(
+                    "post_launch_maintenance_completed duration_ms=\(durationMilliseconds, privacy: .public) attachment_path_repairs=\(repairedAttachmentPathCount, privacy: .public)"
+                )
+                try? PageRepository(database: database).recordRuntimeDiagnostic(
+                    eventName: "post_launch_maintenance_completed",
+                    payload: [
+                        "duration_ms": durationMilliseconds,
+                        "attachment_path_repairs": repairedAttachmentPathCount
+                    ]
+                )
+            } catch {
+                let durationMilliseconds = millisecondsElapsed(since: startedAt)
+                EditorLog.render.error(
+                    "post_launch_maintenance_failed duration_ms=\(durationMilliseconds, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+    }
+
+    private static func millisecondsElapsed(since startedAt: Date) -> Double {
+        Date().timeIntervalSince(startedAt) * 1_000
     }
 
     private static func makeCloudKitSyncEngine(
@@ -464,6 +545,31 @@ enum AppEnvironment {
 #endif
     }
 
+    private static func seedTodayDiaryForUITestingIfNeeded(
+        database: SQLiteDatabase,
+        snapshot: WorkspaceSnapshot
+    ) throws {
+#if DEBUG
+        guard let text = ProcessInfo.processInfo.environment["EDITOR_UI_TEST_TODAY_DIARY_TEXT"],
+              let workspaceID = snapshot.selectedWorkspaceID else {
+            return
+        }
+
+        let diaryRepository = DiaryRepository(database: database)
+        let pageRepository = PageRepository(database: database)
+        let page = try diaryRepository.openDailyPage(workspaceID: workspaceID)
+        let blocks = try pageRepository.loadBlocks(pageID: page.id)
+        if let firstBlock = blocks.first {
+            try pageRepository.updateBlockText(blockID: firstBlock.id, text: text)
+        } else {
+            _ = try pageRepository.appendBlock(pageID: page.id, type: .paragraph, text: text)
+        }
+#else
+        _ = database
+        _ = snapshot
+#endif
+    }
+
     private static func seedReferenceTargetsForUITestingIfNeeded(
         repository: PageRepository,
         snapshot: WorkspaceSnapshot
@@ -572,7 +678,7 @@ enum AppEnvironment {
         let environment = ProcessInfo.processInfo.environment
         guard environment["EDITOR_UI_TEST_CONFLICT"] == "1",
               let pageID = snapshot.selectedPageID,
-              let firstBlockID = snapshot.blocks.first(where: { $0.pageID == pageID })?.id else {
+              let firstBlockID = try repository.loadBlocks(pageID: pageID).first?.id else {
             return
         }
 

@@ -16,6 +16,11 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    private func pageTitle(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["editor.page-title"]
+    }
+
+    @MainActor
     func testIPhoneLaunchOpensEditablePageImmediately() {
         let app = makeApp()
         app.launch()
@@ -33,11 +38,37 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPhoneExistingDiaryBodyLineAcceptsTapAfterColdLaunch() {
+        let app = makeApp(extraEnvironment: ["EDITOR_UI_TEST_TODAY_DIARY_TEXT": "可以"])
+        app.launch()
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "Existing iPhone diary content should open on an editable body line")
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 5), "The app window should be available for hit-target checks")
+        XCTAssertGreaterThan(
+            firstTextView.frame.width,
+            window.frame.width * 0.65,
+            "The iPhone body text editor should expose a broad row-sized tap target, not only the text glyphs"
+        )
+
+        firstTextView.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 2), "Tapping an existing diary body line should show the keyboard and cursor")
+
+        firstTextView.typeText(" cursor")
+        let value = firstTextView.value as? String ?? ""
+        XCTAssertTrue(value.contains("可以 cursor"), "Typing should land in the existing diary body line after tapping it")
+    }
+
+    @MainActor
     func testIPhoneEditorDoesNotDuplicatePageTitleInNavigationBar() {
         let app = makeApp()
         app.launch()
 
-        let pageTitle = app.textFields["editor.page-title"]
+        let pageTitle = pageTitle(in: app)
         XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "The editable page title should remain in the document body")
 
         let titleValue = (pageTitle.value as? String) ?? pageTitle.label
@@ -159,7 +190,7 @@ final class EditorIOSEditingUITests: XCTestCase {
         let app = makeApp(extraEnvironment: ["EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT": "40"])
         app.launch()
 
-        let pageTitle = app.textFields["editor.page-title"]
+        let pageTitle = pageTitle(in: app)
         XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "The editable page title should start in the document body")
         let collapsedTitle = app.staticTexts["editor.mobile-navigation-title"]
         XCTAssertFalse(
@@ -195,7 +226,7 @@ final class EditorIOSEditingUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let pageTitle = app.textFields["editor.page-title"]
+        let pageTitle = pageTitle(in: app)
         XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "The editable page title should be visible")
         XCTAssertLessThanOrEqual(
             pageTitle.frame.minX,
@@ -211,6 +242,64 @@ final class EditorIOSEditingUITests: XCTestCase {
             firstTextView.frame.minX,
             43,
             "The text column should sit closer to the left edge to preserve writing space"
+        )
+    }
+
+    @MainActor
+    func testIPhoneLongPageTitleWrapsInsteadOfStayingSingleLine() {
+        let app = makeApp()
+        app.launch()
+
+        let pageTitle = pageTitle(in: app)
+        XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "The editable page title should be visible")
+        let initialHeight = pageTitle.frame.height
+
+        pageTitle.tap()
+        pageTitle.typeText(
+            " 这是一个很长的页面标题 用来验证 iPhone 标题输入区域可以自然换行 不会只保持单行并把后面的标题横向截断"
+        )
+
+        XCTAssertGreaterThan(
+            pageTitle.frame.height,
+            initialHeight + 12,
+            "Long iPhone page titles should grow onto another line instead of staying in a single-line clipping field"
+        )
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 5), "The app window should be available for viewport checks")
+        XCTAssertLessThanOrEqual(
+            pageTitle.frame.maxX,
+            window.frame.maxX - 8,
+            "A wrapped page title should stay inside the iPhone viewport"
+        )
+    }
+
+    @MainActor
+    func testIPhoneBodyCanTakeFocusAfterWrappedTitleWasFocused() {
+        let app = makeApp(extraEnvironment: ["EDITOR_UI_TEST_TODAY_DIARY_TEXT": "可以"])
+        app.launch()
+
+        let pageTitle = pageTitle(in: app)
+        XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "The editable page title should be visible")
+        pageTitle.tap()
+        pageTitle.typeText(
+            " 这是一个很长的页面标题 用来让标题输入框换行 然后验证正文仍然可以被点击并接管输入焦点"
+        )
+
+        let firstTextView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "The existing diary body should remain visible after the title wraps")
+        firstTextView.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5)).tap()
+        XCTAssertTrue(
+            waitForKeyboardFocus(firstTextView, timeout: 5),
+            "Tapping the body after editing a wrapped title should move keyboard focus into the body"
+        )
+        firstTextView.typeText(" body-focus")
+
+        let bodyValue = firstTextView.value as? String ?? ""
+        XCTAssertTrue(
+            bodyValue.contains("可以 body-focus"),
+            "Tapping the body after editing a wrapped title should move input into the body; value: \(bodyValue)"
         )
     }
 
@@ -246,9 +335,9 @@ final class EditorIOSEditingUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(firstTextView.waitForExistence(timeout: 5), "iPhone should launch on the editor screen")
 
-        let documentListBackButton = app.navigationBars.buttons["全部文档"]
-        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "The editor should expose the middle document-list screen as its back target")
-        documentListBackButton.tap()
+        let documentListButton = app.navigationBars.buttons["editor.mobile-reveal-page-list"]
+        XCTAssertTrue(documentListButton.waitForExistence(timeout: 5), "The editor should expose a direct control for the middle document-list screen")
+        documentListButton.tap()
 
         XCTAssertTrue(
             app.scrollViews["editor.compact-document-list"].waitForExistence(timeout: 5),
@@ -272,15 +361,15 @@ final class EditorIOSEditingUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let documentListBackButton = app.navigationBars.buttons["全部文档"]
-        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Initial compact editor should expose the middle document-list back button")
-        documentListBackButton.tap()
+        let documentListButton = app.navigationBars.buttons["editor.mobile-reveal-page-list"]
+        XCTAssertTrue(documentListButton.waitForExistence(timeout: 5), "Initial compact editor should expose the middle document-list button")
+        documentListButton.tap()
 
         let quickCreate = app.buttons["editor.mobile.quick-create"]
         XCTAssertTrue(quickCreate.waitForExistence(timeout: 5), "The middle document-list screen should expose the floating quick-create button")
         quickCreate.tap()
 
-        let pageTitle = app.textFields["editor.page-title"]
+        let pageTitle = pageTitle(in: app)
         XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "Quick create should navigate into the newly created page")
         XCTAssertTrue(
             waitForKeyboardFocus(pageTitle, timeout: 5),
