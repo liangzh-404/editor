@@ -81,6 +81,43 @@ final class BacklinkRepositoryTests: XCTestCase {
         XCTAssertEqual(rows.first?["link_kind"], "inline_internal")
     }
 
+    func testStableInlinePageOnlyTargetDoesNotFallbackToBlockTarget() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Specs")
+        _ = try pageRepository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+        let currentPayloadJSON = """
+        {"inline_links":[{"label":"Specs#API contract","target_page_id":"\(targetPage.id)"}],"text":"Draft"}
+        """
+        try database.execute(
+            """
+            UPDATE blocks
+            SET text_plain = ?,
+                payload_json = ?
+            WHERE id = ?
+            """,
+            bindings: [.text("Draft"), .text(currentPayloadJSON), .text(sourceBlockID)]
+        )
+
+        try pageRepository.updateBlockText(blockID: sourceBlockID, text: "See [[Specs#API contract]]")
+
+        let row = try XCTUnwrap(try database.query(
+            """
+            SELECT target_page_id, target_block_id, link_text
+            FROM links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(sourceBlockID)]
+        ).first)
+        XCTAssertEqual(row["target_page_id"], targetPage.id)
+        XCTAssertNil(row["target_block_id"] ?? nil)
+        XCTAssertEqual(row["link_text"], "Specs#API contract")
+    }
+
     func testBlockUpdateMaintainsExternalMarkdownLinksForSourcePage() throws {
         let database = try migratedDatabase()
         defer { database.close() }

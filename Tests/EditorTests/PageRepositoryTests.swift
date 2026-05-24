@@ -1584,6 +1584,42 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(block.textPlain, "[[Specs]]开始用块写作。")
     }
 
+    func testUpdateBlockToNonInlineMarkdownTypeClearsInlineInternalLinkTargets() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let currentText = "[[Specs]]"
+        let currentPayloadJSON = """
+        {"inline_links":[{"label":"Specs","target_page_id":"\(targetPage.id)"}],"text":"\(currentText)"}
+        """
+        try database.execute(
+            """
+            UPDATE blocks
+            SET text_plain = ?,
+                payload_json = ?
+            WHERE id = ?
+            """,
+            bindings: [.text(currentText), .text(currentPayloadJSON), .text(sourceBlockID)]
+        )
+
+        try repository.updateBlock(blockID: sourceBlockID, type: .codeBlock, text: "let value = 1")
+
+        let block = try XCTUnwrap(try repository.loadWorkspaceSnapshot().blocks.first { $0.id == sourceBlockID })
+        XCTAssertEqual(block.type, .codeBlock)
+        XCTAssertEqual(block.inlineInternalLinks, [])
+
+        let payloadJSON = try XCTUnwrap(try database.query(
+            "SELECT payload_json FROM blocks WHERE id = ? LIMIT 1",
+            bindings: [.text(sourceBlockID)]
+        ).first?["payload_json"])
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(payloadJSON.utf8)) as? [String: Any])
+        XCTAssertNil(payload["inline_links"])
+    }
+
     func testLargePageImportLoadAndSearchIndexRemainUsable() throws {
         let database = try migratedDatabase()
         defer { database.close() }

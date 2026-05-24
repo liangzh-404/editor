@@ -101,11 +101,20 @@ final class BacklinkRepository {
             case .internalWiki(let label, let pageTitle, let blockText):
                 let stable = inlineInternalLinks.first { $0.label == label }
                 let fallback = try resolveInlineTarget(pageTitle: pageTitle, blockText: blockText)
+                let targetPageID: String?
+                let targetBlockID: String?
+                if let stable {
+                    targetPageID = stable.targetPageID
+                    targetBlockID = stable.targetBlockID
+                } else {
+                    targetPageID = fallback.pageID
+                    targetBlockID = fallback.blockID
+                }
                 try insertLink(
                     sourcePageID: sourcePageID,
                     sourceBlockID: blockID,
-                    targetPageID: stable?.targetPageID ?? fallback.pageID,
-                    targetBlockID: stable?.targetBlockID ?? fallback.blockID,
+                    targetPageID: targetPageID,
+                    targetBlockID: targetBlockID,
                     targetURL: nil,
                     linkText: label,
                     sourceRange: run.fullRange,

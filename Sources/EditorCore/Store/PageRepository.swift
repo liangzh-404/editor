@@ -3299,7 +3299,8 @@ final class PageRepository {
             }
             payload = defaultPayload
         }
-        if !inlineInternalLinks.isEmpty {
+        if type.supportsInlineMarkdownStyling,
+           !inlineInternalLinks.isEmpty {
             payload["inline_links"] = Self.payloadRows(for: inlineInternalLinks)
         }
 
