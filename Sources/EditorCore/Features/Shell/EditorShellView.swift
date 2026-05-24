@@ -48,6 +48,61 @@ enum InlineLinkActivationSourceSelectionResolver {
     }
 }
 
+enum InlineInternalLinkFallbackRouteResolver {
+    static func route(
+        activation: NativeInlineLinkActivation,
+        pages: [PageSummary],
+        blocks: [BlockSnapshot]
+    ) -> InlineLinkActivationRoute? {
+        guard case .internalLink(_, let pageTitle, let blockText) = activation.destination else {
+            return nil
+        }
+        let matchingPages = pages.filter { $0.title == pageTitle }
+        guard matchingPages.count == 1,
+              let targetPage = matchingPages.first else {
+            return nil
+        }
+
+        guard let blockText else {
+            return .internalLink(targetPageID: targetPage.id, targetBlockID: nil)
+        }
+
+        let matchingBlocks = blocks.filter {
+            $0.pageID == targetPage.id
+                && $0.textPlain.trimmingCharacters(in: .whitespacesAndNewlines) == blockText
+        }
+        guard matchingBlocks.count == 1,
+              let targetBlock = matchingBlocks.first else {
+            return nil
+        }
+        return .internalLink(targetPageID: targetPage.id, targetBlockID: targetBlock.id)
+    }
+}
+
+enum InlineInternalLinkActivationRouteResolver {
+    static func route(
+        activation: NativeInlineLinkActivation,
+        sourceBlock: BlockSnapshot,
+        pages: [PageSummary],
+        blocks: [BlockSnapshot]
+    ) -> InlineLinkActivationRoute? {
+        guard case .internalLink(let label, _, _) = activation.destination else {
+            return nil
+        }
+        if let storedTarget = sourceBlock.inlineInternalLinks.first(where: { $0.label == label }) {
+            return .internalLink(
+                targetPageID: storedTarget.targetPageID,
+                targetBlockID: storedTarget.targetBlockID
+            )
+        }
+        return InlineInternalLinkFallbackRouteResolver.route(
+            activation: activation,
+            pages: pages,
+            blocks: blocks
+        )
+    }
+}
+
 enum EditorThemeScheme: Equatable, Sendable {
     case light
     case dark
@@ -10841,23 +10896,13 @@ private struct EditorCanvasView: View {
         in block: BlockSnapshot
     ) -> InlineLinkActivationRoute? {
         switch activation.destination {
-        case .internalLink(let label, let pageTitle, let blockText):
-            if let storedTarget = block.inlineInternalLinks.first(where: { $0.label == label }) {
-                return .internalLink(
-                    targetPageID: storedTarget.targetPageID,
-                    targetBlockID: storedTarget.targetBlockID
-                )
-            }
-            guard let targetPage = pages.first(where: { $0.title == pageTitle }) else {
-                return nil
-            }
-            let targetBlockID = blockText.flatMap { text in
-                allBlocks.first {
-                    $0.pageID == targetPage.id
-                        && $0.textPlain.trimmingCharacters(in: .whitespacesAndNewlines) == text
-                }?.id
-            }
-            return .internalLink(targetPageID: targetPage.id, targetBlockID: targetBlockID)
+        case .internalLink:
+            return InlineInternalLinkActivationRouteResolver.route(
+                activation: activation,
+                sourceBlock: block,
+                pages: pages,
+                blocks: allBlocks
+            )
         case .externalURL(let urlString):
             guard let url = URL(string: urlString) else {
                 return nil

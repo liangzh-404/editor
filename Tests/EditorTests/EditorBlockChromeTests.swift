@@ -17,10 +17,12 @@ final class EditorBlockChromeTests: XCTestCase {
 
         InlineLinkActivationRouter.route(
             .externalURL(URL(string: "https://swift.org")!),
-            openInternal: { pageID, blockID in openedInternal = (pageID, blockID) },
+            openInternal: { pageID, blockID in XCTFail("External URL should not invoke internal opener: \(pageID), \(blockID ?? "nil")") },
             openExternal: { url in openedExternal = url }
         )
 
+        XCTAssertEqual(openedInternal?.0, "page-specs")
+        XCTAssertEqual(openedInternal?.1, "block-api")
         XCTAssertEqual(openedExternal?.absoluteString, "https://swift.org")
     }
 
@@ -54,6 +56,125 @@ final class EditorBlockChromeTests: XCTestCase {
                 activation: activation,
                 selectedRange: NSRange(location: 2, length: 0)
             )
+        )
+    }
+
+    func testInlineInternalLinkFallbackRouteReturnsNilForDuplicatePageTitles() {
+        let pages = [
+            PageSummary(id: "page-a", workspaceID: "workspace", title: "Specs"),
+            PageSummary(id: "page-b", workspaceID: "workspace", title: "Specs")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 4, length: 9),
+            destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+        )
+
+        XCTAssertNil(
+            InlineInternalLinkFallbackRouteResolver.route(
+                activation: activation,
+                pages: pages,
+                blocks: []
+            )
+        )
+    }
+
+    func testInlineInternalLinkRouteUsesMetadataBeforeAmbiguousFallback() {
+        let sourceBlock = BlockSnapshot(
+            id: "source-block",
+            pageID: "source-page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .paragraph,
+            textPlain: "[[Specs]]",
+            inlineInternalLinks: [
+                InlineInternalLinkTarget(
+                    label: "Specs",
+                    targetPageID: "page-b",
+                    targetBlockID: "block-b"
+                )
+            ]
+        )
+        let pages = [
+            PageSummary(id: "page-a", workspaceID: "workspace", title: "Specs"),
+            PageSummary(id: "page-b", workspaceID: "workspace", title: "Specs")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 0, length: 9),
+            destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+        )
+
+        XCTAssertEqual(
+            InlineInternalLinkActivationRouteResolver.route(
+                activation: activation,
+                sourceBlock: sourceBlock,
+                pages: pages,
+                blocks: []
+            ),
+            .internalLink(targetPageID: "page-b", targetBlockID: "block-b")
+        )
+    }
+
+    func testInlineInternalLinkFallbackRouteResolvesUniquePageTitle() {
+        let pages = [
+            PageSummary(id: "page-specs", workspaceID: "workspace", title: "Specs")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 4, length: 9),
+            destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+        )
+
+        XCTAssertEqual(
+            InlineInternalLinkFallbackRouteResolver.route(
+                activation: activation,
+                pages: pages,
+                blocks: []
+            ),
+            .internalLink(targetPageID: "page-specs", targetBlockID: nil)
+        )
+    }
+
+    func testInlineInternalLinkFallbackRouteReturnsNilForDuplicateBlockTextInTargetPage() {
+        let pages = [
+            PageSummary(id: "page-specs", workspaceID: "workspace", title: "Specs")
+        ]
+        let blocks = [
+            BlockSnapshot(id: "block-a", pageID: "page-specs", parentBlockID: nil, orderKey: "a", type: .paragraph, textPlain: "API"),
+            BlockSnapshot(id: "block-b", pageID: "page-specs", parentBlockID: nil, orderKey: "b", type: .paragraph, textPlain: "API")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 4, length: 13),
+            destination: .internalLink(label: "Specs#API", pageTitle: "Specs", blockText: "API")
+        )
+
+        XCTAssertNil(
+            InlineInternalLinkFallbackRouteResolver.route(
+                activation: activation,
+                pages: pages,
+                blocks: blocks
+            )
+        )
+    }
+
+    func testInlineInternalLinkFallbackRouteResolvesUniqueBlockTextInTargetPage() {
+        let pages = [
+            PageSummary(id: "page-specs", workspaceID: "workspace", title: "Specs")
+        ]
+        let blocks = [
+            BlockSnapshot(id: "block-api", pageID: "page-specs", parentBlockID: nil, orderKey: "a", type: .paragraph, textPlain: "API"),
+            BlockSnapshot(id: "block-other", pageID: "page-specs", parentBlockID: nil, orderKey: "b", type: .paragraph, textPlain: "Other")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 4, length: 13),
+            destination: .internalLink(label: "Specs#API", pageTitle: "Specs", blockText: "API")
+        )
+
+        XCTAssertEqual(
+            InlineInternalLinkFallbackRouteResolver.route(
+                activation: activation,
+                pages: pages,
+                blocks: blocks
+            ),
+            .internalLink(targetPageID: "page-specs", targetBlockID: "block-api")
         )
     }
 

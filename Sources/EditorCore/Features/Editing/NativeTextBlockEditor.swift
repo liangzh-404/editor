@@ -309,6 +309,17 @@ enum NativeInlineLinkActivationResolver {
     }
 }
 
+enum NativeInlineLinkPointHitGuard {
+    static func contains(point: CGPoint, linkBounds: CGRect?) -> Bool {
+        guard let linkBounds,
+              !linkBounds.isNull,
+              !linkBounds.isEmpty else {
+            return false
+        }
+        return linkBounds.contains(point)
+    }
+}
+
 enum NativeTextMarkdownSyntaxMarkerAttributes {
 #if os(macOS)
     static func appKit(baseFont: NSFont) -> [NSAttributedString.Key: Any] {
@@ -2317,7 +2328,28 @@ private final class EditorNSTextView: NSTextView {
         ) else {
             return false
         }
+        guard NativeInlineLinkPointHitGuard.contains(
+            point: point,
+            linkBounds: renderedBounds(for: activation.range)
+        ) else {
+            return false
+        }
         return onInlineLinkActivation(activation, selectedRange())
+    }
+
+    private func renderedBounds(for characterRange: NSRange) -> CGRect? {
+        guard characterRange.length > 0 else {
+            return nil
+        }
+        var actualRange = NSRange(location: NSNotFound, length: 0)
+        let screenRect = firstRect(forCharacterRange: characterRange, actualRange: &actualRange)
+        guard actualRange.location != NSNotFound,
+              !screenRect.isNull,
+              !screenRect.isEmpty,
+              let window else {
+            return nil
+        }
+        return convert(window.convertFromScreen(screenRect), from: nil)
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
@@ -3956,8 +3988,39 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
         ) else {
             return
         }
+        guard NativeInlineLinkPointHitGuard.contains(
+            point: point,
+            linkBounds: renderedBounds(for: activation.range)
+        ) else {
+            return
+        }
 
         _ = onInlineLinkActivation(activation, selectedRange)
+    }
+
+    private func renderedBounds(for characterRange: NSRange) -> CGRect? {
+        guard characterRange.length > 0,
+              characterRange.location < textStorage.length else {
+            return nil
+        }
+        let clampedRange = NSRange(
+            location: characterRange.location,
+            length: min(characterRange.length, textStorage.length - characterRange.location)
+        )
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: clampedRange,
+            actualCharacterRange: nil
+        )
+        guard glyphRange.length > 0 else {
+            return nil
+        }
+        let glyphBounds = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        guard !glyphBounds.isNull,
+              !glyphBounds.isEmpty else {
+            return nil
+        }
+        return glyphBounds.offsetBy(dx: textContainerInset.left, dy: textContainerInset.top)
     }
 
     @objc private func moveBlockUp() {

@@ -353,6 +353,24 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testNativeInlineLinkPointHitGuardAcceptsPointInsideLinkBounds() {
+        XCTAssertTrue(
+            NativeInlineLinkPointHitGuard.contains(
+                point: CGPoint(x: 18, y: 12),
+                linkBounds: CGRect(x: 10, y: 4, width: 80, height: 18)
+            )
+        )
+    }
+
+    func testNativeInlineLinkPointHitGuardRejectsPointOutsideRenderedLinkBounds() {
+        XCTAssertFalse(
+            NativeInlineLinkPointHitGuard.contains(
+                point: CGPoint(x: 140, y: 12),
+                linkBounds: CGRect(x: 10, y: 4, width: 80, height: 18)
+            )
+        )
+    }
+
     func testNativeTextInsertionPointRectResolverClampsTallCaretToFontLineHeight() {
         let originalRect = CGRect(x: 12, y: 4, width: 2, height: 28)
 
