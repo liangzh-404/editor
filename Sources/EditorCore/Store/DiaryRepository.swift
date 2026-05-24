@@ -54,6 +54,15 @@ final class DiaryRepository {
         return page
     }
 
+    func existingDailyPage(
+        workspaceID: String,
+        date: Date = Date(),
+        calendar: Calendar = .current
+    ) throws -> PageSummary? {
+        let diaryDate = Self.diaryDateString(from: date, calendar: calendar)
+        return try dailyPage(workspaceID: workspaceID, diaryDate: diaryDate)
+    }
+
     func activeEntry(workspaceID: String) throws -> DiaryEntrySnapshot {
         if let entry = try newestEntry(workspaceID: workspaceID) {
             return entry
@@ -253,9 +262,7 @@ final class DiaryRepository {
         _ page: PageSummary,
         pageRepository: PageRepository
     ) throws {
-        let blocks = try pageRepository.loadWorkspaceSnapshot()
-            .blocks
-            .filter { $0.pageID == page.id }
+        let blocks = try pageRepository.loadBlocks(pageID: page.id)
         guard blocks.count == 1,
               let block = blocks.first,
               block.type == .paragraph,
@@ -276,9 +283,7 @@ final class DiaryRepository {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         guard !lines.isEmpty,
-              let initialBlock = try pageRepository.loadWorkspaceSnapshot()
-                .blocks
-                .first(where: { $0.pageID == page.id }) else {
+              let initialBlock = try pageRepository.loadBlocks(pageID: page.id).first else {
             return
         }
 
@@ -339,7 +344,7 @@ final class DiaryRepository {
         return formatter.string(from: Date())
     }
 
-    private static func diaryDateString(from date: Date, calendar: Calendar) -> String {
+    static func diaryDateString(from date: Date, calendar: Calendar) -> String {
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         let year = components.year ?? 1
         let month = components.month ?? 1

@@ -244,6 +244,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var searchRefreshTask: Task<Void, Never>?
     private var searchHighlightClearTask: Task<Void, Never>?
     private var pendingTextRecognitionAttachmentIDs: Set<String> = []
+    private var isLoadingPendingTextRecognitionAttachmentIDs = false
     private var isForegroundSyncRunning = false
     private var isForegroundSyncRerunPending = false
     private var isCloudKitAccountStatusRefreshRunning = false
@@ -252,6 +253,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var encryptedPageLastOpenedAt: [String: Date] = [:]
     private var encryptedPageAutoLockTask: Task<Void, Never>?
     private var pageArchiveUndoExpirationTask: Task<Void, Never>?
+    private var cachedDiaryPageIDs: Set<String> = []
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
 
     var canNavigateBack: Bool {
@@ -334,8 +336,10 @@ final class WorkspaceViewModel: ObservableObject {
         case .recent:
             return snapshot.pages
         case .diary:
+            let diaryPageIDs = diaryPageIDs
             return snapshot.pages.filter { diaryPageIDs.contains($0.id) }
         case .allDocuments:
+            let diaryPageIDs = diaryPageIDs
             return snapshot.pages.filter { !diaryPageIDs.contains($0.id) }
         case .favorites:
             return snapshot.favoritePages
@@ -438,6 +442,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.searchDebounceNanoseconds = searchDebounceNanoseconds
         self.searchHighlightDurationNanoseconds = searchHighlightDurationNanoseconds
         snapshot = .empty
+        cachedDiaryPageIDs = []
         selectedWorkspaceID = nil
         selectedNotebookID = nil
         selectedPageID = nil
@@ -488,6 +493,7 @@ final class WorkspaceViewModel: ObservableObject {
         searchDebounceNanoseconds = 0
         searchHighlightDurationNanoseconds = 1_600_000_000
         self.snapshot = snapshot
+        cachedDiaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
@@ -520,7 +526,7 @@ final class WorkspaceViewModel: ObservableObject {
         let previousSelectedCollection = selectedCollection
         let previousSelectedPageID = selectedPageID
         let shouldRestorePreviousSelection = hasLoadedSnapshot
-        let loadedSnapshot = try repository.loadWorkspaceSnapshot()
+        let loadedSnapshot = try repository.loadWorkspaceSnapshot(blockPageIDs: [])
         apply(snapshot: loadedSnapshot)
         if shouldRestorePreviousSelection {
             if previousSelectedCollection == .diary {
@@ -534,16 +540,17 @@ final class WorkspaceViewModel: ObservableObject {
         } else {
             try selectColdLaunchDestination()
         }
+        try hydrateBlocksForSelectedPageIfNeeded()
         hasLoadedSnapshot = true
-        try refreshDerivedState(rebuildSearchIndex: true)
-        schedulePendingImageTextRecognition()
+        let shouldRebuildSearchIndex = try searchRepository?.needsFullRebuild() ?? false
+        try refreshDerivedState(rebuildSearchIndex: shouldRebuildSearchIndex)
+        // Avoid starting a large image OCR backlog on launch after vault imports.
         requestInitialEditorFocusIfNeeded(source: "load")
         requestInitialCompactPageNavigationIfNeeded(source: "load")
     }
 
     private func selectColdLaunchDestination() throws {
-        if diaryRepository != nil,
-           try openDailyDiaryPage(source: "cold_launch", recordHistory: false) != nil {
+        if try selectExistingColdLaunchDiaryPage(source: "cold_launch") {
             return
         }
 
@@ -560,6 +567,30 @@ final class WorkspaceViewModel: ObservableObject {
         EditorLog.render.debug(
             "compact_page_navigation_queued page_id=\(recentPageID, privacy: .public) source=cold_launch_recent"
         )
+    }
+
+    private func selectExistingColdLaunchDiaryPage(source: String) throws -> Bool {
+        guard let diaryRepository,
+              let selectedWorkspaceID,
+              let page = try diaryRepository.existingDailyPage(
+                workspaceID: selectedWorkspaceID,
+                date: currentDateProvider(),
+                calendar: diaryCalendar
+              ) else {
+            return false
+        }
+        selectedCollection = .diary
+        selectedPageID = page.id
+        selectedNotebookID = page.notebookID ?? selectedNotebookID
+        refreshBacklinksForSelectedPage()
+        refreshExternalLinksForSelectedPage()
+        refreshConflictsForSelectedPage()
+        requestFocusForInitialEmptyBlockIfNeeded(source: source)
+        pendingCompactPageNavigationID = page.id
+        EditorLog.render.debug(
+            "compact_page_navigation_queued page_id=\(page.id, privacy: .public) source=cold_launch_diary"
+        )
+        return true
     }
 
     func refreshCloudKitAccountStatus() throws {
@@ -853,6 +884,7 @@ final class WorkspaceViewModel: ObservableObject {
         if recordHistory {
             recordNavigationHistoryBeforeOpening(pageID: id)
         }
+        hydrateBlocksForPageIfNeededForUI(id)
         selectedPageID = id
         selectedCollection = collection
         selectedNotebookID = snapshot.pages.first { $0.id == id }?.notebookID ?? selectedNotebookID
@@ -865,7 +897,33 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private var diaryPageIDs: Set<String> {
-        Set(snapshot.diaryPages.map(\.pageID))
+        cachedDiaryPageIDs
+    }
+
+    private func hydrateBlocksForSelectedPageIfNeeded() throws {
+        guard let selectedPageID else {
+            return
+        }
+        try hydrateBlocksForPageIfNeeded(selectedPageID)
+    }
+
+    private func hydrateBlocksForPageIfNeeded(_ pageID: String) throws {
+        guard let repository,
+              !snapshot.blocks.contains(where: { $0.pageID == pageID }) else {
+            return
+        }
+        let blocks = try repository.loadBlocks(pageID: pageID)
+        snapshot = snapshot.replacingBlocks(pageID: pageID, blocks: blocks)
+    }
+
+    private func hydrateBlocksForPageIfNeededForUI(_ pageID: String) {
+        do {
+            try hydrateBlocksForPageIfNeeded(pageID)
+        } catch {
+            EditorLog.store.error(
+                "page_blocks_hydration_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     private func defaultCollectionForOpeningPage(id pageID: String) -> WorkspaceCollection {
@@ -3943,20 +4001,35 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func schedulePendingImageTextRecognition() {
-        guard let attachmentTextRecognitionRepository else {
+        guard let attachmentTextRecognitionRepository,
+              let attachmentTextRecognitionScheduler,
+              imageTextRecognizer != nil,
+              !isLoadingPendingTextRecognitionAttachmentIDs else {
             return
         }
 
-        do {
-            let attachmentIDs = try attachmentTextRecognitionRepository.pendingImageAttachmentIDs()
-            for attachmentID in attachmentIDs {
-                scheduleAttachmentTextRecognitionIfNeeded(attachmentID: attachmentID)
+        isLoadingPendingTextRecognitionAttachmentIDs = true
+        attachmentTextRecognitionScheduler.schedulePendingTextRecognitionLookup(
+            load: {
+                try attachmentTextRecognitionRepository.pendingImageAttachmentIDs()
+            },
+            completion: { [weak self] result in
+                guard let self else {
+                    return
+                }
+                self.isLoadingPendingTextRecognitionAttachmentIDs = false
+                switch result {
+                case .success(let attachmentIDs):
+                    for attachmentID in attachmentIDs {
+                        self.scheduleAttachmentTextRecognitionIfNeeded(attachmentID: attachmentID)
+                    }
+                case .failure(let error):
+                    EditorLog.attachment.error(
+                        "attachment_text_recognition_pending_failed error=\(String(describing: error), privacy: .public)"
+                    )
+                }
             }
-        } catch {
-            EditorLog.attachment.error(
-                "attachment_text_recognition_pending_failed error=\(String(describing: error), privacy: .public)"
-            )
-        }
+        )
     }
 
     private func scheduleAttachmentTextRecognitionIfNeeded(attachmentID: String) {
@@ -4038,6 +4111,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func apply(snapshot: WorkspaceSnapshot) {
         self.snapshot = snapshot
+        cachedDiaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
         let encryptedPageIDs = Set(snapshot.pages.filter(\.isEncrypted).map(\.id))
         unlockedEncryptedPageIDs.formIntersection(encryptedPageIDs)
         encryptedPageLastOpenedAt = encryptedPageLastOpenedAt.filter { encryptedPageIDs.contains($0.key) }
@@ -4947,6 +5021,9 @@ private extension BlockType {
         case .heading1,
              .heading2,
              .heading3,
+             .heading4,
+             .heading5,
+             .heading6,
              .unorderedListItem,
              .orderedListItem,
              .taskItem,
@@ -4976,6 +5053,12 @@ private extension BlockType {
             return 2
         case .heading3:
             return 3
+        case .heading4:
+            return 4
+        case .heading5:
+            return 5
+        case .heading6:
+            return 6
         default:
             return nil
         }

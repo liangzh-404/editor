@@ -1811,10 +1811,37 @@ final class NativeTextBlockEditorTests: XCTestCase {
             type: .heading3,
             textPlain: "Detail heading"
         )
+        let heading4 = BlockSnapshot(
+            id: "heading-4",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "d",
+            type: .heading4,
+            textPlain: "Fourth heading"
+        )
+        let heading5 = BlockSnapshot(
+            id: "heading-5",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "e",
+            type: .heading5,
+            textPlain: "Fifth heading"
+        )
+        let heading6 = BlockSnapshot(
+            id: "heading-6",
+            pageID: "page",
+            parentBlockID: nil,
+            orderKey: "f",
+            type: .heading6,
+            textPlain: "Sixth heading"
+        )
 
         let heading1Descriptor = HeadingBlockChromeDescriptor(block: heading1)
         let heading2Descriptor = HeadingBlockChromeDescriptor(block: heading2)
         let heading3Descriptor = HeadingBlockChromeDescriptor(block: heading3)
+        let heading4Descriptor = HeadingBlockChromeDescriptor(block: heading4)
+        let heading5Descriptor = HeadingBlockChromeDescriptor(block: heading5)
+        let heading6Descriptor = HeadingBlockChromeDescriptor(block: heading6)
 
         XCTAssertEqual(heading1Descriptor.level, 1)
         XCTAssertEqual(heading1Descriptor.accessibilityLabel, "一级标题块")
@@ -1830,6 +1857,21 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(heading3Descriptor.accessibilityLabel, "三级标题块")
         XCTAssertEqual(heading3Descriptor.accessibilityValue, "Detail heading")
         XCTAssertEqual(heading3Descriptor.accessibilityIdentifier, "editor.heading3.heading-3")
+
+        XCTAssertEqual(heading4Descriptor.level, 4)
+        XCTAssertEqual(heading4Descriptor.accessibilityLabel, "四级标题块")
+        XCTAssertEqual(heading4Descriptor.accessibilityValue, "Fourth heading")
+        XCTAssertEqual(heading4Descriptor.accessibilityIdentifier, "editor.heading4.heading-4")
+
+        XCTAssertEqual(heading5Descriptor.level, 5)
+        XCTAssertEqual(heading5Descriptor.accessibilityLabel, "五级标题块")
+        XCTAssertEqual(heading5Descriptor.accessibilityValue, "Fifth heading")
+        XCTAssertEqual(heading5Descriptor.accessibilityIdentifier, "editor.heading5.heading-5")
+
+        XCTAssertEqual(heading6Descriptor.level, 6)
+        XCTAssertEqual(heading6Descriptor.accessibilityLabel, "六级标题块")
+        XCTAssertEqual(heading6Descriptor.accessibilityValue, "Sixth heading")
+        XCTAssertEqual(heading6Descriptor.accessibilityIdentifier, "editor.heading6.heading-6")
     }
 
     func testDividerBlockChromeDescriptorExposesSemanticSeparator() {

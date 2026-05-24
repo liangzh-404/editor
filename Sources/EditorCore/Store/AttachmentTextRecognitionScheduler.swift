@@ -1,6 +1,11 @@
 import Foundation
 
 protocol AttachmentTextRecognitionScheduling {
+    func schedulePendingTextRecognitionLookup(
+        load: @escaping @Sendable () throws -> [String],
+        completion: @MainActor @escaping @Sendable (Result<[String], Error>) -> Void
+    )
+
     func scheduleTextRecognition(
         attachmentID: String,
         recognize: @escaping @Sendable () throws -> Void,
@@ -13,6 +18,20 @@ final class DispatchAttachmentTextRecognitionScheduler: AttachmentTextRecognitio
 
     init(queue: DispatchQueue = DispatchQueue(label: "editor.attachment.text-recognition", qos: .utility)) {
         self.queue = queue
+    }
+
+    func schedulePendingTextRecognitionLookup(
+        load: @escaping @Sendable () throws -> [String],
+        completion: @MainActor @escaping @Sendable (Result<[String], Error>) -> Void
+    ) {
+        queue.async {
+            let result = Result {
+                try load()
+            }
+            Task { @MainActor in
+                completion(result)
+            }
+        }
     }
 
     func scheduleTextRecognition(

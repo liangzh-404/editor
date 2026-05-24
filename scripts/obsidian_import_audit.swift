@@ -216,6 +216,7 @@ enum ObsidianImportAudit {
             }
             guard values.isRegularFile == true,
                   item.pathExtension.lowercased() == "md",
+                  shouldImportMarkdownFile(relativePath: relativePath),
                   !isHidden(relativePath: relativePath) else {
                 continue
             }
@@ -253,7 +254,7 @@ enum ObsidianImportAudit {
             guard values.isRegularFile == true, !isHidden(relativePath: relativePath) else {
                 continue
             }
-            if item.pathExtension.lowercased() != "md" {
+            if item.pathExtension.lowercased() != "md" || !shouldImportMarkdownFile(relativePath: relativePath) {
                 count += 1
             }
         }
@@ -405,6 +406,10 @@ enum ObsidianImportAudit {
             return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
                 && !isDirectory.boolValue
         }
+    }
+
+    private static func shouldImportMarkdownFile(relativePath: String) -> Bool {
+        !URL(fileURLWithPath: relativePath).lastPathComponent.lowercased().hasSuffix(".excalidraw.md")
     }
 
     private static func attachmentPathComponentCandidates(_ pathComponents: [String]) -> [[String]] {

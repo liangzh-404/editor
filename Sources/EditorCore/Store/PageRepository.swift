@@ -33,7 +33,7 @@ final class PageRepository {
         return try loadWorkspaceSnapshot()
     }
 
-    func loadWorkspaceSnapshot() throws -> WorkspaceSnapshot {
+    func loadWorkspaceSnapshot(blockPageIDs: [String]? = nil) throws -> WorkspaceSnapshot {
         let workspaces = try database.query(
             """
             SELECT id, name
@@ -139,7 +139,7 @@ final class PageRepository {
 
         let selectedPageID = pages.first?.id
 
-        let blocks = try loadBlocks(pageIDs: pages.map(\.id))
+        let blocks = try loadBlocks(pageIDs: blockPageIDs ?? pages.map(\.id))
 
         let attachments = try database.query(
             """
@@ -364,6 +364,10 @@ final class PageRepository {
         EditorLog.store.debug(
             "page_pinned_updated page_id=\(pageID, privacy: .public) is_pinned=\(isPinned, privacy: .public)"
         )
+    }
+
+    func loadBlocks(pageID: String) throws -> [BlockSnapshot] {
+        try loadBlocks(pageIDs: [pageID])
     }
 
     func updatePageEncryption(pageID: String, isEncrypted: Bool) throws {
@@ -2673,6 +2677,28 @@ final class PageRepository {
                 fallback: "",
                 blockID: row["id"] ?? ""
             )
+            let taskItemIsCompleted = type == .taskItem
+                ? Self.taskItemIsCompleted(payloadJSON: payloadJSON)
+                : false
+            let toggleIsExpanded = type == .toggle
+                ? Self.toggleIsExpanded(payloadJSON: payloadJSON)
+                : true
+            let codeBlockLineWrapping = type == .codeBlock
+                ? Self.codeBlockLineWrapping(payloadJSON: payloadJSON)
+                : true
+            let pageReferenceTargetPageID: String?
+            let blockReferenceTargetBlockID: String?
+            switch type {
+            case .pageReference:
+                pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: payloadJSON)
+                blockReferenceTargetBlockID = nil
+            case .blockReference:
+                pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: payloadJSON)
+                blockReferenceTargetBlockID = Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
+            default:
+                pageReferenceTargetPageID = nil
+                blockReferenceTargetBlockID = nil
+            }
             return BlockSnapshot(
                 id: row["id"] ?? "",
                 pageID: row["page_id"] ?? "",
@@ -2680,21 +2706,11 @@ final class PageRepository {
                 orderKey: row["order_key"] ?? "",
                 type: type,
                 textPlain: textPlain,
-                taskItemIsCompleted: Self.taskItemIsCompleted(
-                    payloadJSON: payloadJSON
-                ),
-                toggleIsExpanded: Self.toggleIsExpanded(
-                    payloadJSON: payloadJSON
-                ),
-                codeBlockLineWrapping: Self.codeBlockLineWrapping(
-                    payloadJSON: payloadJSON
-                ),
-                pageReferenceTargetPageID: Self.pageReferenceTargetPageID(
-                    payloadJSON: payloadJSON
-                ),
-                blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(
-                    payloadJSON: payloadJSON
-                ),
+                taskItemIsCompleted: taskItemIsCompleted,
+                toggleIsExpanded: toggleIsExpanded,
+                codeBlockLineWrapping: codeBlockLineWrapping,
+                pageReferenceTargetPageID: pageReferenceTargetPageID,
+                blockReferenceTargetBlockID: blockReferenceTargetBlockID,
                 tableRows: Self.tableRows(
                     type: type,
                     payloadJSON: payloadJSON,

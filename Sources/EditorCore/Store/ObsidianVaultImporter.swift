@@ -643,6 +643,10 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
                     summary.ignoredNonMarkdownFileCount += 1
                     continue
                 }
+                guard Self.shouldImportMarkdownFile(relativePath: relativePath) else {
+                    summary.ignoredNonMarkdownFileCount += 1
+                    continue
+                }
 
                 summary.markdownFileCount += 1
                 if configuration.skipsPreviouslyImportedSources,
@@ -752,6 +756,17 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
                     .text(now)
                 ]
             )
+            let insertedRows = try database.query(
+                "SELECT page_id FROM diary_pages WHERE page_id = ? LIMIT 1",
+                bindings: [.text(page.id)]
+            )
+            if !insertedRows.isEmpty {
+                try SyncRepository(database: database).enqueue(
+                    entityType: "diaryPage",
+                    entityID: page.id,
+                    changeType: "create"
+                )
+            }
         }
 
         try insertImportMetadata(
@@ -1136,6 +1151,10 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
             return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
                 && !isDirectory.boolValue
         }
+    }
+
+    private static func shouldImportMarkdownFile(relativePath: String) -> Bool {
+        !URL(fileURLWithPath: relativePath).lastPathComponent.lowercased().hasSuffix(".excalidraw.md")
     }
 
     private static func attachmentPathComponentCandidates(_ pathComponents: [String]) -> [[String]] {

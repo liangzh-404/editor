@@ -1192,6 +1192,36 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(reloadedBlock.pageReferenceTargetPageID, targetPage.id)
     }
 
+    func testPlainTextBlocksIgnoreReferenceTargetsInPayloadWhenLoadingSnapshot() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        try database.execute(
+            """
+            UPDATE blocks
+            SET type = 'paragraph',
+                payload_json = ?,
+                text_plain = 'Plain text'
+            WHERE id = ?
+            """,
+            bindings: [
+                .text(#"{"text":"Plain text","target_page_id":"page-target","target_block_id":"block-target"}"#),
+                .text(blockID)
+            ]
+        )
+
+        let reloadedBlock = try XCTUnwrap(
+            repository.loadWorkspaceSnapshot().blocks.first { $0.id == blockID }
+        )
+        XCTAssertEqual(reloadedBlock.type, .paragraph)
+        XCTAssertNil(reloadedBlock.pageReferenceTargetPageID)
+        XCTAssertNil(reloadedBlock.blockReferenceTargetBlockID)
+    }
+
     func testAppendPageReferenceBlockUsesPlaintextTitleFromEncryptedTarget() throws {
         let database = try migratedDatabase()
         defer { database.close() }

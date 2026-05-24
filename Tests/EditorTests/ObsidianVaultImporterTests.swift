@@ -251,6 +251,12 @@ final class ObsidianVaultImporterTests: XCTestCase {
             """
         )
         XCTAssertEqual(diaryRows.map { $0["diary_date"] ?? "" }, ["2025-01-15"])
+        XCTAssertEqual(
+            try database.queryInt(
+                "SELECT COUNT(*) FROM sync_changes WHERE entity_type = 'diaryPage' AND change_type = 'create'"
+            ),
+            1
+        )
 
         let metadataRows = try database.query(
             """
@@ -476,6 +482,44 @@ final class ObsidianVaultImporterTests: XCTestCase {
             "SELECT original_filename FROM attachments ORDER BY original_filename ASC"
         )
         XCTAssertEqual(attachmentRows.map { $0["original_filename"] ?? "" }, ["Sketch 2026-05-23 17.00.00.excalidraw.md"])
+    }
+
+    func testVaultImporterSkipsExcalidrawMarkdownFilesAsPages() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let workspaceID = try XCTUnwrap(try repository.bootstrapWorkspaceIfNeeded().selectedWorkspaceID)
+        let vaultURL = try makeTemporaryDirectory().appendingPathComponent("空", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        try write(
+            "![[Drawing.excalidraw]]",
+            to: vaultURL.appendingPathComponent("Note.md")
+        )
+        try write(
+            "# Excalidraw data",
+            to: vaultURL.appendingPathComponent("Drawing.excalidraw.md")
+        )
+
+        let summary = try ObsidianVaultImporter(
+            database: database,
+            attachmentsDirectory: try makeTemporaryDirectory()
+        ).importVault(
+            vaultURL: vaultURL,
+            workspaceID: workspaceID
+        )
+        let snapshot = try repository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(summary.markdownFileCount, 1)
+        XCTAssertEqual(summary.importedPageCount, 1)
+        XCTAssertEqual(summary.ignoredNonMarkdownFileCount, 1)
+        XCTAssertEqual(summary.importedAttachmentCount, 1)
+        XCTAssertTrue(snapshot.pages.contains { $0.title == "Note" })
+        XCTAssertFalse(snapshot.pages.contains { $0.title == "Drawing.excalidraw" })
+        XCTAssertEqual(
+            try database.queryInt("SELECT COUNT(*) FROM page_import_metadata WHERE source_path LIKE '%.excalidraw.md'"),
+            0
+        )
     }
 
     func testVaultImporterResolvesImageLinksToConvertedWebPFiles() throws {

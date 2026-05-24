@@ -464,6 +464,9 @@ enum BlockKeyboardFocusResolver {
              .heading1,
              .heading2,
              .heading3,
+             .heading4,
+             .heading5,
+             .heading6,
              .unorderedListItem,
              .orderedListItem,
              .taskItem,
@@ -1199,6 +1202,12 @@ struct NativeTextBlockEditor: View {
 #else
             return .headline
 #endif
+        case .heading4, .heading5, .heading6:
+#if os(iOS)
+            return .system(size: 18, weight: .semibold)
+#else
+            return .subheadline.weight(.semibold)
+#endif
         case .codeBlock, .table:
 #if os(iOS)
             return .system(size: 16, weight: .regular, design: .monospaced)
@@ -1223,6 +1232,8 @@ struct NativeTextBlockEditor: View {
             return 32
         case .heading3:
             return 28
+        case .heading4, .heading5, .heading6:
+            return 26
         case .codeBlock, .table:
             return 24
         default:
@@ -1236,6 +1247,8 @@ struct NativeTextBlockEditor: View {
             return 24
         case .heading3:
             return 22
+        case .heading4, .heading5, .heading6:
+            return 21
         case .codeBlock, .table:
             return 21
         default:
@@ -1657,6 +1670,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             return .systemFont(ofSize: 16, weight: .semibold)
         case .heading3:
             return .systemFont(ofSize: 14, weight: .semibold)
+        case .heading4:
+            return .systemFont(ofSize: 13, weight: .semibold)
+        case .heading5, .heading6:
+            return .systemFont(ofSize: 12, weight: .semibold)
         case .codeBlock, .table:
             return .monospacedSystemFont(ofSize: 13, weight: .regular)
         default:
@@ -1680,6 +1697,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             return 16
         case .heading3:
             return 14
+        case .heading4:
+            return 13
+        case .heading5, .heading6:
+            return 12
         case .codeBlock, .table:
             return 13
         default:
@@ -1865,6 +1886,8 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                 return [.font: italicFont]
             case .strikethrough:
                 return [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
+            case .highlight:
+                return [.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.35)]
             case .code:
                 return [
                     .font: NSFont.monospacedSystemFont(ofSize: parent.nsFont.pointSize, weight: .regular),
@@ -2847,6 +2870,10 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             return .systemFont(ofSize: 24, weight: .semibold)
         case .heading3:
             return .systemFont(ofSize: 20, weight: .semibold)
+        case .heading4:
+            return .systemFont(ofSize: 18, weight: .semibold)
+        case .heading5, .heading6:
+            return .systemFont(ofSize: 17, weight: .semibold)
         case .codeBlock, .table:
             return .monospacedSystemFont(ofSize: 16, weight: .regular)
         default:
@@ -2870,6 +2897,10 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             return 24
         case .heading3:
             return 20
+        case .heading4:
+            return 18
+        case .heading5, .heading6:
+            return 17
         case .codeBlock, .table:
             return 16
         default:
@@ -3175,6 +3206,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                 return [.font: italicFont]
             case .strikethrough:
                 return [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
+            case .highlight:
+                return [.backgroundColor: UIColor.systemYellow.withAlphaComponent(0.35)]
             case .code:
                 return [
                     .font: UIFont.monospacedSystemFont(ofSize: parent.uiFont.pointSize, weight: .regular),

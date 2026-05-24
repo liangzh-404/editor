@@ -425,6 +425,25 @@ final class SearchRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.search("sealed roadmap"), [])
     }
 
+    func testNeedsFullRebuildUsesExistingCompleteSearchIndex() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Indexed block body")
+
+        let repository = SearchRepository(database: database)
+        try repository.rebuildIndex()
+
+        XCTAssertFalse(try repository.needsFullRebuild())
+
+        try database.execute("DELETE FROM search_index WHERE entity_type = 'block'")
+
+        XCTAssertTrue(try repository.needsFullRebuild())
+    }
+
     private func migratedDatabase() throws -> SQLiteDatabase {
         let database = try SQLiteDatabase.open(path: makeTemporaryDirectory().appendingPathComponent("editor.sqlite").path)
         try SchemaMigrator.migrate(database: database)

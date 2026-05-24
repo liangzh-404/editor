@@ -146,6 +146,9 @@ final class MarkdownTransformerTests: XCTestCase {
             block(type: .heading1, text: "Title"),
             block(type: .heading2, text: "Section"),
             block(type: .heading3, text: "Detail"),
+            block(type: .heading4, text: "Fourth"),
+            block(type: .heading5, text: "Fifth"),
+            block(type: .heading6, text: "Sixth"),
             block(type: .paragraph, text: "Body"),
             block(type: .unorderedListItem, text: "Item"),
             block(type: .quote, text: "Quoted"),
@@ -160,6 +163,12 @@ final class MarkdownTransformerTests: XCTestCase {
             ## Section
 
             ### Detail
+
+            #### Fourth
+
+            ##### Fifth
+
+            ###### Sixth
 
             Body
 
@@ -213,6 +222,84 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownRecognizesHeadingLevelsFourThroughSix() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    #### Fourth
+
+                    ##### Fifth
+
+                    ###### Sixth
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .heading4, textPlain: "Fourth"),
+                MarkdownBlockDraft(type: .heading5, textPlain: "Fifth"),
+                MarkdownBlockDraft(type: .heading6, textPlain: "Sixth")
+            ]
+        )
+    }
+
+    func testImportMarkdownSupportsIndentedAtxHeadingsWithClosingHashes() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                       ## Section ##
+
+                    ### Detail ###
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .heading2, textPlain: "Section"),
+                MarkdownBlockDraft(type: .heading3, textPlain: "Detail")
+            ]
+        )
+    }
+
+    func testImportMarkdownTreatsConsecutivePlainLinesAsOneParagraph() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    First line
+                    Second line
+                    中文继续
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .paragraph, textPlain: "First line Second line 中文继续")
+            ]
+        )
+    }
+
+    func testImportMarkdownSupportsIndentedCodeBlocks() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                        let value = 1
+                        print(value)
+
+                    Body
+                    """
+            ),
+            [
+                MarkdownBlockDraft(
+                    type: .codeBlock,
+                    textPlain:
+                        """
+                        let value = 1
+                        print(value)
+                        """
+                ),
+                MarkdownBlockDraft(type: .paragraph, textPlain: "Body")
+            ]
+        )
+    }
+
     func testImportMarkdownSplitsInlineAttachmentLinksIntoOrderedBlocks() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(
@@ -240,6 +327,18 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testImportMarkdownKeepsInlineAttachmentTargetsWithParentheses() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown: "[doc](doc (3).pdf)[plain](doc.pdf)"
+            ),
+            [
+                MarkdownBlockDraft(type: .attachmentFile, textPlain: "doc", attachmentRelativePath: "doc (3).pdf"),
+                MarkdownBlockDraft(type: .attachmentFile, textPlain: "plain", attachmentRelativePath: "doc.pdf")
+            ]
+        )
+    }
+
     func testImportMarkdownSupportsCompletedTaskItems() {
         XCTAssertEqual(
             MarkdownTransformer.importBlocks(
@@ -256,6 +355,26 @@ final class MarkdownTransformerTests: XCTestCase {
                 MarkdownBlockDraft(type: .taskItem, textPlain: "Done", taskItemIsCompleted: true),
                 MarkdownBlockDraft(type: .taskItem, textPlain: "Done too", taskItemIsCompleted: true),
                 MarkdownBlockDraft(type: .taskItem, textPlain: "Todo", taskItemIsCompleted: false)
+            ]
+        )
+    }
+
+    func testImportMarkdownSupportsHorizontalRuleVariants() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    ***
+
+                    ___
+
+                    - - -
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .divider, textPlain: ""),
+                MarkdownBlockDraft(type: .divider, textPlain: ""),
+                MarkdownBlockDraft(type: .divider, textPlain: "")
             ]
         )
     }
@@ -283,6 +402,15 @@ final class MarkdownTransformerTests: XCTestCase {
                         print(value)
                         """
                 )
+            ]
+        )
+    }
+
+    func testImportMarkdownSupportsParenOrderedListMarkers() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(markdown: "1) First"),
+            [
+                MarkdownBlockDraft(type: .orderedListItem, textPlain: "First")
             ]
         )
     }
@@ -429,6 +557,24 @@ final class MarkdownTransformerTests: XCTestCase {
                 MarkdownBlockDraft(type: .quote, textPlain: "First quote line\nsecond quote line"),
                 MarkdownBlockDraft(type: .callout, textPlain: "First callout line\nsecond callout line"),
                 MarkdownBlockDraft(type: .paragraph, textPlain: "Body")
+            ]
+        )
+    }
+
+    func testImportMarkdownSupportsCommonObsidianCalloutTypes() {
+        XCTAssertEqual(
+            MarkdownTransformer.importBlocks(
+                markdown:
+                    """
+                    > [!WARNING] Check this
+                    > before import
+
+                    > [!tip]- Foldable tip
+                    """
+            ),
+            [
+                MarkdownBlockDraft(type: .callout, textPlain: "Check this\nbefore import"),
+                MarkdownBlockDraft(type: .callout, textPlain: "Foldable tip")
             ]
         )
     }
@@ -620,6 +766,20 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testMarkdownInlineStyleScannerFindsAutolinkRanges() {
+        let text = "Visit <https://swift.org> today."
+
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text),
+            [
+                MarkdownInlineStyleRun(
+                    kind: .link,
+                    range: NSRange(location: ("Visit <" as NSString).length, length: 17)
+                )
+            ]
+        )
+    }
+
     func testMarkdownInlineStyleScannerFindsItalicRange() {
         let text = "Use *italic* and **bold**."
 
@@ -633,6 +793,24 @@ final class MarkdownTransformerTests: XCTestCase {
                 MarkdownInlineStyleRun(
                     kind: .bold,
                     range: NSRange(location: ("Use *italic* and **" as NSString).length, length: 4)
+                )
+            ]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerFindsUnderscoreEmphasisRanges() {
+        let text = "Use _italic_ and __bold__."
+
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text),
+            [
+                MarkdownInlineStyleRun(
+                    kind: .italic,
+                    range: NSRange(location: ("Use _" as NSString).length, length: 6)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .bold,
+                    range: NSRange(location: ("Use _italic_ and __" as NSString).length, length: 4)
                 )
             ]
         )
@@ -652,6 +830,24 @@ final class MarkdownTransformerTests: XCTestCase {
             [
                 NSRange(location: ("Use ~~" as NSString).length, length: 7),
                 NSRange(location: ("Use ~~deleted~~ and `" as NSString).length, length: 11)
+            ]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerFindsHighlightRangeOutsideCodeSpan() {
+        let text = "Use ==marked== and `==literal==`."
+
+        let runs = MarkdownInlineStyleScanner.runs(in: text)
+
+        XCTAssertEqual(
+            runs.map { String(describing: $0.kind) },
+            ["highlight", "code"]
+        )
+        XCTAssertEqual(
+            runs.map(\.range),
+            [
+                NSRange(location: ("Use ==" as NSString).length, length: 6),
+                NSRange(location: ("Use ==marked== and `" as NSString).length, length: 11)
             ]
         )
     }
@@ -758,6 +954,14 @@ final class MarkdownTransformerTests: XCTestCase {
                 selection: EditorTextSelection(blockID: "block-1", location: 5, length: 4)
             ),
             "Make *text* stand out"
+        )
+        XCTAssertEqual(
+            MarkdownInlineFormatter.apply(
+                .highlight,
+                to: "Mark this text",
+                selection: EditorTextSelection(blockID: "block-1", location: 5, length: 4)
+            ),
+            "Mark ==this== text"
         )
     }
 

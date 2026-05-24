@@ -2606,6 +2606,9 @@ enum MobileFormatPaletteAction: Equatable, Sendable {
     case heading1
     case heading2
     case heading3
+    case heading4
+    case heading5
+    case heading6
     case unorderedList
     case orderedList
     case task
@@ -2631,6 +2634,12 @@ enum MobileFormatPaletteAction: Equatable, Sendable {
             return .heading2
         case .heading3:
             return .heading3
+        case .heading4:
+            return .heading4
+        case .heading5:
+            return .heading5
+        case .heading6:
+            return .heading6
         case .unorderedList:
             return .unorderedListItem
         case .orderedList:
@@ -2680,6 +2689,9 @@ enum MobileFormatPaletteAction: Equatable, Sendable {
              .heading1,
              .heading2,
              .heading3,
+             .heading4,
+             .heading5,
+             .heading6,
              .unorderedList,
              .orderedList,
              .task,
@@ -2712,6 +2724,12 @@ enum MobileFormatPaletteAction: Equatable, Sendable {
             return "H2"
         case .heading3:
             return "H3"
+        case .heading4:
+            return "H4"
+        case .heading5:
+            return "H5"
+        case .heading6:
+            return "H6"
         case .unorderedList:
             return "无序列表"
         case .orderedList:
@@ -2768,7 +2786,10 @@ enum MobileFormatPaletteAction: Equatable, Sendable {
             return "text.alignleft"
         case .heading1,
              .heading2,
-             .heading3:
+             .heading3,
+             .heading4,
+             .heading5,
+             .heading6:
             return nil
         case .unorderedList:
             return "list.bullet"
@@ -2825,7 +2846,10 @@ enum MobileFormatPaletteActionResolver {
         .indent,
         .divider,
         .heading2,
-        .heading3
+        .heading3,
+        .heading4,
+        .heading5,
+        .heading6
     ]
 }
 
@@ -3691,7 +3715,7 @@ private struct MobileKeyboardInputBar: View {
                 title: "H",
                 accessibilityLabel: "标题",
                 identifier: "editor.mobile-keyboard.heading",
-                isSelected: selectedBlockType == .heading1 || selectedBlockType == .heading2 || selectedBlockType == .heading3,
+                isSelected: selectedBlockType.isHeading,
                 action: onShowHeadingPanel
             )
         }
@@ -3879,6 +3903,9 @@ private struct MobileFormatPalette: View {
              .heading1,
              .heading2,
              .heading3,
+             .heading4,
+             .heading5,
+             .heading6,
              .unorderedList,
              .orderedList,
              .task,
@@ -3916,6 +3943,9 @@ private struct MobileFormatPalette: View {
              .heading1,
              .heading2,
              .heading3,
+             .heading4,
+             .heading5,
+             .heading6,
              .unorderedList,
              .orderedList,
              .task,
@@ -5329,14 +5359,16 @@ private struct WorkspaceSidebar: View {
     @AppStorage("editor.sidebar.tags.expanded") private var isTagsExpanded = true
 
     var body: some View {
+        let model = sidebarModel
+
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.sectionSpacing)) {
                 newDocumentButton
                 sidebarDivider
-                sidebarGroup(items: sidebarModel.primaryItems)
-                tagGroup
+                sidebarGroup(items: model.primaryItems)
+                tagGroup(model: model)
                 sidebarDivider
-                sidebarGroup(items: sidebarModel.utilityItems) { item, pageIDs in
+                sidebarGroup(items: model.utilityItems) { item, pageIDs in
                     defer { activePageDragIDs = [] }
                     guard case .archive = item.collection else {
                         return false
@@ -5418,19 +5450,19 @@ private struct WorkspaceSidebar: View {
     }
 
     @ViewBuilder
-    private var tagGroup: some View {
-        if !sidebarModel.tagItems.isEmpty {
+    private func tagGroup(model: SidebarNavigationModel) -> some View {
+        if !model.tagItems.isEmpty {
             VStack(alignment: .leading, spacing: CGFloat(SidebarChrome.rowSpacing)) {
                 SidebarDisclosureHeader(
                     title: "标签",
-                    count: sidebarModel.tagItems.count,
+                    count: model.tagItems.count,
                     isExpanded: isTagsExpanded
                 ) {
                     isTagsExpanded.toggle()
                 }
 
                 if isTagsExpanded {
-                    ForEach(sidebarModel.tagItems) { item in
+                    ForEach(model.tagItems) { item in
                         CollectionRailButton(
                             item: item,
                             onDropPageIDs: { pageIDs in
@@ -5772,23 +5804,57 @@ private struct PageListView: View {
 #endif
 
     private var pageListScroll: some View {
-        ScrollView(.vertical, showsIndicators: false) {
+        let visiblePages = viewModel.visibleDocumentPages
+        let visiblePageIDs = visiblePages.map(\.id)
+        let tagNamesByPageID = Self.tagNamesByPageID(snapshot: viewModel.snapshot)
+
+        return ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 14) {
                 switch viewModel.selectedCollection {
                 case .recent:
-                    ForEach(PageListDateSectionModel.sections(pages: viewModel.visibleDocumentPages)) { section in
-                        pageRowsSection(title: section.title, pages: section.pages)
+                    ForEach(PageListDateSectionModel.sections(pages: visiblePages)) { section in
+                        pageRowsSection(
+                            title: section.title,
+                            pages: section.pages,
+                            visiblePageIDs: visiblePageIDs,
+                            tagNamesByPageID: tagNamesByPageID
+                        )
                     }
                 case .diary:
-                    pageRowsSection(title: "日记", pages: viewModel.visibleDocumentPages)
+                    pageRowsSection(
+                        title: "日记",
+                        pages: visiblePages,
+                        visiblePageIDs: visiblePageIDs,
+                        tagNamesByPageID: tagNamesByPageID
+                    )
                 case .allDocuments:
-                    pageRowsSection(title: "全部文档", pages: viewModel.visibleDocumentPages)
+                    pageRowsSection(
+                        title: "全部文档",
+                        pages: visiblePages,
+                        visiblePageIDs: visiblePageIDs,
+                        tagNamesByPageID: tagNamesByPageID
+                    )
                 case .favorites:
-                    pageRowsSection(title: "收藏", pages: viewModel.visibleDocumentPages)
+                    pageRowsSection(
+                        title: "收藏",
+                        pages: visiblePages,
+                        visiblePageIDs: visiblePageIDs,
+                        tagNamesByPageID: tagNamesByPageID
+                    )
                 case .encrypted:
-                    pageRowsSection(title: "加密", pages: viewModel.visibleDocumentPages)
+                    pageRowsSection(
+                        title: "加密",
+                        pages: visiblePages,
+                        visiblePageIDs: visiblePageIDs,
+                        tagNamesByPageID: tagNamesByPageID
+                    )
                 case .tag(let tagID):
-                    tagSection(tagID: tagID)
+                    tagSection(
+                        tagID: tagID,
+                        visiblePages: visiblePages,
+                        visiblePageIDs: visiblePageIDs,
+                        tagNamesByPageID: tagNamesByPageID
+                    )
                 case .search:
 #if os(macOS)
                     SearchSectionView(viewModel: viewModel, showsSearchField: false)
@@ -5817,7 +5883,7 @@ private struct PageListView: View {
         .background {
 #if os(macOS)
             PageListKeyboardShortcutBridge(
-                isEnabled: !viewModel.visibleDocumentPages.isEmpty,
+                isEnabled: !visiblePageIDs.isEmpty,
                 activationVersion: keyboardActivationVersion,
                 hasArchiveTargets: {
                     !archiveKeyboardTargetPageIDs().isEmpty
@@ -5857,22 +5923,36 @@ private struct PageListView: View {
     }
 
     @ViewBuilder
-    private func pageRowsSection(title: String, pages: [PageSummary]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func pageRowsSection(
+        title: String,
+        pages: [PageSummary],
+        visiblePageIDs: [String],
+        tagNamesByPageID: [String: [String]]
+    ) -> some View {
+        Section {
+            ForEach(pages) { page in
+                pageRow(
+                    page,
+                    visiblePageIDs: visiblePageIDs,
+                    tagNames: tagNamesByPageID[page.id] ?? []
+                )
+            }
+        } header: {
             Text(title)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 1)
-
-            ForEach(pages) { page in
-                pageRow(page)
-            }
         }
     }
 
     @ViewBuilder
-    private func tagSection(tagID: String) -> some View {
+    private func tagSection(
+        tagID: String,
+        visiblePages: [PageSummary],
+        visiblePageIDs: [String],
+        tagNamesByPageID: [String: [String]]
+    ) -> some View {
         if tagID.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("标签")
@@ -5916,7 +5996,12 @@ private struct PageListView: View {
                 }
             }
         } else {
-            pageRowsSection(title: tagName(for: tagID), pages: viewModel.visibleDocumentPages)
+            pageRowsSection(
+                title: tagName(for: tagID),
+                pages: visiblePages,
+                visiblePageIDs: visiblePageIDs,
+                tagNamesByPageID: tagNamesByPageID
+            )
         }
     }
 
@@ -5990,12 +6075,12 @@ private struct PageListView: View {
         .accessibilityIdentifier("editor.undo-page-archive")
     }
 
-    private func pageRow(_ page: PageSummary) -> some View {
+    private func pageRow(_ page: PageSummary, visiblePageIDs: [String], tagNames: [String]) -> some View {
         PageRow(
             page: page,
             isSelected: viewModel.selectedPageID == page.id,
             isMarkedForBatch: selectedPageIDs.contains(page.id),
-            tagNames: tagNames(for: page),
+            tagNames: tagNames,
             preview: PageListPreviewResolver.preview(
                 pageID: page.id,
                 blocks: viewModel.snapshot.blocks,
@@ -6020,11 +6105,11 @@ private struct PageListView: View {
             handlePageTap(page.id)
         }
         .onDrag {
-            let pageIDs = dragPageIDs(for: page.id)
+            let pageIDs = dragPageIDs(for: page.id, visiblePageIDs: visiblePageIDs)
             activePageDragIDs = Set(pageIDs)
             return NSItemProvider(object: PageDragPayloadResolver.payloadText(pageIDs: pageIDs) as NSString)
         } preview: {
-            PageDragPreview(title: page.title, count: dragPageIDs(for: page.id).count)
+            PageDragPreview(title: page.title, count: dragPageIDs(for: page.id, visiblePageIDs: visiblePageIDs).count)
         }
         .contextMenu {
             if showsMiddleColumnRowControls {
@@ -6128,15 +6213,15 @@ private struct PageListView: View {
         activatePageListKeyboardShortcuts()
     }
 
-    private func dragPageIDs(for pageID: String) -> [String] {
-        rowActionPageIDs(for: pageID)
+    private func dragPageIDs(for pageID: String, visiblePageIDs: [String]) -> [String] {
+        rowActionPageIDs(for: pageID, visiblePageIDs: visiblePageIDs)
     }
 
-    private func rowActionPageIDs(for pageID: String) -> [String] {
+    private func rowActionPageIDs(for pageID: String, visiblePageIDs: [String]? = nil) -> [String] {
         PageListRowActionTargetResolver.pageIDs(
             rowPageID: pageID,
             selectedPageIDs: selectedPageIDs,
-            visiblePageIDs: viewModel.visibleDocumentPages.map(\.id)
+            visiblePageIDs: visiblePageIDs ?? viewModel.visibleDocumentPages.map(\.id)
         )
     }
 
@@ -6371,15 +6456,18 @@ private struct PageListView: View {
         viewModel.snapshot.tags.first { $0.id == tagID }?.path ?? "标签"
     }
 
-    private func tagNames(for page: PageSummary) -> [String] {
-        let tagIDs = Set(
-            viewModel.snapshot.pageTags
-                .filter { $0.pageID == page.id }
-                .map(\.tagID)
-        )
-        return viewModel.snapshot.tags
-            .filter { tagIDs.contains($0.id) }
-            .map(\.path)
+    private static func tagNamesByPageID(snapshot: WorkspaceSnapshot) -> [String: [String]] {
+        let tagPathByID = Dictionary(uniqueKeysWithValues: snapshot.tags.map { ($0.id, $0.path) })
+        let tagOrderByID = Dictionary(uniqueKeysWithValues: snapshot.tags.enumerated().map { ($0.element.id, $0.offset) })
+        var tagIDsByPageID: [String: [String]] = [:]
+        for assignment in snapshot.pageTags {
+            tagIDsByPageID[assignment.pageID, default: []].append(assignment.tagID)
+        }
+        return tagIDsByPageID.mapValues { tagIDs in
+            tagIDs
+                .sorted { (tagOrderByID[$0] ?? Int.max) < (tagOrderByID[$1] ?? Int.max) }
+                .compactMap { tagPathByID[$0] }
+        }
     }
 
     private var selectedPageBinding: Binding<String?> {
@@ -12347,6 +12435,18 @@ struct HeadingBlockChromeDescriptor: Equatable, Sendable {
             level = 3
             accessibilityLabel = "三级标题块"
             accessibilityIdentifier = "editor.heading3.\(block.id)"
+        case .heading4:
+            level = 4
+            accessibilityLabel = "四级标题块"
+            accessibilityIdentifier = "editor.heading4.\(block.id)"
+        case .heading5:
+            level = 5
+            accessibilityLabel = "五级标题块"
+            accessibilityIdentifier = "editor.heading5.\(block.id)"
+        case .heading6:
+            level = 6
+            accessibilityLabel = "六级标题块"
+            accessibilityIdentifier = "editor.heading6.\(block.id)"
         default:
             level = 0
             accessibilityLabel = "文本块"
@@ -13306,7 +13406,7 @@ private struct BlockRowView: View {
 
     @ViewBuilder
     private var textEditableBlockContent: some View {
-        if block.type == .heading1 || block.type == .heading2 || block.type == .heading3 {
+        if block.type.isHeading {
             let descriptor = HeadingBlockChromeDescriptor(block: block)
             nativeTextBlockEditor
                 .padding(.vertical, descriptor.level == 1 ? 2 : 1)
@@ -13903,6 +14003,9 @@ private struct BlockRowView: View {
         .heading1,
         .heading2,
         .heading3,
+        .heading4,
+        .heading5,
+        .heading6,
         .unorderedListItem,
         .orderedListItem,
         .taskItem,
@@ -15567,6 +15670,12 @@ private extension BlockType {
             return "二级标题"
         case .heading3:
             return "三级标题"
+        case .heading4:
+            return "四级标题"
+        case .heading5:
+            return "五级标题"
+        case .heading6:
+            return "六级标题"
         case .unorderedListItem:
             return "无序列表"
         case .orderedListItem:
@@ -15609,6 +15718,12 @@ private extension BlockType {
         case .heading2:
             return "textformat.size"
         case .heading3:
+            return "textformat.size"
+        case .heading4:
+            return "textformat.size"
+        case .heading5:
+            return "textformat.size"
+        case .heading6:
             return "textformat.size"
         case .unorderedListItem:
             return "list.bullet"

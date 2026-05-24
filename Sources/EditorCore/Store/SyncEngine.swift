@@ -2146,36 +2146,13 @@ final class SyncEngine {
         var uploadedCount = 0
         var failedCount = 0
         var blockedPageIDs = Set<String>()
-        for change in changes {
-            if change.entityType == "page" {
-                let hasBlockedBlocks: Bool
-                if blockedPageIDs.contains(change.entityID) {
-                    hasBlockedBlocks = true
-                } else {
-                    hasBlockedBlocks = try syncRepository.hasPendingBlockChanges(pageID: change.entityID)
-                }
-                if hasBlockedBlocks {
-                    EditorLog.sync.debug(
-                        "sync_page_change_deferred_pending_blocks page_id=\(change.entityID, privacy: .public)"
-                    )
-                    continue
-                }
-            }
+        var deferredPageChanges: [String: SyncChange] = [:]
 
-            let retryState = try syncRepository.retryState(change: change)
-            let currentDate = now()
-            if let nextAttemptAt = retryState.nextAttemptAt,
-               nextAttemptAt > currentDate {
-                if change.entityType == "block",
-                   let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {
-                    blockedPageIDs.insert(pageID)
-                }
-                EditorLog.sync.debug(
-                    "sync_change_deferred entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
-                )
-                continue
-            }
-
+        func uploadReadyChange(
+            _ change: SyncChange,
+            currentDate: Date,
+            retryState: SyncRetryState
+        ) throws {
             do {
                 let result = try adapter.upload(change: change)
                 try syncRepository.markUploaded(change: change, uploadResult: result)
@@ -2204,6 +2181,64 @@ final class SyncEngine {
                 EditorLog.sync.error(
                     "sync_change_upload_failed entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public) error=\(errorDescription, privacy: .public)"
                 )
+            }
+        }
+
+        func uploadDeferredPageChangeIfReady(pageID: String) throws {
+            guard let deferredPageChange = deferredPageChanges[pageID],
+                  !blockedPageIDs.contains(pageID),
+                  try !syncRepository.hasPendingBlockChanges(pageID: pageID) else {
+                return
+            }
+
+            deferredPageChanges.removeValue(forKey: pageID)
+            let retryState = try syncRepository.retryState(change: deferredPageChange)
+            let currentDate = now()
+            if let nextAttemptAt = retryState.nextAttemptAt,
+               nextAttemptAt > currentDate {
+                EditorLog.sync.debug(
+                    "sync_change_deferred entity_type=\(deferredPageChange.entityType, privacy: .public) entity_id=\(deferredPageChange.entityID, privacy: .public)"
+                )
+                return
+            }
+            try uploadReadyChange(deferredPageChange, currentDate: currentDate, retryState: retryState)
+        }
+
+        for change in changes {
+            if change.entityType == "page" {
+                let hasBlockedBlocks: Bool
+                if blockedPageIDs.contains(change.entityID) {
+                    hasBlockedBlocks = true
+                } else {
+                    hasBlockedBlocks = try syncRepository.hasPendingBlockChanges(pageID: change.entityID)
+                }
+                if hasBlockedBlocks {
+                    deferredPageChanges[change.entityID] = change
+                    EditorLog.sync.debug(
+                        "sync_page_change_deferred_pending_blocks page_id=\(change.entityID, privacy: .public)"
+                    )
+                    continue
+                }
+            }
+
+            let retryState = try syncRepository.retryState(change: change)
+            let currentDate = now()
+            if let nextAttemptAt = retryState.nextAttemptAt,
+               nextAttemptAt > currentDate {
+                if change.entityType == "block",
+                   let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {
+                    blockedPageIDs.insert(pageID)
+                }
+                EditorLog.sync.debug(
+                    "sync_change_deferred entity_type=\(change.entityType, privacy: .public) entity_id=\(change.entityID, privacy: .public)"
+                )
+                continue
+            }
+
+            try uploadReadyChange(change, currentDate: currentDate, retryState: retryState)
+            if change.entityType == "block",
+               let pageID = try syncRepository.pageIDForBlock(blockID: change.entityID) {
+                try uploadDeferredPageChangeIfReady(pageID: pageID)
             }
         }
         return SyncUploadSummary(uploadedCount: uploadedCount, failedCount: failedCount)

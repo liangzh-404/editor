@@ -46,6 +46,32 @@ final class SyncEngineTests: XCTestCase {
         )))
     }
 
+    func testUploadPendingChangesUploadsDeferredPageAfterItsBlocksInSameRun() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let page = try pageRepository.createPage(workspaceID: workspaceID, title: "Imported")
+        let blockID = try XCTUnwrap(
+            pageRepository.loadWorkspaceSnapshot().blocks.first { $0.pageID == page.id }?.id
+        )
+
+        let adapter = RecordingCloudKitSyncAdapter()
+        try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: adapter
+        ).uploadPendingChanges()
+
+        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), [blockID, page.id])
+        XCTAssertFalse(
+            try SyncRepository(database: database).pendingChanges().contains {
+                $0.entityType == "page" && $0.entityID == page.id
+            }
+        )
+    }
+
     func testUploadPendingChangesBackfillsExistingDiaryPageMappings() throws {
         let database = try migratedDatabase()
         defer { database.close() }

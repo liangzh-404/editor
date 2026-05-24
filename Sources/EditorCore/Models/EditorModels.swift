@@ -88,6 +88,9 @@ enum BlockType: String, Equatable, Sendable {
     case heading1
     case heading2
     case heading3
+    case heading4
+    case heading5
+    case heading6
     case unorderedListItem
     case orderedListItem
     case taskItem
@@ -110,6 +113,9 @@ enum BlockType: String, Equatable, Sendable {
              .heading1,
              .heading2,
              .heading3,
+             .heading4,
+             .heading5,
+             .heading6,
              .unorderedListItem,
              .orderedListItem,
              .taskItem,
@@ -136,6 +142,9 @@ enum BlockType: String, Equatable, Sendable {
              .heading1,
              .heading2,
              .heading3,
+             .heading4,
+             .heading5,
+             .heading6,
              .unorderedListItem,
              .orderedListItem,
              .taskItem,
@@ -152,6 +161,20 @@ enum BlockType: String, Equatable, Sendable {
              .attachmentVideo,
              .attachmentFile,
              .drawing:
+            return false
+        }
+    }
+
+    var isHeading: Bool {
+        switch self {
+        case .heading1,
+             .heading2,
+             .heading3,
+             .heading4,
+             .heading5,
+             .heading6:
+            return true
+        default:
             return false
         }
     }

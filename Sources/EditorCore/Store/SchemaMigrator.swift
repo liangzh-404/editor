@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 14
+    static let currentVersion = 15
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -307,6 +307,18 @@ enum SchemaMigrator {
             );
             """
         )
+        try database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_blocks_page_order
+            ON blocks (page_id, is_deleted, order_key);
+            """
+        )
+        try database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_blocks_parent
+            ON blocks (parent_block_id);
+            """
+        )
 
         try database.execute(
             """
@@ -353,6 +365,18 @@ enum SchemaMigrator {
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (source_page_id) REFERENCES pages(id) ON DELETE CASCADE
             );
+            """
+        )
+        try database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_links_source_page
+            ON links (source_page_id);
+            """
+        )
+        try database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_links_target_page
+            ON links (target_page_id);
             """
         )
         try addColumnIfMissing(

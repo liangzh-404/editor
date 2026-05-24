@@ -260,6 +260,22 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(linkColumns.contains("target_url"))
     }
 
+    func testMigrationCreatesLookupIndexesForLargeVaultPerformance() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let indexNames = Set(try database.queryStrings(
+            "SELECT name FROM sqlite_master WHERE type = 'index'"
+        ))
+
+        XCTAssertTrue(indexNames.contains("idx_blocks_page_order"))
+        XCTAssertTrue(indexNames.contains("idx_blocks_parent"))
+        XCTAssertTrue(indexNames.contains("idx_links_source_page"))
+        XCTAssertTrue(indexNames.contains("idx_links_target_page"))
+    }
+
     func testMigrationRecordsSchemaVersionOne() throws {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         defer { database.close() }

@@ -120,11 +120,22 @@ final class SearchRepository: @unchecked Sendable {
     }
 
     func rebuildIndex() throws {
-        try database.execute("DELETE FROM search_index")
-        try indexPages()
-        try indexBlocks()
-        try indexAttachments()
+        try database.withImmediateTransaction("search_index_rebuild") {
+            try database.execute("DELETE FROM search_index")
+            try indexPages()
+            try indexBlocks()
+            try indexAttachments()
+        }
         EditorLog.render.debug("search_index_rebuilt")
+    }
+
+    func needsFullRebuild() throws -> Bool {
+        let actualCounts = try searchIndexEntryCounts()
+        guard actualCounts.values.reduce(0, +) > 0 else {
+            return true
+        }
+        return actualCounts["page", default: 0] == 0
+            || actualCounts["block", default: 0] == 0
     }
 
     func updateBlockIndex(blockID: String) throws {
@@ -163,7 +174,8 @@ final class SearchRepository: @unchecked Sendable {
     func updateAttachmentIndex(attachmentID: String) throws {
         try database.withImmediateTransaction("search_index_attachment_update") {
             try deleteIndex(entityType: "attachment", entityID: attachmentID)
-            for attachment in try attachmentIndexRows(attachmentID: attachmentID) {
+            let attachments = try attachmentIndexRows(attachmentID: attachmentID)
+            for attachment in attachments {
                 try insertAttachmentIndex(attachment)
             }
         }
@@ -524,6 +536,22 @@ final class SearchRepository: @unchecked Sendable {
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .joined(separator: "\n")
         )
+    }
+
+    private func searchIndexEntryCounts() throws -> [String: Int] {
+        let rows = try database.query(
+            """
+            SELECT entity_type,
+                   COUNT(*) AS count
+            FROM search_index
+            GROUP BY entity_type
+            """
+        )
+        var counts: [String: Int] = [:]
+        for row in rows {
+            counts[row["entity_type"] ?? ""] = Int(row["count"] ?? "0") ?? 0
+        }
+        return counts
     }
 
     private func insertIndex(

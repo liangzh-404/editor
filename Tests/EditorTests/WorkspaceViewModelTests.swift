@@ -35,14 +35,38 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testColdLaunchOpensTodayDiaryAndQueuesCompactEditorNavigation() throws {
+    func testLoadHydratesOnlySelectedPageBlocksOnColdLaunch() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let secondPage = try repository.createPage(workspaceID: workspaceID, title: "Fresh")
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        XCTAssertEqual(viewModel.selectedPageID, secondPage.id)
+        XCTAssertEqual(Set(viewModel.snapshot.blocks.map(\.pageID)), [secondPage.id])
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.pageID), [secondPage.id])
+    }
+
+    @MainActor
+    func testColdLaunchOpensExistingTodayDiaryAndQueuesCompactEditorNavigation() throws {
         let database = try migratedDatabase()
         defer { database.close() }
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
+        let diaryRepository = DiaryRepository(database: database)
+        _ = try diaryRepository.openDailyPage(
+            workspaceID: "workspace-local",
+            date: Self.date(year: 2026, month: 5, day: 16),
+            calendar: Self.gregorianCalendar
+        )
         let viewModel = WorkspaceViewModel(
             repository: repository,
-            diaryRepository: DiaryRepository(database: database),
+            diaryRepository: diaryRepository,
             currentDateProvider: { Self.date(year: 2026, month: 5, day: 16) },
             diaryCalendar: Self.gregorianCalendar
         )
@@ -57,6 +81,38 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [viewModel.selectedPageID])
         XCTAssertEqual(viewModel.pendingCompactPageNavigationID, viewModel.selectedPageID)
         XCTAssertEqual(viewModel.pendingFocusBlockID, viewModel.visibleBlocks.first?.id)
+    }
+
+    @MainActor
+    func testColdLaunchWithMissingTodayDiaryFallsBackToRecentWithoutCreatingDiaryPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        try insertPage(
+            database: database,
+            id: "page-fresh",
+            workspaceID: workspaceID,
+            title: "一小时内笔记",
+            createdAt: Self.isoString(year: 2026, month: 5, day: 16, hour: 10, minute: 0),
+            updatedAt: Self.isoString(year: 2026, month: 5, day: 16, hour: 10, minute: 0)
+        )
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: DiaryRepository(database: database),
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 16, hour: 10, minute: 30) },
+            diaryCalendar: Self.gregorianCalendar
+        )
+
+        try viewModel.load()
+
+        XCTAssertEqual(viewModel.selectedCollection, .recent)
+        XCTAssertEqual(viewModel.selectedPageID, "page-fresh")
+        XCTAssertEqual(
+            try database.queryInt("SELECT COUNT(*) FROM diary_pages WHERE diary_date = '2026-05-16'"),
+            0
+        )
     }
 
     @MainActor
@@ -1407,6 +1463,43 @@ final class WorkspaceViewModelTests: XCTestCase {
         let searchResult = try XCTUnwrap(viewModel.searchResults.first { $0.entityID == importResult.attachment.id })
         XCTAssertEqual(searchResult.destinationBlockID, importResult.block.id)
         XCTAssertEqual(searchResult.highlight?.rects.first?.x, 0.18)
+    }
+
+    @MainActor
+    func testLoadDoesNotScheduleBulkPendingImageTextRecognition() async throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        _ = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let attachmentRepository = AttachmentRepository(
+            database: database,
+            attachmentsDirectory: makeTemporaryDirectory()
+        )
+        _ = try attachmentRepository.importAttachment(
+            sourceURL: try makeSourceFile(name: "imported-vault-image.png", data: Self.onePixelPNGData),
+            workspaceID: "workspace-local",
+            pageID: "page-welcome",
+            thumbnailPolicy: .deferred
+        )
+        let textRecognitionRepository = AttachmentTextRecognitionRepository(database: database)
+        XCTAssertEqual(try textRecognitionRepository.pendingImageAttachmentIDs().count, 1)
+
+        let textRecognitionScheduler = CapturingAttachmentTextRecognitionScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: pageRepository,
+            attachmentRepository: attachmentRepository,
+            attachmentThumbnailScheduler: nil,
+            attachmentTextRecognitionRepository: textRecognitionRepository,
+            attachmentTextRecognitionScheduler: textRecognitionScheduler,
+            imageTextRecognizer: StaticImageTextRecognizer(observations: []),
+            searchRepository: SearchRepository(database: database)
+        )
+
+        try viewModel.load()
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(textRecognitionScheduler.scheduledAttachmentIDs, [])
     }
 
     @MainActor
@@ -4893,6 +4986,18 @@ private final class CapturingAttachmentTextRecognitionScheduler: AttachmentTextR
 
     var scheduledAttachmentIDs: [String] {
         scheduledTextRecognitions.map(\.attachmentID)
+    }
+
+    func schedulePendingTextRecognitionLookup(
+        load: @escaping @Sendable () throws -> [String],
+        completion: @MainActor @escaping @Sendable (Result<[String], Error>) -> Void
+    ) {
+        let result = Result {
+            try load()
+        }
+        Task { @MainActor in
+            completion(result)
+        }
     }
 
     func scheduleTextRecognition(

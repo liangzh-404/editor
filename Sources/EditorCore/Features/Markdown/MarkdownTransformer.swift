@@ -58,6 +58,27 @@ enum SlashCommandResolver {
             type: .heading3
         ),
         SlashCommandDescriptor(
+            id: "heading4",
+            title: "四级标题",
+            subtitle: "细分标题",
+            aliases: ["h4", "标题4", "四级标题"],
+            type: .heading4
+        ),
+        SlashCommandDescriptor(
+            id: "heading5",
+            title: "五级标题",
+            subtitle: "细节标题",
+            aliases: ["h5", "标题5", "五级标题"],
+            type: .heading5
+        ),
+        SlashCommandDescriptor(
+            id: "heading6",
+            title: "六级标题",
+            subtitle: "最小标题",
+            aliases: ["h6", "标题6", "六级标题"],
+            type: .heading6
+        ),
+        SlashCommandDescriptor(
             id: "unordered-list",
             title: "无序列表",
             subtitle: "圆点项目",
@@ -630,6 +651,7 @@ enum MarkdownInlineStyleKind: Equatable {
     case bold
     case italic
     case strikethrough
+    case highlight
     case code
     case link
 }
@@ -645,16 +667,24 @@ enum MarkdownInlineStyleScanner {
         let codeRuns = codeStyleRuns(in: nsText)
         let codeRanges = codeRuns.map(\.range)
         var runs = codeRuns +
-            boldStyleRuns(in: nsText, excluding: codeRanges) +
+            boldStyleRuns(marker: "**", in: nsText, excluding: codeRanges) +
+            boldStyleRuns(marker: "__", in: nsText, excluding: codeRanges) +
             italicStyleRuns(in: nsText, excluding: codeRanges) +
+            underscoreItalicStyleRuns(in: nsText, excluding: codeRanges) +
             strikethroughStyleRuns(in: nsText, excluding: codeRanges) +
-            linkStyleRuns(in: nsText, excluding: codeRanges)
+            highlightStyleRuns(in: nsText, excluding: codeRanges) +
+            linkStyleRuns(in: nsText, excluding: codeRanges) +
+            autolinkStyleRuns(in: nsText, excluding: codeRanges)
         if includingSyntaxMarkers {
             runs += codeSyntaxRuns(in: nsText)
             runs += pairedSyntaxRuns(marker: "**", in: nsText, excluding: codeRanges)
+            runs += pairedSyntaxRuns(marker: "__", in: nsText, excluding: codeRanges)
             runs += italicSyntaxRuns(in: nsText, excluding: codeRanges)
+            runs += underscoreItalicSyntaxRuns(in: nsText, excluding: codeRanges)
             runs += pairedSyntaxRuns(marker: "~~", in: nsText, excluding: codeRanges)
+            runs += pairedSyntaxRuns(marker: "==", in: nsText, excluding: codeRanges)
             runs += linkSyntaxRuns(in: nsText, excluding: codeRanges)
+            runs += autolinkSyntaxRuns(in: nsText, excluding: codeRanges)
         }
         return runs.sorted { lhs, rhs in
             if lhs.range.location == rhs.range.location {
@@ -721,13 +751,17 @@ enum MarkdownInlineStyleScanner {
         return runs
     }
 
-    private static func boldStyleRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
+    private static func boldStyleRuns(
+        marker: String,
+        in text: NSString,
+        excluding excludedRanges: [NSRange]
+    ) -> [MarkdownInlineStyleRun] {
         var runs: [MarkdownInlineStyleRun] = []
         var searchStart = 0
 
         while searchStart < text.length {
             let opening = nextRange(
-                of: "**",
+                of: marker,
                 in: text,
                 from: searchStart,
                 excluding: excludedRanges
@@ -737,7 +771,7 @@ enum MarkdownInlineStyleScanner {
             }
 
             let closing = nextRange(
-                of: "**",
+                of: marker,
                 in: text,
                 from: NSMaxRange(opening),
                 excluding: excludedRanges
@@ -802,6 +836,44 @@ enum MarkdownInlineStyleScanner {
         return runs
     }
 
+    private static func highlightStyleRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
+        var runs: [MarkdownInlineStyleRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = nextRange(
+                of: "==",
+                in: text,
+                from: searchStart,
+                excluding: excludedRanges
+            )
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let closing = nextRange(
+                of: "==",
+                in: text,
+                from: NSMaxRange(opening),
+                excluding: excludedRanges
+            )
+            guard closing.location != NSNotFound else {
+                break
+            }
+
+            let contentRange = NSRange(
+                location: NSMaxRange(opening),
+                length: closing.location - NSMaxRange(opening)
+            )
+            if contentRange.length > 0 {
+                runs.append(MarkdownInlineStyleRun(kind: .highlight, range: contentRange))
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return runs
+    }
+
     private static func italicStyleRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
         var runs: [MarkdownInlineStyleRun] = []
         var searchStart = 0
@@ -840,6 +912,34 @@ enum MarkdownInlineStyleScanner {
         return runs
     }
 
+    private static func underscoreItalicStyleRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
+        var runs: [MarkdownInlineStyleRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = nextSingleUnderscoreRange(in: text, from: searchStart, excluding: excludedRanges)
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let closing = nextSingleUnderscoreRange(in: text, from: NSMaxRange(opening), excluding: excludedRanges)
+            guard closing.location != NSNotFound else {
+                break
+            }
+
+            let contentRange = NSRange(
+                location: NSMaxRange(opening),
+                length: closing.location - NSMaxRange(opening)
+            )
+            if contentRange.length > 0 {
+                runs.append(MarkdownInlineStyleRun(kind: .italic, range: contentRange))
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return runs
+    }
+
     private static func italicSyntaxRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
         var runs: [MarkdownInlineStyleRun] = []
         var searchStart = 0
@@ -851,6 +951,35 @@ enum MarkdownInlineStyleScanner {
             }
 
             let closing = nextSingleAsteriskRange(in: text, from: NSMaxRange(opening), excluding: excludedRanges)
+            guard closing.location != NSNotFound else {
+                break
+            }
+
+            let contentRange = NSRange(
+                location: NSMaxRange(opening),
+                length: closing.location - NSMaxRange(opening)
+            )
+            if contentRange.length > 0 {
+                runs.append(MarkdownInlineStyleRun(kind: .syntax, range: opening))
+                runs.append(MarkdownInlineStyleRun(kind: .syntax, range: closing))
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return runs
+    }
+
+    private static func underscoreItalicSyntaxRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
+        var runs: [MarkdownInlineStyleRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = nextSingleUnderscoreRange(in: text, from: searchStart, excluding: excludedRanges)
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let closing = nextSingleUnderscoreRange(in: text, from: NSMaxRange(opening), excluding: excludedRanges)
             guard closing.location != NSNotFound else {
                 break
             }
@@ -1003,6 +1132,65 @@ enum MarkdownInlineStyleScanner {
         return runs
     }
 
+    private static func autolinkStyleRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
+        autolinkRanges(in: text, excluding: excludedRanges)
+            .map { MarkdownInlineStyleRun(kind: .link, range: $0.contentRange) }
+    }
+
+    private static func autolinkSyntaxRuns(in text: NSString, excluding excludedRanges: [NSRange]) -> [MarkdownInlineStyleRun] {
+        autolinkRanges(in: text, excluding: excludedRanges).flatMap { range in
+            [
+                MarkdownInlineStyleRun(kind: .syntax, range: range.openingRange),
+                MarkdownInlineStyleRun(kind: .syntax, range: range.closingRange)
+            ]
+        }
+    }
+
+    private static func autolinkRanges(
+        in text: NSString,
+        excluding excludedRanges: [NSRange]
+    ) -> [(openingRange: NSRange, contentRange: NSRange, closingRange: NSRange)] {
+        var ranges: [(openingRange: NSRange, contentRange: NSRange, closingRange: NSRange)] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = nextRange(
+                of: "<",
+                in: text,
+                from: searchStart,
+                excluding: excludedRanges
+            )
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let closing = nextRange(
+                of: ">",
+                in: text,
+                from: NSMaxRange(opening),
+                excluding: excludedRanges
+            )
+            guard closing.location != NSNotFound else {
+                searchStart = NSMaxRange(opening)
+                continue
+            }
+
+            let contentRange = NSRange(
+                location: NSMaxRange(opening),
+                length: closing.location - NSMaxRange(opening)
+            )
+            let content = text.substring(with: contentRange)
+            if contentRange.length > 0,
+               URLComponents(string: content)?.scheme != nil,
+               !overlapsAny(contentRange, excludedRanges) {
+                ranges.append((opening, contentRange, closing))
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return ranges
+    }
+
     private static func nextRange(
         of marker: String,
         in text: NSString,
@@ -1043,6 +1231,27 @@ enum MarkdownInlineStyleScanner {
         return NSRange(location: NSNotFound, length: 0)
     }
 
+    private static func nextSingleUnderscoreRange(
+        in text: NSString,
+        from location: Int,
+        excluding excludedRanges: [NSRange]
+    ) -> NSRange {
+        var searchStart = location
+        while searchStart < text.length {
+            let foundRange = range(of: "_", in: text, from: searchStart)
+            guard foundRange.location != NSNotFound else {
+                return foundRange
+            }
+            if !overlapsAny(foundRange, excludedRanges),
+               !isAdjacentToUnderscore(foundRange, in: text),
+               !isInsideWord(foundRange, in: text) {
+                return foundRange
+            }
+            searchStart = NSMaxRange(foundRange)
+        }
+        return NSRange(location: NSNotFound, length: 0)
+    }
+
     private static func range(of marker: String, in text: NSString, from location: Int) -> NSRange {
         guard location < text.length else {
             return NSRange(location: NSNotFound, length: 0)
@@ -1071,12 +1280,39 @@ enum MarkdownInlineStyleScanner {
         }
         return false
     }
+
+    private static func isAdjacentToUnderscore(_ range: NSRange, in text: NSString) -> Bool {
+        let previousLocation = range.location - 1
+        if previousLocation >= 0,
+           text.substring(with: NSRange(location: previousLocation, length: 1)) == "_" {
+            return true
+        }
+        let nextLocation = NSMaxRange(range)
+        if nextLocation < text.length,
+           text.substring(with: NSRange(location: nextLocation, length: 1)) == "_" {
+            return true
+        }
+        return false
+    }
+
+    private static func isInsideWord(_ range: NSRange, in text: NSString) -> Bool {
+        let previousLocation = range.location - 1
+        let nextLocation = NSMaxRange(range)
+        guard previousLocation >= 0, nextLocation < text.length else {
+            return false
+        }
+        let previous = text.substring(with: NSRange(location: previousLocation, length: 1))
+        let next = text.substring(with: NSRange(location: nextLocation, length: 1))
+        return previous.rangeOfCharacter(from: .alphanumerics) != nil &&
+            next.rangeOfCharacter(from: .alphanumerics) != nil
+    }
 }
 
 enum MarkdownInlineFormat: Equatable, Sendable {
     case bold
     case italic
     case strikethrough
+    case highlight
     case code
 
     var openingMarker: String {
@@ -1087,6 +1323,8 @@ enum MarkdownInlineFormat: Equatable, Sendable {
             return "*"
         case .strikethrough:
             return "~~"
+        case .highlight:
+            return "=="
         case .code:
             return "`"
         }
@@ -1104,6 +1342,8 @@ enum MarkdownInlineFormat: Equatable, Sendable {
             return "italic"
         case .strikethrough:
             return "strikethrough"
+        case .highlight:
+            return "highlight"
         case .code:
             return "code"
         }
@@ -1412,6 +1652,7 @@ enum MarkdownTransformer {
         var paragraphLines: [String] = []
         var blockquoteType: BlockType?
         var blockquoteLines: [String] = []
+        var indentedCodeLines: [String] = []
 
         for line in markdown.components(separatedBy: .newlines) {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
@@ -1444,12 +1685,23 @@ enum MarkdownTransformer {
                 continue
             }
 
+            if let indentedCodeLine = indentedCodeText(for: line),
+               paragraphLines.isEmpty {
+                flushTableLines(&tableLines, into: &drafts)
+                flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
+                indentedCodeLines.append(indentedCodeLine)
+                continue
+            }
+
             guard !trimmedLine.isEmpty else {
+                flushIndentedCodeLines(&indentedCodeLines, into: &drafts)
                 flushParagraphLines(&paragraphLines, into: &drafts)
                 flushTableLines(&tableLines, into: &drafts)
                 flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
                 continue
             }
+
+            flushIndentedCodeLines(&indentedCodeLines, into: &drafts)
 
             if let blockquoteLine = blockquoteLineDraft(for: trimmedLine) {
                 flushParagraphLines(&paragraphLines, into: &drafts)
@@ -1515,6 +1767,7 @@ enum MarkdownTransformer {
 
         if let codeLines {
             flushParagraphLines(&paragraphLines, into: &drafts)
+            flushIndentedCodeLines(&indentedCodeLines, into: &drafts)
             drafts.append(
                 MarkdownBlockDraft(
                     type: .codeBlock,
@@ -1522,6 +1775,7 @@ enum MarkdownTransformer {
                 )
             )
         }
+        flushIndentedCodeLines(&indentedCodeLines, into: &drafts)
         flushParagraphLines(&paragraphLines, into: &drafts)
         flushTableLines(&tableLines, into: &drafts)
         flushBlockquoteLines(&blockquoteLines, type: &blockquoteType, into: &drafts)
@@ -1539,6 +1793,12 @@ enum MarkdownTransformer {
             return "## \(block.textPlain)"
         case .heading3:
             return "### \(block.textPlain)"
+        case .heading4:
+            return "#### \(block.textPlain)"
+        case .heading5:
+            return "##### \(block.textPlain)"
+        case .heading6:
+            return "###### \(block.textPlain)"
         case .unorderedListItem:
             return "- \(block.textPlain)"
         case .orderedListItem:
@@ -1593,14 +1853,11 @@ enum MarkdownTransformer {
     }
 
     private static func importBlockDraft(for line: String) -> MarkdownBlockDraft {
-        if line.hasPrefix("### ") {
-            return MarkdownBlockDraft(type: .heading3, textPlain: String(line.dropFirst(4)))
+        if let headingDraft = atxHeadingDraft(for: line) {
+            return headingDraft
         }
-        if line.hasPrefix("## ") {
-            return MarkdownBlockDraft(type: .heading2, textPlain: String(line.dropFirst(3)))
-        }
-        if line.hasPrefix("# ") {
-            return MarkdownBlockDraft(type: .heading1, textPlain: String(line.dropFirst(2)))
+        if isDividerLine(line) {
+            return MarkdownBlockDraft(type: .divider, textPlain: "")
         }
         if let taskItemDraft = taskItemDraft(for: line) {
             return taskItemDraft
@@ -1611,17 +1868,14 @@ enum MarkdownTransformer {
         if let orderedListText = orderedListItemText(for: line) {
             return MarkdownBlockDraft(type: .orderedListItem, textPlain: orderedListText)
         }
-        if line.hasPrefix("> [!NOTE] ") {
-            return MarkdownBlockDraft(type: .callout, textPlain: String(line.dropFirst(10)))
-        }
-        if line.hasPrefix("> ") {
-            return MarkdownBlockDraft(type: .quote, textPlain: String(line.dropFirst(2)))
+        if let blockquoteContent = blockquoteContent(for: line) {
+            if let calloutText = calloutText(for: blockquoteContent) {
+                return MarkdownBlockDraft(type: .callout, textPlain: calloutText)
+            }
+            return MarkdownBlockDraft(type: .quote, textPlain: blockquoteContent)
         }
         if let toggleText = toggleText(for: line) {
             return MarkdownBlockDraft(type: .toggle, textPlain: toggleText)
-        }
-        if line == "---" {
-            return MarkdownBlockDraft(type: .divider, textPlain: "")
         }
         if let attachmentDraft = attachmentDraft(for: line) {
             return attachmentDraft
@@ -1659,6 +1913,62 @@ enum MarkdownTransformer {
         return nil
     }
 
+    private static func atxHeadingDraft(for line: String) -> MarkdownBlockDraft? {
+        var index = line.startIndex
+        var level = 0
+        while index < line.endIndex, line[index] == "#", level < 6 {
+            level += 1
+            index = line.index(after: index)
+        }
+
+        guard level > 0,
+              index < line.endIndex,
+              line[index].isWhitespace else {
+            return nil
+        }
+
+        let rawText = String(line[index...]).trimmingCharacters(in: .whitespaces)
+        let text = removingClosingAtxSequence(from: rawText)
+        guard !text.isEmpty else {
+            return nil
+        }
+
+        let type: BlockType
+        switch level {
+        case 1:
+            type = .heading1
+        case 2:
+            type = .heading2
+        case 3:
+            type = .heading3
+        case 4:
+            type = .heading4
+        case 5:
+            type = .heading5
+        default:
+            type = .heading6
+        }
+        return MarkdownBlockDraft(type: type, textPlain: text)
+    }
+
+    private static func removingClosingAtxSequence(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard trimmed.last == "#" else {
+            return trimmed
+        }
+
+        var index = trimmed.endIndex
+        repeat {
+            index = trimmed.index(before: index)
+        } while index > trimmed.startIndex && trimmed[index] == "#"
+
+        guard trimmed[index].isWhitespace else {
+            return trimmed
+        }
+
+        return String(trimmed[..<index]).trimmingCharacters(in: .whitespaces)
+    }
+
     private static func unorderedListItemText(for line: String) -> String? {
         for marker in ["- ", "* ", "+ "] where line.hasPrefix(marker) {
             return String(line.dropFirst(marker.count))
@@ -1670,12 +1980,22 @@ enum MarkdownTransformer {
         let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2,
               let marker = parts.first,
-              marker.hasSuffix("."),
+              marker.hasSuffix(".") || marker.hasSuffix(")"),
               marker.dropLast().allSatisfy(\.isNumber) else {
             return nil
         }
 
         return String(parts[1])
+    }
+
+    private static func isDividerLine(_ line: String) -> Bool {
+        let compactLine = line.filter { !$0.isWhitespace }
+        guard compactLine.count >= 3,
+              let marker = compactLine.first,
+              marker == "-" || marker == "*" || marker == "_" else {
+            return false
+        }
+        return compactLine.allSatisfy { $0 == marker }
     }
 
     private static func codeFenceMarker(forStartLine line: String) -> String? {
@@ -1684,6 +2004,16 @@ enum MarkdownTransformer {
         }
         if line.hasPrefix("~~~") {
             return "~~~"
+        }
+        return nil
+    }
+
+    private static func indentedCodeText(for line: String) -> String? {
+        if line.hasPrefix("    ") {
+            return String(line.dropFirst(4))
+        }
+        if line.hasPrefix("\t") {
+            return String(line.dropFirst())
         }
         return nil
     }
@@ -1738,19 +2068,46 @@ enum MarkdownTransformer {
     }
 
     private static func blockquoteLineDraft(for line: String) -> MarkdownBlockDraft? {
-        if line.hasPrefix("> [!NOTE] ") {
-            return MarkdownBlockDraft(type: .callout, textPlain: String(line.dropFirst(10)))
+        guard let content = blockquoteContent(for: line) else {
+            return nil
         }
-        if line == "> [!NOTE]" {
-            return MarkdownBlockDraft(type: .callout, textPlain: "")
+        if let calloutText = calloutText(for: content) {
+            return MarkdownBlockDraft(type: .callout, textPlain: calloutText)
         }
-        if line.hasPrefix("> ") {
-            return MarkdownBlockDraft(type: .quote, textPlain: String(line.dropFirst(2)))
+        return MarkdownBlockDraft(type: .quote, textPlain: content)
+    }
+
+    private static func blockquoteContent(for line: String) -> String? {
+        guard line.hasPrefix(">") else {
+            return nil
         }
-        if line == ">" {
-            return MarkdownBlockDraft(type: .quote, textPlain: "")
+        var content = String(line.dropFirst())
+        if content.first?.isWhitespace == true {
+            content.removeFirst()
         }
-        return nil
+        return content
+    }
+
+    private static func calloutText(for blockquoteContent: String) -> String? {
+        guard blockquoteContent.hasPrefix("[!") else {
+            return nil
+        }
+        guard let closingBracket = blockquoteContent.firstIndex(of: "]") else {
+            return nil
+        }
+
+        let markerStart = blockquoteContent.index(blockquoteContent.startIndex, offsetBy: 2)
+        let marker = blockquoteContent[markerStart..<closingBracket]
+        guard !marker.isEmpty,
+              marker.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }) else {
+            return nil
+        }
+
+        var remainder = String(blockquoteContent[blockquoteContent.index(after: closingBracket)...])
+        if remainder.first == "+" || remainder.first == "-" {
+            remainder.removeFirst()
+        }
+        return remainder.trimmingCharacters(in: .whitespaces)
     }
 
     private static func appendBlockquoteLine(
@@ -1809,6 +2166,22 @@ enum MarkdownTransformer {
         blockquoteLines.removeAll()
     }
 
+    private static func flushIndentedCodeLines(
+        _ indentedCodeLines: inout [String],
+        into drafts: inout [MarkdownBlockDraft]
+    ) {
+        guard !indentedCodeLines.isEmpty else {
+            return
+        }
+        drafts.append(
+            MarkdownBlockDraft(
+                type: .codeBlock,
+                textPlain: indentedCodeLines.joined(separator: "\n")
+            )
+        )
+        indentedCodeLines.removeAll()
+    }
+
     private static func flushParagraphLines(
         _ paragraphLines: inout [String],
         into drafts: inout [MarkdownBlockDraft]
@@ -1830,12 +2203,7 @@ enum MarkdownTransformer {
         with line: String,
         existingLines: [String]
     ) -> Bool {
-        guard !existingLines.isEmpty,
-              let firstCharacter = line.first else {
-            return false
-        }
-
-        return firstCharacter.isLowercase
+        !existingLines.isEmpty && !line.isEmpty
     }
 
     private static func toggleText(for line: String) -> String? {
@@ -1933,7 +2301,7 @@ enum MarkdownTransformer {
                 continue
             }
             let targetStart = line.index(after: targetOpen)
-            guard let targetEnd = line[targetStart...].firstIndex(of: ")") else {
+            guard let targetEnd = markdownLinkTargetEnd(in: line, from: targetStart) else {
                 return nil
             }
 
@@ -1951,6 +2319,37 @@ enum MarkdownTransformer {
                 target,
                 isImage
             )
+        }
+
+        return nil
+    }
+
+    private static func markdownLinkTargetEnd(in line: String, from targetStart: String.Index) -> String.Index? {
+        var index = targetStart
+        var nestedParenthesisDepth = 0
+        var isEscaped = false
+
+        while index < line.endIndex {
+            let character = line[index]
+            if isEscaped {
+                isEscaped = false
+                index = line.index(after: index)
+                continue
+            }
+            if character == "\\" {
+                isEscaped = true
+                index = line.index(after: index)
+                continue
+            }
+            if character == "(" {
+                nestedParenthesisDepth += 1
+            } else if character == ")" {
+                if nestedParenthesisDepth == 0 {
+                    return index
+                }
+                nestedParenthesisDepth -= 1
+            }
+            index = line.index(after: index)
         }
 
         return nil
