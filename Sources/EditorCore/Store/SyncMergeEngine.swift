@@ -77,6 +77,17 @@ struct RemotePageChange: Equatable, Sendable {
     }
 }
 
+struct RemotePageVersionChange: Equatable, Sendable {
+    let versionID: String
+    let pageID: String
+    let title: String
+    let snapshotJSON: String
+    let contentHash: String
+    let blockCount: Int
+    let createdAt: String
+    let updatedAt: String?
+}
+
 struct RemoteDiaryPageChange: Equatable, Sendable {
     let pageID: String
     let workspaceID: String
@@ -374,6 +385,55 @@ final class SyncMergeEngine {
             )
             try clearPendingLocalChanges(entityType: "diaryPage", entityID: remote.pageID)
         }
+    }
+
+    func applyRemotePageVersion(_ remote: RemotePageVersionChange) throws {
+        guard try shouldApplyRemoteChange(
+            entityType: "pageVersion",
+            entityID: remote.versionID,
+            remoteUpdatedAt: remote.updatedAt,
+            localUpdatedAt: localUpdatedAt(table: "page_versions", idColumn: "id", entityID: remote.versionID)
+        ) else {
+            return
+        }
+
+        let updatedAt = remote.updatedAt ?? remote.createdAt
+        try database.execute(
+            """
+            INSERT INTO page_versions (
+                id,
+                page_id,
+                title,
+                snapshot_json,
+                content_hash,
+                block_count,
+                sync_state,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                page_id = excluded.page_id,
+                title = excluded.title,
+                snapshot_json = excluded.snapshot_json,
+                content_hash = excluded.content_hash,
+                block_count = excluded.block_count,
+                sync_state = excluded.sync_state,
+                updated_at = excluded.updated_at
+            """,
+            bindings: [
+                .text(remote.versionID),
+                .text(remote.pageID),
+                .text(remote.title),
+                .text(remote.snapshotJSON),
+                .text(remote.contentHash),
+                .integer(remote.blockCount),
+                .text("synced"),
+                .text(remote.createdAt),
+                .text(updatedAt)
+            ]
+        )
+        try clearPendingLocalChanges(entityType: "pageVersion", entityID: remote.versionID)
     }
 
     func applyRemoteTag(_ remote: RemoteTagChange) throws {
@@ -915,6 +975,8 @@ final class SyncMergeEngine {
         switch remote.entityType {
         case "page":
             try applyRemotePageDeletion(pageID: remote.entityID)
+        case "pageVersion":
+            try applyRemotePageVersionDeletion(versionID: remote.entityID)
         case "diaryPage":
             try applyRemoteDiaryPageDeletion(pageID: remote.entityID)
         case "notebook":
@@ -1219,6 +1281,16 @@ final class SyncMergeEngine {
             WHERE page_id = ?
             """,
             bindings: [.text(pageID)]
+        )
+    }
+
+    private func applyRemotePageVersionDeletion(versionID: String) throws {
+        try database.execute(
+            """
+            DELETE FROM page_versions
+            WHERE id = ?
+            """,
+            bindings: [.text(versionID)]
         )
     }
 

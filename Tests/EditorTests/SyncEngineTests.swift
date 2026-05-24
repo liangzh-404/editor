@@ -31,7 +31,11 @@ final class SyncEngineTests: XCTestCase {
             adapter: adapter
         ).uploadPendingChanges()
 
-        XCTAssertEqual(adapter.uploadedChanges.map(\.entityID), [pageID, blockID])
+        XCTAssertEqual(Array(adapter.uploadedChanges.prefix(2).map(\.entityID)), [pageID, blockID])
+        let versionChange = try XCTUnwrap(adapter.uploadedChanges.dropFirst(2).first)
+        XCTAssertEqual(versionChange.entityType, "pageVersion")
+        XCTAssertEqual(versionChange.changeType, "create")
+        XCTAssertTrue(versionChange.entityID.hasPrefix("page-version-"))
         XCTAssertEqual(try syncRepository.pendingChanges(), [])
         let syncRecords = try syncRepository.syncRecords()
         XCTAssertTrue(syncRecords.contains(SyncRecord(
@@ -274,14 +278,19 @@ final class SyncEngineTests: XCTestCase {
             pageRepository.loadWorkspaceSnapshot().blocks.first { $0.id == blockID }
         )
         XCTAssertEqual(reloadedBlock.textPlain, "Offline edit survives")
-        XCTAssertEqual(result.uploadedCount, 1)
+        XCTAssertEqual(result.uploadedCount, 2)
         XCTAssertEqual(result.failedCount, 1)
-        XCTAssertEqual(try syncRepository.pendingChanges(), [
+        let pendingChanges = try syncRepository.pendingChanges()
+        XCTAssertEqual(pendingChanges, [
             SyncChange(entityType: "block", entityID: blockID, changeType: "update")
         ])
+        let versionChange = try XCTUnwrap(adapter.uploadedChanges.first { $0.entityType == "pageVersion" })
+        XCTAssertEqual(versionChange.changeType, "create")
+        XCTAssertTrue(versionChange.entityID.hasPrefix("page-version-"))
         let syncedEntityIDs = Set(try syncRepository.syncRecords().map(\.entityID))
         XCTAssertTrue(syncedEntityIDs.contains(pageID))
         XCTAssertTrue(syncedEntityIDs.contains(blockID))
+        XCTAssertTrue(syncedEntityIDs.contains(versionChange.entityID))
         XCTAssertEqual(
             try syncRepository.retryState(change: SyncChange(entityType: "block", entityID: blockID, changeType: "update")),
             SyncRetryState(
@@ -2012,6 +2021,63 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(rows.first?["diary_date"], "2026-05-21")
     }
 
+    func testFetchRemoteChangesAppliesRemotePageVersion() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let localSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(localSnapshot.selectedPageID)
+        let versionSnapshot = PageVersionSnapshot(
+            pageID: pageID,
+            title: "Remote old title",
+            pageCreatedAt: "2026-05-24T00:00:00.000Z",
+            pageUpdatedAt: "2026-05-24T00:01:00.000Z",
+            capturedAt: "2026-05-24T00:02:00.000Z",
+            blocks: [
+                PageVersionBlockSnapshot(
+                    id: "block-remote-version",
+                    pageID: pageID,
+                    parentBlockID: nil,
+                    orderKey: "000001",
+                    typeRawValue: BlockType.paragraph.rawValue,
+                    textPlain: "Remote historical text",
+                    payloadJSON: #"{"text":"Remote historical text"}"#
+                )
+            ]
+        )
+        let snapshotData = try JSONEncoder().encode(versionSnapshot)
+        let snapshotJSON = try XCTUnwrap(String(data: snapshotData, encoding: .utf8))
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            pageVersionChanges: [
+                RemotePageVersionChange(
+                    versionID: "version-remote",
+                    pageID: pageID,
+                    title: "Remote old title",
+                    snapshotJSON: snapshotJSON,
+                    contentHash: "remote-hash",
+                    blockCount: 1,
+                    createdAt: "2026-05-24T00:02:00.000Z",
+                    updatedAt: "2026-05-24T00:02:00.000Z"
+                )
+            ],
+            changes: []
+        )
+
+        let result = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let storedSnapshot = try PageVersionRepository(database: database)
+            .versionSnapshot(versionID: "version-remote")
+
+        XCTAssertEqual(result.appliedCount, 1)
+        XCTAssertEqual(storedSnapshot.title, "Remote old title")
+        XCTAssertEqual(storedSnapshot.blocks.map(\.textPlain), ["Remote historical text"])
+    }
+
     func testFetchRemoteChangesSkipsDiaryPageMappingWhenPageIsMissing() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -2375,6 +2441,44 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(record["textPlain"] as? String, "Cloud text")
         XCTAssertEqual(record["type"] as? String, BlockType.paragraph.rawValue)
         XCTAssertEqual(result.recordName, "editor-cloudkit-v2.block.\(blockID)")
+    }
+
+    func testCloudKitPrivateDatabaseAdapterMapsPageVersionChangeToRecord() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let versionRepository = PageVersionRepository(
+            database: database,
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+        let pageRepository = PageRepository(
+            database: database,
+            pageVersionRepository: versionRepository
+        )
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        try pageRepository.updateBlockText(blockID: blockID, text: "Cloud text")
+        let version = try XCTUnwrap(try versionRepository.versionSummaries(pageID: pageID).first)
+        let saver = CapturingCloudKitRecordSaver()
+
+        let result = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordSaver: saver
+        ).upload(change: SyncChange(entityType: "pageVersion", entityID: version.id, changeType: "create"))
+
+        let record = try XCTUnwrap(saver.savedRecords.first)
+        XCTAssertEqual(record.recordType, "PageVersionRecord")
+        XCTAssertEqual(record.recordID.recordName, "editor-cloudkit-v2.pageVersion.\(version.id)")
+        XCTAssertEqual(record["entityID"] as? String, version.id)
+        XCTAssertEqual(record["pageID"] as? String, pageID)
+        XCTAssertEqual(record["title"] as? String, "欢迎")
+        XCTAssertEqual(record["snapshotJSON"] as? String, try database.query(
+            "SELECT snapshot_json FROM page_versions WHERE id = ?",
+            bindings: [.text(version.id)]
+        ).first?["snapshot_json"])
+        XCTAssertEqual((record["blockCount"] as? NSNumber)?.intValue, 1)
+        XCTAssertEqual(result.recordName, "editor-cloudkit-v2.pageVersion.\(version.id)")
     }
 
     func testLiveCloudKitRecordSaverUsesOverwriteSavePolicyForIdempotentUploads() {
@@ -2792,6 +2896,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
     let notebookChanges: [RemoteNotebookChange]
     let pageChanges: [RemotePageChange]
     let diaryPageChanges: [RemoteDiaryPageChange]
+    let pageVersionChanges: [RemotePageVersionChange]
     let tagChanges: [RemoteTagChange]
     let pageTagChanges: [RemotePageTagChange]
     let attachmentChanges: [RemoteAttachmentChange]
@@ -2807,6 +2912,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
         notebookChanges: [RemoteNotebookChange] = [],
         pageChanges: [RemotePageChange] = [],
         diaryPageChanges: [RemoteDiaryPageChange] = [],
+        pageVersionChanges: [RemotePageVersionChange] = [],
         tagChanges: [RemoteTagChange] = [],
         pageTagChanges: [RemotePageTagChange] = [],
         attachmentChanges: [RemoteAttachmentChange] = [],
@@ -2819,6 +2925,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
         self.notebookChanges = notebookChanges
         self.pageChanges = pageChanges
         self.diaryPageChanges = diaryPageChanges
+        self.pageVersionChanges = pageVersionChanges
         self.tagChanges = tagChanges
         self.pageTagChanges = pageTagChanges
         self.attachmentChanges = attachmentChanges
@@ -2838,6 +2945,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
             notebookChanges: notebookChanges,
             pageChanges: pageChanges,
             diaryPageChanges: diaryPageChanges,
+            pageVersionChanges: pageVersionChanges,
             tagChanges: tagChanges,
             pageTagChanges: pageTagChanges,
             attachmentChanges: attachmentChanges,

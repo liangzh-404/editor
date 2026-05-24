@@ -245,6 +245,7 @@ final class WorkspaceViewModel: ObservableObject {
     static let pageArchiveUndoVisibilityDuration: TimeInterval = 8
 
     private let repository: PageRepository?
+    private let pageVersionRepository: PageVersionRepository?
     private let diaryRepository: DiaryRepository?
     private let tagRepository: TagRepository?
     private let attachmentRepository: AttachmentRepository?
@@ -299,6 +300,14 @@ final class WorkspaceViewModel: ObservableObject {
     private static let deferredHydrationBlockThreshold = 300
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
     private static let foregroundSyncPartialFailureCooldown: TimeInterval = 30
+
+    func pageVersionSummaries(pageID: String) throws -> [PageVersionSummary] {
+        try pageVersionRepository?.versionSummaries(pageID: pageID) ?? []
+    }
+
+    func pageVersionSnapshot(versionID: String) throws -> PageVersionSnapshot? {
+        try pageVersionRepository?.versionSnapshot(versionID: versionID)
+    }
 
     var canNavigateBack: Bool {
         !pageNavigationBackStack.isEmpty || selectedPageParentLink != nil
@@ -444,6 +453,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     init(
         repository: PageRepository,
+        pageVersionRepository: PageVersionRepository? = nil,
         diaryRepository: DiaryRepository? = nil,
         tagRepository: TagRepository? = nil,
         attachmentRepository: AttachmentRepository? = nil,
@@ -468,6 +478,7 @@ final class WorkspaceViewModel: ObservableObject {
         searchHighlightDurationNanoseconds: UInt64 = 1_600_000_000
     ) {
         self.repository = repository
+        self.pageVersionRepository = pageVersionRepository
         self.diaryRepository = diaryRepository
         self.tagRepository = tagRepository
         self.attachmentRepository = attachmentRepository
@@ -521,6 +532,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     init(snapshot: WorkspaceSnapshot) {
         repository = nil
+        pageVersionRepository = nil
         diaryRepository = nil
         tagRepository = nil
         attachmentRepository = nil

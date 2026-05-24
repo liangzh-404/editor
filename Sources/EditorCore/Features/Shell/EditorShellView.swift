@@ -918,6 +918,12 @@ private struct ThreeColumnEditorShell: View {
                     pageTagNames: viewModel.selectedPageTagNames,
                     availableTags: viewModel.snapshot.tags,
                     selectedPageTagIDs: viewModel.selectedPageTagIDs,
+                    onLoadPageVersionSummaries: { pageID in
+                        try viewModel.pageVersionSummaries(pageID: pageID)
+                    },
+                    onLoadPageVersionSnapshot: { versionID in
+                        try viewModel.pageVersionSnapshot(versionID: versionID)
+                    },
                     pendingFocusBlockID: viewModel.pendingFocusBlockID,
                     pendingSearchHighlight: viewModel.pendingSearchHighlight,
                     pendingFocusRequestID: viewModel.pendingFocusRequestID,
@@ -1270,6 +1276,12 @@ private struct ThreeColumnEditorShell: View {
                 pageTagNames: viewModel.selectedPageTagNames,
                 availableTags: viewModel.snapshot.tags,
                 selectedPageTagIDs: viewModel.selectedPageTagIDs,
+                onLoadPageVersionSummaries: { pageID in
+                    try viewModel.pageVersionSummaries(pageID: pageID)
+                },
+                onLoadPageVersionSnapshot: { versionID in
+                    try viewModel.pageVersionSnapshot(versionID: versionID)
+                },
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 pendingSearchHighlight: viewModel.pendingSearchHighlight,
                 pendingFocusRequestID: viewModel.pendingFocusRequestID,
@@ -2719,6 +2731,136 @@ enum ConflictDiffChrome {
     static let removedFillToken = EditorDesignTokens.Colors.dangerFill
     static let addedTextToken = EditorDesignTokens.Colors.successText
     static let addedFillToken = EditorDesignTokens.Colors.successFill
+}
+
+enum PageVersionDiffLineKind: String, Equatable, Sendable {
+    case unchanged
+    case removed
+    case added
+}
+
+struct PageVersionDiffLine: Identifiable, Equatable, Sendable {
+    let id: String
+    let kind: PageVersionDiffLineKind
+    let text: String
+}
+
+enum PageVersionDiffBuilder {
+    static func lines(
+        version: PageVersionSnapshot,
+        currentPage: PageSummary?,
+        currentBlocks: [BlockSnapshot]
+    ) -> [PageVersionDiffLine] {
+        var result: [PageVersionDiffLine] = []
+        let versionTitle = PageTitleDisplayPolicy.listTitle(for: version.title)
+        let currentTitle = PageTitleDisplayPolicy.listTitle(for: currentPage?.title ?? "")
+
+        if versionTitle == currentTitle {
+            append(.unchanged, text: "标题：\(versionTitle)", to: &result)
+        } else {
+            append(.removed, text: "标题：\(versionTitle)", to: &result)
+            append(.added, text: "标题：\(currentTitle)", to: &result)
+        }
+
+        result.append(contentsOf: diffLines(
+            oldLines: version.blocks.map(versionBlockLine),
+            newLines: currentBlocks.map(currentBlockLine),
+            startingAt: result.count
+        ))
+        return result
+    }
+
+    private static func diffLines(
+        oldLines: [String],
+        newLines: [String],
+        startingAt startIndex: Int
+    ) -> [PageVersionDiffLine] {
+        guard oldLines != newLines else {
+            return oldLines.enumerated().map { offset, text in
+                PageVersionDiffLine(
+                    id: "\(startIndex + offset)-unchanged",
+                    kind: .unchanged,
+                    text: text
+                )
+            }
+        }
+
+        let table = longestCommonSubsequenceTable(oldLines: oldLines, newLines: newLines)
+        var result: [PageVersionDiffLine] = []
+        var oldIndex = 0
+        var newIndex = 0
+        while oldIndex < oldLines.count || newIndex < newLines.count {
+            if oldIndex < oldLines.count,
+               newIndex < newLines.count,
+               oldLines[oldIndex] == newLines[newIndex] {
+                append(.unchanged, text: oldLines[oldIndex], to: &result, startIndex: startIndex)
+                oldIndex += 1
+                newIndex += 1
+            } else if oldIndex < oldLines.count,
+                      (newIndex == newLines.count || table[oldIndex + 1][newIndex] >= table[oldIndex][newIndex + 1]) {
+                append(.removed, text: oldLines[oldIndex], to: &result, startIndex: startIndex)
+                oldIndex += 1
+            } else if newIndex < newLines.count {
+                append(.added, text: newLines[newIndex], to: &result, startIndex: startIndex)
+                newIndex += 1
+            }
+        }
+        return result
+    }
+
+    private static func longestCommonSubsequenceTable(
+        oldLines: [String],
+        newLines: [String]
+    ) -> [[Int]] {
+        var table = Array(
+            repeating: Array(repeating: 0, count: newLines.count + 1),
+            count: oldLines.count + 1
+        )
+        guard !oldLines.isEmpty, !newLines.isEmpty else {
+            return table
+        }
+
+        for oldIndex in stride(from: oldLines.count - 1, through: 0, by: -1) {
+            for newIndex in stride(from: newLines.count - 1, through: 0, by: -1) {
+                if oldLines[oldIndex] == newLines[newIndex] {
+                    table[oldIndex][newIndex] = table[oldIndex + 1][newIndex + 1] + 1
+                } else {
+                    table[oldIndex][newIndex] = max(
+                        table[oldIndex + 1][newIndex],
+                        table[oldIndex][newIndex + 1]
+                    )
+                }
+            }
+        }
+        return table
+    }
+
+    private static func versionBlockLine(_ block: PageVersionBlockSnapshot) -> String {
+        block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "[\(block.typeRawValue)]"
+            : block.textPlain
+    }
+
+    private static func currentBlockLine(_ block: BlockSnapshot) -> String {
+        block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "[\(block.type.rawValue)]"
+            : block.textPlain
+    }
+
+    private static func append(
+        _ kind: PageVersionDiffLineKind,
+        text: String,
+        to lines: inout [PageVersionDiffLine],
+        startIndex: Int = 0
+    ) {
+        lines.append(
+            PageVersionDiffLine(
+                id: "\(startIndex + lines.count)-\(kind.rawValue)",
+                kind: kind,
+                text: text
+            )
+        )
+    }
 }
 
 enum ListMarkerColumnAlignmentResolver {
@@ -5213,6 +5355,12 @@ private struct CompactPageDestination: View {
                 pageTagNames: viewModel.selectedPageTagNames,
                 availableTags: viewModel.snapshot.tags,
                 selectedPageTagIDs: viewModel.selectedPageTagIDs,
+                onLoadPageVersionSummaries: { pageID in
+                    try viewModel.pageVersionSummaries(pageID: pageID)
+                },
+                onLoadPageVersionSnapshot: { versionID in
+                    try viewModel.pageVersionSnapshot(versionID: versionID)
+                },
                 pendingFocusBlockID: viewModel.pendingFocusBlockID,
                 pendingSearchHighlight: viewModel.pendingSearchHighlight,
                 pendingFocusRequestID: viewModel.pendingFocusRequestID,
@@ -8932,6 +9080,358 @@ private struct PageTitleUIKitTextField: UIViewRepresentable {
 }
 #endif
 
+private struct PageInfoPanel: View {
+    let page: PageSummary?
+    let currentBlocks: [BlockSnapshot]
+    let onLoadVersionSummaries: (String) throws -> [PageVersionSummary]
+    let onLoadVersionSnapshot: (String) throws -> PageVersionSnapshot?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var versions: [PageVersionSummary] = []
+    @State private var selectedVersionID: String?
+    @State private var selectedVersionSnapshot: PageVersionSnapshot?
+    @State private var errorText: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            content
+        }
+        .background(EditorDesignTokens.Colors.editorBackground.color)
+        .onAppear(perform: loadVersions)
+        .onChange(of: page?.id) { _, _ in
+            loadVersions()
+        }
+        .onChange(of: selectedVersionID) { _, _ in
+            loadSelectedVersion()
+        }
+        .accessibilityIdentifier("editor.page-info.panel")
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("笔记信息")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+
+                    Text(page.map { PageTitleDisplayPolicy.listTitle(for: $0.title) } ?? "未命名")
+                        .font(.callout)
+                        .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.callout.weight(.semibold))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                .accessibilityLabel("关闭")
+            }
+
+            HStack(alignment: .top, spacing: 28) {
+                PageInfoTimestampColumn(
+                    title: "创建时间",
+                    value: PageInfoDateFormatter.display(page?.createdAt)
+                )
+                PageInfoTimestampColumn(
+                    title: "修改时间",
+                    value: PageInfoDateFormatter.display(page?.updatedAt)
+                )
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+#if os(iOS)
+        VStack(alignment: .leading, spacing: 0) {
+            versionList
+                .frame(maxHeight: 210)
+            Divider()
+            diffPane
+        }
+#else
+        HStack(alignment: .top, spacing: 0) {
+            versionList
+                .frame(width: 260)
+            Divider()
+            diffPane
+        }
+#endif
+    }
+
+    private var versionList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("版本历史")
+                .font(.headline)
+                .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+
+            if let errorText {
+                Text(errorText)
+                    .font(.callout)
+                    .foregroundStyle(EditorDesignTokens.Colors.warningText.color)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if versions.isEmpty {
+                Text("最近 7 天暂无版本历史")
+                    .font(.callout)
+                    .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(versions) { version in
+                            PageVersionRow(
+                                version: version,
+                                isSelected: selectedVersionID == version.id,
+                                onSelect: {
+                                    selectedVersionID = version.id
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .padding(20)
+    }
+
+    @ViewBuilder
+    private var diffPane: some View {
+        if let selectedVersionSnapshot {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("与当前版本差异")
+                        .font(.headline)
+                        .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+
+                    Spacer()
+
+                    Text(PageInfoDateFormatter.display(selectedVersionSnapshot.capturedAt))
+                        .font(.caption)
+                        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                }
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(PageVersionDiffBuilder.lines(
+                            version: selectedVersionSnapshot,
+                            currentPage: page,
+                            currentBlocks: currentBlocks
+                        )) { line in
+                            PageVersionDiffLineView(line: line)
+                        }
+                    }
+                    .padding(.bottom, 12)
+                }
+            }
+            .padding(20)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("与当前版本差异")
+                    .font(.headline)
+                    .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+
+                Text("选择一个历史版本后查看差异")
+                    .font(.callout)
+                    .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func loadVersions() {
+        guard let page else {
+            versions = []
+            selectedVersionID = nil
+            selectedVersionSnapshot = nil
+            errorText = nil
+            return
+        }
+
+        do {
+            let loadedVersions = try onLoadVersionSummaries(page.id)
+            versions = loadedVersions
+            errorText = nil
+            selectedVersionID = loadedVersions.first?.id
+            if loadedVersions.isEmpty {
+                selectedVersionSnapshot = nil
+            } else {
+                loadSelectedVersion()
+            }
+        } catch {
+            versions = []
+            selectedVersionID = nil
+            selectedVersionSnapshot = nil
+            errorText = "版本历史加载失败"
+        }
+    }
+
+    private func loadSelectedVersion() {
+        guard let selectedVersionID else {
+            selectedVersionSnapshot = nil
+            return
+        }
+
+        do {
+            selectedVersionSnapshot = try onLoadVersionSnapshot(selectedVersionID)
+            errorText = nil
+        } catch {
+            selectedVersionSnapshot = nil
+            errorText = "版本内容加载失败"
+        }
+    }
+}
+
+private struct PageInfoTimestampColumn: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+            Text(value)
+                .font(.callout)
+                .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct PageVersionRow: View {
+    let version: PageVersionSummary
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(PageInfoDateFormatter.display(version.createdAt))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+                    .lineLimit(1)
+                Text("\(version.blockCount) 个块")
+                    .font(.caption)
+                    .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(
+                        isSelected
+                            ? EditorDesignTokens.Colors.accent.color.opacity(0.12)
+                            : Color.clear
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("editor.page-info.version-row.\(version.id)")
+    }
+}
+
+private struct PageVersionDiffLineView: View {
+    let line: PageVersionDiffLine
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(prefix)
+                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                .frame(width: 14, alignment: .center)
+                .foregroundStyle(foregroundColor)
+
+            Text(line.text)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(foregroundColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
+    private var prefix: String {
+        switch line.kind {
+        case .unchanged:
+            return " "
+        case .removed:
+            return "-"
+        case .added:
+            return "+"
+        }
+    }
+
+    private var foregroundColor: Color {
+        switch line.kind {
+        case .unchanged:
+            return ConflictDiffChrome.unchangedTextToken.color
+        case .removed:
+            return ConflictDiffChrome.removedTextToken.color
+        case .added:
+            return ConflictDiffChrome.addedTextToken.color
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch line.kind {
+        case .unchanged:
+            return ConflictDiffChrome.unchangedFillToken.color.opacity(0.72)
+        case .removed:
+            return ConflictDiffChrome.removedFillToken.color
+        case .added:
+            return ConflictDiffChrome.addedFillToken.color
+        }
+    }
+}
+
+private enum PageInfoDateFormatter {
+    static func display(_ value: String?) -> String {
+        guard let value, !value.isEmpty else {
+            return "-"
+        }
+
+        guard let date = parse(value) else {
+            return value
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_CN")
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private static func parse(_ value: String) -> Date? {
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: value) {
+            return date
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
+    }
+}
+
 private struct EditorCanvasView: View {
     let page: PageSummary?
     let pages: [PageSummary]
@@ -8948,6 +9448,8 @@ private struct EditorCanvasView: View {
     let pageTagNames: [String]
     var availableTags: [TagSummary] = []
     var selectedPageTagIDs: [String] = []
+    var onLoadPageVersionSummaries: (String) throws -> [PageVersionSummary] = { _ in [] }
+    var onLoadPageVersionSnapshot: (String) throws -> PageVersionSnapshot? = { _ in nil }
     let pendingFocusBlockID: String?
     var pendingSearchHighlight: SearchTransientHighlight? = nil
     var pendingFocusRequestID: UUID? = nil
@@ -9020,6 +9522,7 @@ private struct EditorCanvasView: View {
     var onRemoveTagFromSelectedPage: (String) -> Bool = { _ in false }
     var onCreateAndAssignTagToSelectedPage: (String) -> Bool = { _ in false }
     @State private var isAttachmentImporterPresented = false
+    @State private var isPageInfoPresented = false
     @State private var attachmentImporterAllowedContentTypes: [UTType] = [.image, .movie, .data, .item]
     @State private var pendingAttachmentImportAnchorBlockID: String?
     @State private var isMarkdownImporterPresented = false
@@ -9064,13 +9567,26 @@ private struct EditorCanvasView: View {
 #endif
 
     var body: some View {
-        if isEncryptedContentLocked {
-            EncryptedPageLockedView(
-                isAuthenticating: isAuthenticatingEncryptedContent,
-                onUnlock: onUnlockEncryptedContent
+        Group {
+            if isEncryptedContentLocked {
+                EncryptedPageLockedView(
+                    isAuthenticating: isAuthenticatingEncryptedContent,
+                    onUnlock: onUnlockEncryptedContent
+                )
+            } else {
+                unlockedCanvasBody
+            }
+        }
+        .sheet(isPresented: $isPageInfoPresented) {
+            PageInfoPanel(
+                page: page,
+                currentBlocks: blocks,
+                onLoadVersionSummaries: onLoadPageVersionSummaries,
+                onLoadVersionSnapshot: onLoadPageVersionSnapshot
             )
-        } else {
-            unlockedCanvasBody
+#if os(macOS)
+            .frame(minWidth: 760, minHeight: 520)
+#endif
         }
     }
 
@@ -9747,7 +10263,10 @@ private struct EditorCanvasView: View {
             }
 
             ToolbarItem(placement: .topBarTrailing) {
-                pageActionsMenu
+                HStack(spacing: 12) {
+                    pageInfoButton
+                    pageActionsMenu
+                }
             }
         }
         .toolbarBackground(EditorDesignTokens.Colors.editorBackground.color, for: .navigationBar)
@@ -10152,6 +10671,7 @@ private struct EditorCanvasView: View {
 
     private var macCanvasToolbar: some View {
         HStack(spacing: 10) {
+            pageInfoButton
             pageActionsMenu
 
             if shouldOfferAuxiliaryRail {
@@ -10440,6 +10960,26 @@ private struct EditorCanvasView: View {
         .foregroundStyle(EditorDesignTokens.Colors.primaryText.color.opacity(0.82))
         .help("更多")
         .accessibilityIdentifier("editor.page-actions")
+    }
+
+    @ViewBuilder
+    private var pageInfoButton: some View {
+        Button {
+            isPageInfoPresented = true
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.callout.weight(.medium))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color.opacity(0.78))
+        .help("笔记信息")
+        .accessibilityLabel("笔记信息")
+        .accessibilityIdentifier("editor.page-info.button")
+        .disabled(page == nil)
+#if os(macOS)
+        .focusable(false)
+#endif
     }
 
     private var blockReferenceTargets: [BlockSnapshot] {

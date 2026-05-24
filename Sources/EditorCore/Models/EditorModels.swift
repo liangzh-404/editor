@@ -54,6 +54,37 @@ struct PageSummary: Identifiable, Equatable, Sendable {
     }
 }
 
+struct PageVersionSummary: Identifiable, Equatable, Sendable {
+    let id: String
+    let pageID: String
+    let title: String
+    let blockCount: Int
+    let createdAt: String
+}
+
+struct PageVersionBlockSnapshot: Equatable, Codable, Sendable {
+    let id: String
+    let pageID: String
+    let parentBlockID: String?
+    let orderKey: String
+    let typeRawValue: String
+    let textPlain: String
+    let payloadJSON: String
+
+    var type: BlockType? {
+        BlockType(rawValue: typeRawValue)
+    }
+}
+
+struct PageVersionSnapshot: Equatable, Codable, Sendable {
+    let pageID: String
+    let title: String
+    let pageCreatedAt: String
+    let pageUpdatedAt: String
+    let capturedAt: String
+    let blocks: [PageVersionBlockSnapshot]
+}
+
 struct TagSummary: Identifiable, Equatable, Sendable {
     let id: String
     let workspaceID: String

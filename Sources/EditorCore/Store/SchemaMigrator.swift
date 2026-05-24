@@ -1,7 +1,7 @@
 import Foundation
 
 enum SchemaMigrator {
-    static let currentVersion = 15
+    static let currentVersion = 16
 
     static func migrate(database: SQLiteDatabase) throws {
         try database.execute("PRAGMA foreign_keys = ON")
@@ -88,6 +88,35 @@ enum SchemaMigrator {
             table: "pages",
             column: "is_encrypted",
             definition: "INTEGER NOT NULL DEFAULT 0"
+        )
+
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS page_versions (
+                id TEXT PRIMARY KEY,
+                page_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                block_count INTEGER NOT NULL DEFAULT 0,
+                sync_state TEXT NOT NULL DEFAULT 'local',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE
+            );
+            """
+        )
+        try database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_page_versions_page_created
+            ON page_versions (page_id, created_at DESC);
+            """
+        )
+        try database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_page_versions_created_at
+            ON page_versions (created_at);
+            """
         )
 
         try database.execute(

@@ -132,6 +132,68 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.exportMarkdown, in: .regular))
     }
 
+    func testPageVersionDiffBuilderComparesHistoricalSnapshotWithCurrentPage() {
+        let version = PageVersionSnapshot(
+            pageID: "page-1",
+            title: "Old title",
+            pageCreatedAt: "2026-05-24T01:00:00.000Z",
+            pageUpdatedAt: "2026-05-24T01:05:00.000Z",
+            capturedAt: "2026-05-24T01:10:00.000Z",
+            blocks: [
+                PageVersionBlockSnapshot(
+                    id: "block-1",
+                    pageID: "page-1",
+                    parentBlockID: nil,
+                    orderKey: "a",
+                    typeRawValue: BlockType.paragraph.rawValue,
+                    textPlain: "Old body",
+                    payloadJSON: "{}"
+                ),
+                PageVersionBlockSnapshot(
+                    id: "block-2",
+                    pageID: "page-1",
+                    parentBlockID: nil,
+                    orderKey: "b",
+                    typeRawValue: BlockType.paragraph.rawValue,
+                    textPlain: "Shared",
+                    payloadJSON: "{}"
+                )
+            ]
+        )
+        let currentPage = PageSummary(
+            id: "page-1",
+            workspaceID: "workspace-1",
+            title: "New title"
+        )
+        let currentBlocks = [
+            BlockSnapshot(
+                id: "block-1",
+                pageID: "page-1",
+                parentBlockID: nil,
+                orderKey: "a",
+                type: .paragraph,
+                textPlain: "New body"
+            ),
+            BlockSnapshot(
+                id: "block-2",
+                pageID: "page-1",
+                parentBlockID: nil,
+                orderKey: "b",
+                type: .paragraph,
+                textPlain: "Shared"
+            )
+        ]
+
+        let lines = PageVersionDiffBuilder.lines(
+            version: version,
+            currentPage: currentPage,
+            currentBlocks: currentBlocks
+        )
+
+        XCTAssertEqual(lines.map(\.kind), [.removed, .added, .removed, .added, .unchanged])
+        XCTAssertEqual(lines.map(\.text), ["标题：Old title", "标题：New title", "Old body", "New body", "Shared"])
+    }
+
     func testPageTitleDisplayPolicyUsesPlaceholderOnlyForEmptyDisplaySurfaces() {
         XCTAssertEqual(PageTitleDisplayPolicy.emptyTitlePlaceholder, "未命名")
         XCTAssertEqual(PageTitleDisplayPolicy.listTitle(for: ""), "未命名")

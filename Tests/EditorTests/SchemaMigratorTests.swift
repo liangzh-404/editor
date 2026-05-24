@@ -34,7 +34,34 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(tableNames.contains("sync_server_change_tokens"))
         XCTAssertTrue(tableNames.contains("runtime_diagnostics"))
         XCTAssertTrue(tableNames.contains("conflict_versions"))
+        XCTAssertTrue(tableNames.contains("page_versions"))
         XCTAssertTrue(tableNames.contains("search_index"))
+    }
+
+    func testPageVersionsTableStoresSyncedSnapshotMetadata() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let columns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('page_versions')"))
+        let indexNames = Set(try database.queryStrings(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'index'
+              AND tbl_name = 'page_versions'
+            """
+        ))
+
+        XCTAssertTrue(columns.contains("id"))
+        XCTAssertTrue(columns.contains("page_id"))
+        XCTAssertTrue(columns.contains("snapshot_json"))
+        XCTAssertTrue(columns.contains("content_hash"))
+        XCTAssertTrue(columns.contains("created_at"))
+        XCTAssertTrue(columns.contains("sync_state"))
+        XCTAssertTrue(indexNames.contains("idx_page_versions_page_created"))
+        XCTAssertTrue(indexNames.contains("idx_page_versions_created_at"))
     }
 
     func testRuntimeDiagnosticsTableCapturesObservableSyncEvents() throws {

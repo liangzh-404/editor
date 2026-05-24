@@ -24,10 +24,12 @@ final class SyncRepositoryTests: XCTestCase {
         try pageRepository.updateBlockText(blockID: blockID, text: "Dirty local edit")
 
         let changes = try SyncRepository(database: database).pendingChanges()
-        XCTAssertEqual(changes, [
-            SyncChange(entityType: "block", entityID: blockID, changeType: "update"),
-            SyncChange(entityType: "page", entityID: pageID, changeType: "update")
-        ])
+        XCTAssertEqual(changes.count, 3)
+        XCTAssertTrue(changes.contains(SyncChange(entityType: "block", entityID: blockID, changeType: "update")))
+        XCTAssertTrue(changes.contains(SyncChange(entityType: "page", entityID: pageID, changeType: "update")))
+        let versionChange = try XCTUnwrap(changes.first { $0.entityType == "pageVersion" })
+        XCTAssertEqual(versionChange.changeType, "create")
+        XCTAssertTrue(versionChange.entityID.hasPrefix("page-version-"))
     }
 
     func testAttachmentImportEnqueuesAttachmentAndBlockSyncChanges() throws {

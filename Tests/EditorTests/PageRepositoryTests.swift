@@ -86,6 +86,99 @@ final class PageRepositoryTests: XCTestCase {
         XCTAssertEqual(try SyncRepository(database: database).pendingChanges(), [])
     }
 
+    func testUpdateBlockTextCapturesPreviousSnapshotAndCoalescesForFiveMinutes() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        let versionRepository = PageVersionRepository(database: database, now: { now })
+        let repository = PageRepository(
+            database: database,
+            pageVersionRepository: versionRepository
+        )
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let blockID = try XCTUnwrap(initialSnapshot.blocks.first?.id)
+
+        try repository.updateBlockText(blockID: blockID, text: "First edit")
+
+        var summaries = try versionRepository.versionSummaries(pageID: pageID)
+        var firstVersion = try XCTUnwrap(summaries.first)
+        var snapshot = try versionRepository.versionSnapshot(versionID: firstVersion.id)
+
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(snapshot.title, "欢迎")
+        XCTAssertEqual(snapshot.blocks.map(\.textPlain), ["开始用块写作。"])
+        XCTAssertTrue(
+            try SyncRepository(database: database).pendingChanges().contains(
+                SyncChange(entityType: "pageVersion", entityID: firstVersion.id, changeType: "create")
+            )
+        )
+
+        now = now.addingTimeInterval(60)
+        try repository.updateBlockText(blockID: blockID, text: "Second edit")
+        XCTAssertEqual(try versionRepository.versionSummaries(pageID: pageID).count, 1)
+
+        now = now.addingTimeInterval(301)
+        try repository.updateBlockText(blockID: blockID, text: "Third edit")
+
+        summaries = try versionRepository.versionSummaries(pageID: pageID)
+        firstVersion = try XCTUnwrap(summaries.first)
+        snapshot = try versionRepository.versionSnapshot(versionID: firstVersion.id)
+
+        XCTAssertEqual(summaries.count, 2)
+        XCTAssertEqual(snapshot.blocks.map(\.textPlain), ["Second edit"])
+    }
+
+    func testUpdatePageTitleCapturesPreviousTitleInVersionHistory() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let versionRepository = PageVersionRepository(
+            database: database,
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+        let repository = PageRepository(
+            database: database,
+            pageVersionRepository: versionRepository
+        )
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+
+        try repository.updatePageTitle(pageID: pageID, title: "Editable Title")
+
+        let summary = try XCTUnwrap(try versionRepository.versionSummaries(pageID: pageID).first)
+        let snapshot = try versionRepository.versionSnapshot(versionID: summary.id)
+        XCTAssertEqual(snapshot.title, "欢迎")
+        XCTAssertEqual(snapshot.blocks.map(\.textPlain), ["开始用块写作。"])
+    }
+
+    func testImportMarkdownCapturesPreviousSnapshotInVersionHistory() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        let versionRepository = PageVersionRepository(database: database, now: { now })
+        let repository = PageRepository(
+            database: database,
+            pageVersionRepository: versionRepository
+        )
+        let initialSnapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        let initialBlocks = initialSnapshot.blocks.filter { $0.pageID == pageID }
+
+        now = now.addingTimeInterval(60)
+        try repository.importMarkdown(pageID: pageID, markdown: "Imported body")
+
+        let version = try XCTUnwrap(try versionRepository.versionSummaries(pageID: pageID).first)
+        let snapshot = try versionRepository.versionSnapshot(versionID: version.id)
+        let reloadedBlocks = try repository.loadWorkspaceSnapshot().blocks.filter { $0.pageID == pageID }
+
+        XCTAssertEqual(reloadedBlocks.map(\.textPlain), ["Imported body"])
+        XCTAssertEqual(snapshot.blocks.map(\.id), initialBlocks.map(\.id))
+        XCTAssertEqual(snapshot.blocks.map(\.textPlain), initialBlocks.map(\.textPlain))
+    }
+
     func testTableBlockPersistsStructuredRowsInPayload() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -781,7 +874,12 @@ final class PageRepositoryTests: XCTestCase {
 
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.type), [.heading1, .paragraph, .unorderedListItem])
         XCTAssertEqual(reloadedSnapshot.blocks.map(\.textPlain), ["Imported", "Body", "Item"])
-        XCTAssertEqual(try SyncRepository(database: database).pendingChanges().map(\.entityType), ["block", "block", "block", "page"])
+        let pendingChanges = try SyncRepository(database: database).pendingChanges()
+        XCTAssertEqual(pendingChanges.filter { $0.entityType == "block" }.count, 3)
+        XCTAssertTrue(pendingChanges.contains { $0.entityType == "page" })
+        let versionChange = try XCTUnwrap(pendingChanges.first { $0.entityType == "pageVersion" })
+        XCTAssertEqual(versionChange.changeType, "create")
+        XCTAssertTrue(versionChange.entityID.hasPrefix("page-version-"))
     }
 
     func testImportMarkdownKeepsIndentedListContinuationOutOfCodeBlocks() throws {
