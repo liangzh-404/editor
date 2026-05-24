@@ -146,6 +146,20 @@ private final class SyncChangeObservation: @unchecked Sendable {
 private struct PageNavigationHistoryEntry: Equatable {
     let pageID: String
     let collection: WorkspaceCollection
+    let blockID: String?
+    let selection: EditorTextSelection?
+
+    init(
+        pageID: String,
+        collection: WorkspaceCollection,
+        blockID: String? = nil,
+        selection: EditorTextSelection? = nil
+    ) {
+        self.pageID = pageID
+        self.collection = collection
+        self.blockID = blockID
+        self.selection = selection
+    }
 }
 
 enum WorkspacePageCreationFocus: Equatable, Sendable {
@@ -221,6 +235,7 @@ final class WorkspaceViewModel: ObservableObject {
     @Published private(set) var syncStatusText = "同步空闲"
     @Published private(set) var pendingFocusBlockID: String?
     @Published private(set) var pendingFocusRequestID: UUID?
+    @Published private(set) var pendingNavigationFocusSelection: EditorTextSelection?
     @Published private(set) var pendingPageTitleFocusPageID: String?
     @Published private(set) var pendingCompactPageNavigationID: String?
     @Published private(set) var pendingCompactCollectionNavigation: WorkspaceCollection?
@@ -1056,6 +1071,45 @@ final class WorkspaceViewModel: ObservableObject {
         pageNavigationForwardStack = []
     }
 
+    private func restoreNavigationEntry(_ entry: PageNavigationHistoryEntry) {
+        selectPage(id: entry.pageID, collection: entry.collection, recordHistory: false)
+        pendingCompactPageNavigationID = entry.pageID
+        pendingNavigationFocusSelection = nil
+        guard let blockID = entry.blockID,
+              snapshot.blocks.contains(where: { $0.id == blockID }) else {
+            return
+        }
+        pendingFocusBlockID = blockID
+        pendingFocusRequestID = UUID()
+        if let selection = entry.selection {
+            pendingNavigationFocusSelection = selection
+        }
+    }
+
+    private func currentNavigationHistoryEntry() -> PageNavigationHistoryEntry? {
+        guard let selectedPageID else {
+            return nil
+        }
+
+        let focusedBlock = snapshot.blocks.first {
+            $0.id == pendingFocusBlockID && $0.pageID == selectedPageID
+        }
+        let focusedSelection: EditorTextSelection?
+        if let focusedBlock,
+           pendingNavigationFocusSelection?.blockID == focusedBlock.id {
+            focusedSelection = pendingNavigationFocusSelection
+        } else {
+            focusedSelection = nil
+        }
+
+        return PageNavigationHistoryEntry(
+            pageID: selectedPageID,
+            collection: selectedCollection,
+            blockID: focusedBlock?.id,
+            selection: focusedSelection
+        )
+    }
+
     func updateDiaryText(_ text: String) throws {
         guard let diaryRepository else {
             throw WorkspaceViewModelError.missingDiaryRepository
@@ -1289,6 +1343,50 @@ final class WorkspaceViewModel: ObservableObject {
         EditorLog.render.debug("page_reference_opened target_page_id=\(targetPageID, privacy: .public)")
     }
 
+    func openInlineInternalLinkForUI(
+        sourceBlockID: String,
+        targetPageID: String,
+        targetBlockID: String?,
+        sourceSelection: EditorTextSelection?
+    ) -> Bool {
+        guard snapshot.pages.contains(where: { $0.id == targetPageID }) else {
+            EditorLog.render.debug(
+                "inline_internal_link_open_failed reason=target_page_unavailable target_page_id=\(targetPageID, privacy: .public)"
+            )
+            return false
+        }
+
+        let sourceEntry = PageNavigationHistoryEntry(
+            pageID: selectedPageID ?? snapshot.blocks.first { $0.id == sourceBlockID }?.pageID ?? "",
+            collection: selectedCollection,
+            blockID: sourceBlockID,
+            selection: sourceSelection
+        )
+        guard !sourceEntry.pageID.isEmpty else {
+            return false
+        }
+
+        pageNavigationBackStack.append(sourceEntry)
+        pageNavigationForwardStack.removeAll()
+        selectPage(id: targetPageID, collection: defaultCollectionForOpeningPage(id: targetPageID), recordHistory: false)
+        pendingCompactPageNavigationID = targetPageID
+
+        if let targetBlockID,
+           snapshot.blocks.contains(where: { $0.id == targetBlockID }) {
+            pendingFocusBlockID = targetBlockID
+            pendingFocusRequestID = UUID()
+        } else {
+            pendingFocusBlockID = nil
+            pendingFocusRequestID = nil
+        }
+        pendingNavigationFocusSelection = nil
+
+        EditorLog.render.debug(
+            "inline_internal_link_opened target_page_id=\(targetPageID, privacy: .public) target_block_id=\(targetBlockID ?? "none", privacy: .public)"
+        )
+        return true
+    }
+
     @discardableResult
     func openParentPageForCurrentPage() throws -> Bool {
         guard let parentLink = selectedPageParentLink else {
@@ -1423,7 +1521,7 @@ final class WorkspaceViewModel: ObservableObject {
     func navigateBack() throws -> Bool {
         if let currentPageID = selectedPageID,
            let currentParentLink = selectedPageParentLink {
-            let currentEntry = PageNavigationHistoryEntry(
+            let currentEntry = currentNavigationHistoryEntry() ?? PageNavigationHistoryEntry(
                 pageID: currentPageID,
                 collection: selectedCollection
             )
@@ -1442,17 +1540,10 @@ final class WorkspaceViewModel: ObservableObject {
                 continue
             }
 
-            if let selectedPageID {
-                pageNavigationForwardStack.append(
-                    PageNavigationHistoryEntry(pageID: selectedPageID, collection: selectedCollection)
-                )
+            if let currentEntry = currentNavigationHistoryEntry() {
+                pageNavigationForwardStack.append(currentEntry)
             }
-            selectPage(
-                id: previousEntry.pageID,
-                collection: previousEntry.collection,
-                recordHistory: false
-            )
-            pendingCompactPageNavigationID = previousEntry.pageID
+            restoreNavigationEntry(previousEntry)
             return true
         }
 
@@ -1466,13 +1557,10 @@ final class WorkspaceViewModel: ObservableObject {
                 continue
             }
 
-            if let selectedPageID {
-                pageNavigationBackStack.append(
-                    PageNavigationHistoryEntry(pageID: selectedPageID, collection: selectedCollection)
-                )
+            if let currentEntry = currentNavigationHistoryEntry() {
+                pageNavigationBackStack.append(currentEntry)
             }
-            selectPage(id: nextEntry.pageID, collection: nextEntry.collection, recordHistory: false)
-            pendingCompactPageNavigationID = nextEntry.pageID
+            restoreNavigationEntry(nextEntry)
             return true
         }
 
@@ -1583,6 +1671,17 @@ final class WorkspaceViewModel: ObservableObject {
             pendingFocusRequestID = nil
         }
         return pendingFocusBlockID
+    }
+
+    @discardableResult
+    func consumePendingNavigationFocusSelection(for blockID: String) -> EditorTextSelection? {
+        guard pendingNavigationFocusSelection?.blockID == blockID else {
+            return nil
+        }
+        defer {
+            pendingNavigationFocusSelection = nil
+        }
+        return pendingNavigationFocusSelection
     }
 
     private func requestBlockFocus(_ blockID: String) {
