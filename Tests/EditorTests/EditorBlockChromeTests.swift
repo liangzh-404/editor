@@ -55,8 +55,8 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 28)
         XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 14)
         XCTAssertEqual(EditorDesignTokens.Typography.bodyLineHeightMultiple, 1.34)
-        XCTAssertEqual(EditorDesignTokens.Layout.editorMaxWidth, 680)
-        XCTAssertEqual(EditorDesignTokens.Layout.editorExpandedMaxWidth, 688)
+        XCTAssertEqual(EditorDesignTokens.Layout.editorMaxWidth, 560)
+        XCTAssertEqual(EditorDesignTokens.Layout.editorExpandedMaxWidth, 560)
     }
 
     func testPopoverShadowTokensStayLightAndWarmNeutral() {
@@ -91,7 +91,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(EditorCanvasChromeLayout.verticalPadding, 18)
         XCTAssertEqual(EditorCanvasChromeLayout.pageTitleLeadingPadding, 27)
 #else
-        XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, 40)
+        XCTAssertEqual(EditorCanvasChromeLayout.horizontalPadding, 34)
         XCTAssertEqual(EditorCanvasChromeLayout.verticalPadding, 36)
         XCTAssertEqual(EditorCanvasChromeLayout.pageTitleLeadingPadding, 27)
         XCTAssertEqual(EditorCanvasChromeLayout.blockRowTitleAlignmentCompensation, 0)
@@ -411,33 +411,35 @@ final class EditorBlockChromeTests: XCTestCase {
     func testEditorCanvasCentersContentFrameInsideWideDetailColumn() {
         let frameWidth = EditorCanvasWidthPolicy.centeredContentFrameWidth(
             containerWidth: 1_420,
-            horizontalPadding: 40,
+            horizontalPadding: 34,
             editorMaxWidth: CGFloat(EditorDesignTokens.Layout.editorExpandedMaxWidth)
         )
 
-        XCTAssertEqual(frameWidth, 768)
+        XCTAssertEqual(frameWidth, 628)
         XCTAssertEqual(
             EditorCanvasWidthPolicy.centeredSideInset(
                 containerWidth: 1_420,
                 contentFrameWidth: frameWidth
             ),
-            326
+            396
         )
         XCTAssertEqual(
             EditorCanvasWidthPolicy.editorColumnWidth(
                 containerWidth: 1_420,
-                horizontalPadding: 40,
+                horizontalPadding: 34,
                 editorMaxWidth: CGFloat(EditorDesignTokens.Layout.editorExpandedMaxWidth)
             ),
-            688
+            560
         )
     }
 
     func testDesktopInlineOutlineDefaultsToExpandedOnlyWhenLeftGutterCanHostIt() {
+        XCTAssertEqual(DesktopInlineOutlinePlacementPolicy.expandedWidth, 244)
+        XCTAssertEqual(DesktopInlineOutlinePlacementPolicy.collapsedWidth, 34)
         XCTAssertEqual(
             DesktopInlineOutlinePlacementPolicy.presentation(
                 outlineItemCount: 3,
-                leadingGap: 260,
+                leadingGap: 290,
                 userPreference: .automatic
             ),
             .expanded
@@ -445,10 +447,22 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(
             DesktopInlineOutlinePlacementPolicy.presentation(
                 outlineItemCount: 3,
-                leadingGap: 96,
+                leadingGap: 260,
                 userPreference: .automatic
             ),
             .collapsed
+        )
+        XCTAssertEqual(
+            DesktopInlineOutlinePlacementPolicy.presentation(
+                outlineItemCount: 3,
+                leadingGap: DesktopInlineOutlinePlacementPolicy.leadingGap(
+                    containerWidth: 1_208,
+                    horizontalPadding: 34,
+                    editorMaxWidth: CGFloat(EditorDesignTokens.Layout.editorExpandedMaxWidth)
+                ),
+                userPreference: .automatic
+            ),
+            .expanded
         )
     }
 
@@ -456,17 +470,17 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(
             DesktopInlineOutlinePlacementPolicy.presentation(
                 outlineItemCount: 2,
-                leadingGap: 260,
+                leadingGap: 290,
                 userPreference: .collapsed
             ),
             .collapsed
         )
         XCTAssertEqual(
-            DesktopInlineOutlineTogglePolicy.triggerAction(leadingGap: 260),
+            DesktopInlineOutlineTogglePolicy.triggerAction(leadingGap: 290),
             .persist(.expanded)
         )
         XCTAssertEqual(
-            DesktopInlineOutlineTogglePolicy.triggerAction(leadingGap: 96),
+            DesktopInlineOutlineTogglePolicy.triggerAction(leadingGap: 260),
             .togglePopover
         )
     }
@@ -922,6 +936,21 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(compactControlDescriptor.textVerticalOffset, -4)
         XCTAssertEqual(TextEditableBlockChromePolicy.backgroundOpacity(blockType: .taskItem), 0)
         XCTAssertEqual(TextEditableBlockChromePolicy.backgroundOpacity(blockType: .toggle), 0)
+    }
+
+    func testHeadingBlockChromeUsesLevelSensitiveAccentStrip() {
+        let heading1 = HeadingBlockChromeDescriptor(
+            block: block(id: "h1", parentBlockID: nil, type: .heading1, text: "一级标题")
+        )
+        let heading3 = HeadingBlockChromeDescriptor(
+            block: block(id: "h3", parentBlockID: nil, type: .heading3, text: "三级标题")
+        )
+
+        XCTAssertEqual(heading1.accentWidth, 5)
+        XCTAssertEqual(heading3.accentWidth, 3)
+        XCTAssertGreaterThan(heading1.backgroundOpacity, heading3.backgroundOpacity)
+        XCTAssertGreaterThan(heading1.textLeadingPadding, heading3.textLeadingPadding)
+        XCTAssertEqual(heading1.accessibilityIdentifier, "editor.heading1.h1")
     }
 
     func testDragPreviewChromeOffsetsVisibleCardAwayFromPointerAndDropIndicator() {
@@ -2723,6 +2752,46 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(model.primaryItems.last?.collection, .encrypted)
         XCTAssertEqual(model.utilityItems.map(\.identifier), ["editor.collection.archive"])
         XCTAssertFalse(model.utilityItems.contains { $0.collection == .search })
+    }
+
+    func testSidebarTagSectionDefaultsCollapsedAndExpandsForTaggedSelection() {
+        XCTAssertFalse(SidebarTagSectionExpansionPolicy.defaultIsExpanded)
+        XCTAssertFalse(SidebarTagSectionExpansionPolicy.shouldAutoExpand(selectedPageTagIDs: []))
+        XCTAssertTrue(SidebarTagSectionExpansionPolicy.shouldAutoExpand(selectedPageTagIDs: ["tag-work"]))
+    }
+
+    func testSidebarHighlightsTagsAttachedToTheSelectedPage() {
+        let relatedItem = SidebarNavigationItem(
+            id: "tag-work",
+            title: "工作",
+            systemImage: "tag",
+            count: 1,
+            collection: .tag("tag-work"),
+            identifier: "editor.collection.tag.tag-work",
+            isSelected: false
+        )
+        let unrelatedItem = SidebarNavigationItem(
+            id: "tag-life",
+            title: "生活",
+            systemImage: "tag",
+            count: 1,
+            collection: .tag("tag-life"),
+            identifier: "editor.collection.tag.tag-life",
+            isSelected: false
+        )
+
+        XCTAssertTrue(
+            SidebarTagHighlightPolicy.isHighlighted(
+                item: relatedItem,
+                selectedPageTagIDs: ["tag-work"]
+            )
+        )
+        XCTAssertFalse(
+            SidebarTagHighlightPolicy.isHighlighted(
+                item: unrelatedItem,
+                selectedPageTagIDs: ["tag-work"]
+            )
+        )
     }
 
     func testSidebarChromeUsesCompactBearLikeRailMetrics() {

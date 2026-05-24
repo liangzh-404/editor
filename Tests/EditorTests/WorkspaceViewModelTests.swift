@@ -339,6 +339,44 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLegacyDateTitledDiaryPagesAreRemovedFromAllDocumentsAndShownInDiary() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let ordinaryPage = try repository.createPage(workspaceID: workspaceID, title: "普通文档")
+        let legacyDiaryPage = try repository.createPage(workspaceID: workspaceID, title: "2023年8月14日 星期一")
+        let duplicatedLegacyDiaryPage = try repository.createPage(workspaceID: workspaceID, title: "2023年8月15日 星期二 2")
+        let englishWeekdayDiaryPage = try repository.createPage(workspaceID: workspaceID, title: "2023年10月14日 Saturday")
+        let isoWeekdayDiaryPage = try repository.createPage(workspaceID: workspaceID, title: "2023-01-27 星期五")
+        let isoDateOnlyDiaryPage = try repository.createPage(workspaceID: workspaceID, title: "2023-01-03")
+        let wrongWeekdayPage = try repository.createPage(workspaceID: workspaceID, title: "2023年8月14日 星期二")
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        viewModel.selectCollection(.allDocuments)
+
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == ordinaryPage.id })
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == wrongWeekdayPage.id })
+        XCTAssertFalse(viewModel.visibleDocumentPages.contains { $0.id == legacyDiaryPage.id })
+        XCTAssertFalse(viewModel.visibleDocumentPages.contains { $0.id == duplicatedLegacyDiaryPage.id })
+        XCTAssertFalse(viewModel.visibleDocumentPages.contains { $0.id == englishWeekdayDiaryPage.id })
+        XCTAssertFalse(viewModel.visibleDocumentPages.contains { $0.id == isoWeekdayDiaryPage.id })
+        XCTAssertFalse(viewModel.visibleDocumentPages.contains { $0.id == isoDateOnlyDiaryPage.id })
+
+        viewModel.selectCollection(.diary)
+
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == legacyDiaryPage.id })
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == duplicatedLegacyDiaryPage.id })
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == englishWeekdayDiaryPage.id })
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == isoWeekdayDiaryPage.id })
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == isoDateOnlyDiaryPage.id })
+        XCTAssertFalse(viewModel.visibleDocumentPages.contains { $0.id == ordinaryPage.id })
+        XCTAssertFalse(viewModel.visibleDocumentPages.contains { $0.id == wrongWeekdayPage.id })
+    }
+
+    @MainActor
     func testDiaryCollectionOrdersPagesByDiaryDateDescending() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -18,16 +18,14 @@ enum LocalSyncGenerationResetPolicy {
         let markerURL = storeDirectory.appendingPathComponent(markerFilename)
         let storedGeneration = try? String(contentsOf: markerURL, encoding: .utf8)
 
-        if storedGeneration != currentGeneration,
-           fileManager.fileExists(atPath: storeDirectory.path) {
-            try fileManager.removeItem(at: storeDirectory)
-            EditorLog.sync.debug("local_sync_generation_reset reason=generation_mismatch")
-        }
-
         try fileManager.createDirectory(
             at: storeDirectory,
             withIntermediateDirectories: true
         )
+        if storedGeneration != currentGeneration,
+           fileManager.fileExists(atPath: storeDirectory.path) {
+            EditorLog.sync.debug("local_sync_generation_preserved reason=generation_mismatch")
+        }
         try currentGeneration.write(to: markerURL, atomically: true, encoding: .utf8)
         return storeDirectory
     }

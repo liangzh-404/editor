@@ -12,7 +12,7 @@ final class LocalSyncGenerationResetPolicyTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testPrepareStoreDirectoryDropsExistingLocalDataWhenGenerationMarkerIsMissing() throws {
+    func testPrepareStoreDirectoryPreservesExistingLocalDataWhenGenerationMarkerIsMissing() throws {
         let root = makeTemporaryDirectory()
         let editorDirectory = root.appendingPathComponent("Editor", isDirectory: true)
         let attachmentDirectory = editorDirectory.appendingPathComponent("Attachments", isDirectory: true)
@@ -26,8 +26,14 @@ final class LocalSyncGenerationResetPolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(preparedDirectory, editorDirectory)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: editorDirectory.appendingPathComponent("editor.sqlite").path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: attachmentDirectory.appendingPathComponent("old.txt").path))
+        XCTAssertEqual(
+            try String(contentsOf: editorDirectory.appendingPathComponent("editor.sqlite"), encoding: .utf8),
+            "old database"
+        )
+        XCTAssertEqual(
+            try String(contentsOf: attachmentDirectory.appendingPathComponent("old.txt"), encoding: .utf8),
+            "old attachment"
+        )
         XCTAssertEqual(
             try String(contentsOf: editorDirectory.appendingPathComponent(".sync-generation"), encoding: .utf8),
             "editor-cloudkit-v2"
@@ -52,7 +58,7 @@ final class LocalSyncGenerationResetPolicyTests: XCTestCase {
         )
     }
 
-    func testPrepareStoreDirectoryDropsExistingLocalDataWhenGenerationMarkerIsPreviousGeneration() throws {
+    func testPrepareStoreDirectoryPreservesExistingLocalDataWhenGenerationMarkerIsPreviousGeneration() throws {
         let root = makeTemporaryDirectory()
         let editorDirectory = root.appendingPathComponent("Editor", isDirectory: true)
         try FileManager.default.createDirectory(at: editorDirectory, withIntermediateDirectories: true)
@@ -64,7 +70,10 @@ final class LocalSyncGenerationResetPolicyTests: XCTestCase {
             currentGeneration: "editor-cloudkit-v2"
         )
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: editorDirectory.appendingPathComponent("editor.sqlite").path))
+        XCTAssertEqual(
+            try String(contentsOf: editorDirectory.appendingPathComponent("editor.sqlite"), encoding: .utf8),
+            "previous database"
+        )
         XCTAssertEqual(
             try String(contentsOf: editorDirectory.appendingPathComponent(".sync-generation"), encoding: .utf8),
             "editor-cloudkit-v2"

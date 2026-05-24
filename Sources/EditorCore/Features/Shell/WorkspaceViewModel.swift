@@ -178,7 +178,7 @@ enum WorkspaceColdLaunchSelectionResolver {
         now: Date,
         calendar: Calendar
     ) -> String? {
-        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        let diaryPageIDs = snapshot.diaryPageIDs
         return snapshot.pages.first { page in
             guard !diaryPageIDs.contains(page.id),
                   let updatedAtString = page.updatedAt,
@@ -370,9 +370,7 @@ final class WorkspaceViewModel: ObservableObject {
             return snapshot.pages.filter { !snapshot.isEmptyDiaryPage($0.id) }
         case .diary:
             let diaryPageIDs = visibleDiaryPageIDs
-            let diaryDatesByPageID = Dictionary(
-                uniqueKeysWithValues: snapshot.diaryPages.map { ($0.pageID, $0.diaryDate) }
-            )
+            let diaryDatesByPageID = snapshot.diaryDateByPageID
             return snapshot.pages
                 .filter { diaryPageIDs.contains($0.id) }
                 .sorted { first, second in
@@ -536,7 +534,7 @@ final class WorkspaceViewModel: ObservableObject {
         searchDebounceNanoseconds = 0
         searchHighlightDurationNanoseconds = 1_600_000_000
         self.snapshot = snapshot
-        cachedDiaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        cachedDiaryPageIDs = snapshot.diaryPageIDs
         selectedWorkspaceID = snapshot.selectedWorkspaceID
         selectedNotebookID = snapshot.selectedNotebookID
         selectedPageID = snapshot.selectedPageID
@@ -4243,7 +4241,7 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func apply(snapshot: WorkspaceSnapshot) {
         self.snapshot = snapshot
-        cachedDiaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        cachedDiaryPageIDs = snapshot.diaryPageIDs
         let encryptedPageIDs = Set(snapshot.pages.filter(\.isEncrypted).map(\.id))
         unlockedEncryptedPageIDs.formIntersection(encryptedPageIDs)
         encryptedPageLastOpenedAt = encryptedPageLastOpenedAt.filter { encryptedPageIDs.contains($0.key) }

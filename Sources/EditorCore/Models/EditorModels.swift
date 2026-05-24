@@ -79,6 +79,102 @@ struct DiaryPageSnapshot: Equatable, Sendable {
     let diaryDate: String
 }
 
+enum DiaryTitleClassificationPolicy {
+    private static let chineseTitlePattern = #"^\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s+(?:星期)?([一二三四五六日天]|Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)(?:\s+\d+)?\s*$"#
+    private static let isoTitlePattern = #"^\s*(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+(?:星期)?([一二三四五六日天]|Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday))?(?:\s+\d+)?\s*$"#
+
+    static func diaryDateString(forPageTitle title: String) -> String? {
+        if let chineseDate = diaryDateString(matching: chineseTitlePattern, in: title, requiresWeekday: true) {
+            return chineseDate
+        }
+        return diaryDateString(matching: isoTitlePattern, in: title, requiresWeekday: false)
+    }
+
+    private static func diaryDateString(
+        matching pattern: String,
+        in title: String,
+        requiresWeekday: Bool
+    ) -> String? {
+        let titleRegex = try! NSRegularExpression(pattern: pattern)
+        let fullRange = NSRange(title.startIndex..<title.endIndex, in: title)
+        guard let match = titleRegex.firstMatch(in: title, range: fullRange),
+              match.numberOfRanges == 5,
+              let year = Int(capture(1, in: title, match: match) ?? ""),
+              let month = Int(capture(2, in: title, match: match) ?? ""),
+              let day = Int(capture(3, in: title, match: match) ?? "") else {
+            return nil
+        }
+        let weekdaySymbol = capture(4, in: title, match: match)
+        if requiresWeekday, weekdaySymbol == nil {
+            return nil
+        }
+        let expectedWeekday = weekdaySymbol.flatMap(weekdayNumber(for:))
+        if weekdaySymbol != nil, expectedWeekday == nil {
+            return nil
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? calendar.timeZone
+        let components = DateComponents(
+            calendar: calendar,
+            timeZone: calendar.timeZone,
+            year: year,
+            month: month,
+            day: day
+        )
+        guard let date = calendar.date(from: components) else {
+            return nil
+        }
+
+        let resolved = calendar.dateComponents([.year, .month, .day, .weekday], from: date)
+        guard resolved.year == year,
+              resolved.month == month,
+              resolved.day == day else {
+            return nil
+        }
+        if let expectedWeekday, resolved.weekday != expectedWeekday {
+            return nil
+        }
+
+        return String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    private static func capture(_ index: Int, in string: String, match: NSTextCheckingResult) -> String? {
+        guard index < match.numberOfRanges else {
+            return nil
+        }
+        let nsRange = match.range(at: index)
+        guard nsRange.location != NSNotFound,
+              let range = Range(nsRange, in: string) else {
+            return nil
+        }
+        return String(string[range])
+    }
+
+    private static func weekdayNumber(for symbol: String) -> Int? {
+        switch symbol.lowercased() {
+        case "日", "天":
+            return 1
+        case "一", "monday":
+            return 2
+        case "二", "tuesday":
+            return 3
+        case "三", "wednesday":
+            return 4
+        case "四", "thursday":
+            return 5
+        case "五", "friday":
+            return 6
+        case "六", "saturday":
+            return 7
+        case "sunday":
+            return 1
+        default:
+            return nil
+        }
+    }
+}
+
 struct PageParentLink: Equatable, Sendable {
     let parentPageID: String
     let childPageID: String
@@ -518,8 +614,24 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         pages.filter(\.isFavorite)
     }
 
+    var diaryPagesIncludingInferredTitles: [DiaryPageSnapshot] {
+        let explicitPageIDs = Set(diaryPages.map(\.pageID))
+        let inferredPages = pages.compactMap { page -> DiaryPageSnapshot? in
+            guard !explicitPageIDs.contains(page.id),
+                  let diaryDate = DiaryTitleClassificationPolicy.diaryDateString(forPageTitle: page.title) else {
+                return nil
+            }
+            return DiaryPageSnapshot(pageID: page.id, workspaceID: page.workspaceID, diaryDate: diaryDate)
+        }
+        return diaryPages + inferredPages
+    }
+
+    var diaryDateByPageID: [String: String] {
+        Dictionary(uniqueKeysWithValues: diaryPagesIncludingInferredTitles.map { ($0.pageID, $0.diaryDate) })
+    }
+
     var diaryPageIDs: Set<String> {
-        Set(diaryPages.map(\.pageID))
+        Set(diaryPagesIncludingInferredTitles.map(\.pageID))
     }
 
     var visibleDiaryPageIDs: Set<String> {
