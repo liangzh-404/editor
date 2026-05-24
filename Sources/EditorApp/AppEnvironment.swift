@@ -153,7 +153,7 @@ enum AppEnvironment {
             mergeEngine: SyncMergeEngine(database: database),
             subscriptionEnsurer: CloudKitPrivateDatabaseSubscriptionEnsurer(),
             uploadBatchSize: 50,
-            maximumUploadsPerRun: 50
+            maximumUploadsPerRun: 250
         )
     }
 

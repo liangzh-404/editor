@@ -4772,6 +4772,99 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testForegroundSyncContinuesDrainingLocalBacklogWithoutWaitingForPollingInterval() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let syncRepository = SyncRepository(database: database)
+        try syncRepository.enqueue(entityType: "tag", entityID: "tag-one", changeType: "create")
+        try syncRepository.enqueue(entityType: "tag", entityID: "tag-two", changeType: "create")
+        let recorder = ForegroundSyncCallRecorder()
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: OrderedForegroundSyncAdapter(recorder: recorder),
+                remoteChangeFetcher: OrderedForegroundSyncFetcher(recorder: recorder),
+                mergeEngine: SyncMergeEngine(database: database),
+                subscriptionEnsurer: OrderedForegroundSyncSubscriptionEnsurer(recorder: recorder),
+                maximumUploadsPerRun: 1
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+        XCTAssertEqual(try syncRepository.pendingChanges(), [
+            SyncChange(entityType: "tag", entityID: "tag-two", changeType: "create")
+        ])
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
+        XCTAssertEqual(try syncRepository.pendingChanges(), [])
+        XCTAssertEqual(recorder.calls, [
+            .ensureSubscription,
+            .upload(SyncChange(entityType: "tag", entityID: "tag-one", changeType: "create")),
+            .ensureSubscription,
+            .upload(SyncChange(entityType: "tag", entityID: "tag-two", changeType: "create")),
+            .fetch
+        ])
+    }
+
+    @MainActor
+    func testForegroundSyncDoesNotSpinWhenOnlyDeferredLocalBacklogRemains() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let syncRepository = SyncRepository(database: database)
+        let deferredChange = SyncChange(entityType: "tag", entityID: "tag-one", changeType: "create")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try syncRepository.enqueue(
+            entityType: deferredChange.entityType,
+            entityID: deferredChange.entityID,
+            changeType: deferredChange.changeType
+        )
+        try syncRepository.recordFailure(
+            change: deferredChange,
+            errorDescription: "retry later",
+            nextAttemptAt: now.addingTimeInterval(300)
+        )
+        let recorder = ForegroundSyncCallRecorder()
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: OrderedForegroundSyncAdapter(recorder: recorder),
+                remoteChangeFetcher: OrderedForegroundSyncFetcher(recorder: recorder),
+                mergeEngine: SyncMergeEngine(database: database),
+                subscriptionEnsurer: OrderedForegroundSyncSubscriptionEnsurer(recorder: recorder),
+                maximumUploadsPerRun: 1,
+                now: { now }
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
+        XCTAssertEqual(try syncRepository.pendingChanges(), [deferredChange])
+        XCTAssertEqual(recorder.calls, [.ensureSubscription])
+        XCTAssertEqual(viewModel.syncStatusText, "同步暂缓，稍后自动重试")
+    }
+
+    @MainActor
     func testSyncAfterActivationSkipsDuringFailureCooldownAndRetriesAfterward() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -4807,6 +4900,71 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.syncAfterActivation()
 
         XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+    }
+
+    @MainActor
+    func testPartialForegroundUploadFailureRetriesBacklogAfterShortCooldown() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let syncRepository = SyncRepository(database: database)
+        let failingChange = SyncChange(entityType: "tag", entityID: "tag-one", changeType: "create")
+        let uploadedChange = SyncChange(entityType: "tag", entityID: "tag-two", changeType: "create")
+        let queuedChange = SyncChange(entityType: "tag", entityID: "tag-three", changeType: "create")
+        for change in [failingChange, uploadedChange, queuedChange] {
+            try syncRepository.enqueue(
+                entityType: change.entityType,
+                entityID: change.entityID,
+                changeType: change.changeType
+            )
+        }
+        let recorder = ForegroundSyncCallRecorder()
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        var currentDate = Date(timeIntervalSince1970: 2_000)
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: syncRepository,
+                adapter: PartiallyFailingForegroundSyncAdapter(
+                    recorder: recorder,
+                    failingChange: failingChange
+                ),
+                remoteChangeFetcher: OrderedForegroundSyncFetcher(recorder: recorder),
+                mergeEngine: SyncMergeEngine(database: database),
+                subscriptionEnsurer: OrderedForegroundSyncSubscriptionEnsurer(recorder: recorder),
+                maximumUploadsPerRun: 2,
+                now: { currentDate }
+            ),
+            syncScheduler: scheduler,
+            currentDateProvider: { currentDate }
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        try scheduler.runNextScheduledOperation()
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
+
+        currentDate = Date(timeIntervalSince1970: 2_029)
+        viewModel.syncAfterForegroundInterval()
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
+
+        currentDate = Date(timeIntervalSince1970: 2_031)
+        viewModel.syncAfterForegroundInterval()
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(recorder.calls, [
+            .ensureSubscription,
+            .upload(failingChange),
+            .upload(uploadedChange),
+            .ensureSubscription,
+            .upload(failingChange),
+            .upload(queuedChange)
+        ])
+        XCTAssertEqual(try syncRepository.pendingChanges(), [failingChange])
     }
 
     func testForegroundSyncActivationPolicySyncsOnInitialAndLaterActivePhasesOnly() {
@@ -5248,6 +5406,27 @@ private final class OrderedForegroundSyncAdapter: CloudKitSyncAdapter {
     }
 }
 
+private final class PartiallyFailingForegroundSyncAdapter: CloudKitSyncAdapter {
+    private let recorder: ForegroundSyncCallRecorder
+    private let failingChange: SyncChange
+
+    init(recorder: ForegroundSyncCallRecorder, failingChange: SyncChange) {
+        self.recorder = recorder
+        self.failingChange = failingChange
+    }
+
+    func upload(change: SyncChange) throws -> CloudKitUploadResult {
+        recorder.record(.upload(change))
+        if change == failingChange {
+            throw WorkspaceViewModelTestError.uploadFailed
+        }
+        return CloudKitUploadResult(
+            recordName: "\(change.entityType)-\(change.entityID)",
+            changeTag: "tag-\(change.entityID)"
+        )
+    }
+}
+
 private final class OrderedForegroundSyncFetcher: CloudKitRemoteChangeFetching {
     private let recorder: ForegroundSyncCallRecorder
 
@@ -5297,6 +5476,7 @@ private enum WorkspaceViewModelTestError: Error, CustomStringConvertible {
     case thumbnailGenerationFailed
     case noScheduledForegroundSync
     case remoteFetchFailed
+    case uploadFailed
 
     var description: String {
         switch self {
@@ -5306,6 +5486,8 @@ private enum WorkspaceViewModelTestError: Error, CustomStringConvertible {
             return "noScheduledForegroundSync"
         case .remoteFetchFailed:
             return "remoteFetchFailed"
+        case .uploadFailed:
+            return "uploadFailed"
         }
     }
 }

@@ -30,6 +30,7 @@ enum AttachmentPreviewGenerationStatus: Equatable, Sendable {
 struct WorkspaceForegroundSyncSummary: Equatable, Sendable {
     let uploadSummary: SyncUploadSummary
     let fetchSummary: SyncFetchSummary
+    let remainingLocalChangeCount: Int
 }
 
 struct SearchTransientHighlight: Equatable, Sendable {
@@ -255,6 +256,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var pageArchiveUndoExpirationTask: Task<Void, Never>?
     private var cachedDiaryPageIDs: Set<String> = []
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
+    private static let foregroundSyncPartialFailureCooldown: TimeInterval = 30
 
     var canNavigateBack: Bool {
         !pageNavigationBackStack.isEmpty || selectedPageParentLink != nil
@@ -4319,7 +4321,8 @@ final class WorkspaceViewModel: ObservableObject {
                 return .success(
                     WorkspaceForegroundSyncSummary(
                         uploadSummary: uploadSummary,
-                        fetchSummary: SyncFetchSummary(appliedCount: 0)
+                        fetchSummary: SyncFetchSummary(appliedCount: 0),
+                        remainingLocalChangeCount: remainingLocalChanges
                     )
                 )
             }
@@ -4341,7 +4344,8 @@ final class WorkspaceViewModel: ObservableObject {
             return .success(
                 WorkspaceForegroundSyncSummary(
                     uploadSummary: uploadSummary,
-                    fetchSummary: fetchSummary
+                    fetchSummary: fetchSummary,
+                    remainingLocalChangeCount: 0
                 )
             )
         } catch {
@@ -4392,23 +4396,39 @@ final class WorkspaceViewModel: ObservableObject {
     private func finishForegroundSync(_ result: WorkspaceForegroundSyncResult) {
         isForegroundSyncRunning = false
         let shouldRunPendingSync = shouldRunPendingForegroundSync(after: result)
+        let shouldContinueBacklogDrain = shouldContinueForegroundBacklogDrain(after: result)
         completeForegroundSync(result)
-        guard isForegroundSyncRerunPending else {
+        let hasPendingLocalChangeRerun = isForegroundSyncRerunPending
+        isForegroundSyncRerunPending = false
+
+        guard hasPendingLocalChangeRerun || shouldContinueBacklogDrain else {
             return
         }
 
-        isForegroundSyncRerunPending = false
         guard shouldRunPendingSync else {
             return
         }
 
-        scheduleForegroundSyncIfNeeded(reason: "pending_local_change")
+        scheduleForegroundSyncIfNeeded(
+            reason: shouldContinueBacklogDrain ? "local_backlog" : "pending_local_change"
+        )
     }
 
     private func shouldRunPendingForegroundSync(after result: WorkspaceForegroundSyncResult) -> Bool {
         switch result {
         case .success(let summary):
             summary.uploadSummary.failedCount == 0
+        case .failure:
+            false
+        }
+    }
+
+    private func shouldContinueForegroundBacklogDrain(after result: WorkspaceForegroundSyncResult) -> Bool {
+        switch result {
+        case .success(let summary):
+            summary.uploadSummary.failedCount == 0
+                && summary.uploadSummary.uploadedCount > 0
+                && summary.remainingLocalChangeCount > 0
         case .failure:
             false
         }
@@ -4422,12 +4442,24 @@ final class WorkspaceViewModel: ObservableObject {
                 payload: [
                     "uploaded_count": summary.uploadSummary.uploadedCount,
                     "failed_upload_count": summary.uploadSummary.failedCount,
-                    "fetched_count": summary.fetchSummary.appliedCount
+                    "fetched_count": summary.fetchSummary.appliedCount,
+                    "remaining_local_change_count": summary.remainingLocalChangeCount
                 ]
             )
             if summary.uploadSummary.failedCount > 0 {
                 syncStatusText = "已安排同步重试"
-                scheduleForegroundSyncFailureCooldown()
+                if shouldUsePartialFailureCooldown(for: summary) {
+                    scheduleForegroundSyncPartialFailureCooldown()
+                } else {
+                    scheduleForegroundSyncFailureCooldown()
+                }
+            } else if summary.remainingLocalChangeCount > 0 {
+                if summary.uploadSummary.uploadedCount > 0 {
+                    syncStatusText = "继续同步，剩余 \(summary.remainingLocalChangeCount) 条本地变更"
+                } else {
+                    syncStatusText = "同步暂缓，稍后自动重试"
+                }
+                nextForegroundSyncAttemptAt = nil
             } else if summary.fetchSummary.appliedCount > 0 {
                 syncStatusText = "已同步 \(summary.fetchSummary.appliedCount) 条远端变更"
                 nextForegroundSyncAttemptAt = nil
@@ -4436,14 +4468,16 @@ final class WorkspaceViewModel: ObservableObject {
                 nextForegroundSyncAttemptAt = nil
             }
 
-            do {
-                try load()
-            } catch {
-                syncStatusText = "同步失败"
-                scheduleForegroundSyncFailureCooldown()
-                EditorLog.sync.error(
-                    "sync_now_failed error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
-                )
+            if summary.fetchSummary.appliedCount > 0 {
+                do {
+                    try load()
+                } catch {
+                    syncStatusText = "同步失败"
+                    scheduleForegroundSyncFailureCooldown()
+                    EditorLog.sync.error(
+                        "sync_now_failed error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
+                    )
+                }
             }
         case .failure(let errorDescription):
             recordForegroundSyncDiagnostic(
@@ -4459,8 +4493,22 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func scheduleForegroundSyncFailureCooldown() {
+        scheduleForegroundSyncCooldown(after: Self.foregroundSyncFailureCooldown)
+    }
+
+    private func scheduleForegroundSyncPartialFailureCooldown() {
+        scheduleForegroundSyncCooldown(after: Self.foregroundSyncPartialFailureCooldown)
+    }
+
+    private func scheduleForegroundSyncCooldown(after interval: TimeInterval) {
         nextForegroundSyncAttemptAt = currentDateProvider()
-            .addingTimeInterval(Self.foregroundSyncFailureCooldown)
+            .addingTimeInterval(interval)
+    }
+
+    private func shouldUsePartialFailureCooldown(for summary: WorkspaceForegroundSyncSummary) -> Bool {
+        summary.uploadSummary.uploadedCount > 0
+            && summary.uploadSummary.failedCount > 0
+            && summary.remainingLocalChangeCount > summary.uploadSummary.failedCount
     }
 
     private func recordForegroundSyncDiagnostic(eventName: String, payload: [String: Any]) {
