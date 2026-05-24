@@ -29,6 +29,25 @@ enum InlineLinkActivationRouter {
     }
 }
 
+enum InlineLinkActivationSourceSelectionResolver {
+    static func sourceSelection(
+        blockID: String,
+        activation: NativeInlineLinkActivation,
+        selectedRange: NSRange
+    ) -> EditorTextSelection? {
+        switch activation.destination {
+        case .internalLink:
+            return EditorTextSelection(
+                blockID: blockID,
+                location: activation.range.location,
+                length: activation.range.length
+            )
+        case .externalURL:
+            return nil
+        }
+    }
+}
+
 enum EditorThemeScheme: Equatable, Sendable {
     case light
     case dark
@@ -10798,15 +10817,15 @@ private struct EditorCanvasView: View {
         guard let route = inlineLinkActivationRoute(for: activation, in: block) else {
             return false
         }
-        let sourceSelection = EditorTextSelection(
-            blockID: block.id,
-            location: selectedRange.location,
-            length: selectedRange.length
-        )
         var didRoute = false
         InlineLinkActivationRouter.route(
             route,
             openInternal: { targetPageID, targetBlockID in
+                let sourceSelection = InlineLinkActivationSourceSelectionResolver.sourceSelection(
+                    blockID: block.id,
+                    activation: activation,
+                    selectedRange: selectedRange
+                )
                 didRoute = onOpenInlineInternalLink(block.id, targetPageID, targetBlockID, sourceSelection)
             },
             openExternal: { url in

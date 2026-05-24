@@ -24,6 +24,39 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(openedExternal?.absoluteString, "https://swift.org")
     }
 
+    func testInlineLinkActivationSourceSelectionUsesActivationRangeForInternalLinks() {
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 12, length: 9),
+            destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+        )
+
+        let sourceSelection = InlineLinkActivationSourceSelectionResolver.sourceSelection(
+            blockID: "source-block",
+            activation: activation,
+            selectedRange: NSRange(location: 2, length: 0)
+        )
+
+        XCTAssertEqual(
+            sourceSelection,
+            EditorTextSelection(blockID: "source-block", location: 12, length: 9)
+        )
+    }
+
+    func testInlineLinkActivationSourceSelectionIgnoresExternalLinks() {
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 12, length: 19),
+            destination: .externalURL("https://swift.org")
+        )
+
+        XCTAssertNil(
+            InlineLinkActivationSourceSelectionResolver.sourceSelection(
+                blockID: "source-block",
+                activation: activation,
+                selectedRange: NSRange(location: 2, length: 0)
+            )
+        )
+    }
+
     func testCraftThingsDesignTokensMatchDesktopEditorialPalette() {
         assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF7, green: 0xF7, blue: 0xF5)
         assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF2, green: 0xF2, blue: 0xEF)
