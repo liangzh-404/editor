@@ -1,8 +1,10 @@
+import CryptoKit
 import Foundation
 
 final class PageRepository: @unchecked Sendable {
     private let database: SQLiteDatabase
     private let encryptedNoteCipher: EncryptedNoteCiphering
+    private let pageVersionRepository: PageVersionRepository?
 
     var syncChangeNotificationObject: AnyObject {
         database
@@ -24,10 +26,16 @@ final class PageRepository: @unchecked Sendable {
 
     init(
         database: SQLiteDatabase,
-        encryptedNoteCipher: EncryptedNoteCiphering = EncryptedNoteCipher()
+        encryptedNoteCipher: EncryptedNoteCiphering = EncryptedNoteCipher(),
+        pageVersionRepository: PageVersionRepository? = nil
     ) {
         self.database = database
         self.encryptedNoteCipher = encryptedNoteCipher
+        self.pageVersionRepository = pageVersionRepository
+            ?? PageVersionRepository(
+                database: database,
+                encryptedNoteCipher: encryptedNoteCipher
+            )
     }
 
     @discardableResult
@@ -302,6 +310,7 @@ final class PageRepository: @unchecked Sendable {
             return
         }
 
+        try pageVersionRepository?.captureVersionIfNeeded(pageID: pageID)
         let now = Self.timestamp()
         let storedTitle = try storedValue(title, isEncrypted: isEncrypted)
         try database.execute(
@@ -1148,6 +1157,7 @@ final class PageRepository: @unchecked Sendable {
             return
         }
 
+        try pageVersionRepository?.captureVersionIfNeeded(pageID: currentRow["page_id"] ?? "")
         try database.execute(
             """
             UPDATE blocks
@@ -1238,6 +1248,9 @@ final class PageRepository: @unchecked Sendable {
 
         let now = Self.timestamp()
         let isEncrypted = try pageIsEncrypted(pageID: pageID)
+        if !removedBlockIDs.isEmpty || !replacementBlocks.isEmpty {
+            try pageVersionRepository?.captureVersionIfNeeded(pageID: pageID)
+        }
         try database.withImmediateTransaction("replace_page_blocks") {
             if !removedBlockIDs.isEmpty {
                 let placeholders = Array(repeating: "?", count: removedBlockIDs.count).joined(separator: ", ")
@@ -1542,6 +1555,7 @@ final class PageRepository: @unchecked Sendable {
         let drafts = MarkdownTransformer.importBlocks(markdown: markdown)
         let now = Self.timestamp()
         let isEncrypted = try pageIsEncrypted(pageID: pageID)
+        try pageVersionRepository?.captureVersionIfNeeded(pageID: pageID)
 
         try database.execute(
             """
@@ -2212,6 +2226,7 @@ final class PageRepository: @unchecked Sendable {
         let blockID = "block-\(UUID().uuidString.lowercased())"
         let orderKey = String(format: "%06d", blockCount + 1)
 
+        try pageVersionRepository?.captureVersionIfNeeded(pageID: pageID)
         try insertBlock(
             id: blockID,
             pageID: pageID,
@@ -2292,6 +2307,7 @@ final class PageRepository: @unchecked Sendable {
         var reorderedBlockIDs = orderedBlockIDs
         reorderedBlockIDs.insert(insertedBlockID, at: currentIndex + 1)
 
+        try pageVersionRepository?.captureVersionIfNeeded(pageID: pageID)
         try database.withImmediateTransaction("insert_paragraph_block") {
             try insertBlock(
                 id: insertedBlockID,
@@ -2402,6 +2418,12 @@ final class PageRepository: @unchecked Sendable {
         var reorderedBlocks = remainingBlocks
         reorderedBlocks.insert(contentsOf: movingBlocks, at: clampedTargetIndex)
 
+        let reorderedBlockUpdates = reorderedBlocks.enumerated().filter { index, block in
+            String(format: "%06d", index + 1) != block.orderKey
+        }
+        if !reorderedBlockUpdates.isEmpty {
+            try pageVersionRepository?.captureVersionIfNeeded(pageID: pageID)
+        }
         let now = Self.timestamp()
         var changedBlockIDs: [String] = []
         try database.withImmediateTransaction("move_block") {
@@ -2495,6 +2517,7 @@ final class PageRepository: @unchecked Sendable {
         }
 
         let now = Self.timestamp()
+        try pageVersionRepository?.captureVersionIfNeeded(pageID: pageID)
         try database.withImmediateTransaction("delete_block") {
             try database.execute(
                 """
@@ -3188,6 +3211,7 @@ final class PageRepository: @unchecked Sendable {
             }
         }
 
+        try pageVersionRepository?.captureVersionIfNeeded(pageID: pageID)
         try persistBlockParent(blockID: blockID, parentBlockID: parentBlockID)
         return true
     }
@@ -3674,6 +3698,334 @@ final class PageRepository: @unchecked Sendable {
             return lhs.orderKey < rhs.orderKey
         }
         return lhs.originalIndex < rhs.originalIndex
+    }
+}
+
+final class PageVersionRepository {
+    private struct LatestVersionMetadata {
+        let createdAt: String
+        let contentHash: String
+    }
+
+    private let database: SQLiteDatabase
+    private let encryptedNoteCipher: EncryptedNoteCiphering
+    private let now: () -> Date
+    private let minCaptureInterval: TimeInterval
+    private let retentionInterval: TimeInterval
+    private let maxSnapshotBlockCount: Int
+    private let maxSnapshotBytes: Int
+
+    init(
+        database: SQLiteDatabase,
+        encryptedNoteCipher: EncryptedNoteCiphering = EncryptedNoteCipher(),
+        now: @escaping () -> Date = Date.init,
+        minCaptureInterval: TimeInterval = 5 * 60,
+        retentionInterval: TimeInterval = 7 * 24 * 60 * 60,
+        maxSnapshotBlockCount: Int = 2_000,
+        maxSnapshotBytes: Int = 1_000_000
+    ) {
+        self.database = database
+        self.encryptedNoteCipher = encryptedNoteCipher
+        self.now = now
+        self.minCaptureInterval = minCaptureInterval
+        self.retentionInterval = retentionInterval
+        self.maxSnapshotBlockCount = maxSnapshotBlockCount
+        self.maxSnapshotBytes = maxSnapshotBytes
+    }
+
+    func captureVersionIfNeeded(pageID: String) throws {
+        guard !pageID.isEmpty else {
+            return
+        }
+
+        let captureDate = now()
+        if let latest = try latestVersionMetadata(pageID: pageID),
+           let latestDate = Self.date(from: latest.createdAt),
+           captureDate.timeIntervalSince(latestDate) < minCaptureInterval {
+            return
+        }
+
+        let pageRows = try database.query(
+            """
+            SELECT id,
+                   title,
+                   is_encrypted,
+                   created_at,
+                   updated_at
+            FROM pages
+            WHERE id = ?
+              AND is_archived = 0
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        )
+        guard let pageRow = pageRows.first else {
+            return
+        }
+
+        let blockCountRow = try database.query(
+            """
+            SELECT COUNT(*) AS count
+            FROM blocks
+            WHERE page_id = ?
+              AND is_deleted = 0
+            """,
+            bindings: [.text(pageID)]
+        ).first
+        let blockCount = Int(blockCountRow?["count"] ?? "") ?? 0
+        guard blockCount <= maxSnapshotBlockCount else {
+            EditorLog.store.debug(
+                "page_version_snapshot_skipped_large_page page_id=\(pageID, privacy: .public) block_count=\(blockCount, privacy: .public)"
+            )
+            return
+        }
+
+        let isEncrypted = Self.sqliteBool(pageRow["is_encrypted"])
+        let title = try decryptedStoredValue(pageRow["title"] ?? "", isEncrypted: isEncrypted)
+        let blocks = try versionBlocks(pageID: pageID)
+        let capturedAt = Self.timestamp(captureDate)
+        let snapshot = PageVersionSnapshot(
+            pageID: pageID,
+            title: title,
+            pageCreatedAt: pageRow["created_at"] ?? capturedAt,
+            pageUpdatedAt: pageRow["updated_at"] ?? capturedAt,
+            capturedAt: capturedAt,
+            blocks: blocks
+        )
+        let snapshotJSON = try Self.encodeSnapshot(snapshot)
+        guard snapshotJSON.utf8.count <= maxSnapshotBytes else {
+            EditorLog.store.debug(
+                "page_version_snapshot_skipped_large_snapshot page_id=\(pageID, privacy: .public) byte_count=\(snapshotJSON.utf8.count, privacy: .public)"
+            )
+            return
+        }
+
+        let contentHash = Self.sha256Hex(snapshotJSON)
+        if let latest = try latestVersionMetadata(pageID: pageID),
+           latest.contentHash == contentHash {
+            return
+        }
+
+        let versionID = "page-version-\(UUID().uuidString.lowercased())"
+        try database.execute(
+            """
+            INSERT INTO page_versions (
+                id,
+                page_id,
+                title,
+                snapshot_json,
+                content_hash,
+                block_count,
+                sync_state,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(versionID),
+                .text(pageID),
+                .text(title),
+                .text(snapshotJSON),
+                .text(contentHash),
+                .integer(blocks.count),
+                .text("local"),
+                .text(capturedAt),
+                .text(capturedAt)
+            ]
+        )
+        try SyncRepository(database: database).enqueue(
+            entityType: "pageVersion",
+            entityID: versionID,
+            changeType: "create"
+        )
+        try pruneExpiredVersions(pageID: pageID, at: captureDate)
+    }
+
+    func versionSummaries(pageID: String, limit: Int = 100) throws -> [PageVersionSummary] {
+        let cutoff = Self.timestamp(now().addingTimeInterval(-retentionInterval))
+        return try database.query(
+            """
+            SELECT id,
+                   page_id,
+                   title,
+                   block_count,
+                   created_at
+            FROM page_versions
+            WHERE page_id = ?
+              AND created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            bindings: [
+                .text(pageID),
+                .text(cutoff),
+                .integer(limit)
+            ]
+        ).map { row in
+            PageVersionSummary(
+                id: row["id"] ?? "",
+                pageID: row["page_id"] ?? "",
+                title: row["title"] ?? "",
+                blockCount: Int(row["block_count"] ?? "") ?? 0,
+                createdAt: row["created_at"] ?? ""
+            )
+        }
+    }
+
+    func versionSnapshot(versionID: String) throws -> PageVersionSnapshot {
+        let row = try database.query(
+            """
+            SELECT snapshot_json
+            FROM page_versions
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(versionID)]
+        ).first
+        guard let snapshotJSON = row?["snapshot_json"] else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        return try Self.decodeSnapshot(snapshotJSON)
+    }
+
+    private func versionBlocks(pageID: String) throws -> [PageVersionBlockSnapshot] {
+        try database.query(
+            """
+            SELECT blocks.id AS id,
+                   blocks.page_id AS page_id,
+                   blocks.parent_block_id AS parent_block_id,
+                   blocks.order_key AS order_key,
+                   blocks.type AS type,
+                   blocks.payload_json AS payload_json,
+                   blocks.text_plain AS text_plain,
+                   pages.is_encrypted AS is_encrypted
+            FROM blocks
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.page_id = ?
+              AND blocks.is_deleted = 0
+            ORDER BY blocks.order_key ASC
+            """,
+            bindings: [.text(pageID)]
+        ).map { row in
+            let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+            let payloadJSON = try decryptedStoredValue(
+                row["payload_json"] ?? "{}",
+                isEncrypted: isEncrypted
+            )
+            let textPlain = try decryptedStoredValue(
+                row["text_plain"] ?? "",
+                isEncrypted: isEncrypted
+            )
+            return PageVersionBlockSnapshot(
+                id: row["id"] ?? "",
+                pageID: row["page_id"] ?? "",
+                parentBlockID: row["parent_block_id"] ?? nil,
+                orderKey: row["order_key"] ?? "",
+                typeRawValue: row["type"] ?? BlockType.paragraph.rawValue,
+                textPlain: textPlain,
+                payloadJSON: payloadJSON
+            )
+        }
+    }
+
+    private func latestVersionMetadata(pageID: String) throws -> LatestVersionMetadata? {
+        try database.query(
+            """
+            SELECT created_at,
+                   content_hash
+            FROM page_versions
+            WHERE page_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            bindings: [.text(pageID)]
+        ).first.map { row in
+            LatestVersionMetadata(
+                createdAt: row["created_at"] ?? "",
+                contentHash: row["content_hash"] ?? ""
+            )
+        }
+    }
+
+    private func pruneExpiredVersions(pageID: String, at date: Date) throws {
+        let cutoff = Self.timestamp(date.addingTimeInterval(-retentionInterval))
+        let expiredIDs = try database.query(
+            """
+            SELECT id
+            FROM page_versions
+            WHERE page_id = ?
+              AND created_at < ?
+            """,
+            bindings: [
+                .text(pageID),
+                .text(cutoff)
+            ]
+        ).compactMap { $0["id"] }
+
+        for expiredID in expiredIDs {
+            try SyncRepository(database: database).enqueue(
+                entityType: "pageVersion",
+                entityID: expiredID,
+                changeType: "delete"
+            )
+        }
+
+        try database.execute(
+            """
+            DELETE FROM page_versions
+            WHERE page_id = ?
+              AND created_at < ?
+            """,
+            bindings: [
+                .text(pageID),
+                .text(cutoff)
+            ]
+        )
+    }
+
+    private func decryptedStoredValue(_ storedValue: String, isEncrypted _: Bool) throws -> String {
+        guard encryptedNoteCipher.isCiphertext(storedValue) else {
+            return storedValue
+        }
+        return try encryptedNoteCipher.decrypt(storedValue)
+    }
+
+    private static func encodeSnapshot(_ snapshot: PageVersionSnapshot) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(snapshot)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw PageRepositoryError.invalidPayloadEncoding
+        }
+        return json
+    }
+
+    private static func decodeSnapshot(_ json: String) throws -> PageVersionSnapshot {
+        let data = Data(json.utf8)
+        return try JSONDecoder().decode(PageVersionSnapshot.self, from: data)
+    }
+
+    private static func sha256Hex(_ string: String) -> String {
+        let digest = SHA256.hash(data: Data(string.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func sqliteBool(_ value: String?) -> Bool {
+        value == "1" || value == "true"
+    }
+
+    private static func timestamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
+    private static func date(from timestamp: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: timestamp)
     }
 }
 

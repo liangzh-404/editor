@@ -459,6 +459,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
     let notebookChanges: [RemoteNotebookChange]
     let pageChanges: [RemotePageChange]
     let diaryPageChanges: [RemoteDiaryPageChange]
+    let pageVersionChanges: [RemotePageVersionChange]
     let tagChanges: [RemoteTagChange]
     let pageTagChanges: [RemotePageTagChange]
     let attachmentChanges: [RemoteAttachmentChange]
@@ -473,6 +474,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
         notebookChanges: [RemoteNotebookChange] = [],
         pageChanges: [RemotePageChange] = [],
         diaryPageChanges: [RemoteDiaryPageChange] = [],
+        pageVersionChanges: [RemotePageVersionChange] = [],
         tagChanges: [RemoteTagChange] = [],
         pageTagChanges: [RemotePageTagChange] = [],
         attachmentChanges: [RemoteAttachmentChange] = [],
@@ -486,6 +488,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
         self.notebookChanges = notebookChanges
         self.pageChanges = pageChanges
         self.diaryPageChanges = diaryPageChanges
+        self.pageVersionChanges = pageVersionChanges
         self.tagChanges = tagChanges
         self.pageTagChanges = pageTagChanges
         self.attachmentChanges = attachmentChanges
@@ -1148,6 +1151,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         "NotebookRecord",
         "PageRecord",
         "DiaryPageRecord",
+        "PageVersionRecord",
         "TagRecord",
         "PageTagRecord",
         "AttachmentRecord",
@@ -1345,6 +1349,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             notebookChanges: currentGenerationRecords(recordsByType["NotebookRecord"] ?? []).compactMap(remoteNotebookChange),
             pageChanges: pageChanges,
             diaryPageChanges: currentGenerationRecords(recordsByType["DiaryPageRecord"] ?? []).compactMap(remoteDiaryPageChange),
+            pageVersionChanges: currentGenerationRecords(recordsByType["PageVersionRecord"] ?? []).compactMap(remotePageVersionChange),
             tagChanges: currentGenerationRecords(recordsByType["TagRecord"] ?? []).compactMap(remoteTagChange),
             pageTagChanges: currentGenerationRecords(recordsByType["PageTagRecord"] ?? []).compactMap(remotePageTagChange),
             attachmentChanges: try currentGenerationRecords(recordsByType["AttachmentRecord"] ?? []).compactMap { record in
@@ -1386,6 +1391,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             return try pageRecord(entityID: change.entityID)
         case "diaryPage":
             return try diaryPageRecord(entityID: change.entityID)
+        case "pageVersion":
+            return try pageVersionRecord(entityID: change.entityID)
         case "tag":
             return try tagRecord(entityID: change.entityID)
         case "pageTag":
@@ -1471,6 +1478,34 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         let record = makeRecord(type: "DiaryPageRecord", entityType: "diaryPage", entityID: entityID)
         record["workspaceID"] = row["workspace_id"] as CKRecordValue?
         record["diaryDate"] = row["diary_date"] as CKRecordValue?
+        record["updatedAt"] = row["updated_at"] as CKRecordValue?
+        return record
+    }
+
+    private func pageVersionRecord(entityID: String) throws -> CKRecord {
+        let row = try requiredRow(
+            """
+            SELECT id,
+                   page_id,
+                   title,
+                   snapshot_json,
+                   content_hash,
+                   block_count,
+                   created_at,
+                   updated_at
+            FROM page_versions
+            WHERE id = ?
+            LIMIT 1
+            """,
+            entityID: entityID
+        )
+        let record = makeRecord(type: "PageVersionRecord", entityType: "pageVersion", entityID: entityID)
+        record["pageID"] = row["page_id"] as CKRecordValue?
+        record["title"] = row["title"] as CKRecordValue?
+        record["snapshotJSON"] = row["snapshot_json"] as CKRecordValue?
+        record["contentHash"] = row["content_hash"] as CKRecordValue?
+        record["blockCount"] = NSNumber(value: Int(row["block_count"] ?? "") ?? 0)
+        record["createdAt"] = row["created_at"] as CKRecordValue?
         record["updatedAt"] = row["updated_at"] as CKRecordValue?
         return record
     }
@@ -1662,6 +1697,28 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         )
     }
 
+    private func remotePageVersionChange(record: CKRecord) -> RemotePageVersionChange? {
+        guard let versionID = record["entityID"] as? String,
+              let pageID = record["pageID"] as? String,
+              let title = record["title"] as? String,
+              let snapshotJSON = record["snapshotJSON"] as? String,
+              let contentHash = record["contentHash"] as? String,
+              let createdAt = record["createdAt"] as? String else {
+            return nil
+        }
+
+        return RemotePageVersionChange(
+            versionID: versionID,
+            pageID: pageID,
+            title: title,
+            snapshotJSON: snapshotJSON,
+            contentHash: contentHash,
+            blockCount: (record["blockCount"] as? NSNumber)?.intValue ?? 0,
+            createdAt: createdAt,
+            updatedAt: record["updatedAt"] as? String
+        )
+    }
+
     private func remoteTagChange(record: CKRecord) -> RemoteTagChange? {
         guard let tagID = record["entityID"] as? String,
               let workspaceID = record["workspaceID"] as? String,
@@ -1829,6 +1886,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             return "page"
         case "DiaryPageRecord":
             return "diaryPage"
+        case "PageVersionRecord":
+            return "pageVersion"
         case "TagRecord":
             return "tag"
         case "PageTagRecord":
@@ -2420,6 +2479,26 @@ final class SyncEngine {
                 try mergeEngine.applyRemoteDiaryPage(change)
             }
         }
+        var skippedRemotePageVersionCount = 0
+        for change in changeSet.pageVersionChanges {
+            guard try syncRepository.pageRecordExists(pageID: change.pageID) else {
+                skippedRemotePageVersionCount += 1
+                recordRuntimeDiagnostic(
+                    eventName: "remote_page_version_skipped_missing_page",
+                    payloadJSON: Self.diagnosticPayloadJSON([
+                        "version_id": change.versionID,
+                        "page_id": change.pageID
+                    ])
+                )
+                EditorLog.sync.error(
+                    "sync_remote_page_version_skipped_missing_page version_id=\(change.versionID, privacy: .public) page_id=\(change.pageID, privacy: .public)"
+                )
+                continue
+            }
+            try applyRemoteUpsert(entityType: "pageVersion", entityID: change.versionID) {
+                try mergeEngine.applyRemotePageVersion(change)
+            }
+        }
         var skippedRemoteTagCount = 0
         for change in RemoteTagChangeDependencySorter.sorted(changeSet.tagChanges) {
             guard try syncRepository.workspaceRecordExists(workspaceID: change.workspaceID) else {
@@ -2539,6 +2618,8 @@ final class SyncEngine {
                 + changeSet.pageChanges.count
                 + changeSet.diaryPageChanges.count
                 - skippedRemoteDiaryPageCount
+                + changeSet.pageVersionChanges.count
+                - skippedRemotePageVersionCount
                 + changeSet.tagChanges.count
                 - skippedRemoteTagCount
                 + changeSet.pageTagChanges.count
@@ -2797,6 +2878,8 @@ final class SyncEngine {
             return 60
         case "block":
             return 70
+        case "pageVersion":
+            return 80
         default:
             return 80
         }

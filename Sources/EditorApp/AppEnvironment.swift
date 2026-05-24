@@ -70,7 +70,11 @@ enum AppEnvironment {
         try SchemaMigrator.migrate(database: database)
         try DataProtectionService.applyNativeProtection(to: URL(fileURLWithPath: databasePath))
 
-        let repository = PageRepository(database: database)
+        let pageVersionRepository = PageVersionRepository(database: database)
+        let repository = PageRepository(
+            database: database,
+            pageVersionRepository: pageVersionRepository
+        )
         let snapshot = try repository.bootstrapWorkspaceIfNeeded(blockPageIDs: [])
         try seedTodayDiaryForUITestingIfNeeded(database: database, snapshot: snapshot)
         try seedLargePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
@@ -95,6 +99,7 @@ enum AppEnvironment {
 
         let viewModel = WorkspaceViewModel(
             repository: repository,
+            pageVersionRepository: pageVersionRepository,
             diaryRepository: DiaryRepository(database: database),
             tagRepository: TagRepository(database: database),
             attachmentRepository: attachmentRepository,

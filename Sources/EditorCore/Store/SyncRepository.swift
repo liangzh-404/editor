@@ -329,6 +329,13 @@ final class SyncRepository {
             now: now
         )
         try enqueueUnsyncedCreates(
+            entityType: "pageVersion",
+            entityIDExpression: "page_versions.id",
+            sourceSQL: "page_versions",
+            sourcePredicate: nil,
+            now: now
+        )
+        try enqueueUnsyncedCreates(
             entityType: "pageTag",
             entityIDExpression: "page_tags.page_id || '.' || page_tags.tag_id",
             sourceSQL: "page_tags",
