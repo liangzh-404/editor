@@ -2629,6 +2629,7 @@ final class EditorBlockChromeTests: XCTestCase {
             diaryPages: [
                 DiaryPageSnapshot(pageID: "page-diary", workspaceID: workspaceID, diaryDate: "2026-05-18")
             ],
+            emptyDiaryPageIDs: ["page-diary"],
             selectedWorkspaceID: workspaceID,
             selectedPageID: "page-recent"
         )
@@ -2639,11 +2640,11 @@ final class EditorBlockChromeTests: XCTestCase {
             model.primaryItems.map(\.title),
             ["全部文档", "日记", "加密"]
         )
-        XCTAssertEqual(model.primaryItems.map(\.count), [3, 1, 1])
+        XCTAssertEqual(model.primaryItems.map(\.count), [3, 0, 1])
         XCTAssertEqual(model.primaryItems.first?.identifier, "editor.collection.all-documents")
         XCTAssertEqual(model.primaryItems.first?.isSelected, true)
         XCTAssertEqual(model.tagItems.map(\.title), ["工作", "项目", "生活"])
-        XCTAssertEqual(model.tagItems.map(\.count), [2, 2, 2])
+        XCTAssertEqual(model.tagItems.map(\.count), [2, 2, 1])
         XCTAssertEqual(model.tagItems.map(\.nestingLevel), [0, 1, 0])
         XCTAssertEqual(model.primaryItems.last?.identifier, "editor.collection.encrypted")
         XCTAssertEqual(model.primaryItems.last?.collection, .encrypted)

@@ -34,6 +34,7 @@ enum AppEnvironment {
             try SchemaMigrator.migrate(database: database)
             try DataProtectionService.applyNativeProtection(to: URL(fileURLWithPath: databasePath))
             _ = try PageRepository(database: database).bootstrapWorkspaceIfNeeded()
+            try repairLocalStoreBeforeSync(database: database)
 
             let attachmentsDirectory = try attachmentsDirectory()
             try DataProtectionService.applyNativeProtectionRecursively(to: attachmentsDirectory)
@@ -74,6 +75,7 @@ enum AppEnvironment {
         try seedReferenceTargetsForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         try seedFavoritePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         try seedTaggedPageForUITestingIfNeeded(snapshot: snapshot, tagRepository: TagRepository(database: database))
+        try repairLocalStoreBeforeSync(database: database)
         let attachmentsDirectory = try attachmentsDirectory()
         try DataProtectionService.applyNativeProtectionRecursively(to: attachmentsDirectory)
         let attachmentRepository = AttachmentRepository(
@@ -128,6 +130,16 @@ enum AppEnvironment {
         return CloudKitAccountMetadataService()
     }
 
+    private static func repairLocalStoreBeforeSync(database: SQLiteDatabase) throws {
+        let repairedTagCount = try TagRepository(database: database).repairDuplicateTags()
+        try SyncRepository(database: database).enqueueUnsyncedLocalRecords()
+        if repairedTagCount > 0 {
+            EditorLog.sync.debug(
+                "local_store_repaired duplicate_tags=\(repairedTagCount, privacy: .public)"
+            )
+        }
+    }
+
     private static func makeCloudKitSyncEngine(
         database: SQLiteDatabase,
         attachmentsDirectory: URL
@@ -150,6 +162,7 @@ enum AppEnvironment {
             syncRepository: SyncRepository(database: database),
             adapter: adapter,
             remoteChangeFetcher: adapter,
+            remoteSnapshotFetcher: adapter,
             mergeEngine: SyncMergeEngine(database: database),
             subscriptionEnsurer: CloudKitPrivateDatabaseSubscriptionEnsurer(),
             uploadBatchSize: 50,
@@ -241,6 +254,7 @@ enum AppEnvironment {
 
             let repository = PageRepository(database: database)
             let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+            try repairLocalStoreBeforeSync(database: database)
             let appendedBlockID: String?
             if let appendText = request.appendText {
                 let pageID = request.pageID ?? snapshot.selectedPageID ?? "page-welcome"

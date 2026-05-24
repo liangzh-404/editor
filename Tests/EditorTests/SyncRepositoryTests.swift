@@ -147,6 +147,41 @@ final class SyncRepositoryTests: XCTestCase {
         )
     }
 
+    func testEnqueueUnsyncedLocalRecordsRestoresDroppedCreateChanges() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let tagRepository = TagRepository(database: database)
+        let tag = try tagRepository.createTag(workspaceID: workspaceID, name: "Writing")
+        try tagRepository.assignTags(pageID: pageID, tagIDs: [tag.id])
+        try database.execute("DELETE FROM sync_changes")
+        try database.execute("DELETE FROM sync_records")
+
+        try SyncRepository(database: database).enqueueUnsyncedLocalRecords()
+
+        let pendingChanges = try SyncRepository(database: database).pendingChanges()
+        XCTAssertTrue(pendingChanges.contains(
+            SyncChange(entityType: "workspace", entityID: workspaceID, changeType: "create")
+        ))
+        XCTAssertTrue(pendingChanges.contains(
+            SyncChange(entityType: "page", entityID: pageID, changeType: "create")
+        ))
+        XCTAssertTrue(pendingChanges.contains(
+            SyncChange(entityType: "block", entityID: blockID, changeType: "create")
+        ))
+        XCTAssertTrue(pendingChanges.contains(
+            SyncChange(entityType: "tag", entityID: tag.id, changeType: "create")
+        ))
+        XCTAssertTrue(pendingChanges.contains(
+            SyncChange(entityType: "pageTag", entityID: "\(pageID).\(tag.id)", changeType: "create")
+        ))
+    }
+
     func testServerChangeTokenRoundTripsByScope() throws {
         let database = try migratedDatabase()
         defer { database.close() }

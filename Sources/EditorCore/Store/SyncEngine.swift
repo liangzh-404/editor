@@ -448,6 +448,10 @@ protocol CloudKitRemoteChangeFetching {
     ) throws -> CloudKitRemoteChangeSet
 }
 
+protocol CloudKitRemoteSnapshotFetching {
+    func fetchCurrentGenerationSnapshot() throws -> CloudKitRemoteChangeSet
+}
+
 struct CloudKitRemoteChangeSet: Equatable, Sendable {
     let workspaceChanges: [RemoteWorkspaceChange]
     let notebookChanges: [RemoteNotebookChange]
@@ -522,6 +526,7 @@ protocol CloudKitSubscriptionEnsuring {
 
 protocol CloudKitRecordFetching {
     func fetchRecords(recordType: String) throws -> [CKRecord]
+    func fetchCurrentGenerationRecords(recordType: String) throws -> [CKRecord]
     func fetchRecordChanges(
         sinceServerChangeTokenData serverChangeTokenData: Data?
     ) throws -> CloudKitFetchedRecordChangeSet
@@ -567,6 +572,12 @@ enum CloudKitServerChangeTokenCodec {
 }
 
 extension CloudKitRecordFetching {
+    func fetchCurrentGenerationRecords(recordType: String) throws -> [CKRecord] {
+        try fetchRecords(recordType: recordType).filter { record in
+            record["syncGeneration"] as? String == CloudKitSyncGeneration.current
+        }
+    }
+
     func fetchRecordChanges(
         sinceServerChangeTokenData serverChangeTokenData: Data?
     ) throws -> CloudKitFetchedRecordChangeSet {
@@ -961,6 +972,40 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
         return records
     }
 
+    func fetchCurrentGenerationRecords(recordType: String) throws -> [CKRecord] {
+        do {
+            let query = CKQuery(
+                recordType: recordType,
+                predicate: NSPredicate(
+                    format: "syncGeneration == %@",
+                    CloudKitSyncGeneration.current
+                )
+            )
+            var response = try fetch(
+                query: query,
+                operationName: "fetchCurrentGenerationRecords:\(recordType)"
+            )
+            var records = try Self.records(from: response.matchResults)
+
+            while let cursor = response.queryCursor {
+                response = try fetch(
+                    cursor: cursor,
+                    operationName: "fetchCurrentGenerationRecords:\(recordType):cursor"
+                )
+                records.append(contentsOf: try Self.records(from: response.matchResults))
+            }
+
+            return records
+        } catch {
+            EditorLog.sync.error(
+                "cloudkit_current_generation_query_failed record_type=\(recordType, privacy: .public) error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public) fallback=unfiltered_query"
+            )
+            return try fetchRecords(recordType: recordType).filter { record in
+                record["syncGeneration"] as? String == CloudKitSyncGeneration.current
+            }
+        }
+    }
+
     private func fetch(query: CKQuery, operationName: String) throws -> QueryFetchResponse {
         let semaphore = DispatchSemaphore(value: 0)
         final class FetchBox: @unchecked Sendable {
@@ -1095,7 +1140,7 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
     }
 }
 
-final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteChangeFetching {
+final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteChangeFetching, CloudKitRemoteSnapshotFetching {
     static let recordTypes = [
         "WorkspaceRecord",
         "NotebookRecord",
@@ -1265,6 +1310,30 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
                 sinceServerChangeTokenData: nil
             )
         }
+        return try remoteChangeSet(from: fetchedChanges)
+    }
+
+    func fetchCurrentGenerationSnapshot() throws -> CloudKitRemoteChangeSet {
+        guard let recordFetcher else {
+            throw CloudKitPrivateDatabaseAdapterError.remoteFetchUnavailable
+        }
+        let recordsByType = try Dictionary(
+            uniqueKeysWithValues: Self.recordTypes.map { recordType in
+                (
+                    recordType,
+                    try recordFetcher.fetchCurrentGenerationRecords(recordType: recordType)
+                )
+            }
+        )
+        return try remoteChangeSet(
+            from: CloudKitFetchedRecordChangeSet(
+                recordsByType: recordsByType,
+                serverChangeTokenData: nil
+            )
+        )
+    }
+
+    private func remoteChangeSet(from fetchedChanges: CloudKitFetchedRecordChangeSet) throws -> CloudKitRemoteChangeSet {
         let recordsByType = fetchedChanges.recordsByType
         let pageRecords = currentGenerationRecords(recordsByType["PageRecord"] ?? [])
         let pageChanges = pageRecords.compactMap(remotePageChange)
@@ -2157,10 +2226,13 @@ struct RemoteNotificationSyncHandler {
 
 final class SyncEngine {
     private static let serverChangeTokenScope = "privateDatabase"
+    private static let currentGenerationSnapshotBackfillScope = "currentGenerationSnapshotBackfill.\(CloudKitSyncGeneration.current)"
+    private static let snapshotBackfillPageThreshold = 50
 
     private let syncRepository: SyncRepository
     private let adapter: CloudKitSyncAdapter
     private let remoteChangeFetcher: CloudKitRemoteChangeFetching?
+    private let remoteSnapshotFetcher: CloudKitRemoteSnapshotFetching?
     private let mergeEngine: SyncMergeEngine?
     private let subscriptionEnsurer: CloudKitSubscriptionEnsuring?
     private let retryPolicy: SyncRetryPolicy
@@ -2172,6 +2244,7 @@ final class SyncEngine {
         syncRepository: SyncRepository,
         adapter: CloudKitSyncAdapter,
         remoteChangeFetcher: CloudKitRemoteChangeFetching? = nil,
+        remoteSnapshotFetcher: CloudKitRemoteSnapshotFetching? = nil,
         mergeEngine: SyncMergeEngine? = nil,
         subscriptionEnsurer: CloudKitSubscriptionEnsuring? = nil,
         retryPolicy: SyncRetryPolicy = SyncRetryPolicy(),
@@ -2182,6 +2255,7 @@ final class SyncEngine {
         self.syncRepository = syncRepository
         self.adapter = adapter
         self.remoteChangeFetcher = remoteChangeFetcher
+        self.remoteSnapshotFetcher = remoteSnapshotFetcher
         self.mergeEngine = mergeEngine
         self.subscriptionEnsurer = subscriptionEnsurer
         self.retryPolicy = retryPolicy
@@ -2212,7 +2286,38 @@ final class SyncEngine {
     }
 
     func fetchRemoteChanges() throws -> SyncFetchSummary {
-        guard let remoteChangeFetcher, let mergeEngine else {
+        guard let mergeEngine else {
+            return SyncFetchSummary(appliedCount: 0)
+        }
+
+        if let remoteSnapshotFetcher,
+           try shouldRunCurrentGenerationSnapshotBackfill() {
+            let pageCount = try syncRepository.pageRecordCount()
+            recordRuntimeDiagnostic(
+                eventName: "foreground_sync_snapshot_backfill_started",
+                payloadJSON: Self.diagnosticPayloadJSON([
+                    "page_count": "\(pageCount)",
+                    "generation": CloudKitSyncGeneration.current
+                ])
+            )
+            let snapshotChangeSet = try remoteSnapshotFetcher.fetchCurrentGenerationSnapshot()
+            let snapshotSummary = try applyRemoteChangeSet(snapshotChangeSet, mergeEngine: mergeEngine)
+            try syncRepository.markRemoteSnapshotBackfillCompleted(
+                scope: Self.currentGenerationSnapshotBackfillScope
+            )
+            recordRuntimeDiagnostic(
+                eventName: "foreground_sync_snapshot_backfill_completed",
+                payloadJSON: "{\"fetched_count\":\(snapshotSummary.appliedCount)}"
+            )
+            if snapshotSummary.appliedCount > 0 {
+                return SyncFetchSummary(
+                    appliedCount: snapshotSummary.appliedCount,
+                    hasMoreChanges: true
+                )
+            }
+        }
+
+        guard let remoteChangeFetcher else {
             return SyncFetchSummary(appliedCount: 0)
         }
 
@@ -2234,6 +2339,29 @@ final class SyncEngine {
             EditorLog.sync.error("cloudkit_server_change_token_expired action=retry_from_scratch")
             changeSet = try remoteChangeFetcher.fetchRemoteChanges(sinceServerChangeTokenData: nil)
         }
+        let summary = try applyRemoteChangeSet(changeSet, mergeEngine: mergeEngine)
+        if let serverChangeTokenData = changeSet.serverChangeTokenData {
+            try syncRepository.saveServerChangeTokenData(
+                serverChangeTokenData,
+                scope: Self.serverChangeTokenScope
+            )
+        }
+        return summary
+    }
+
+    private func shouldRunCurrentGenerationSnapshotBackfill() throws -> Bool {
+        guard try syncRepository.pageRecordCount() <= Self.snapshotBackfillPageThreshold else {
+            return false
+        }
+        return try !syncRepository.hasCompletedRemoteSnapshotBackfill(
+            scope: Self.currentGenerationSnapshotBackfillScope
+        )
+    }
+
+    private func applyRemoteChangeSet(
+        _ changeSet: CloudKitRemoteChangeSet,
+        mergeEngine: SyncMergeEngine
+    ) throws -> SyncFetchSummary {
         for change in changeSet.workspaceChanges {
             try applyRemoteChange(entityType: "workspace", entityID: change.workspaceID) {
                 try mergeEngine.applyRemoteWorkspace(change)
@@ -2376,12 +2504,6 @@ final class SyncEngine {
                 try mergeEngine.applyRemoteDeletion(deletion)
             }
         }
-        if let serverChangeTokenData = changeSet.serverChangeTokenData {
-            try syncRepository.saveServerChangeTokenData(
-                serverChangeTokenData,
-                scope: Self.serverChangeTokenScope
-            )
-        }
         return SyncFetchSummary(
             appliedCount: changeSet.workspaceChanges.count
                 + changeSet.notebookChanges.count
@@ -2440,7 +2562,7 @@ final class SyncEngine {
 
     @discardableResult
     func uploadPendingChanges() throws -> SyncUploadSummary {
-        try syncRepository.enqueueUnsyncedDiaryPageMappings()
+        try syncRepository.enqueueUnsyncedLocalRecords()
         let changes = prioritizedUploadChanges(try syncRepository.pendingChanges())
         var uploadedCount = 0
         var failedCount = 0

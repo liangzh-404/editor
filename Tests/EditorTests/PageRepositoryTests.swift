@@ -225,6 +225,7 @@ final class PageRepositoryTests: XCTestCase {
         let reloadedSnapshot = try repository.loadWorkspaceSnapshot()
 
         XCTAssertEqual(reloadedSnapshot.pages.first?.id, pinnedPage.id)
+        XCTAssertEqual(reloadedSnapshot.pages.first?.isPinned, true)
         XCTAssertEqual(reloadedSnapshot.pages.dropFirst().first?.id, laterPage.id)
     }
 

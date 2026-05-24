@@ -597,6 +597,75 @@ final class SyncEngineTests: XCTestCase {
         )
     }
 
+    func testFetchRemoteChangesBackfillsCurrentGenerationSnapshotWhenLocalStoreHasFewPages() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let notebookID = try XCTUnwrap(initialSnapshot.selectedNotebookID)
+        let syncRepository = SyncRepository(database: database)
+        let remotePageID = "page-remote-snapshot"
+        let snapshotFetcher = StaticRemoteSnapshotFetcher(
+            changeSet: CloudKitRemoteChangeSet(
+                pageChanges: [
+                    RemotePageChange(
+                        pageID: remotePageID,
+                        workspaceID: workspaceID,
+                        notebookID: notebookID,
+                        title: "Remote snapshot page",
+                        orderKey: "000002",
+                        isArchived: false,
+                        updatedAt: "2026-05-24T08:00:00Z"
+                    )
+                ],
+                blockChanges: [
+                    RemoteBlockChange(
+                        blockID: "block-remote-snapshot",
+                        pageID: remotePageID,
+                        type: .paragraph,
+                        textPlain: "Snapshot body",
+                        payloadJSON: "{\"text\":\"Snapshot body\"}",
+                        revision: 1,
+                        orderKey: "000001",
+                        updatedAt: "2026-05-24T08:00:00Z"
+                    )
+                ]
+            )
+        )
+        let incrementalFetcher = StaticRemoteBlockChangeFetcher(
+            changes: [],
+            serverChangeTokenData: Data("next-token".utf8)
+        )
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: incrementalFetcher,
+            remoteSnapshotFetcher: snapshotFetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(result, SyncFetchSummary(appliedCount: 2, hasMoreChanges: true))
+        XCTAssertEqual(snapshotFetcher.fetchCount, 1)
+        XCTAssertEqual(incrementalFetcher.fetchCount, 0)
+        XCTAssertTrue(
+            try syncRepository.hasCompletedRemoteSnapshotBackfill(
+                scope: "currentGenerationSnapshotBackfill.\(CloudKitSyncGeneration.current)"
+            )
+        )
+        XCTAssertEqual(
+            reloadedSnapshot.pages.first { $0.id == remotePageID }?.title,
+            "Remote snapshot page"
+        )
+        XCTAssertEqual(
+            reloadedSnapshot.blocks.first { $0.id == "block-remote-snapshot" }?.textPlain,
+            "Snapshot body"
+        )
+    }
+
     func testFetchRemoteChangesResetsExpiredServerChangeTokenAndRetriesFromScratch() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -2467,6 +2536,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
     let deletedRecords: [RemoteDeletedRecord]
     let serverChangeTokenData: Data?
     private(set) var receivedServerChangeTokenData: Data?
+    private(set) var fetchCount = 0
 
     init(
         workspaceChanges: [RemoteWorkspaceChange] = [],
@@ -2497,6 +2567,7 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
     func fetchRemoteChanges(
         sinceServerChangeTokenData serverChangeTokenData: Data?
     ) throws -> CloudKitRemoteChangeSet {
+        fetchCount += 1
         receivedServerChangeTokenData = serverChangeTokenData
         return CloudKitRemoteChangeSet(
             workspaceChanges: workspaceChanges,
@@ -2511,6 +2582,20 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
             deletedRecords: deletedRecords,
             serverChangeTokenData: self.serverChangeTokenData
         )
+    }
+}
+
+final class StaticRemoteSnapshotFetcher: CloudKitRemoteSnapshotFetching {
+    let changeSet: CloudKitRemoteChangeSet
+    private(set) var fetchCount = 0
+
+    init(changeSet: CloudKitRemoteChangeSet) {
+        self.changeSet = changeSet
+    }
+
+    func fetchCurrentGenerationSnapshot() throws -> CloudKitRemoteChangeSet {
+        fetchCount += 1
+        return changeSet
     }
 }
 

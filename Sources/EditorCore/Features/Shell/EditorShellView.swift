@@ -4553,9 +4553,9 @@ struct CompactLibraryNavigationItem: Identifiable, Equatable, Sendable {
 
 enum CompactLibraryNavigationModel {
     static func items(snapshot: WorkspaceSnapshot) -> [CompactLibraryNavigationItem] {
-        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        let diaryPageIDs = snapshot.diaryPageIDs
         let allDocumentCount = snapshot.pages.filter { !diaryPageIDs.contains($0.id) }.count
-        let encryptedCount = snapshot.pages.filter(\.isEncrypted).count
+        let encryptedCount = snapshot.pages.filter { $0.isEncrypted && !snapshot.isEmptyDiaryPage($0.id) }.count
 
         return [
             CompactLibraryNavigationItem(
@@ -4572,7 +4572,7 @@ enum CompactLibraryNavigationModel {
                 id: "diary",
                 title: "日记",
                 systemImage: "square.and.pencil",
-                count: diaryPageIDs.count,
+                count: snapshot.visibleDiaryPageIDs.count,
                 showsCount: true,
                 collection: .diary,
                 route: .collection(.diary),
@@ -4582,7 +4582,7 @@ enum CompactLibraryNavigationModel {
                 id: "favorites",
                 title: "收藏",
                 systemImage: "star",
-                count: snapshot.favoritePages.count,
+                count: snapshot.favoritePages.filter { !snapshot.isEmptyDiaryPage($0.id) }.count,
                 showsCount: true,
                 collection: .favorites,
                 route: .collection(.favorites),
@@ -4621,26 +4621,27 @@ struct CompactCollectionPageListItem: Identifiable, Equatable, Sendable {
 
 enum CompactCollectionPageListModel {
     static func pages(snapshot: WorkspaceSnapshot, collection: WorkspaceCollection) -> [PageSummary] {
-        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        let diaryPageIDs = snapshot.diaryPageIDs
+        let visibleDiaryPageIDs = snapshot.visibleDiaryPageIDs
 
         switch collection {
         case .recent:
-            return snapshot.pages
+            return snapshot.pages.filter { !snapshot.isEmptyDiaryPage($0.id) }
         case .diary:
             let diaryDatesByPageID = Dictionary(
                 uniqueKeysWithValues: snapshot.diaryPages.map { ($0.pageID, $0.diaryDate) }
             )
             return snapshot.pages
-                .filter { diaryPageIDs.contains($0.id) }
+                .filter { visibleDiaryPageIDs.contains($0.id) }
                 .sorted { first, second in
                     (diaryDatesByPageID[first.id] ?? "") > (diaryDatesByPageID[second.id] ?? "")
                 }
         case .allDocuments:
             return snapshot.pages.filter { !diaryPageIDs.contains($0.id) }
         case .favorites:
-            return snapshot.favoritePages
+            return snapshot.favoritePages.filter { !snapshot.isEmptyDiaryPage($0.id) }
         case .encrypted:
-            return snapshot.pages.filter(\.isEncrypted)
+            return snapshot.pages.filter { $0.isEncrypted && !snapshot.isEmptyDiaryPage($0.id) }
         case .tag(let tagID):
             guard !tagID.isEmpty else {
                 return []
@@ -4650,7 +4651,7 @@ enum CompactCollectionPageListModel {
                     .filter { $0.tagID == tagID }
                     .map(\.pageID)
             )
-            return snapshot.pages.filter { pageIDs.contains($0.id) }
+            return snapshot.pages.filter { pageIDs.contains($0.id) && !snapshot.isEmptyDiaryPage($0.id) }
         case .search:
             return []
         case .archive:
@@ -5175,9 +5176,9 @@ struct SidebarNavigationModel: Equatable, Sendable {
     let utilityItems: [SidebarNavigationItem]
 
     init(snapshot: WorkspaceSnapshot, selectedCollection: WorkspaceCollection) {
-        let diaryPageIDs = Set(snapshot.diaryPages.map(\.pageID))
+        let diaryPageIDs = snapshot.diaryPageIDs
         let allDocumentCount = snapshot.pages.filter { !diaryPageIDs.contains($0.id) }.count
-        let encryptedCount = snapshot.pages.filter(\.isEncrypted).count
+        let encryptedCount = snapshot.pages.filter { $0.isEncrypted && !snapshot.isEmptyDiaryPage($0.id) }.count
         let tagCounts = Dictionary(
             grouping: snapshot.pageTags,
             by: \.tagID
@@ -5201,7 +5202,7 @@ struct SidebarNavigationModel: Equatable, Sendable {
                 id: "diary",
                 title: "日记",
                 systemImage: "square.and.pencil",
-                count: diaryPageIDs.count,
+                count: snapshot.visibleDiaryPageIDs.count,
                 collection: .diary,
                 identifier: "editor.collection.diary",
                 isSelected: selectedCollection == .diary
@@ -5223,7 +5224,7 @@ struct SidebarNavigationModel: Equatable, Sendable {
             let visibleTagIDs = [tag.id] + (tagDescendants[tag.id] ?? [])
             let visiblePageIDs = visibleTagIDs.reduce(into: Set<String>()) { pageIDs, tagID in
                 pageIDs.formUnion(tagCounts[tagID] ?? [])
-            }
+            }.subtracting(snapshot.emptyDiaryPageIDs)
             return SidebarNavigationItem(
                 id: "tag-\(tag.id)",
                 title: tag.name,

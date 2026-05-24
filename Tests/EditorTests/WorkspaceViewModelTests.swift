@@ -78,7 +78,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedPage?.title, "2026年5月16日 星期六")
         XCTAssertEqual(viewModel.visibleBlocks.map(\.type), [.paragraph])
         XCTAssertEqual(viewModel.visibleBlocks.map(\.textPlain), [""])
-        XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [viewModel.selectedPageID])
+        XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [])
         XCTAssertEqual(viewModel.pendingCompactPageNavigationID, viewModel.selectedPageID)
         XCTAssertEqual(viewModel.pendingFocusBlockID, viewModel.visibleBlocks.first?.id)
     }
@@ -363,6 +363,13 @@ final class WorkspaceViewModelTests: XCTestCase {
                 .id
         )
         try repository.updateBlockText(blockID: olderBlockID, text: "旧日记后来编辑")
+        let newerBlockID = try XCTUnwrap(
+            try repository.loadWorkspaceSnapshot()
+                .blocks
+                .first { $0.pageID == newerDay.id }?
+                .id
+        )
+        try repository.updateBlockText(blockID: newerBlockID, text: "新日记")
         let viewModel = WorkspaceViewModel(
             repository: repository,
             diaryRepository: diaryRepository,
@@ -374,6 +381,49 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.selectCollection(.diary)
 
         XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id).prefix(2), [newerDay.id, olderDay.id])
+    }
+
+    @MainActor
+    func testDiaryCollectionAndRecentListHideEmptyDiaryPages() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let diaryRepository = DiaryRepository(database: database)
+        let emptyDay = try diaryRepository.openDailyPage(
+            workspaceID: workspaceID,
+            date: Self.date(year: 2026, month: 5, day: 16),
+            calendar: Self.gregorianCalendar
+        )
+        let contentDay = try diaryRepository.openDailyPage(
+            workspaceID: workspaceID,
+            date: Self.date(year: 2026, month: 5, day: 17),
+            calendar: Self.gregorianCalendar
+        )
+        let contentBlockID = try XCTUnwrap(
+            try repository.loadWorkspaceSnapshot()
+                .blocks
+                .first { $0.pageID == contentDay.id }?
+                .id
+        )
+        try repository.updateBlockText(blockID: contentBlockID, text: "今天有内容")
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            diaryRepository: diaryRepository,
+            currentDateProvider: { Self.date(year: 2026, month: 5, day: 17) },
+            diaryCalendar: Self.gregorianCalendar
+        )
+        try viewModel.load()
+
+        viewModel.selectCollection(.diary)
+
+        XCTAssertEqual(viewModel.visibleDocumentPages.map(\.id), [contentDay.id])
+
+        viewModel.selectCollection(.recent)
+
+        XCTAssertTrue(viewModel.visibleDocumentPages.contains { $0.id == contentDay.id })
+        XCTAssertFalse(viewModel.visibleDocumentPages.contains { $0.id == emptyDay.id })
     }
 
     @MainActor
@@ -1382,6 +1432,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         let viewModel = WorkspaceViewModel(repository: repository)
@@ -4422,6 +4473,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Sync from UI")
         let syncRepository = SyncRepository(database: database)
@@ -4451,6 +4503,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Foreground sync")
         let syncRepository = SyncRepository(database: database)
@@ -4517,6 +4570,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         let syncRepository = SyncRepository(database: database)
         let scheduler = DeferredWorkspaceSyncScheduler()
@@ -4549,6 +4603,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let subscriptionEnsurer = RecordingCloudKitSubscriptionEnsurer()
         let scheduler = DeferredWorkspaceSyncScheduler()
         let viewModel = WorkspaceViewModel(
@@ -4577,6 +4632,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Foreground queued sync")
         let syncRepository = SyncRepository(database: database)
@@ -4610,6 +4666,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Foreground diagnostic sync")
         let scheduler = DeferredWorkspaceSyncScheduler()
@@ -4644,6 +4701,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Manual queued sync")
         let syncRepository = SyncRepository(database: database)
@@ -4677,6 +4735,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Foreground duplicate sync")
         let scheduler = DeferredWorkspaceSyncScheduler()
@@ -4703,6 +4762,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         let scheduler = DeferredWorkspaceSyncScheduler()
         let viewModel = WorkspaceViewModel(
@@ -4737,6 +4797,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         try repository.updateBlockText(blockID: blockID, text: "Upload before fetch")
         let recorder = ForegroundSyncCallRecorder()
@@ -4775,6 +4836,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let syncRepository = SyncRepository(database: database)
         try syncRepository.enqueue(entityType: "tag", entityID: "tag-one", changeType: "create")
         try syncRepository.enqueue(entityType: "tag", entityID: "tag-two", changeType: "create")
@@ -4818,6 +4880,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let syncRepository = SyncRepository(database: database)
         try syncRepository.enqueue(entityType: "tag", entityID: "tag-one", changeType: "create")
         try syncRepository.enqueue(entityType: "tag", entityID: "tag-two", changeType: "create")
@@ -4865,6 +4928,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let recorder = ForegroundSyncCallRecorder()
         let scheduler = DeferredWorkspaceSyncScheduler()
         let viewModel = WorkspaceViewModel(
@@ -4900,12 +4964,13 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testForegroundSyncDoesNotSpinWhenOnlyDeferredLocalBacklogRemains() throws {
+    func testForegroundSyncFetchesRemoteChangesWhenOnlyDeferredLocalBacklogRemains() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let syncRepository = SyncRepository(database: database)
         let deferredChange = SyncChange(entityType: "tag", entityID: "tag-one", changeType: "create")
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -4941,7 +5006,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         XCTAssertEqual(scheduler.scheduledOperationCount, 0)
         XCTAssertEqual(try syncRepository.pendingChanges(), [deferredChange])
-        XCTAssertEqual(recorder.calls, [.ensureSubscription])
+        XCTAssertEqual(recorder.calls, [.ensureSubscription, .fetch])
         XCTAssertEqual(viewModel.syncStatusText, "同步暂缓，稍后自动重试")
     }
 
@@ -4952,6 +5017,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let scheduler = DeferredWorkspaceSyncScheduler()
         var currentDate = Date(timeIntervalSince1970: 1_000)
         let viewModel = WorkspaceViewModel(
@@ -4984,12 +5050,13 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPartialForegroundUploadFailureRetriesBacklogAfterShortCooldown() throws {
+    func testPartialForegroundUploadFailureContinuesDrainingReadyBacklogImmediately() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
         let repository = PageRepository(database: database)
         _ = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let syncRepository = SyncRepository(database: database)
         let failingChange = SyncChange(entityType: "tag", entityID: "tag-one", changeType: "create")
         let uploadedChange = SyncChange(entityType: "tag", entityID: "tag-two", changeType: "create")
@@ -5003,7 +5070,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         }
         let recorder = ForegroundSyncCallRecorder()
         let scheduler = DeferredWorkspaceSyncScheduler()
-        var currentDate = Date(timeIntervalSince1970: 2_000)
+        let currentDate = Date(timeIntervalSince1970: 2_000)
         let viewModel = WorkspaceViewModel(
             repository: repository,
             syncEngine: SyncEngine(
@@ -5025,14 +5092,6 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         viewModel.syncAfterActivation()
         try scheduler.runNextScheduledOperation()
-        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
-
-        currentDate = Date(timeIntervalSince1970: 2_029)
-        viewModel.syncAfterForegroundInterval()
-        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
-
-        currentDate = Date(timeIntervalSince1970: 2_031)
-        viewModel.syncAfterForegroundInterval()
         XCTAssertEqual(scheduler.scheduledOperationCount, 1)
 
         try scheduler.runNextScheduledOperation()
@@ -5042,10 +5101,24 @@ final class WorkspaceViewModelTests: XCTestCase {
             .upload(failingChange),
             .upload(uploadedChange),
             .ensureSubscription,
-            .upload(failingChange),
             .upload(queuedChange)
         ])
         XCTAssertEqual(try syncRepository.pendingChanges(), [failingChange])
+        XCTAssertEqual(viewModel.syncStatusText, "同步中...")
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
+        XCTAssertEqual(recorder.calls, [
+            .ensureSubscription,
+            .upload(failingChange),
+            .upload(uploadedChange),
+            .ensureSubscription,
+            .upload(queuedChange),
+            .ensureSubscription,
+            .fetch
+        ])
+        XCTAssertEqual(viewModel.syncStatusText, "同步暂缓，稍后自动重试")
     }
 
     func testForegroundSyncActivationPolicySyncsOnInitialAndLaterActivePhasesOnly() {
@@ -5068,6 +5141,7 @@ final class WorkspaceViewModelTests: XCTestCase {
 
         let repository = PageRepository(database: database)
         let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
         let syncRepository = SyncRepository(database: database)
@@ -5107,6 +5181,39 @@ final class WorkspaceViewModelTests: XCTestCase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)
         return database
+    }
+
+    private func markExistingLocalRecordsSynced(database: SQLiteDatabase) throws {
+        let rows = try database.query(
+            """
+            SELECT 'workspace' AS entity_type, id AS entity_id FROM workspaces
+            UNION ALL SELECT 'notebook', id FROM notebooks
+            UNION ALL SELECT 'tag', id FROM tags
+            UNION ALL SELECT 'page', id FROM pages
+            UNION ALL SELECT 'diaryPage', page_id FROM diary_pages
+            UNION ALL SELECT 'pageTag', page_id || '.' || tag_id FROM page_tags
+            UNION ALL SELECT 'attachment', id FROM attachments
+            UNION ALL SELECT 'block', id FROM blocks WHERE is_deleted = 0
+            """
+        )
+        let syncRepository = SyncRepository(database: database)
+        for row in rows {
+            guard let entityType = row["entity_type"],
+                  let entityID = row["entity_id"] else {
+                continue
+            }
+            try syncRepository.markUploaded(
+                change: SyncChange(
+                    entityType: entityType,
+                    entityID: entityID,
+                    changeType: "create"
+                ),
+                uploadResult: CloudKitUploadResult(
+                    recordName: "test.\(entityType).\(entityID)",
+                    changeTag: nil
+                )
+            )
+        }
     }
 
     private func temporaryDatabasePath() -> String {

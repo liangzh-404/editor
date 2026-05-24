@@ -367,9 +367,9 @@ final class WorkspaceViewModel: ObservableObject {
     var visibleDocumentPages: [PageSummary] {
         switch selectedCollection {
         case .recent:
-            return snapshot.pages
+            return snapshot.pages.filter { !snapshot.isEmptyDiaryPage($0.id) }
         case .diary:
-            let diaryPageIDs = diaryPageIDs
+            let diaryPageIDs = visibleDiaryPageIDs
             let diaryDatesByPageID = Dictionary(
                 uniqueKeysWithValues: snapshot.diaryPages.map { ($0.pageID, $0.diaryDate) }
             )
@@ -382,9 +382,9 @@ final class WorkspaceViewModel: ObservableObject {
             let diaryPageIDs = diaryPageIDs
             return snapshot.pages.filter { !diaryPageIDs.contains($0.id) }
         case .favorites:
-            return snapshot.favoritePages
+            return snapshot.favoritePages.filter { !snapshot.isEmptyDiaryPage($0.id) }
         case .encrypted:
-            return snapshot.pages.filter(\.isEncrypted)
+            return snapshot.pages.filter { $0.isEncrypted && !snapshot.isEmptyDiaryPage($0.id) }
         case .tag(let tagID):
             guard !tagID.isEmpty else {
                 return []
@@ -395,7 +395,7 @@ final class WorkspaceViewModel: ObservableObject {
                     .filter { visibleTagIDs.contains($0.tagID) }
                     .map(\.pageID)
             )
-            return snapshot.pages.filter { pageIDs.contains($0.id) }
+            return snapshot.pages.filter { pageIDs.contains($0.id) && !snapshot.isEmptyDiaryPage($0.id) }
         case .search:
             return []
         case .archive:
@@ -566,6 +566,7 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        _ = try tagRepository?.repairDuplicateTags()
         let previousSelectedCollection = selectedCollection
         let previousSelectedPageID = selectedPageID
         let shouldRestorePreviousSelection = hasLoadedSnapshot
@@ -951,6 +952,10 @@ final class WorkspaceViewModel: ObservableObject {
 
     private var diaryPageIDs: Set<String> {
         cachedDiaryPageIDs
+    }
+
+    private var visibleDiaryPageIDs: Set<String> {
+        diaryPageIDs.subtracting(snapshot.emptyDiaryPageIDs)
     }
 
     private func hydrateBlocksForSelectedPageIfNeeded() throws {
@@ -4427,7 +4432,10 @@ final class WorkspaceViewModel: ObservableObject {
                 payloadJSON: "{\"duration_ms\":\(uploadDurationMilliseconds),\"failed_count\":\(uploadSummary.failedCount),\"uploaded_count\":\(uploadSummary.uploadedCount)}"
             )
             let remainingLocalChanges = try syncEngine.pendingChangeCount()
-            guard remainingLocalChanges == 0 else {
+            let onlyDeferredLocalChangesRemain = remainingLocalChanges > 0
+                && uploadSummary.uploadedCount == 0
+                && uploadSummary.failedCount == 0
+            guard remainingLocalChanges == 0 || onlyDeferredLocalChangesRemain else {
                 syncEngine.recordRuntimeDiagnostic(
                     eventName: "foreground_sync_fetch_skipped",
                     payloadJSON: "{\"pending_change_count\":\(remainingLocalChanges),\"reason\":\"local_backlog\"}"
@@ -4438,6 +4446,12 @@ final class WorkspaceViewModel: ObservableObject {
                         fetchSummary: SyncFetchSummary(appliedCount: 0),
                         remainingLocalChangeCount: remainingLocalChanges
                     )
+                )
+            }
+            if onlyDeferredLocalChangesRemain {
+                syncEngine.recordRuntimeDiagnostic(
+                    eventName: "foreground_sync_fetch_allowed",
+                    payloadJSON: "{\"pending_change_count\":\(remainingLocalChanges),\"reason\":\"deferred_local_backlog\"}"
                 )
             }
 
@@ -4459,7 +4473,7 @@ final class WorkspaceViewModel: ObservableObject {
                 WorkspaceForegroundSyncSummary(
                     uploadSummary: uploadSummary,
                     fetchSummary: fetchSummary,
-                    remainingLocalChangeCount: 0
+                    remainingLocalChangeCount: remainingLocalChanges
                 )
             )
         } catch {
@@ -4533,6 +4547,7 @@ final class WorkspaceViewModel: ObservableObject {
         switch result {
         case .success(let summary):
             summary.uploadSummary.failedCount == 0
+                || shouldContinueForegroundBacklogDrain(summary)
         case .failure:
             false
         }
@@ -4541,12 +4556,15 @@ final class WorkspaceViewModel: ObservableObject {
     private func shouldContinueForegroundBacklogDrain(after result: WorkspaceForegroundSyncResult) -> Bool {
         switch result {
         case .success(let summary):
-            summary.uploadSummary.failedCount == 0
-                && summary.uploadSummary.uploadedCount > 0
-                && summary.remainingLocalChangeCount > 0
+            shouldContinueForegroundBacklogDrain(summary)
         case .failure:
             false
         }
+    }
+
+    private func shouldContinueForegroundBacklogDrain(_ summary: WorkspaceForegroundSyncSummary) -> Bool {
+        summary.uploadSummary.uploadedCount > 0
+            && summary.remainingLocalChangeCount > summary.uploadSummary.failedCount
     }
 
     private func shouldContinueForegroundRemoteDrain(after result: WorkspaceForegroundSyncResult) -> Bool {
@@ -4573,7 +4591,10 @@ final class WorkspaceViewModel: ObservableObject {
                     "remaining_local_change_count": summary.remainingLocalChangeCount
                 ]
             )
-            if summary.uploadSummary.failedCount > 0 {
+            if shouldContinueForegroundBacklogDrain(summary) {
+                syncStatusText = "继续同步，剩余 \(summary.remainingLocalChangeCount) 条本地变更"
+                nextForegroundSyncAttemptAt = nil
+            } else if summary.uploadSummary.failedCount > 0 {
                 syncStatusText = "已安排同步重试"
                 if shouldUsePartialFailureCooldown(for: summary) {
                     scheduleForegroundSyncPartialFailureCooldown()

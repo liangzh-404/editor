@@ -199,6 +199,35 @@ final class PageRepository {
                 diaryDate: row["diary_date"] ?? ""
             )
         }
+        let emptyDiaryPageIDs = Set(try database.query(
+            """
+            SELECT diary_pages.page_id
+            FROM diary_pages
+            WHERE diary_pages.workspace_id = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM blocks
+                  WHERE blocks.page_id = diary_pages.page_id
+                    AND blocks.is_deleted = 0
+                    AND (
+                        length(trim(blocks.text_plain)) > 0
+                        OR blocks.type IN (
+                            'table',
+                            'divider',
+                            'pageReference',
+                            'blockReference',
+                            'attachmentImage',
+                            'attachmentVideo',
+                            'attachmentFile',
+                            'drawing'
+                        )
+                    )
+              )
+            """,
+            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
+        ).compactMap { row in
+            row["page_id"] ?? nil
+        })
         let pageParentLinks = try database.query(
             """
             SELECT parent_page_id, child_page_id, source_block_id, order_key
@@ -224,6 +253,7 @@ final class PageRepository {
             tags: tags,
             pageTags: pageTags,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,

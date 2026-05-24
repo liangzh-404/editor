@@ -278,8 +278,7 @@ final class SyncRepository {
             WHERE NOT EXISTS (
                 SELECT 1
                 FROM sync_records
-                WHERE entity_type = 'diaryPage'
-                  AND entity_id = diary_pages.page_id
+                WHERE id = 'diaryPage-' || diary_pages.page_id
             )
               AND NOT EXISTS (
                 SELECT 1
@@ -289,6 +288,112 @@ final class SyncRepository {
             )
             """,
             bindings: [.text(now)]
+        )
+    }
+
+    func enqueueUnsyncedLocalRecords() throws {
+        let now = dateFormatter.string(from: Date())
+        try enqueueUnsyncedCreates(
+            entityType: "workspace",
+            entityIDExpression: "workspaces.id",
+            sourceSQL: "workspaces",
+            sourcePredicate: nil,
+            now: now
+        )
+        try enqueueUnsyncedCreates(
+            entityType: "notebook",
+            entityIDExpression: "notebooks.id",
+            sourceSQL: "notebooks",
+            sourcePredicate: nil,
+            now: now
+        )
+        try enqueueUnsyncedCreates(
+            entityType: "tag",
+            entityIDExpression: "tags.id",
+            sourceSQL: "tags",
+            sourcePredicate: nil,
+            now: now
+        )
+        try enqueueUnsyncedCreates(
+            entityType: "page",
+            entityIDExpression: "pages.id",
+            sourceSQL: "pages",
+            sourcePredicate: nil,
+            now: now
+        )
+        try enqueueUnsyncedCreates(
+            entityType: "diaryPage",
+            entityIDExpression: "diary_pages.page_id",
+            sourceSQL: "diary_pages",
+            sourcePredicate: nil,
+            now: now
+        )
+        try enqueueUnsyncedCreates(
+            entityType: "pageTag",
+            entityIDExpression: "page_tags.page_id || '.' || page_tags.tag_id",
+            sourceSQL: "page_tags",
+            sourcePredicate: nil,
+            now: now
+        )
+        try enqueueUnsyncedCreates(
+            entityType: "attachment",
+            entityIDExpression: "attachments.id",
+            sourceSQL: "attachments",
+            sourcePredicate: nil,
+            now: now
+        )
+        try enqueueUnsyncedCreates(
+            entityType: "block",
+            entityIDExpression: "blocks.id",
+            sourceSQL: "blocks",
+            sourcePredicate: "blocks.is_deleted = 0",
+            now: now
+        )
+    }
+
+    private func enqueueUnsyncedCreates(
+        entityType: String,
+        entityIDExpression: String,
+        sourceSQL: String,
+        sourcePredicate: String?,
+        now: String
+    ) throws {
+        let predicatePrefix = sourcePredicate.map { "\($0) AND " } ?? ""
+        try database.execute(
+            """
+            INSERT INTO sync_changes (
+                id,
+                entity_type,
+                entity_id,
+                change_type,
+                attempt_count,
+                created_at
+            )
+            SELECT 'sync-' || lower(hex(randomblob(16))),
+                   ?,
+                   \(entityIDExpression),
+                   'create',
+                   0,
+                   ?
+            FROM \(sourceSQL)
+            WHERE \(predicatePrefix)NOT EXISTS (
+                SELECT 1
+                FROM sync_records
+                WHERE sync_records.id = ? || '-' || \(entityIDExpression)
+            )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM sync_changes
+                WHERE sync_changes.entity_type = ?
+                  AND sync_changes.entity_id = \(entityIDExpression)
+            )
+            """,
+            bindings: [
+                .text(entityType),
+                .text(now),
+                .text(entityType),
+                .text(entityType)
+            ]
         )
     }
 
@@ -485,6 +590,47 @@ final class SyncRepository {
             WHERE scope = ?
             """,
             bindings: [.text(scope)]
+        )
+    }
+
+    func pageRecordCount() throws -> Int {
+        let row = try database.query(
+            """
+            SELECT COUNT(*) AS count
+            FROM pages
+            """
+        ).first
+        return Int(row?["count"] ?? "") ?? 0
+    }
+
+    func hasCompletedRemoteSnapshotBackfill(scope: String) throws -> Bool {
+        let rows = try database.query(
+            """
+            SELECT 1
+            FROM sync_server_change_tokens
+            WHERE scope = ?
+            LIMIT 1
+            """,
+            bindings: [.text(scope)]
+        )
+        return !rows.isEmpty
+    }
+
+    func markRemoteSnapshotBackfillCompleted(scope: String) throws {
+        try database.execute(
+            """
+            INSERT OR REPLACE INTO sync_server_change_tokens (
+                scope,
+                token_base64,
+                updated_at
+            )
+            VALUES (?, ?, ?)
+            """,
+            bindings: [
+                .text(scope),
+                .text(Data("completed".utf8).base64EncodedString()),
+                .text(dateFormatter.string(from: Date()))
+            ]
         )
     }
 

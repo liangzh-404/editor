@@ -508,6 +508,7 @@ struct WorkspaceSnapshot: Equatable, Sendable {
     let pageTags: [PageTagAssignment]
     let activeDiaryEntry: DiaryEntrySnapshot?
     let diaryPages: [DiaryPageSnapshot]
+    let emptyDiaryPageIDs: Set<String>
     let pageParentLinks: [PageParentLink]
     let selectedWorkspaceID: String?
     let selectedNotebookID: String?
@@ -515,6 +516,18 @@ struct WorkspaceSnapshot: Equatable, Sendable {
 
     var favoritePages: [PageSummary] {
         pages.filter(\.isFavorite)
+    }
+
+    var diaryPageIDs: Set<String> {
+        Set(diaryPages.map(\.pageID))
+    }
+
+    var visibleDiaryPageIDs: Set<String> {
+        diaryPageIDs.subtracting(emptyDiaryPageIDs)
+    }
+
+    func isEmptyDiaryPage(_ pageID: String) -> Bool {
+        emptyDiaryPageIDs.contains(pageID)
     }
 
     init(
@@ -528,6 +541,7 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         pageTags: [PageTagAssignment] = [],
         activeDiaryEntry: DiaryEntrySnapshot? = nil,
         diaryPages: [DiaryPageSnapshot] = [],
+        emptyDiaryPageIDs: Set<String> = [],
         pageParentLinks: [PageParentLink] = [],
         selectedWorkspaceID: String?,
         selectedNotebookID: String? = nil,
@@ -543,6 +557,7 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         self.pageTags = pageTags
         self.activeDiaryEntry = activeDiaryEntry
         self.diaryPages = diaryPages
+        self.emptyDiaryPageIDs = emptyDiaryPageIDs
         self.pageParentLinks = pageParentLinks
         self.selectedWorkspaceID = selectedWorkspaceID
         self.selectedNotebookID = selectedNotebookID
@@ -575,6 +590,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -596,6 +612,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -625,6 +642,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -646,6 +664,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -667,6 +686,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -688,6 +708,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -709,6 +730,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -742,6 +764,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -789,6 +812,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -836,6 +860,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -883,6 +908,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
@@ -911,6 +937,7 @@ extension WorkspaceSnapshot {
             pageTags: pageTags,
             activeDiaryEntry: activeDiaryEntry,
             diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
             pageParentLinks: pageParentLinks,
             selectedWorkspaceID: selectedWorkspaceID,
             selectedNotebookID: selectedNotebookID,
