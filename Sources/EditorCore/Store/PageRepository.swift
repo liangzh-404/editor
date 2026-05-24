@@ -292,8 +292,6 @@ final class PageRepository {
         guard source.type.supportsInlineMarkdownStyling else {
             return nil
         }
-        let label = try inlineInternalLinkLabel(targetPageID: targetPageID, targetBlockID: targetBlockID)
-        let markdown = "[[\(label)]]"
         let nsText = source.text as NSString
         guard selection.location >= 0,
               selection.length >= 0,
@@ -301,15 +299,29 @@ final class PageRepository {
               selection.length <= nsText.length - selection.location else {
             return nil
         }
+        let selectionRange = NSRange(location: selection.location, length: selection.length)
+        let textWithoutSelection = nsText.replacingCharacters(in: selectionRange, with: "")
+        let existingInlineLinks = InlineInternalLinkTarget.pruned(
+            payloadJSON: source.payloadJSON,
+            visibleText: textWithoutSelection
+        )
+        let rawLabel = try inlineInternalLinkRawLabel(targetPageID: targetPageID, targetBlockID: targetBlockID)
+        guard let baseLabel = Self.normalizedInlineInternalLinkLabel(rawLabel) else {
+            return nil
+        }
+        let label = uniqueInlineInternalLinkLabel(
+            baseLabel: baseLabel,
+            targetPageID: targetPageID,
+            targetBlockID: targetBlockID,
+            existingInlineLinks: existingInlineLinks
+        )
+        let markdown = "[[\(label)]]"
 
         let nextText = nsText.replacingCharacters(
-            in: NSRange(location: selection.location, length: selection.length),
+            in: selectionRange,
             with: markdown
         )
-        var inlineLinks = InlineInternalLinkTarget.pruned(
-            payloadJSON: source.payloadJSON,
-            visibleText: nextText
-        )
+        var inlineLinks = existingInlineLinks
         inlineLinks.removeAll { $0.label == label }
         inlineLinks.append(
             InlineInternalLinkTarget(
@@ -3253,7 +3265,7 @@ final class PageRepository {
         )
     }
 
-    private func inlineInternalLinkLabel(targetPageID: String, targetBlockID: String?) throws -> String {
+    private func inlineInternalLinkRawLabel(targetPageID: String, targetBlockID: String?) throws -> String {
         let pageRows = try database.query(
             """
             SELECT title, is_encrypted
@@ -3293,6 +3305,37 @@ final class PageRepository {
         let blockIsEncrypted = Self.sqliteBool(blockRow["is_encrypted"])
         let blockText = try decryptedStoredValue(blockRow["text_plain"] ?? "", isEncrypted: blockIsEncrypted)
         return "\(pageTitle)#\(blockText)"
+    }
+
+    private static func normalizedInlineInternalLinkLabel(_ rawLabel: String) -> String? {
+        let trimmedLabel = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLabel.isEmpty else {
+            return nil
+        }
+        let normalizedLabel = trimmedLabel
+            .replacingOccurrences(of: "[[", with: "(")
+            .replacingOccurrences(of: "]]", with: ")")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalizedLabel.isEmpty ? nil : normalizedLabel
+    }
+
+    private func uniqueInlineInternalLinkLabel(
+        baseLabel: String,
+        targetPageID: String,
+        targetBlockID: String?,
+        existingInlineLinks: [InlineInternalLinkTarget]
+    ) -> String {
+        var candidate = baseLabel
+        var suffix = 2
+        while let existingLink = existingInlineLinks.first(where: { $0.label == candidate }) {
+            if existingLink.targetPageID == targetPageID,
+               existingLink.targetBlockID == targetBlockID {
+                return candidate
+            }
+            candidate = "\(baseLabel) (\(suffix))"
+            suffix += 1
+        }
+        return candidate
     }
 
     private func siblingBlocks(pageID: String, parentBlockID: String?) throws -> [String] {
