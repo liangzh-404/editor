@@ -260,6 +260,19 @@ final class SchemaMigratorTests: XCTestCase {
         XCTAssertTrue(linkColumns.contains("target_url"))
     }
 
+    func testLinksTableTracksInlineSourceRangesAndKind() throws {
+        let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
+        defer { database.close() }
+
+        try SchemaMigrator.migrate(database: database)
+
+        let columns = Set(try database.queryStrings("SELECT name FROM pragma_table_info('links')"))
+
+        XCTAssertTrue(columns.contains("source_range_location"))
+        XCTAssertTrue(columns.contains("source_range_length"))
+        XCTAssertTrue(columns.contains("link_kind"))
+    }
+
     func testMigrationCreatesLookupIndexesForLargeVaultPerformance() throws {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         defer { database.close() }

@@ -385,6 +385,24 @@ enum SchemaMigrator {
             column: "target_url",
             definition: "TEXT"
         )
+        try addColumnIfMissing(
+            database: database,
+            table: "links",
+            column: "source_range_location",
+            definition: "INTEGER"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "links",
+            column: "source_range_length",
+            definition: "INTEGER"
+        )
+        try addColumnIfMissing(
+            database: database,
+            table: "links",
+            column: "link_kind",
+            definition: "TEXT NOT NULL DEFAULT 'inline'"
+        )
 
         try database.execute(
             """

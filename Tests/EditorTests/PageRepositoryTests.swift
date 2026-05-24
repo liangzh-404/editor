@@ -1555,6 +1555,35 @@ final class PageRepositoryTests: XCTestCase {
         )
     }
 
+    func testLoadWorkspaceSnapshotCarriesInlineInternalLinkTargets() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let nextText = "[[Specs]]开始用块写作。"
+        let payloadJSON = """
+        {"inline_links":[{"label":"Specs","target_page_id":"\(targetPage.id)"}],"text":"\(nextText)"}
+        """
+        try database.execute(
+            """
+            UPDATE blocks
+            SET text_plain = ?,
+                payload_json = ?
+            WHERE id = ?
+            """,
+            bindings: [.text(nextText), .text(payloadJSON), .text(sourceBlockID)]
+        )
+
+        let block = try XCTUnwrap(try repository.loadWorkspaceSnapshot().blocks.first { $0.id == sourceBlockID })
+        XCTAssertEqual(block.inlineInternalLinks, [
+            InlineInternalLinkTarget(label: "Specs", targetPageID: targetPage.id, targetBlockID: nil)
+        ])
+        XCTAssertEqual(block.textPlain, "[[Specs]]开始用块写作。")
+    }
+
     func testLargePageImportLoadAndSearchIndexRemainUsable() throws {
         let database = try migratedDatabase()
         defer { database.close() }

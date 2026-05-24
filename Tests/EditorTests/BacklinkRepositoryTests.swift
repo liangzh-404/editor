@@ -56,6 +56,31 @@ final class BacklinkRepositoryTests: XCTestCase {
         )
     }
 
+    func testBlockUpdateIndexesInlineWikiLinkWithSourceRange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        try pageRepository.updateBlockText(blockID: blockID, text: "See [[欢迎]]")
+
+        let rows = try database.query(
+            """
+            SELECT target_page_id, link_text, source_range_location, source_range_length, link_kind
+            FROM links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(blockID)]
+        )
+        XCTAssertEqual(rows.first?["target_page_id"], pageID)
+        XCTAssertEqual(rows.first?["link_text"], "欢迎")
+        XCTAssertEqual(rows.first?["source_range_location"], String(("See " as NSString).length))
+        XCTAssertEqual(rows.first?["source_range_length"], String(("[[欢迎]]" as NSString).length))
+        XCTAssertEqual(rows.first?["link_kind"], "inline_internal")
+    }
+
     func testBlockUpdateMaintainsExternalMarkdownLinksForSourcePage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -88,6 +113,22 @@ final class BacklinkRepositoryTests: XCTestCase {
                     linkText: "Docs"
                 )
             ]
+        )
+    }
+
+    func testBlockUpdateIndexesPlainExternalURLs() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        try pageRepository.updateBlockText(blockID: blockID, text: "Visit https://swift.org now")
+
+        XCTAssertEqual(
+            try BacklinkRepository(database: database).externalLinks(sourcePageID: pageID).map(\.targetURL),
+            ["https://swift.org"]
         )
     }
 

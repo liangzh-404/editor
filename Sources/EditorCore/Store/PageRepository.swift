@@ -1121,6 +1121,7 @@ final class PageRepository {
                 codeBlockLineWrapping: codeBlockLineWrapping,
                 pageReferenceTargetPageID: referenceTargets.pageID,
                 blockReferenceTargetBlockID: referenceTargets.blockID,
+                inlineInternalLinks: Self.inlineInternalLinks(payloadJSON: currentPayloadJSON),
                 tableRows: explicitTableRows
             )
         }
@@ -1174,7 +1175,8 @@ final class PageRepository {
                 blockID: blockID,
                 text: text,
                 pageReferenceTargetPageID: referenceTargets.pageID,
-                blockReferenceTargetBlockID: referenceTargets.blockID
+                blockReferenceTargetBlockID: referenceTargets.blockID,
+                inlineInternalLinks: Self.inlineInternalLinks(payloadJSON: currentPayloadJSON)
             )
         }
     }
@@ -1346,6 +1348,7 @@ final class PageRepository {
             """
             SELECT blocks.type,
                    blocks.text_plain,
+                   blocks.payload_json,
                    blocks.page_id AS page_id,
                    pages.is_encrypted AS is_encrypted
             FROM blocks
@@ -1361,11 +1364,13 @@ final class PageRepository {
 
         let isEncrypted = Self.sqliteBool(row["is_encrypted"])
         let text = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+        let currentPayloadJSON = try decryptedStoredValue(row["payload_json"] ?? "", isEncrypted: isEncrypted)
         let payloadJSON = try storedValue(
             try blockPayloadJSON(
                 type: .toggle,
                 text: text,
-                toggleIsExpanded: isExpanded
+                toggleIsExpanded: isExpanded,
+                inlineInternalLinks: Self.inlineInternalLinks(payloadJSON: currentPayloadJSON)
             ),
             isEncrypted: isEncrypted
         )
@@ -1396,7 +1401,8 @@ final class PageRepository {
         } else {
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: blockID,
-                text: text
+                text: text,
+                inlineInternalLinks: Self.inlineInternalLinks(payloadJSON: currentPayloadJSON)
             )
         }
     }
@@ -1406,6 +1412,7 @@ final class PageRepository {
             """
             SELECT blocks.type,
                    blocks.text_plain,
+                   blocks.payload_json,
                    blocks.page_id AS page_id,
                    pages.is_encrypted AS is_encrypted
             FROM blocks
@@ -1481,11 +1488,13 @@ final class PageRepository {
 
         let isEncrypted = Self.sqliteBool(row["is_encrypted"])
         let text = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+        let currentPayloadJSON = try decryptedStoredValue(row["payload_json"] ?? "", isEncrypted: isEncrypted)
         let payloadJSON = try storedValue(
             try blockPayloadJSON(
                 type: .taskItem,
                 text: text,
-                taskItemIsCompleted: isCompleted
+                taskItemIsCompleted: isCompleted,
+                inlineInternalLinks: Self.inlineInternalLinks(payloadJSON: currentPayloadJSON)
             ),
             isEncrypted: isEncrypted
         )
@@ -1516,7 +1525,8 @@ final class PageRepository {
         } else {
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: blockID,
-                text: text
+                text: text,
+                inlineInternalLinks: Self.inlineInternalLinks(payloadJSON: currentPayloadJSON)
             )
         }
     }
@@ -2783,6 +2793,7 @@ final class PageRepository {
                 codeBlockLineWrapping: codeBlockLineWrapping,
                 pageReferenceTargetPageID: pageReferenceTargetPageID,
                 blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+                inlineInternalLinks: Self.inlineInternalLinks(payloadJSON: payloadJSON),
                 tableRows: Self.tableRows(
                     type: type,
                     payloadJSON: payloadJSON,
@@ -3123,7 +3134,8 @@ final class PageRepository {
                 blockID: row["id"] ?? "",
                 text: row["text_plain"] ?? "",
                 pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
-                blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
+                blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON),
+                inlineInternalLinks: Self.inlineInternalLinks(payloadJSON: payloadJSON)
             )
         }
     }
@@ -3240,9 +3252,10 @@ final class PageRepository {
         codeBlockLineWrapping: Bool = true,
         pageReferenceTargetPageID: String? = nil,
         blockReferenceTargetBlockID: String? = nil,
+        inlineInternalLinks: [InlineInternalLinkTarget] = [],
         tableRows explicitTableRows: [[String]]? = nil
     ) throws -> String {
-        let payload: [String: Any]
+        var payload: [String: Any]
         switch type {
         case .divider:
             payload = [:]
@@ -3285,6 +3298,9 @@ final class PageRepository {
                 defaultPayload["target_page_id"] = pageReferenceTargetPageID
             }
             payload = defaultPayload
+        }
+        if !inlineInternalLinks.isEmpty {
+            payload["inline_links"] = Self.payloadRows(for: inlineInternalLinks)
         }
 
         let data = try JSONSerialization.data(
@@ -3335,6 +3351,7 @@ final class PageRepository {
                 codeBlockLineWrapping: block.codeBlockLineWrapping,
                 pageReferenceTargetPageID: block.pageReferenceTargetPageID,
                 blockReferenceTargetBlockID: block.blockReferenceTargetBlockID,
+                inlineInternalLinks: block.inlineInternalLinks,
                 tableRows: block.tableRows
             )
         }
@@ -3599,6 +3616,42 @@ final class PageRepository {
         }
 
         return targetBlockID
+    }
+
+    private static func inlineInternalLinks(payloadJSON: String) -> [InlineInternalLinkTarget] {
+        guard let data = payloadJSON.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = payload["inline_links"] as? [[String: Any]] else {
+            return []
+        }
+
+        return rows.compactMap { row in
+            guard let label = row["label"] as? String,
+                  !label.isEmpty,
+                  let targetPageID = row["target_page_id"] as? String,
+                  !targetPageID.isEmpty else {
+                return nil
+            }
+            return InlineInternalLinkTarget(
+                label: label,
+                targetPageID: targetPageID,
+                targetBlockID: row["target_block_id"] as? String
+            )
+        }
+    }
+
+    private static func payloadRows(for inlineLinks: [InlineInternalLinkTarget]) -> [[String: Any]] {
+        inlineLinks.map { link in
+            var row: [String: Any] = [
+                "label": link.label,
+                "target_page_id": link.targetPageID
+            ]
+            if let targetBlockID = link.targetBlockID,
+               !targetBlockID.isEmpty {
+                row["target_block_id"] = targetBlockID
+            }
+            return row
+        }
     }
 
     private static func sqliteBool(_ value: String?) -> Bool {
