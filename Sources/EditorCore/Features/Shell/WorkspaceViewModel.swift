@@ -285,6 +285,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var pageArchiveUndoStack: [PageArchiveUndoSnapshot] = []
     private var pageNavigationBackStack: [PageNavigationHistoryEntry] = []
     private var pageNavigationForwardStack: [PageNavigationHistoryEntry] = []
+    private var currentAnchoredNavigationEntry: PageNavigationHistoryEntry?
     private var searchRestorationCollection: WorkspaceCollection?
     private var searchRefreshTask: Task<Void, Never>?
     private var searchHighlightClearTask: Task<Void, Never>?
@@ -1074,9 +1075,12 @@ final class WorkspaceViewModel: ObservableObject {
     private func restoreNavigationEntry(_ entry: PageNavigationHistoryEntry) {
         selectPage(id: entry.pageID, collection: entry.collection, recordHistory: false)
         pendingCompactPageNavigationID = entry.pageID
+        pendingFocusBlockID = nil
+        pendingFocusRequestID = nil
         pendingNavigationFocusSelection = nil
         guard let blockID = entry.blockID,
-              snapshot.blocks.contains(where: { $0.id == blockID }) else {
+              snapshot.blocks.contains(where: { $0.id == blockID && $0.pageID == entry.pageID }) else {
+            currentAnchoredNavigationEntry = nil
             return
         }
         pendingFocusBlockID = blockID
@@ -1084,11 +1088,17 @@ final class WorkspaceViewModel: ObservableObject {
         if let selection = entry.selection {
             pendingNavigationFocusSelection = selection
         }
+        currentAnchoredNavigationEntry = entry
     }
 
     private func currentNavigationHistoryEntry() -> PageNavigationHistoryEntry? {
         guard let selectedPageID else {
             return nil
+        }
+
+        if let currentAnchoredNavigationEntry,
+           currentAnchoredNavigationEntry.pageID == selectedPageID {
+            return currentAnchoredNavigationEntry
         }
 
         let focusedBlock = snapshot.blocks.first {
@@ -1368,16 +1378,23 @@ final class WorkspaceViewModel: ObservableObject {
 
         pageNavigationBackStack.append(sourceEntry)
         pageNavigationForwardStack.removeAll()
-        selectPage(id: targetPageID, collection: defaultCollectionForOpeningPage(id: targetPageID), recordHistory: false)
+        let targetCollection = defaultCollectionForOpeningPage(id: targetPageID)
+        selectPage(id: targetPageID, collection: targetCollection, recordHistory: false)
         pendingCompactPageNavigationID = targetPageID
 
         if let targetBlockID,
-           snapshot.blocks.contains(where: { $0.id == targetBlockID }) {
+           snapshot.blocks.contains(where: { $0.id == targetBlockID && $0.pageID == targetPageID }) {
             pendingFocusBlockID = targetBlockID
             pendingFocusRequestID = UUID()
+            currentAnchoredNavigationEntry = PageNavigationHistoryEntry(
+                pageID: targetPageID,
+                collection: targetCollection,
+                blockID: targetBlockID
+            )
         } else {
             pendingFocusBlockID = nil
             pendingFocusRequestID = nil
+            currentAnchoredNavigationEntry = nil
         }
         pendingNavigationFocusSelection = nil
 

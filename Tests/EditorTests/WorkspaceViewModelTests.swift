@@ -2433,6 +2433,91 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testOpenInlineInternalBlockLinkForwardRestoresTargetAfterUIConsumesFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let targetBlock = try repository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+        let viewModel = WorkspaceViewModel(repository: repository, backlinkRepository: BacklinkRepository(database: database))
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+
+        XCTAssertTrue(
+            viewModel.openInlineInternalLinkForUI(
+                sourceBlockID: sourceBlockID,
+                targetPageID: targetPage.id,
+                targetBlockID: targetBlock.id,
+                sourceSelection: nil
+            )
+        )
+        XCTAssertEqual(viewModel.consumePendingFocusBlockID(), targetBlock.id)
+
+        XCTAssertTrue(try viewModel.navigateBack())
+        XCTAssertTrue(viewModel.navigateForward())
+
+        XCTAssertEqual(viewModel.selectedPageID, targetPage.id)
+        XCTAssertEqual(viewModel.pendingFocusBlockID, targetBlock.id)
+    }
+
+    @MainActor
+    func testOpenInlineInternalLinkIgnoresTargetBlockFromDifferentPage() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let otherPage = try repository.createPage(workspaceID: workspaceID, title: "Other")
+        let otherBlock = try repository.appendBlock(pageID: otherPage.id, type: .paragraph, text: "Wrong page")
+        let viewModel = WorkspaceViewModel(repository: repository, backlinkRepository: BacklinkRepository(database: database))
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+
+        XCTAssertTrue(
+            viewModel.openInlineInternalLinkForUI(
+                sourceBlockID: sourceBlockID,
+                targetPageID: targetPage.id,
+                targetBlockID: otherBlock.id,
+                sourceSelection: nil
+            )
+        )
+
+        XCTAssertEqual(viewModel.selectedPageID, targetPage.id)
+        XCTAssertNil(viewModel.pendingFocusBlockID)
+    }
+
+    @MainActor
+    func testNavigateBackToPageOnlyEntryClearsStalePendingFocus() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourcePageID = try XCTUnwrap(snapshot.selectedPageID)
+        let targetPage = try repository.createPage(workspaceID: workspaceID, title: "Specs")
+        let targetBlock = try repository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+        let viewModel = WorkspaceViewModel(repository: repository, backlinkRepository: BacklinkRepository(database: database))
+        try viewModel.load()
+        viewModel.selectPage(id: sourcePageID)
+        viewModel.selectPage(id: targetPage.id)
+        viewModel.openBlockReference(targetPageID: targetPage.id, targetBlockID: targetBlock.id)
+
+        XCTAssertEqual(viewModel.pendingFocusBlockID, targetBlock.id)
+        XCTAssertTrue(try viewModel.navigateBack())
+
+        XCTAssertEqual(viewModel.selectedPageID, sourcePageID)
+        XCTAssertNil(viewModel.pendingFocusBlockID)
+        XCTAssertNil(viewModel.pendingFocusRequestID)
+    }
+
+    @MainActor
     func testCreatePageSelectsNewEmptyPage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
