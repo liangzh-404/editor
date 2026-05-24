@@ -1270,6 +1270,128 @@ final class SyncEngineTests: XCTestCase {
         ])
     }
 
+    func testFetchRemoteChangesAppliesRemoteParentTagsBeforeChildrenFromSameBatch() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            tagChanges: [
+                RemoteTagChange(
+                    tagID: "tag-child",
+                    workspaceID: workspaceID,
+                    parentTagID: "tag-parent",
+                    name: "Child",
+                    orderKey: "000002",
+                    updatedAt: "2026-05-21T00:00:01Z"
+                ),
+                RemoteTagChange(
+                    tagID: "tag-parent",
+                    workspaceID: workspaceID,
+                    name: "Parent",
+                    orderKey: "000001",
+                    updatedAt: "2026-05-21T00:00:00Z"
+                )
+            ],
+            changes: []
+        )
+
+        let summary = try SyncEngine(
+            syncRepository: SyncRepository(database: database),
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let tags = try TagRepository(database: database).tags(workspaceID: workspaceID)
+
+        XCTAssertEqual(summary.appliedCount, 2)
+        XCTAssertEqual(tags.map(\.path), ["Parent", "Parent/Child"])
+        XCTAssertEqual(tags.first { $0.id == "tag-child" }?.parentTagID, "tag-parent")
+    }
+
+    func testFetchRemoteChangesSkipsRemoteTagWhenParentTagIsMissing() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let syncRepository = SyncRepository(database: database)
+        let nextToken = Data("next-token".utf8)
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            tagChanges: [
+                RemoteTagChange(
+                    tagID: "tag-orphan-child",
+                    workspaceID: workspaceID,
+                    parentTagID: "tag-missing-parent",
+                    name: "Orphan Child",
+                    orderKey: "000001",
+                    updatedAt: "2026-05-21T00:00:00Z"
+                )
+            ],
+            changes: [],
+            serverChangeTokenData: nextToken
+        )
+
+        let summary = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let diagnostics = try RuntimeDiagnosticRepository(database: database).recentEvents(limit: 1)
+
+        XCTAssertEqual(summary.appliedCount, 0)
+        XCTAssertEqual(try TagRepository(database: database).tags(workspaceID: workspaceID), [])
+        XCTAssertEqual(
+            try syncRepository.serverChangeTokenData(scope: "privateDatabase"),
+            nextToken
+        )
+        XCTAssertEqual(diagnostics.first?.eventName, "remote_tag_skipped_missing_parent")
+    }
+
+    func testFetchRemoteChangesSkipsRemoteTagWhenWorkspaceIsMissing() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        let nextToken = Data("next-token".utf8)
+        let fetcher = StaticRemoteBlockChangeFetcher(
+            tagChanges: [
+                RemoteTagChange(
+                    tagID: "tag-missing-workspace",
+                    workspaceID: "workspace-missing",
+                    name: "Missing Workspace",
+                    orderKey: "000001",
+                    updatedAt: "2026-05-21T00:00:00Z"
+                )
+            ],
+            changes: [],
+            serverChangeTokenData: nextToken
+        )
+
+        let summary = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteChangeFetcher: fetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let diagnostics = try RuntimeDiagnosticRepository(database: database).recentEvents(limit: 1)
+
+        XCTAssertEqual(summary.appliedCount, 0)
+        XCTAssertEqual(
+            try database.query("SELECT id FROM tags"),
+            []
+        )
+        XCTAssertEqual(
+            try syncRepository.serverChangeTokenData(scope: "privateDatabase"),
+            nextToken
+        )
+        XCTAssertEqual(diagnostics.first?.eventName, "remote_tag_skipped_missing_workspace")
+    }
+
     func testFetchRemoteChangesAppliesRemoteTagAndPageTagDeletion() throws {
         let database = try migratedDatabase()
         defer { database.close() }

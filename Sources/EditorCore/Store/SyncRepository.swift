@@ -213,6 +213,32 @@ final class SyncRepository {
         return !rows.isEmpty
     }
 
+    func workspaceRecordExists(workspaceID: String) throws -> Bool {
+        let rows = try database.query(
+            """
+            SELECT 1
+            FROM workspaces
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(workspaceID)]
+        )
+        return !rows.isEmpty
+    }
+
+    func tagRecordExists(tagID: String) throws -> Bool {
+        let rows = try database.query(
+            """
+            SELECT 1
+            FROM tags
+            WHERE id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(tagID)]
+        )
+        return !rows.isEmpty
+    }
+
     func pendingChanges() throws -> [SyncChange] {
         try database.query(
             """

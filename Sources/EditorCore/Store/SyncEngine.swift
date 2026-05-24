@@ -1958,6 +1958,61 @@ enum RemoteBlockChangeDependencySorter {
     }
 }
 
+enum RemoteTagChangeDependencySorter {
+    static func sorted(_ changes: [RemoteTagChange]) -> [RemoteTagChange] {
+        let changesByID = Dictionary(uniqueKeysWithValues: changes.map { ($0.tagID, $0) })
+        var ordered: [RemoteTagChange] = []
+        var visiting = Set<String>()
+        var visited = Set<String>()
+
+        for change in changes {
+            visit(
+                change,
+                changesByID: changesByID,
+                visiting: &visiting,
+                visited: &visited,
+                ordered: &ordered
+            )
+        }
+        return ordered
+    }
+
+    private static func visit(
+        _ change: RemoteTagChange,
+        changesByID: [String: RemoteTagChange],
+        visiting: inout Set<String>,
+        visited: inout Set<String>,
+        ordered: inout [RemoteTagChange]
+    ) {
+        guard !visited.contains(change.tagID) else {
+            return
+        }
+        guard !visiting.contains(change.tagID) else {
+            ordered.append(change)
+            visited.insert(change.tagID)
+            return
+        }
+
+        visiting.insert(change.tagID)
+        if let parentTagID = change.parentTagID,
+           let parent = changesByID[parentTagID] {
+            visit(
+                parent,
+                changesByID: changesByID,
+                visiting: &visiting,
+                visited: &visited,
+                ordered: &ordered
+            )
+        }
+        visiting.remove(change.tagID)
+
+        if !visited.contains(change.tagID) {
+            ordered.append(change)
+            visited.insert(change.tagID)
+        }
+    }
+}
+
 struct SyncRemoteApplyError: Error, Equatable, CustomStringConvertible {
     let entityType: String
     let entityID: String
@@ -2215,7 +2270,38 @@ final class SyncEngine {
                 try mergeEngine.applyRemoteDiaryPage(change)
             }
         }
-        for change in changeSet.tagChanges {
+        var skippedRemoteTagCount = 0
+        for change in RemoteTagChangeDependencySorter.sorted(changeSet.tagChanges) {
+            guard try syncRepository.workspaceRecordExists(workspaceID: change.workspaceID) else {
+                skippedRemoteTagCount += 1
+                recordRuntimeDiagnostic(
+                    eventName: "remote_tag_skipped_missing_workspace",
+                    payloadJSON: Self.diagnosticPayloadJSON([
+                        "tag_id": change.tagID,
+                        "workspace_id": change.workspaceID
+                    ])
+                )
+                EditorLog.sync.error(
+                    "sync_remote_tag_skipped_missing_workspace tag_id=\(change.tagID, privacy: .public) workspace_id=\(change.workspaceID, privacy: .public)"
+                )
+                continue
+            }
+            if let parentTagID = change.parentTagID,
+               try !syncRepository.tagRecordExists(tagID: parentTagID) {
+                skippedRemoteTagCount += 1
+                recordRuntimeDiagnostic(
+                    eventName: "remote_tag_skipped_missing_parent",
+                    payloadJSON: Self.diagnosticPayloadJSON([
+                        "tag_id": change.tagID,
+                        "parent_tag_id": parentTagID,
+                        "workspace_id": change.workspaceID
+                    ])
+                )
+                EditorLog.sync.error(
+                    "sync_remote_tag_skipped_missing_parent tag_id=\(change.tagID, privacy: .public) parent_tag_id=\(parentTagID, privacy: .public) workspace_id=\(change.workspaceID, privacy: .public)"
+                )
+                continue
+            }
             try applyRemoteChange(entityType: "tag", entityID: change.tagID) {
                 try mergeEngine.applyRemoteTag(change)
             }
@@ -2303,6 +2389,7 @@ final class SyncEngine {
                 + changeSet.diaryPageChanges.count
                 - skippedRemoteDiaryPageCount
                 + changeSet.tagChanges.count
+                - skippedRemoteTagCount
                 + changeSet.pageTagChanges.count
                 + changeSet.attachmentChanges.count
                 + changeSet.blockChanges.count
