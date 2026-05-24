@@ -14,6 +14,20 @@ final class EditorSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testBeginEditingPublishesOnlyFocusedBlockRenderingChange() {
+        let session = EditorSession()
+        var publishCount = 0
+        let cancellable = session.objectWillChange.sink {
+            publishCount += 1
+        }
+
+        session.beginEditing(blockID: "block-1", reason: .userTap)
+
+        XCTAssertEqual(publishCount, 1)
+        _ = cancellable
+    }
+
+    @MainActor
     func testDraftUpdatesMarkOnlyEditedBlockDirty() {
         let session = EditorSession()
 
@@ -22,6 +36,20 @@ final class EditorSessionTests: XCTestCase {
 
         XCTAssertEqual(session.draftText(for: "block-1"), "Hello")
         XCTAssertEqual(session.dirtyBlockIDs, ["block-1"])
+    }
+
+    @MainActor
+    func testDraftUpdatesDoNotPublishRenderingChanges() {
+        let session = EditorSession()
+        var publishCount = 0
+        let cancellable = session.objectWillChange.sink {
+            publishCount += 1
+        }
+
+        session.updateDraft(blockID: "block-1", text: "Hello")
+
+        XCTAssertEqual(publishCount, 0)
+        _ = cancellable
     }
 
     @MainActor
@@ -74,5 +102,20 @@ final class EditorSessionTests: XCTestCase {
         session.updateComposition(blockID: "block-1", isComposing: false)
 
         XCTAssertNil(session.composingBlockID)
+    }
+
+    @MainActor
+    func testCompositionUpdatesDoNotPublishRenderingChanges() {
+        let session = EditorSession()
+        var publishCount = 0
+        let cancellable = session.objectWillChange.sink {
+            publishCount += 1
+        }
+
+        session.updateComposition(blockID: "block-1", isComposing: true)
+        session.updateComposition(blockID: "block-1", isComposing: false)
+
+        XCTAssertEqual(publishCount, 0)
+        _ = cancellable
     }
 }

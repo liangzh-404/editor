@@ -8597,11 +8597,9 @@ private struct EditorCanvasView: View {
 
 #endif
 
+                let blockDragPayloadIndex = BlockDragPayloadIndex(blocks: blocks)
                 ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
-                    let dragPayloadBlockIDs = BlockDragPayloadResolver.payloadBlockIDs(
-                        rootBlockID: block.id,
-                        blocks: blocks
-                    )
+                    let dragPayloadBlockIDs = blockDragPayloadIndex.payloadBlockIDs(rootBlockID: block.id)
                     let searchHighlight = pendingSearchHighlight?.blockID == block.id ? pendingSearchHighlight : nil
 
                     if index == 0 {
@@ -12656,7 +12654,7 @@ private struct BlockRowView: View {
     let searchHighlight: SearchTransientHighlight?
     let pageReferencePreviewText: String?
     let contentFont: EditorContentFont
-    @ObservedObject var editorSession: EditorSession
+    let editorSession: EditorSession
     let nestingLevel: Int
     let listOrdinal: Int?
     let dragPayloadBlockIDs: [String]

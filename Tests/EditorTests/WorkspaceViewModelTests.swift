@@ -1815,6 +1815,46 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdateBlockTextSkipsNoOpSnapshotPublish() throws {
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [
+                WorkspaceSummary(id: "workspace", name: "Workspace")
+            ],
+            notebooks: [
+                NotebookSummary(id: "notebook", workspaceID: "workspace", name: "Notebook")
+            ],
+            pages: [
+                PageSummary(id: "page", workspaceID: "workspace", notebookID: "notebook", title: "Page")
+            ],
+            blocks: [
+                BlockSnapshot(
+                    id: "block",
+                    pageID: "page",
+                    parentBlockID: nil,
+                    orderKey: "a",
+                    type: .paragraph,
+                    textPlain: "Same text"
+                )
+            ],
+            attachments: [],
+            selectedWorkspaceID: "workspace",
+            selectedNotebookID: "notebook",
+            selectedPageID: "page"
+        )
+        let viewModel = WorkspaceViewModel(snapshot: snapshot)
+        var publishCount = 0
+        let cancellable = viewModel.objectWillChange.sink {
+            publishCount += 1
+        }
+
+        try viewModel.updateBlockText(blockID: "block", text: "Same text")
+
+        XCTAssertEqual(publishCount, 0)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Same text")
+        _ = cancellable
+    }
+
+    @MainActor
     func testUndoLastTextEditRestoresBlockTypeAfterMarkdownShortcut() throws {
         let database = try migratedDatabase()
         defer { database.close() }

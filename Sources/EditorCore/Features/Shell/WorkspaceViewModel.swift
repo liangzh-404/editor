@@ -1645,6 +1645,9 @@ final class WorkspaceViewModel: ObservableObject {
         let currentBlock = snapshot.blocks.first { $0.id == blockID }
         let currentType = currentBlock?.type ?? .paragraph
         let nextBlock = nextBlockState(currentType: currentType, text: text)
+        guard !isNoOpBlockTextUpdate(currentBlock: currentBlock, nextBlock: nextBlock) else {
+            return
+        }
         let coalescingKey = makeTextEditUndoCoalescingKey(
             blockID: blockID,
             currentBlock: currentBlock,
@@ -4899,6 +4902,22 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         return (currentType, text, nil)
+    }
+
+    private func isNoOpBlockTextUpdate(
+        currentBlock: BlockSnapshot?,
+        nextBlock: (type: BlockType, text: String, taskItemIsCompleted: Bool?)
+    ) -> Bool {
+        guard let currentBlock,
+              currentBlock.type == nextBlock.type,
+              currentBlock.textPlain == nextBlock.text else {
+            return false
+        }
+
+        guard let taskItemIsCompleted = nextBlock.taskItemIsCompleted else {
+            return true
+        }
+        return currentBlock.taskItemIsCompleted == taskItemIsCompleted
     }
 }
 

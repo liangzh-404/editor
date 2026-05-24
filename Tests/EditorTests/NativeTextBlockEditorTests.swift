@@ -137,6 +137,92 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: false))
     }
 
+    func testNativeTextStyleApplicationPolicySkipsUnchangedStyleWork() {
+        let key = NativeTextStyleFingerprint(
+            blockType: .paragraph,
+            text: "Hello **world**",
+            fontName: "System",
+            fontSize: 14,
+            lineHeightMultiple: 1.34
+        )
+
+        XCTAssertTrue(
+            NativeTextStyleApplicationPolicy.shouldApplyStyle(
+                cached: nil,
+                next: key,
+                isComposing: false
+            )
+        )
+        XCTAssertFalse(
+            NativeTextStyleApplicationPolicy.shouldApplyStyle(
+                cached: key,
+                next: key,
+                isComposing: false
+            )
+        )
+        XCTAssertFalse(
+            NativeTextStyleApplicationPolicy.shouldApplyStyle(
+                cached: nil,
+                next: key,
+                isComposing: true
+            )
+        )
+        XCTAssertTrue(
+            NativeTextStyleApplicationPolicy.shouldApplyStyle(
+                cached: key,
+                next: NativeTextStyleFingerprint(
+                    blockType: .paragraph,
+                    text: "Hello **world**!",
+                    fontName: "System",
+                    fontSize: 14,
+                    lineHeightMultiple: 1.34
+                ),
+                isComposing: false
+            )
+        )
+    }
+
+    func testNativeTextHeightMeasurementPolicySkipsUnchangedMeasurementWork() {
+        let key = NativeTextHeightMeasurementFingerprint(
+            text: "Wrapped text",
+            width: 320,
+            lineWrapping: true,
+            blockType: .paragraph,
+            fontName: "System",
+            fontSize: 14,
+            minimumHeight: 20,
+            lineHeightMultiple: 1.34
+        )
+
+        XCTAssertTrue(
+            NativeTextHeightMeasurementPolicy.shouldMeasureHeight(
+                cached: nil,
+                next: key
+            )
+        )
+        XCTAssertFalse(
+            NativeTextHeightMeasurementPolicy.shouldMeasureHeight(
+                cached: key,
+                next: key
+            )
+        )
+        XCTAssertTrue(
+            NativeTextHeightMeasurementPolicy.shouldMeasureHeight(
+                cached: key,
+                next: NativeTextHeightMeasurementFingerprint(
+                    text: "Wrapped text",
+                    width: 500,
+                    lineWrapping: true,
+                    blockType: .paragraph,
+                    fontName: "System",
+                    fontSize: 14,
+                    minimumHeight: 20,
+                    lineHeightMultiple: 1.34
+                )
+            )
+        )
+    }
+
     func testNativeTextPlaceholderHidesWhileIMEIsComposing() {
         XCTAssertFalse(
             NativeTextPlaceholderVisibilityPolicy.showsPlaceholder(
@@ -1981,6 +2067,53 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 focusedBlockID: "divider",
                 blocks: blocks
             )
+        )
+    }
+
+    func testBlockDragPayloadIndexMatchesResolverForNestedBlocks() {
+        let blocks = [
+            BlockSnapshot(
+                id: "root",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "a",
+                type: .paragraph,
+                textPlain: "Root"
+            ),
+            BlockSnapshot(
+                id: "child",
+                pageID: "page",
+                parentBlockID: "root",
+                orderKey: "b",
+                type: .paragraph,
+                textPlain: "Child"
+            ),
+            BlockSnapshot(
+                id: "grandchild",
+                pageID: "page",
+                parentBlockID: "child",
+                orderKey: "c",
+                type: .paragraph,
+                textPlain: "Grandchild"
+            ),
+            BlockSnapshot(
+                id: "sibling",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "d",
+                type: .paragraph,
+                textPlain: "Sibling"
+            )
+        ]
+
+        let index = BlockDragPayloadIndex(blocks: blocks)
+
+        XCTAssertEqual(index.payloadBlockIDs(rootBlockID: "root"), ["root", "child", "grandchild"])
+        XCTAssertEqual(index.payloadBlockIDs(rootBlockID: "child"), ["child", "grandchild"])
+        XCTAssertEqual(index.payloadBlockIDs(rootBlockID: "sibling"), ["sibling"])
+        XCTAssertEqual(
+            index.payloadBlockIDs(rootBlockID: "root"),
+            BlockDragPayloadResolver.payloadBlockIDs(rootBlockID: "root", blocks: blocks)
         )
     }
 

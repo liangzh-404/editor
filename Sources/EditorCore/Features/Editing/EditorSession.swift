@@ -16,10 +16,10 @@ struct EditorTextSelection: Equatable, Sendable {
 @MainActor
 final class EditorSession: ObservableObject {
     @Published private(set) var focusedBlockID: String?
-    @Published private(set) var lastFocusReason: EditorFocusReason?
-    @Published private(set) var dirtyBlockIDs: Set<String> = []
+    private(set) var lastFocusReason: EditorFocusReason?
+    private(set) var dirtyBlockIDs: Set<String> = []
     @Published private(set) var textSelection: EditorTextSelection?
-    @Published private(set) var composingBlockID: String?
+    private(set) var composingBlockID: String?
     @Published private(set) var selectedBlockIDs: Set<String> = []
 
     private var draftTexts: [String: String] = [:]

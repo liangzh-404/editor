@@ -624,6 +624,35 @@ enum BlockDragPayloadResolver {
     }
 }
 
+struct BlockDragPayloadIndex {
+    private let payloadBlockIDsByRootID: [String: [String]]
+
+    init(blocks: [BlockSnapshot]) {
+        let parentBlockIDsByID = Dictionary(
+            uniqueKeysWithValues: blocks.map { ($0.id, $0.parentBlockID) }
+        )
+        var payloadBlockIDsByRootID: [String: [String]] = [:]
+
+        for block in blocks {
+            payloadBlockIDsByRootID[block.id, default: []].append(block.id)
+
+            var parentBlockID = block.parentBlockID
+            var visitedBlockIDs = Set<String>()
+            while let parentID = parentBlockID, !visitedBlockIDs.contains(parentID) {
+                payloadBlockIDsByRootID[parentID, default: []].append(block.id)
+                visitedBlockIDs.insert(parentID)
+                parentBlockID = parentBlockIDsByID[parentID] ?? nil
+            }
+        }
+
+        self.payloadBlockIDsByRootID = payloadBlockIDsByRootID
+    }
+
+    func payloadBlockIDs(rootBlockID: String) -> [String] {
+        payloadBlockIDsByRootID[rootBlockID] ?? []
+    }
+}
+
 enum BlockDragReorderResolver {
     static func targetIndex(
         draggedBlockID: String,
@@ -779,6 +808,44 @@ enum NativeTextCompositionPolicy {
 
     static func shouldHandleBlockCommand(isComposing: Bool) -> Bool {
         !isComposing
+    }
+}
+
+struct NativeTextStyleFingerprint: Equatable {
+    let blockType: BlockType
+    let text: String
+    let fontName: String
+    let fontSize: CGFloat
+    let lineHeightMultiple: CGFloat
+}
+
+enum NativeTextStyleApplicationPolicy {
+    static func shouldApplyStyle(
+        cached: NativeTextStyleFingerprint?,
+        next: NativeTextStyleFingerprint,
+        isComposing: Bool
+    ) -> Bool {
+        !isComposing && cached != next
+    }
+}
+
+struct NativeTextHeightMeasurementFingerprint: Equatable {
+    let text: String
+    let width: CGFloat
+    let lineWrapping: Bool
+    let blockType: BlockType
+    let fontName: String
+    let fontSize: CGFloat
+    let minimumHeight: CGFloat
+    let lineHeightMultiple: CGFloat
+}
+
+enum NativeTextHeightMeasurementPolicy {
+    static func shouldMeasureHeight(
+        cached: NativeTextHeightMeasurementFingerprint?,
+        next: NativeTextHeightMeasurementFingerprint
+    ) -> Bool {
+        cached != next
     }
 }
 
@@ -950,7 +1017,7 @@ struct NativeTextBlockEditor: View {
     let text: String
     let blockType: BlockType
     let contentFont: EditorContentFont
-    @ObservedObject var session: EditorSession
+    let session: EditorSession
     let lineWrapping: Bool
     let focusRequestID: UUID?
     let focusSelection: EditorTextSelection?
@@ -1303,7 +1370,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let text: String
     let blockType: BlockType
     let contentFont: EditorContentFont
-    @ObservedObject var session: EditorSession
+    let session: EditorSession
     let lineWrapping: Bool
     let focusRequestID: UUID?
     let focusSelection: EditorTextSelection?
@@ -1634,6 +1701,8 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         private var focusRequestState = NativeTextFocusRequestState()
         private var modelUpdateGuard = NativeTextModelUpdateGuard()
         private var isHeightMeasurementScheduled = false
+        private var appliedStyleFingerprint: NativeTextStyleFingerprint?
+        private var measuredHeightFingerprint: NativeTextHeightMeasurementFingerprint?
         private let codeSyntaxHighlighter = Highlight()
         private var codeSyntaxHighlightTask: Task<Void, Never>?
 
@@ -1652,6 +1721,16 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         }
 
         func applyTextStyles(to textView: NSTextView) {
+            let nextFingerprint = styleFingerprint(for: textView)
+            guard NativeTextStyleApplicationPolicy.shouldApplyStyle(
+                cached: appliedStyleFingerprint,
+                next: nextFingerprint,
+                isComposing: textView.hasMarkedText()
+            ) else {
+                return
+            }
+            appliedStyleFingerprint = nextFingerprint
+
             guard parent.blockType == .codeBlock else {
                 codeSyntaxHighlightTask?.cancel()
                 applyInlineMarkdownStyles(to: textView)
@@ -1691,6 +1770,16 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             if NSMaxRange(selectedRange) <= fullRange.length {
                 textView.setSelectedRange(selectedRange)
             }
+        }
+
+        private func styleFingerprint(for textView: NSTextView) -> NativeTextStyleFingerprint {
+            NativeTextStyleFingerprint(
+                blockType: parent.blockType,
+                text: textView.string,
+                fontName: parent.nsFont.fontName,
+                fontSize: parent.nsFont.pointSize,
+                lineHeightMultiple: CGFloat(EditorDesignTokens.Typography.bodyLineHeightMultiple)
+            )
         }
 
         private func applyCodeBlockSyntaxHighlight(to textView: NSTextView) {
@@ -1993,15 +2082,44 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                     return
                 }
                 self.isHeightMeasurementScheduled = false
-                self.parent.onContentHeightChange(self.measuredHeight(for: textView))
+                let nextFingerprint = self.heightMeasurementFingerprint(for: textView)
+                guard NativeTextHeightMeasurementPolicy.shouldMeasureHeight(
+                    cached: self.measuredHeightFingerprint,
+                    next: nextFingerprint
+                ) else {
+                    return
+                }
+                self.measuredHeightFingerprint = nextFingerprint
+                self.parent.onContentHeightChange(
+                    self.measuredHeight(
+                        for: textView,
+                        width: nextFingerprint.width
+                    )
+                )
             }
         }
 
-        private func measuredHeight(for textView: NSTextView) -> CGFloat {
+        private func heightMeasurementFingerprint(for textView: NSTextView) -> NativeTextHeightMeasurementFingerprint {
+            NativeTextHeightMeasurementFingerprint(
+                text: textView.string,
+                width: measurementWidth(for: textView),
+                lineWrapping: parent.lineWrapping,
+                blockType: parent.blockType,
+                fontName: parent.nsFont.fontName,
+                fontSize: parent.nsFont.pointSize,
+                minimumHeight: parent.minimumHeight,
+                lineHeightMultiple: CGFloat(EditorDesignTokens.Typography.bodyLineHeightMultiple)
+            )
+        }
+
+        private func measurementWidth(for textView: NSTextView) -> CGFloat {
+            parent.lineWrapping ? max(textView.bounds.width, 320) : 10_000
+        }
+
+        private func measuredHeight(for textView: NSTextView, width: CGFloat) -> CGFloat {
             guard !textView.string.isEmpty else {
                 return parent.minimumHeight
             }
-            let width = parent.lineWrapping ? max(textView.bounds.width, 320) : 10_000
             let boundingRect = textView.attributedString().boundingRect(
                 with: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading]
@@ -2438,7 +2556,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let text: String
     let blockType: BlockType
     let contentFont: EditorContentFont
-    @ObservedObject var session: EditorSession
+    let session: EditorSession
     let lineWrapping: Bool
     let focusRequestID: UUID?
     let focusSelection: EditorTextSelection?
@@ -2779,6 +2897,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         private var focusRequestState = NativeTextFocusRequestState()
         private var modelUpdateGuard = NativeTextModelUpdateGuard()
         private var isHeightMeasurementScheduled = false
+        private var appliedStyleFingerprint: NativeTextStyleFingerprint?
+        private var measuredHeightFingerprint: NativeTextHeightMeasurementFingerprint?
         private let codeSyntaxHighlighter = Highlight()
         private var codeSyntaxHighlightTask: Task<Void, Never>?
         private var keyboardAccessoryHostingController: UIHostingController<AnyView>?
@@ -2915,6 +3035,16 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
 
         func applyTextStyles(to textView: UITextView) {
+            let nextFingerprint = styleFingerprint(for: textView)
+            guard NativeTextStyleApplicationPolicy.shouldApplyStyle(
+                cached: appliedStyleFingerprint,
+                next: nextFingerprint,
+                isComposing: textView.markedTextRange != nil
+            ) else {
+                return
+            }
+            appliedStyleFingerprint = nextFingerprint
+
             guard parent.blockType == .codeBlock else {
                 codeSyntaxHighlightTask?.cancel()
                 applyInlineMarkdownStyles(to: textView)
@@ -2953,6 +3083,16 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             if NSMaxRange(selectedRange) <= fullRange.length {
                 textView.selectedRange = selectedRange
             }
+        }
+
+        private func styleFingerprint(for textView: UITextView) -> NativeTextStyleFingerprint {
+            NativeTextStyleFingerprint(
+                blockType: parent.blockType,
+                text: textView.text ?? "",
+                fontName: parent.uiFont.fontName,
+                fontSize: parent.uiFont.pointSize,
+                lineHeightMultiple: CGFloat(EditorDesignTokens.Typography.bodyLineHeightMultiple)
+            )
         }
 
         private func applyCodeBlockSyntaxHighlight(to textView: UITextView) {
@@ -3353,20 +3493,49 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                     return
                 }
                 self.isHeightMeasurementScheduled = false
-                self.parent.onContentHeightChange(self.measuredHeight(for: textView))
+                let nextFingerprint = self.heightMeasurementFingerprint(for: textView)
+                guard NativeTextHeightMeasurementPolicy.shouldMeasureHeight(
+                    cached: self.measuredHeightFingerprint,
+                    next: nextFingerprint
+                ) else {
+                    return
+                }
+                self.measuredHeightFingerprint = nextFingerprint
+                self.parent.onContentHeightChange(
+                    self.measuredHeight(
+                        for: textView,
+                        width: nextFingerprint.width
+                    )
+                )
             }
         }
 
-        private func measuredHeight(for textView: UITextView) -> CGFloat {
-            guard !textView.text.isEmpty else {
-                return parent.minimumHeight
-            }
-            let width = NativeTextMeasurementWidthPolicy.width(
+        private func heightMeasurementFingerprint(for textView: UITextView) -> NativeTextHeightMeasurementFingerprint {
+            NativeTextHeightMeasurementFingerprint(
+                text: textView.text ?? "",
+                width: measurementWidth(for: textView),
+                lineWrapping: parent.lineWrapping,
+                blockType: parent.blockType,
+                fontName: parent.uiFont.fontName,
+                fontSize: parent.uiFont.pointSize,
+                minimumHeight: parent.minimumHeight,
+                lineHeightMultiple: CGFloat(EditorDesignTokens.Typography.bodyLineHeightMultiple)
+            )
+        }
+
+        private func measurementWidth(for textView: UITextView) -> CGFloat {
+            NativeTextMeasurementWidthPolicy.width(
                 boundsWidth: textView.bounds.width,
                 viewportWidth: UIScreen.main.bounds.width,
                 horizontalMargin: CGFloat(EditorCanvasChromeLayout.compactHorizontalPadding * 2),
                 lineWrapping: parent.lineWrapping
             )
+        }
+
+        private func measuredHeight(for textView: UITextView, width: CGFloat) -> CGFloat {
+            guard !textView.text.isEmpty else {
+                return parent.minimumHeight
+            }
             let fittingSize = textView.sizeThatFits(
                 CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
             )
