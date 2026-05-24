@@ -460,6 +460,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
     let fullSnapshotPageIDs: Set<String>
     let deletedRecords: [RemoteDeletedRecord]
     let serverChangeTokenData: Data?
+    let hasMoreChanges: Bool
 
     init(
         workspaceChanges: [RemoteWorkspaceChange] = [],
@@ -472,7 +473,8 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
         blockChanges: [RemoteBlockChange] = [],
         fullSnapshotPageIDs: Set<String> = [],
         deletedRecords: [RemoteDeletedRecord] = [],
-        serverChangeTokenData: Data? = nil
+        serverChangeTokenData: Data? = nil,
+        hasMoreChanges: Bool = false
     ) {
         self.workspaceChanges = workspaceChanges
         self.notebookChanges = notebookChanges
@@ -485,6 +487,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
         self.fullSnapshotPageIDs = fullSnapshotPageIDs
         self.deletedRecords = deletedRecords
         self.serverChangeTokenData = serverChangeTokenData
+        self.hasMoreChanges = hasMoreChanges
     }
 }
 
@@ -528,15 +531,18 @@ struct CloudKitFetchedRecordChangeSet: Equatable {
     let recordsByType: [String: [CKRecord]]
     let deletedRecordIDsByType: [String: [CKRecord.ID]]
     let serverChangeTokenData: Data?
+    let hasMoreChanges: Bool
 
     init(
         recordsByType: [String: [CKRecord]],
         deletedRecordIDsByType: [String: [CKRecord.ID]] = [:],
-        serverChangeTokenData: Data?
+        serverChangeTokenData: Data?,
+        hasMoreChanges: Bool = false
     ) {
         self.recordsByType = recordsByType
         self.deletedRecordIDsByType = deletedRecordIDsByType
         self.serverChangeTokenData = serverChangeTokenData
+        self.hasMoreChanges = hasMoreChanges
     }
 }
 
@@ -889,6 +895,8 @@ final class CloudKitPrivateDatabaseSubscriptionEnsurer: CloudKitSubscriptionEnsu
 }
 
 final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordReading {
+    static let recordZoneChangeBatchLimit = 200
+
     private let database: CKDatabase
     private let zoneEnsurer: CloudKitRecordZoneEnsuring
     private let operationWaiter: CloudKitOperationWaiter
@@ -1015,11 +1023,12 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
         let configuration = CKFetchRecordZoneChangesOperation.ZoneConfiguration(
             previousServerChangeToken: previousToken
         )
+        configuration.resultsLimit = Self.recordZoneChangeBatchLimit
         let operation = CKFetchRecordZoneChangesOperation(
             recordZoneIDs: [zoneID],
             configurationsByRecordZoneID: [zoneID: configuration]
         )
-        operation.fetchAllChanges = true
+        operation.fetchAllChanges = false
         let operationConfiguration = CKOperation.Configuration()
         operationConfiguration.timeoutIntervalForResource = operationWaiter.timeout
         operation.configuration = operationConfiguration
@@ -1029,6 +1038,7 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
             var records: [CKRecord] = []
             var deletedRecordIDsByType: [String: [CKRecord.ID]] = [:]
             var serverChangeTokenData: Data?
+            var hasMoreChanges = false
             var error: Error?
         }
         let fetchBox = FetchBox()
@@ -1050,6 +1060,7 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
                 do {
                     fetchBox.serverChangeTokenData = try CloudKitServerChangeTokenCodec
                         .data(from: response.serverChangeToken)
+                    fetchBox.hasMoreChanges = response.moreComing
                 } catch {
                     fetchBox.error = error
                 }
@@ -1078,7 +1089,8 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
         return CloudKitFetchedRecordChangeSet(
             recordsByType: Dictionary(grouping: fetchBox.records, by: \.recordType),
             deletedRecordIDsByType: fetchBox.deletedRecordIDsByType,
-            serverChangeTokenData: fetchBox.serverChangeTokenData
+            serverChangeTokenData: fetchBox.serverChangeTokenData,
+            hasMoreChanges: fetchBox.hasMoreChanges
         )
     }
 }
@@ -1277,7 +1289,8 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             blockChanges: blockRecords.compactMap(remoteBlockChange),
             fullSnapshotPageIDs: fullSnapshotPageIDs,
             deletedRecords: deletedRecords,
-            serverChangeTokenData: fetchedChanges.serverChangeTokenData
+            serverChangeTokenData: fetchedChanges.serverChangeTokenData,
+            hasMoreChanges: fetchedChanges.hasMoreChanges
         )
     }
 
@@ -1882,6 +1895,12 @@ struct SyncUploadSummary: Equatable, Sendable {
 
 struct SyncFetchSummary: Equatable, Sendable {
     let appliedCount: Int
+    let hasMoreChanges: Bool
+
+    init(appliedCount: Int, hasMoreChanges: Bool = false) {
+        self.appliedCount = appliedCount
+        self.hasMoreChanges = hasMoreChanges
+    }
 }
 
 enum RemoteBlockChangeDependencySorter {
@@ -2288,7 +2307,8 @@ final class SyncEngine {
                 + changeSet.attachmentChanges.count
                 + changeSet.blockChanges.count
                 - skippedRemoteBlockCount
-                + changeSet.deletedRecords.count
+                + changeSet.deletedRecords.count,
+            hasMoreChanges: changeSet.hasMoreChanges
         )
     }
 

@@ -4336,7 +4336,7 @@ final class WorkspaceViewModel: ObservableObject {
             fetchDurationMilliseconds = millisecondsElapsed(since: fetchStartedAt)
             syncEngine.recordRuntimeDiagnostic(
                 eventName: "foreground_sync_fetch_completed",
-                payloadJSON: "{\"duration_ms\":\(fetchDurationMilliseconds),\"fetched_count\":\(fetchSummary.appliedCount)}"
+                payloadJSON: "{\"duration_ms\":\(fetchDurationMilliseconds),\"fetched_count\":\(fetchSummary.appliedCount),\"has_more_changes\":\(fetchSummary.hasMoreChanges)}"
             )
             EditorLog.sync.debug(
                 "foreground_sync_completed subscription_ms=\(subscriptionDurationMilliseconds, privacy: .public) upload_ms=\(uploadDurationMilliseconds, privacy: .public) fetch_ms=\(fetchDurationMilliseconds, privacy: .public) total_ms=\(millisecondsElapsed(since: syncStartedAt), privacy: .public) uploaded=\(uploadSummary.uploadedCount, privacy: .public) failed_uploads=\(uploadSummary.failedCount, privacy: .public) fetched=\(fetchSummary.appliedCount, privacy: .public)"
@@ -4397,11 +4397,12 @@ final class WorkspaceViewModel: ObservableObject {
         isForegroundSyncRunning = false
         let shouldRunPendingSync = shouldRunPendingForegroundSync(after: result)
         let shouldContinueBacklogDrain = shouldContinueForegroundBacklogDrain(after: result)
+        let shouldContinueRemoteDrain = shouldContinueForegroundRemoteDrain(after: result)
         completeForegroundSync(result)
         let hasPendingLocalChangeRerun = isForegroundSyncRerunPending
         isForegroundSyncRerunPending = false
 
-        guard hasPendingLocalChangeRerun || shouldContinueBacklogDrain else {
+        guard hasPendingLocalChangeRerun || shouldContinueBacklogDrain || shouldContinueRemoteDrain else {
             return
         }
 
@@ -4410,7 +4411,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         scheduleForegroundSyncIfNeeded(
-            reason: shouldContinueBacklogDrain ? "local_backlog" : "pending_local_change"
+            reason: shouldContinueBacklogDrain ? "local_backlog" : (shouldContinueRemoteDrain ? "remote_backlog" : "pending_local_change")
         )
     }
 
@@ -4434,6 +4435,17 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    private func shouldContinueForegroundRemoteDrain(after result: WorkspaceForegroundSyncResult) -> Bool {
+        switch result {
+        case .success(let summary):
+            summary.uploadSummary.failedCount == 0
+                && summary.remainingLocalChangeCount == 0
+                && summary.fetchSummary.hasMoreChanges
+        case .failure:
+            false
+        }
+    }
+
     private func completeForegroundSync(_ result: WorkspaceForegroundSyncResult) {
         switch result {
         case .success(let summary):
@@ -4443,6 +4455,7 @@ final class WorkspaceViewModel: ObservableObject {
                     "uploaded_count": summary.uploadSummary.uploadedCount,
                     "failed_upload_count": summary.uploadSummary.failedCount,
                     "fetched_count": summary.fetchSummary.appliedCount,
+                    "has_more_remote_changes": summary.fetchSummary.hasMoreChanges,
                     "remaining_local_change_count": summary.remainingLocalChangeCount
                 ]
             )
@@ -4459,6 +4472,9 @@ final class WorkspaceViewModel: ObservableObject {
                 } else {
                     syncStatusText = "同步暂缓，稍后自动重试"
                 }
+                nextForegroundSyncAttemptAt = nil
+            } else if summary.fetchSummary.hasMoreChanges {
+                syncStatusText = "继续同步远端变更"
                 nextForegroundSyncAttemptAt = nil
             } else if summary.fetchSummary.appliedCount > 0 {
                 syncStatusText = "已同步 \(summary.fetchSummary.appliedCount) 条远端变更"

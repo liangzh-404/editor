@@ -4819,6 +4819,47 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testForegroundSyncContinuesDrainingRemoteBacklogWithoutWaitingForPollingInterval() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let recorder = ForegroundSyncCallRecorder()
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: SyncRepository(database: database),
+                adapter: OrderedForegroundSyncAdapter(recorder: recorder),
+                remoteChangeFetcher: OrderedForegroundSyncFetcher(
+                    recorder: recorder,
+                    hasMoreChangesSequence: [true, false]
+                ),
+                mergeEngine: SyncMergeEngine(database: database),
+                subscriptionEnsurer: OrderedForegroundSyncSubscriptionEnsurer(recorder: recorder)
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
+        XCTAssertEqual(recorder.calls, [
+            .ensureSubscription,
+            .fetch,
+            .ensureSubscription,
+            .fetch
+        ])
+    }
+
+    @MainActor
     func testForegroundSyncDoesNotSpinWhenOnlyDeferredLocalBacklogRemains() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -5429,15 +5470,20 @@ private final class PartiallyFailingForegroundSyncAdapter: CloudKitSyncAdapter {
 
 private final class OrderedForegroundSyncFetcher: CloudKitRemoteChangeFetching {
     private let recorder: ForegroundSyncCallRecorder
+    private var hasMoreChangesSequence: [Bool]
 
-    init(recorder: ForegroundSyncCallRecorder) {
+    init(recorder: ForegroundSyncCallRecorder, hasMoreChangesSequence: [Bool] = [false]) {
         self.recorder = recorder
+        self.hasMoreChangesSequence = hasMoreChangesSequence
     }
 
     func fetchRemoteChanges(
         sinceServerChangeTokenData serverChangeTokenData: Data?
     ) throws -> CloudKitRemoteChangeSet {
         recorder.record(.fetch)
+        let hasMoreChanges = hasMoreChangesSequence.isEmpty
+            ? false
+            : hasMoreChangesSequence.removeFirst()
         return CloudKitRemoteChangeSet(
             workspaceChanges: [],
             notebookChanges: [],
@@ -5447,7 +5493,8 @@ private final class OrderedForegroundSyncFetcher: CloudKitRemoteChangeFetching {
             blockChanges: [],
             fullSnapshotPageIDs: [],
             deletedRecords: [],
-            serverChangeTokenData: nil
+            serverChangeTokenData: nil,
+            hasMoreChanges: hasMoreChanges
         )
     }
 }
