@@ -939,6 +939,30 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testMarkdownInlineStyleScannerHidesBoldMarkersAroundWhitespaceContent() {
+        let text = "Plan ** ** done"
+
+        let runs = MarkdownInlineStyleScanner.runs(in: text, includingSyntaxMarkers: true)
+
+        XCTAssertEqual(
+            runs,
+            [
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Plan " as NSString).length, length: 2)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .bold,
+                    range: NSRange(location: ("Plan **" as NSString).length, length: 1)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("Plan ** " as NSString).length, length: 2)
+                )
+            ]
+        )
+    }
+
     func testMarkdownInlineStyleScannerDoesNotStyleMarkersInsideCodeSpan() {
         let text = "Literal `**not bold**` then **bold**"
 

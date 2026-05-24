@@ -264,6 +264,8 @@ final class ObsidianVaultImporterTests: XCTestCase {
         let metadataRows = try database.query(
             """
             SELECT source_path,
+                   source_created_at,
+                   source_modified_at,
                    frontmatter_json,
                    custom_metadata_json,
                    is_encrypted,
@@ -283,6 +285,8 @@ final class ObsidianVaultImporterTests: XCTestCase {
         XCTAssertTrue((encryptedRow["custom_metadata_json"] ?? "").contains("\"secret_note\":true"))
         XCTAssertTrue((encryptedRow["custom_metadata_json"] ?? "").contains("\"stored_plaintext\":false"))
         let diaryRow = try XCTUnwrap(metadataRows.first { $0["source_path"] == "日记/2025年/一月/3周/2025年1月15日 星期三.md" })
+        XCTAssertEqual(diaryRow["source_created_at"], "2025-01-15T08:00:00.000Z")
+        XCTAssertEqual(diaryRow["source_modified_at"], "2025-01-15T21:30:00.000Z")
         XCTAssertEqual(diaryRow["diary_date"], "2025-01-15")
         XCTAssertTrue((diaryRow["frontmatter_json"] ?? "").contains("custom-field"))
 

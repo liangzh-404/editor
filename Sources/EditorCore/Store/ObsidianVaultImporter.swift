@@ -15,6 +15,7 @@ struct ObsidianVaultImportConfiguration: Equatable, Sendable {
     var skipsPreviouslyImportedSources = true
     var importsReferencedAttachments = true
     var attachmentSearchDirectories: [URL] = []
+    var batchSize = 25
 }
 
 struct ObsidianVaultImportSummary: Equatable, Sendable {
@@ -28,8 +29,20 @@ struct ObsidianVaultImportSummary: Equatable, Sendable {
     var diaryPatterns: [String: Int] = [:]
 }
 
-protocol ObsidianVaultImporting {
+private struct ObsidianMarkdownImportCandidate {
+    let url: URL
+    let relativePath: String
+}
+
+protocol ObsidianVaultImporting: Sendable {
     func importVault(vaultURL: URL, workspaceID: String) throws -> ObsidianVaultImportSummary
+    func importVaultInBatches(vaultURL: URL, workspaceID: String) throws -> ObsidianVaultImportSummary
+}
+
+extension ObsidianVaultImporting {
+    func importVaultInBatches(vaultURL: URL, workspaceID: String) throws -> ObsidianVaultImportSummary {
+        try importVault(vaultURL: vaultURL, workspaceID: workspaceID)
+    }
 }
 
 struct ObsidianFrontmatter: Equatable, Sendable {
@@ -573,7 +586,7 @@ enum ObsidianDiaryDateResolver {
     }
 }
 
-final class ObsidianVaultImporter: ObsidianVaultImporting {
+final class ObsidianVaultImporter: ObsidianVaultImporting, @unchecked Sendable {
     private let database: SQLiteDatabase
     private let pageRepository: PageRepository
     private let tagRepository: TagRepository
@@ -693,6 +706,85 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
             )
             return summary
         }
+    }
+
+    func importVaultInBatches(vaultURL: URL, workspaceID: String) throws -> ObsidianVaultImportSummary {
+        let attachmentIndex = try makeAttachmentIndex(vaultURL: vaultURL)
+        var summary = ObsidianVaultImportSummary()
+        let rootNotebookID = try database.withImmediateTransaction("obsidian_vault_import_prepare") {
+            try ensureNotebookPath(
+                workspaceID: workspaceID,
+                components: [vaultURL.lastPathComponent]
+            )
+        }
+        let candidates = try markdownImportCandidates(
+            vaultURL: vaultURL,
+            ignoredNonMarkdownFileCount: &summary.ignoredNonMarkdownFileCount
+        )
+        summary.markdownFileCount = candidates.count
+
+        let batchSize = max(1, configuration.batchSize)
+        var batchStart = 0
+        while batchStart < candidates.count {
+            let batchEnd = min(batchStart + batchSize, candidates.count)
+            let batch = candidates[batchStart..<batchEnd]
+            let batchSummary = try database.withImmediateTransaction("obsidian_vault_import_batch") {
+                var batchSummary = ObsidianVaultImportSummary()
+                for candidate in batch {
+                    if configuration.skipsPreviouslyImportedSources,
+                       try importedPageID(sourcePath: candidate.relativePath) != nil {
+                        batchSummary.skippedPageCount += 1
+                        continue
+                    }
+
+                    let notebookID = try ensureNotebookPath(
+                        workspaceID: workspaceID,
+                        components: [vaultURL.lastPathComponent] + directoryComponents(relativePath: candidate.relativePath),
+                        fallbackNotebookID: rootNotebookID
+                    )
+                    let importResult = try importMarkdownFile(
+                        candidate.url,
+                        relativePath: candidate.relativePath,
+                        vaultURL: vaultURL,
+                        workspaceID: workspaceID,
+                        notebookID: notebookID,
+                        attachmentIndex: attachmentIndex
+                    )
+                    batchSummary.importedPageCount += 1
+                    batchSummary.importedAttachmentCount += importResult.importedAttachmentCount
+                    if importResult.isEncrypted {
+                        batchSummary.encryptedPageCount += 1
+                    }
+                    if let diaryMatch = importResult.diaryMatch {
+                        batchSummary.diaryPatterns[diaryMatch.pattern, default: 0] += 1
+                        if diaryMatch.dateString != nil {
+                            batchSummary.diaryPageCount += 1
+                        }
+                    }
+                }
+                return batchSummary
+            }
+            summary.importedPageCount += batchSummary.importedPageCount
+            summary.skippedPageCount += batchSummary.skippedPageCount
+            summary.encryptedPageCount += batchSummary.encryptedPageCount
+            summary.diaryPageCount += batchSummary.diaryPageCount
+            summary.importedAttachmentCount += batchSummary.importedAttachmentCount
+            for (pattern, count) in batchSummary.diaryPatterns {
+                summary.diaryPatterns[pattern, default: 0] += count
+            }
+
+            EditorLog.store.debug(
+                "obsidian_vault_import_batch_committed start=\(batchStart, privacy: .public) end=\(batchEnd, privacy: .public) imported=\(batchSummary.importedPageCount, privacy: .public) skipped=\(batchSummary.skippedPageCount, privacy: .public)"
+            )
+            batchStart = batchEnd
+        }
+
+        try pageRepository.relinkObsidianBlockReferenceBlocks()
+        try SearchRepository(database: database).rebuildIndex()
+        EditorLog.store.debug(
+            "obsidian_vault_imported markdown_files=\(summary.markdownFileCount, privacy: .public) imported=\(summary.importedPageCount, privacy: .public) encrypted=\(summary.encryptedPageCount, privacy: .public) diary=\(summary.diaryPageCount, privacy: .public)"
+        )
+        return summary
     }
 
     private func importMarkdownFile(
@@ -1137,6 +1229,52 @@ final class ObsidianVaultImporter: ObsidianVaultImporting {
             }
         }
         return index
+    }
+
+    private func markdownImportCandidates(
+        vaultURL: URL,
+        ignoredNonMarkdownFileCount: inout Int
+    ) throws -> [ObsidianMarkdownImportCandidate] {
+        guard let enumerator = fileManager.enumerator(
+            at: vaultURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsPackageDescendants]
+        ) else {
+            throw ObsidianVaultImporterError.unreadableVault(vaultURL.path)
+        }
+
+        var candidates: [ObsidianMarkdownImportCandidate] = []
+        while let item = enumerator.nextObject() as? URL {
+            let relativePath = try self.relativePath(for: item, vaultURL: vaultURL)
+            let values = try item.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            if values.isDirectory == true {
+                if isHidden(relativePath: relativePath) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            guard values.isRegularFile == true,
+                  !isHidden(relativePath: relativePath) else {
+                continue
+            }
+            guard item.pathExtension.lowercased() == "md" else {
+                ignoredNonMarkdownFileCount += 1
+                continue
+            }
+            guard Self.shouldImportMarkdownFile(relativePath: relativePath) else {
+                ignoredNonMarkdownFileCount += 1
+                continue
+            }
+
+            candidates.append(
+                ObsidianMarkdownImportCandidate(
+                    url: item,
+                    relativePath: relativePath
+                )
+            )
+        }
+
+        return candidates
     }
 
     private static func attachmentSourceURL(

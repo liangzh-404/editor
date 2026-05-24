@@ -6483,8 +6483,8 @@ private struct PageListView: View {
                   newValue != viewModel.selectedPageID else {
                 return
             }
-            DispatchQueue.main.async {
-                viewModel.selectPage(id: newValue)
+            Task { @MainActor in
+                await viewModel.selectPageForUI(id: newValue)
             }
         }
     }

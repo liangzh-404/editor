@@ -2928,6 +2928,46 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testObsidianVaultImportSchedulesBackgroundWorkAndReportsCompletion() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        let importer = RecordingObsidianVaultImporter(
+            summary: ObsidianVaultImportSummary(
+                markdownFileCount: 5,
+                importedPageCount: 2,
+                skippedPageCount: 3,
+                encryptedPageCount: 0,
+                diaryPageCount: 1,
+                importedAttachmentCount: 1,
+                ignoredNonMarkdownFileCount: 0,
+                diaryPatterns: [:]
+            )
+        )
+        let scheduler = DeferredObsidianImportScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            obsidianImporter: importer,
+            obsidianImportScheduler: scheduler
+        )
+        try viewModel.load()
+        let vaultURL = makeTemporaryDirectory()
+
+        viewModel.importObsidianVaultForCurrentWorkspace(sourceURL: vaultURL)
+
+        XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+        XCTAssertEqual(importer.importedVaultURLs, [])
+        XCTAssertEqual(viewModel.markdownImportStatusText, "Importing Obsidian vault...")
+
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(importer.importedVaultURLs, [vaultURL])
+        XCTAssertEqual(viewModel.markdownImportStatusText, "Imported 2 Obsidian notes, 1 attachments, skipped 3")
+    }
+
+    @MainActor
     func testImportMarkdownToCurrentPageRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -5344,6 +5384,54 @@ private struct StaticImageTextRecognizer: ImageTextRecognizing {
 
     func recognizeText(in imageURL: URL) throws -> [AttachmentRecognizedTextObservation] {
         observations
+    }
+}
+
+private final class RecordingObsidianVaultImporter: ObsidianVaultImporting, @unchecked Sendable {
+    private let summary: ObsidianVaultImportSummary
+    private(set) var importedVaultURLs: [URL] = []
+
+    init(summary: ObsidianVaultImportSummary) {
+        self.summary = summary
+    }
+
+    func importVault(vaultURL: URL, workspaceID: String) throws -> ObsidianVaultImportSummary {
+        importedVaultURLs.append(vaultURL)
+        return summary
+    }
+}
+
+private final class DeferredObsidianImportScheduler: WorkspaceObsidianImportScheduling {
+    private struct ScheduledImport {
+        let operation: @Sendable () -> WorkspaceObsidianImportResult
+        let completion: @MainActor @Sendable (WorkspaceObsidianImportResult) -> Void
+    }
+
+    private var scheduledImports: [ScheduledImport] = []
+
+    var scheduledOperationCount: Int {
+        scheduledImports.count
+    }
+
+    func scheduleObsidianImport(
+        operation: @escaping @Sendable () -> WorkspaceObsidianImportResult,
+        completion: @escaping @MainActor @Sendable (WorkspaceObsidianImportResult) -> Void
+    ) {
+        scheduledImports.append(
+            ScheduledImport(
+                operation: operation,
+                completion: completion
+            )
+        )
+    }
+
+    @MainActor
+    func runNextScheduledOperation() throws {
+        guard !scheduledImports.isEmpty else {
+            throw WorkspaceViewModelTestError.noScheduledForegroundSync
+        }
+        let scheduledImport = scheduledImports.removeFirst()
+        scheduledImport.completion(scheduledImport.operation())
     }
 }
 

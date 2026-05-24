@@ -57,10 +57,22 @@ enum WorkspaceCloudKitAccountStatusRefreshResult: Sendable {
     case failure(String)
 }
 
+enum WorkspaceObsidianImportResult: Sendable {
+    case success(ObsidianVaultImportSummary)
+    case failure(String)
+}
+
 protocol WorkspaceSyncScheduling {
     func scheduleForegroundSync(
         operation: @escaping @Sendable () -> WorkspaceForegroundSyncResult,
         completion: @escaping @MainActor @Sendable (WorkspaceForegroundSyncResult) -> Void
+    )
+}
+
+protocol WorkspaceObsidianImportScheduling {
+    func scheduleObsidianImport(
+        operation: @escaping @Sendable () -> WorkspaceObsidianImportResult,
+        completion: @escaping @MainActor @Sendable (WorkspaceObsidianImportResult) -> Void
     )
 }
 
@@ -77,6 +89,22 @@ final class BackgroundWorkspaceSyncScheduler: WorkspaceSyncScheduling {
     func scheduleForegroundSync(
         operation: @escaping @Sendable () -> WorkspaceForegroundSyncResult,
         completion: @escaping @MainActor @Sendable (WorkspaceForegroundSyncResult) -> Void
+    ) {
+        queue.async {
+            let result = operation()
+            Task { @MainActor in
+                completion(result)
+            }
+        }
+    }
+}
+
+final class BackgroundWorkspaceObsidianImportScheduler: WorkspaceObsidianImportScheduling {
+    private let queue = DispatchQueue(label: "editor.obsidian-import", qos: .utility)
+
+    func scheduleObsidianImport(
+        operation: @escaping @Sendable () -> WorkspaceObsidianImportResult,
+        completion: @escaping @MainActor @Sendable (WorkspaceObsidianImportResult) -> Void
     ) {
         queue.async {
             let result = operation()
@@ -222,6 +250,7 @@ final class WorkspaceViewModel: ObservableObject {
     private let backlinkRepository: BacklinkRepository?
     private let conflictRepository: ConflictRepository?
     private let obsidianImporter: ObsidianVaultImporting?
+    private let obsidianImportScheduler: WorkspaceObsidianImportScheduling
     private let automaticallyResolveConflicts: Bool
     private let syncEngine: SyncEngine?
     private let syncScheduler: WorkspaceSyncScheduling
@@ -248,6 +277,8 @@ final class WorkspaceViewModel: ObservableObject {
     private var isLoadingPendingTextRecognitionAttachmentIDs = false
     private var isForegroundSyncRunning = false
     private var isForegroundSyncRerunPending = false
+    private var isObsidianImportRunning = false
+    private var shouldSyncAfterObsidianImport = false
     private var isCloudKitAccountStatusRefreshRunning = false
     private var nextForegroundSyncAttemptAt: Date?
     private var syncChangeObservation: SyncChangeObservation?
@@ -417,6 +448,7 @@ final class WorkspaceViewModel: ObservableObject {
         backlinkRepository: BacklinkRepository? = nil,
         conflictRepository: ConflictRepository? = nil,
         obsidianImporter: ObsidianVaultImporting? = nil,
+        obsidianImportScheduler: WorkspaceObsidianImportScheduling = BackgroundWorkspaceObsidianImportScheduler(),
         automaticallyResolveConflicts: Bool = true,
         syncEngine: SyncEngine? = nil,
         syncScheduler: WorkspaceSyncScheduling = BackgroundWorkspaceSyncScheduler(),
@@ -440,6 +472,7 @@ final class WorkspaceViewModel: ObservableObject {
         self.backlinkRepository = backlinkRepository
         self.conflictRepository = conflictRepository
         self.obsidianImporter = obsidianImporter
+        self.obsidianImportScheduler = obsidianImportScheduler
         self.automaticallyResolveConflicts = automaticallyResolveConflicts
         self.syncEngine = syncEngine
         self.syncScheduler = syncScheduler
@@ -491,6 +524,7 @@ final class WorkspaceViewModel: ObservableObject {
         backlinkRepository = nil
         conflictRepository = nil
         obsidianImporter = nil
+        obsidianImportScheduler = BackgroundWorkspaceObsidianImportScheduler()
         automaticallyResolveConflicts = true
         syncEngine = nil
         syncScheduler = BackgroundWorkspaceSyncScheduler()
@@ -692,6 +726,12 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func syncAfterLocalChange() {
+        guard !isObsidianImportRunning else {
+            shouldSyncAfterObsidianImport = true
+            syncStatusText = "导入中，完成后同步"
+            EditorLog.sync.debug("foreground_sync_deferred reason=obsidian_import_running")
+            return
+        }
         scheduleForegroundSyncIfNeeded(reason: "local_change")
     }
 
@@ -930,11 +970,29 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func hydrateBlocksForPageIfNeededForUI(_ pageID: String) {
+        let startedAt = Date()
+        let wasAlreadyHydrated = snapshot.blocks.contains { $0.pageID == pageID }
         do {
             try hydrateBlocksForPageIfNeeded(pageID)
+            let durationMilliseconds = Self.millisecondsElapsed(since: startedAt)
+            let blockCount = snapshot.blocks.filter { $0.pageID == pageID }.count
+            EditorLog.render.debug(
+                "page_blocks_hydrated page_id=\(pageID, privacy: .public) already_loaded=\(wasAlreadyHydrated, privacy: .public) blocks=\(blockCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)"
+            )
+            if durationMilliseconds >= 100 {
+                try? repository?.recordRuntimeDiagnostic(
+                    eventName: "page_blocks_hydration_slow",
+                    payload: [
+                        "page_id": pageID,
+                        "already_loaded": wasAlreadyHydrated,
+                        "block_count": blockCount,
+                        "duration_ms": durationMilliseconds
+                    ]
+                )
+            }
         } catch {
             EditorLog.store.error(
-                "page_blocks_hydration_failed page_id=\(pageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                "page_blocks_hydration_failed page_id=\(pageID, privacy: .public) duration_ms=\(Self.millisecondsElapsed(since: startedAt), privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
     }
@@ -3655,14 +3713,70 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func importObsidianVaultForCurrentWorkspace(sourceURL: URL) {
-        do {
-            let summary = try importObsidianVault(vaultURL: sourceURL)
-            EditorLog.markdown.debug(
-                "obsidian_vault_imported source=\(sourceURL.lastPathComponent, privacy: .public) imported=\(summary.importedPageCount, privacy: .public) encrypted=\(summary.encryptedPageCount, privacy: .public) diary=\(summary.diaryPageCount, privacy: .public)"
-            )
-        } catch {
+        guard let obsidianImporter else {
+            EditorLog.markdown.error("obsidian_vault_import_failed reason=missing_importer")
+            return
+        }
+        guard let selectedWorkspaceID else {
+            EditorLog.markdown.error("obsidian_vault_import_failed reason=missing_workspace")
+            return
+        }
+        guard !isObsidianImportRunning else {
+            markdownImportStatusText = "Obsidian import already running"
+            EditorLog.markdown.debug("obsidian_vault_import_skipped reason=already_running")
+            return
+        }
+
+        isObsidianImportRunning = true
+        shouldSyncAfterObsidianImport = false
+        markdownImportStatusText = "Importing Obsidian vault..."
+        EditorLog.markdown.debug(
+            "obsidian_vault_import_scheduled source=\(sourceURL.lastPathComponent, privacy: .public)"
+        )
+        obsidianImportScheduler.scheduleObsidianImport(
+            operation: {
+                do {
+                    return .success(
+                        try obsidianImporter.importVaultInBatches(
+                            vaultURL: sourceURL,
+                            workspaceID: selectedWorkspaceID
+                        )
+                    )
+                } catch {
+                    return .failure(String(describing: error))
+                }
+            },
+            completion: { [weak self] result in
+                self?.finishObsidianVaultImport(sourceURL: sourceURL, result: result)
+            }
+        )
+    }
+
+    private func finishObsidianVaultImport(sourceURL: URL, result: WorkspaceObsidianImportResult) {
+        isObsidianImportRunning = false
+        switch result {
+        case .success(let summary):
+            do {
+                try load()
+                markdownImportStatusText = Self.obsidianImportStatusText(summary: summary)
+                EditorLog.markdown.debug(
+                    "obsidian_vault_imported source=\(sourceURL.lastPathComponent, privacy: .public) imported=\(summary.importedPageCount, privacy: .public) encrypted=\(summary.encryptedPageCount, privacy: .public) diary=\(summary.diaryPageCount, privacy: .public)"
+                )
+                if shouldSyncAfterObsidianImport || summary.importedPageCount > 0 || summary.importedAttachmentCount > 0 {
+                    shouldSyncAfterObsidianImport = false
+                    scheduleForegroundSyncIfNeeded(reason: "obsidian_import")
+                }
+            } catch {
+                markdownImportStatusText = "Obsidian import completed, reload failed"
+                EditorLog.markdown.error(
+                    "obsidian_vault_import_reload_failed source=\(sourceURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
+            }
+        case .failure(let message):
+            shouldSyncAfterObsidianImport = false
+            markdownImportStatusText = "Obsidian import failed"
             EditorLog.markdown.error(
-                "obsidian_vault_import_failed source=\(sourceURL.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                "obsidian_vault_import_failed source=\(sourceURL.lastPathComponent, privacy: .public) error=\(message, privacy: .public)"
             )
         }
     }

@@ -73,7 +73,7 @@ enum ObsidianImportAudit {
         let summary = try ObsidianVaultImporter(
             database: database,
             attachmentsDirectory: attachmentsDirectory
-        ).importVault(
+        ).importVaultInBatches(
             vaultURL: arguments.vaultURL,
             workspaceID: workspaceID
         )
