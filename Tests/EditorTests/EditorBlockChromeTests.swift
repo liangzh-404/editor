@@ -13,6 +13,44 @@ final class EditorBlockChromeTests: XCTestCase {
         assertColor(EditorDesignTokens.Colors.accent, red: 0xE5, green: 0x45, blue: 0x4F)
     }
 
+    func testDarkDesignTokensProvideLayeredReadableEditorialPalette() {
+        assertColor(EditorDesignTokens.Colors.appBackground, scheme: .dark, red: 0x15, green: 0x15, blue: 0x14)
+        assertColor(EditorDesignTokens.Colors.sidebarBackground, scheme: .dark, red: 0x1D, green: 0x1B, blue: 0x19)
+        assertColor(EditorDesignTokens.Colors.documentListBackground, scheme: .dark, red: 0x18, green: 0x18, blue: 0x17)
+        assertColor(EditorDesignTokens.Colors.editorBackground, scheme: .dark, red: 0x10, green: 0x11, blue: 0x11)
+        assertColor(EditorDesignTokens.Colors.primaryText, scheme: .dark, red: 0xEF, green: 0xED, blue: 0xEA)
+        assertColor(EditorDesignTokens.Colors.secondaryText, scheme: .dark, red: 0xB8, green: 0xB2, blue: 0xAA)
+        assertColor(EditorDesignTokens.Colors.tertiaryText, scheme: .dark, red: 0x81, green: 0x7C, blue: 0x73)
+        assertColor(EditorDesignTokens.Colors.border, scheme: .dark, red: 0x37, green: 0x32, blue: 0x2C)
+        assertColor(EditorDesignTokens.Colors.accent, scheme: .dark, red: 0xFF, green: 0x63, blue: 0x6E)
+        XCTAssertNotEqual(
+            EditorDesignTokens.Colors.documentListBackground.components(for: .dark),
+            EditorDesignTokens.Colors.editorBackground.components(for: .dark)
+        )
+        XCTAssertGreaterThan(EditorDesignTokens.Colors.primaryText.components(for: .dark).red, 0.85)
+        XCTAssertLessThan(EditorDesignTokens.Colors.editorBackground.components(for: .dark).red, 0.08)
+    }
+
+    func testDarkModeSemanticSurfacesCoverEditorSpecialCases() {
+        assertColor(EditorDesignTokens.Colors.elevatedSurface, scheme: .dark, red: 0x20, green: 0x1F, blue: 0x1D)
+        assertColor(EditorDesignTokens.Colors.controlBackground, scheme: .dark, red: 0x26, green: 0x24, blue: 0x21)
+        assertColor(EditorDesignTokens.Colors.codeBlockBackground, scheme: .dark, red: 0x1A, green: 0x1C, blue: 0x1E)
+        assertColor(EditorDesignTokens.Colors.calloutBackground, scheme: .dark, red: 0x1B, green: 0x20, blue: 0x26)
+        assertColor(EditorDesignTokens.Colors.quoteBackground, scheme: .dark, red: 0x23, green: 0x20, blue: 0x1B)
+        assertColor(EditorDesignTokens.Colors.attachmentBackground, scheme: .dark, red: 0x1B, green: 0x1D, blue: 0x1F)
+        assertColor(EditorDesignTokens.Colors.tableHeaderBackground, scheme: .dark, red: 0x21, green: 0x20, blue: 0x1E)
+        assertColor(EditorDesignTokens.Colors.drawingCanvasBackground, scheme: .dark, red: 0x18, green: 0x19, blue: 0x1A)
+        assertColor(EditorDesignTokens.Colors.inlineCodeBackground, scheme: .dark, red: 0x27, green: 0x25, blue: 0x22)
+        assertColor(EditorDesignTokens.Colors.searchHighlightFill, scheme: .dark, red: 0xF4, green: 0xBC, blue: 0x44)
+        assertColor(EditorDesignTokens.Colors.searchHighlightStroke, scheme: .dark, red: 0xFF, green: 0xD1, blue: 0x63)
+        assertColor(EditorDesignTokens.Colors.warningText, scheme: .dark, red: 0xFF, green: 0xB8, blue: 0x4D)
+        assertColor(EditorDesignTokens.Colors.warningFill, scheme: .dark, red: 0x33, green: 0x25, blue: 0x13)
+        assertColor(EditorDesignTokens.Colors.warningStroke, scheme: .dark, red: 0x7A, green: 0x58, blue: 0x22)
+        assertColor(EditorDesignTokens.Colors.successText, scheme: .dark, red: 0x7F, green: 0xDA, blue: 0x8A)
+        assertColor(EditorDesignTokens.Colors.successFill, scheme: .dark, red: 0x14, green: 0x28, blue: 0x1A)
+        assertColor(EditorDesignTokens.Colors.dangerFill, scheme: .dark, red: 0x32, green: 0x18, blue: 0x1C)
+    }
+
     func testCraftThingsDesignTokensKeepDocumentTypographyInRange() {
         XCTAssertEqual(EditorDesignTokens.Typography.documentTitleSize, 28)
         XCTAssertEqual(EditorDesignTokens.Typography.bodySize, 14)
@@ -1017,6 +1055,19 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertLessThan(CompactChrome.backgroundYellowBias, 0.015)
     }
 
+    func testDarkThemeKeepsMiddleColumnAndWritingSurfaceSeparated() {
+        XCTAssertNotEqual(
+            PageListChrome.backgroundToken.components(for: .dark),
+            EditorDesignTokens.Colors.editorBackground.components(for: .dark)
+        )
+        XCTAssertNotEqual(
+            SidebarChrome.backgroundToken.components(for: .dark),
+            PageListChrome.backgroundToken.components(for: .dark)
+        )
+        XCTAssertEqual(CompactChrome.backgroundToken, PageListChrome.backgroundToken)
+        XCTAssertEqual(CompactLibraryChrome.backgroundToken, EditorDesignTokens.Colors.appBackground)
+    }
+
     func testCompactProgrammaticPagePushDisablesDefaultNavigationAnimation() {
         XCTAssertTrue(CompactPagePushAnimationPolicy.disablesProgrammaticPushAnimation)
     }
@@ -1042,6 +1093,22 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorOpacity, 0.38)
         XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorThickness, 1.5)
         XCTAssertEqual(TableBlockChrome.selectorSelectedIndicatorInset, 10)
+    }
+
+    func testSpecialBlockChromeUsesSemanticAdaptiveBackgroundTokens() {
+        XCTAssertEqual(SpecialBlockSurfaceChrome.codeBackgroundToken, EditorDesignTokens.Colors.codeBlockBackground)
+        XCTAssertEqual(SpecialBlockSurfaceChrome.calloutBackgroundToken, EditorDesignTokens.Colors.calloutBackground)
+        XCTAssertEqual(SpecialBlockSurfaceChrome.quoteBackgroundToken, EditorDesignTokens.Colors.quoteBackground)
+        XCTAssertEqual(SpecialBlockSurfaceChrome.attachmentBackgroundToken, EditorDesignTokens.Colors.attachmentBackground)
+        XCTAssertEqual(SpecialBlockSurfaceChrome.drawingCanvasBackgroundToken, EditorDesignTokens.Colors.drawingCanvasBackground)
+        XCTAssertEqual(TableBlockChrome.headerBackgroundToken, EditorDesignTokens.Colors.tableHeaderBackground)
+        XCTAssertEqual(StatusChrome.warningTextToken, EditorDesignTokens.Colors.warningText)
+        XCTAssertEqual(StatusChrome.warningFillToken, EditorDesignTokens.Colors.warningFill)
+        XCTAssertEqual(StatusChrome.warningStrokeToken, EditorDesignTokens.Colors.warningStroke)
+        XCTAssertEqual(ConflictDiffChrome.addedTextToken, EditorDesignTokens.Colors.successText)
+        XCTAssertEqual(ConflictDiffChrome.addedFillToken, EditorDesignTokens.Colors.successFill)
+        XCTAssertEqual(ConflictDiffChrome.removedTextToken, EditorDesignTokens.Colors.danger)
+        XCTAssertEqual(ConflictDiffChrome.removedFillToken, EditorDesignTokens.Colors.dangerFill)
     }
 
     func testTableInsertControlChromeKeepsExpandedPlusInsideGridEdge() {
@@ -1936,7 +2003,10 @@ final class EditorBlockChromeTests: XCTestCase {
                 .toggle,
                 .divider,
                 .heading2,
-                .heading3
+                .heading3,
+                .heading4,
+                .heading5,
+                .heading6
             ]
         )
         XCTAssertEqual(actions.compactMap(\.inlineFormat), [.bold, .italic, .strikethrough, .code])
@@ -1946,6 +2016,9 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertTrue(actions.contains(.dismissKeyboard))
 
         let labels = Set(actions.map(\.accessibilityLabel))
+        XCTAssertTrue(labels.contains("H4"))
+        XCTAssertTrue(labels.contains("H5"))
+        XCTAssertTrue(labels.contains("H6"))
         XCTAssertFalse(labels.contains("下划线"))
         XCTAssertFalse(labels.contains("颜色"))
         XCTAssertFalse(labels.contains("高亮"))
@@ -2675,15 +2748,17 @@ final class EditorBlockChromeTests: XCTestCase {
 
     private func assertColor(
         _ token: EditorColorToken,
+        scheme: EditorThemeScheme = .light,
         red: Int,
         green: Int,
         blue: Int,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        XCTAssertEqual(token.red, Double(red) / 255, accuracy: 0.0001, file: file, line: line)
-        XCTAssertEqual(token.green, Double(green) / 255, accuracy: 0.0001, file: file, line: line)
-        XCTAssertEqual(token.blue, Double(blue) / 255, accuracy: 0.0001, file: file, line: line)
+        let components = token.components(for: scheme)
+        XCTAssertEqual(components.red, Double(red) / 255, accuracy: 0.0001, file: file, line: line)
+        XCTAssertEqual(components.green, Double(green) / 255, accuracy: 0.0001, file: file, line: line)
+        XCTAssertEqual(components.blue, Double(blue) / 255, accuracy: 0.0001, file: file, line: line)
     }
 
     func testCompactLibraryNavigationRoutesRowsByCollectionAndIncludesDiary() {

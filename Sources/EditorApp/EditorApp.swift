@@ -437,13 +437,13 @@ private struct ShortcutKeyCapsule: View {
 
 private enum SettingsChrome {
     static let backgroundColor = EditorDesignTokens.Colors.appBackground.color
-    static let surfaceColor = Color.white.opacity(0.94)
-    static let subtleControlColor = Color(red: 0.952, green: 0.953, blue: 0.948)
-    static let keycapColor = Color(red: 0.982, green: 0.982, blue: 0.976)
+    static let surfaceColor = EditorDesignTokens.Colors.elevatedSurface.color.opacity(0.94)
+    static let subtleControlColor = EditorDesignTokens.Colors.controlBackground.color
+    static let keycapColor = EditorDesignTokens.Colors.controlBackgroundSubtle.color
     static let borderColor = EditorDesignTokens.Colors.border.color.opacity(0.80)
-    static let keyBorderColor = Color(red: 0.835, green: 0.842, blue: 0.850)
+    static let keyBorderColor = EditorDesignTokens.Colors.border.color
     static let recordingColor = EditorDesignTokens.Colors.accent.color
-    static let dangerColor = Color(red: 0.78, green: 0.12, blue: 0.16)
+    static let dangerColor = EditorDesignTokens.Colors.danger.color
 }
 
 private struct ShortcutCaptureHost: NSViewRepresentable {

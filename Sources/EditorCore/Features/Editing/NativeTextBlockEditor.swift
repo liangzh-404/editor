@@ -911,11 +911,34 @@ enum NativeTextCursorChrome {
     static var nsColor: NSColor {
         EditorDesignTokens.Colors.accent.nsColor
     }
+
+    static func nsColor(for scheme: EditorThemeScheme) -> NSColor {
+        EditorDesignTokens.Colors.accent.nsColor(for: scheme)
+    }
 #elseif os(iOS)
     static var uiColor: UIColor {
         EditorDesignTokens.Colors.accent.uiColor
     }
+
+    static func uiColor(for scheme: EditorThemeScheme) -> UIColor {
+        EditorDesignTokens.Colors.accent.uiColor(for: scheme)
+    }
 #endif
+}
+
+enum NativeInlineMarkdownStyleChrome {
+    static let inlineCodeBackgroundToken = EditorDesignTokens.Colors.inlineCodeBackground
+}
+
+enum NativeCodeSyntaxHighlightChrome {
+    static func colors(for scheme: EditorThemeScheme) -> HighlightColors {
+        switch scheme {
+        case .light:
+            return .light(.xcode)
+        case .dark:
+            return .dark(.xcode)
+        }
+    }
 }
 
 enum NativeTextKeyboardRestorePolicy {
@@ -1181,7 +1204,7 @@ struct NativeTextBlockEditor: View {
             if showsPlaceholder {
                 Text("按 \"/\" 快速操作")
                     .font(placeholderFont)
-                    .foregroundStyle(.secondary.opacity(0.72))
+                    .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
 #if os(iOS)
                     .padding(.top, NativeTextEditorLayout.placeholderTopPadding)
 #else
@@ -1856,11 +1879,14 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             }
 
             let baseAttributes = baseTextAttributes
-            codeSyntaxHighlightTask = Task { [weak self, weak textView, codeSyntaxHighlighter] in
+            let colors = NativeCodeSyntaxHighlightChrome.colors(
+                for: EditorThemeScheme(appearance: textView.effectiveAppearance)
+            )
+            codeSyntaxHighlightTask = Task { [weak self, weak textView, codeSyntaxHighlighter, colors] in
                 do {
                     let highlighted = try await codeSyntaxHighlighter.attributedText(
                         code,
-                        colors: .light(.xcode)
+                        colors: colors
                     )
                     let highlightedString = try NSAttributedString(highlighted, including: \.appKit)
                     await MainActor.run { [weak self, weak textView] in
@@ -1927,7 +1953,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             case .code:
                 return [
                     .font: NSFont.monospacedSystemFont(ofSize: parent.nsFont.pointSize, weight: .regular),
-                    .backgroundColor: NSColor.textBackgroundColor.withAlphaComponent(0.86)
+                    .backgroundColor: NativeInlineMarkdownStyleChrome.inlineCodeBackgroundToken.nsColor
                 ]
             case .link:
                 return [
@@ -3193,11 +3219,14 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             }
 
             let baseAttributes = baseTextAttributes
-            codeSyntaxHighlightTask = Task { [weak self, weak textView, codeSyntaxHighlighter] in
+            let colors = NativeCodeSyntaxHighlightChrome.colors(
+                for: textView.traitCollection.userInterfaceStyle == .dark ? .dark : .light
+            )
+            codeSyntaxHighlightTask = Task { [weak self, weak textView, codeSyntaxHighlighter, colors] in
                 do {
                     let highlighted = try await codeSyntaxHighlighter.attributedText(
                         code,
-                        colors: .light(.xcode)
+                        colors: colors
                     )
                     let highlightedString = try NSAttributedString(highlighted, including: \.uiKit)
                     await MainActor.run { [weak self, weak textView] in
@@ -3262,7 +3291,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             case .code:
                 return [
                     .font: UIFont.monospacedSystemFont(ofSize: parent.uiFont.pointSize, weight: .regular),
-                    .backgroundColor: UIColor.secondarySystemBackground
+                    .backgroundColor: NativeInlineMarkdownStyleChrome.inlineCodeBackgroundToken.uiColor
                 ]
             case .link:
                 return [

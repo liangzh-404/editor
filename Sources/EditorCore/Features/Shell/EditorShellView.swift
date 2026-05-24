@@ -9,33 +9,120 @@ import AppKit
 import UIKit
 #endif
 
-struct EditorColorToken: Equatable, Sendable {
+enum EditorThemeScheme: Equatable, Sendable {
+    case light
+    case dark
+}
+
+struct EditorColorComponents: Equatable, Sendable {
     let red: Double
     let green: Double
     let blue: Double
 
-    var color: Color {
-        Color(red: red, green: green, blue: blue)
-    }
-
-#if os(macOS)
-    var nsColor: NSColor {
-        NSColor(red: red, green: green, blue: blue, alpha: 1)
-    }
-#elseif os(iOS)
-    var uiColor: UIColor {
-        UIColor(red: red, green: green, blue: blue, alpha: 1)
-    }
-#endif
-
-    static func hex(_ red: Int, _ green: Int, _ blue: Int) -> EditorColorToken {
-        EditorColorToken(
+    static func hex(_ red: Int, _ green: Int, _ blue: Int) -> EditorColorComponents {
+        EditorColorComponents(
             red: Double(red) / 255,
             green: Double(green) / 255,
             blue: Double(blue) / 255
         )
     }
 }
+
+struct EditorColorToken: Equatable, Sendable {
+    private let lightComponents: EditorColorComponents
+    private let darkComponents: EditorColorComponents
+
+    var red: Double {
+        lightComponents.red
+    }
+
+    var green: Double {
+        lightComponents.green
+    }
+
+    var blue: Double {
+        lightComponents.blue
+    }
+
+    var color: Color {
+#if os(macOS)
+        Color(nsColor)
+#elseif os(iOS)
+        Color(uiColor)
+#else
+        Color(red: red, green: green, blue: blue)
+#endif
+    }
+
+#if os(macOS)
+    var nsColor: NSColor {
+        NSColor(name: nil) { appearance in
+            nsColor(for: EditorThemeScheme(appearance: appearance))
+        }
+    }
+
+    func nsColor(for scheme: EditorThemeScheme) -> NSColor {
+        let components = components(for: scheme)
+        return NSColor(
+            red: components.red,
+            green: components.green,
+            blue: components.blue,
+            alpha: 1
+        )
+    }
+#elseif os(iOS)
+    var uiColor: UIColor {
+        UIColor { traits in
+            uiColor(for: traits.userInterfaceStyle == .dark ? .dark : .light)
+        }
+    }
+
+    func uiColor(for scheme: EditorThemeScheme) -> UIColor {
+        let components = components(for: scheme)
+        return UIColor(
+            red: components.red,
+            green: components.green,
+            blue: components.blue,
+            alpha: 1
+        )
+    }
+#endif
+
+    func components(for scheme: EditorThemeScheme) -> EditorColorComponents {
+        switch scheme {
+        case .light:
+            return lightComponents
+        case .dark:
+            return darkComponents
+        }
+    }
+
+    static func hex(_ red: Int, _ green: Int, _ blue: Int) -> EditorColorToken {
+        EditorColorToken(
+            lightComponents: .hex(red, green, blue),
+            darkComponents: .hex(red, green, blue)
+        )
+    }
+
+    static func hex(
+        light: (Int, Int, Int),
+        dark: (Int, Int, Int)
+    ) -> EditorColorToken {
+        EditorColorToken(
+            lightComponents: .hex(light.0, light.1, light.2),
+            darkComponents: .hex(dark.0, dark.1, dark.2)
+        )
+    }
+}
+
+#if os(macOS)
+extension EditorThemeScheme {
+    init(appearance: NSAppearance) {
+        let match = appearance.bestMatch(from: [.darkAqua, .aqua])
+        self = match == .darkAqua ? .dark : .light
+    }
+}
+#endif
 
 struct EditorShadowToken: Equatable, Sendable {
     let color: EditorColorToken
@@ -51,16 +138,122 @@ struct EditorShadowToken: Equatable, Sendable {
 
 enum EditorDesignTokens {
     enum Colors {
-        static let appBackground = EditorColorToken.hex(0xF7, 0xF7, 0xF5)
-        static let sidebarBackground = EditorColorToken.hex(0xF2, 0xF2, 0xEF)
-        static let documentListBackground = EditorColorToken.hex(0xF8, 0xF8, 0xF6)
-        static let editorBackground = EditorColorToken.hex(0xFF, 0xFF, 0xFF)
-        static let primaryText = EditorColorToken.hex(0x22, 0x21, 0x1F)
-        static let secondaryText = EditorColorToken.hex(0x5F, 0x61, 0x66)
-        static let tertiaryText = EditorColorToken.hex(0x8B, 0x8D, 0x91)
-        static let border = EditorColorToken.hex(0xE6, 0xE5, 0xE1)
-        static let accent = EditorColorToken.hex(0xE5, 0x45, 0x4F)
-        static let shadow = EditorColorToken.hex(0x1E, 0x19, 0x12)
+        static let appBackground = EditorColorToken.hex(
+            light: (0xF7, 0xF7, 0xF5),
+            dark: (0x15, 0x15, 0x14)
+        )
+        static let sidebarBackground = EditorColorToken.hex(
+            light: (0xF2, 0xF2, 0xEF),
+            dark: (0x1D, 0x1B, 0x19)
+        )
+        static let documentListBackground = EditorColorToken.hex(
+            light: (0xF8, 0xF8, 0xF6),
+            dark: (0x18, 0x18, 0x17)
+        )
+        static let editorBackground = EditorColorToken.hex(
+            light: (0xFF, 0xFF, 0xFF),
+            dark: (0x10, 0x11, 0x11)
+        )
+        static let primaryText = EditorColorToken.hex(
+            light: (0x22, 0x21, 0x1F),
+            dark: (0xEF, 0xED, 0xEA)
+        )
+        static let secondaryText = EditorColorToken.hex(
+            light: (0x5F, 0x61, 0x66),
+            dark: (0xB8, 0xB2, 0xAA)
+        )
+        static let tertiaryText = EditorColorToken.hex(
+            light: (0x8B, 0x8D, 0x91),
+            dark: (0x81, 0x7C, 0x73)
+        )
+        static let border = EditorColorToken.hex(
+            light: (0xE6, 0xE5, 0xE1),
+            dark: (0x37, 0x32, 0x2C)
+        )
+        static let accent = EditorColorToken.hex(
+            light: (0xE5, 0x45, 0x4F),
+            dark: (0xFF, 0x63, 0x6E)
+        )
+        static let shadow = EditorColorToken.hex(
+            light: (0x1E, 0x19, 0x12),
+            dark: (0x00, 0x00, 0x00)
+        )
+        static let elevatedSurface = EditorColorToken.hex(
+            light: (0xFF, 0xFF, 0xFF),
+            dark: (0x20, 0x1F, 0x1D)
+        )
+        static let controlBackground = EditorColorToken.hex(
+            light: (0xF3, 0xF3, 0xF0),
+            dark: (0x26, 0x24, 0x21)
+        )
+        static let controlBackgroundSubtle = EditorColorToken.hex(
+            light: (0xFA, 0xFA, 0xF8),
+            dark: (0x1B, 0x1B, 0x1A)
+        )
+        static let codeBlockBackground = EditorColorToken.hex(
+            light: (0xF6, 0xF7, 0xF8),
+            dark: (0x1A, 0x1C, 0x1E)
+        )
+        static let calloutBackground = EditorColorToken.hex(
+            light: (0xF6, 0xF7, 0xF8),
+            dark: (0x1B, 0x20, 0x26)
+        )
+        static let quoteBackground = EditorColorToken.hex(
+            light: (0xE6, 0xE5, 0xE1),
+            dark: (0x23, 0x20, 0x1B)
+        )
+        static let attachmentBackground = EditorColorToken.hex(
+            light: (0xF6, 0xF7, 0xF8),
+            dark: (0x1B, 0x1D, 0x1F)
+        )
+        static let tableHeaderBackground = EditorColorToken.hex(
+            light: (0xE6, 0xE5, 0xE1),
+            dark: (0x21, 0x20, 0x1E)
+        )
+        static let drawingCanvasBackground = EditorColorToken.hex(
+            light: (0xFB, 0xFC, 0xFD),
+            dark: (0x18, 0x19, 0x1A)
+        )
+        static let inlineCodeBackground = EditorColorToken.hex(
+            light: (0xF4, 0xF3, 0xF1),
+            dark: (0x27, 0x25, 0x22)
+        )
+        static let searchHighlightFill = EditorColorToken.hex(
+            light: (0xFF, 0xD6, 0x42),
+            dark: (0xF4, 0xBC, 0x44)
+        )
+        static let searchHighlightStroke = EditorColorToken.hex(
+            light: (0xDB, 0x8A, 0x0A),
+            dark: (0xFF, 0xD1, 0x63)
+        )
+        static let warningText = EditorColorToken.hex(
+            light: (0xA8, 0x5B, 0x00),
+            dark: (0xFF, 0xB8, 0x4D)
+        )
+        static let warningFill = EditorColorToken.hex(
+            light: (0xFF, 0xF8, 0xEA),
+            dark: (0x33, 0x25, 0x13)
+        )
+        static let warningStroke = EditorColorToken.hex(
+            light: (0xF0, 0xC2, 0x70),
+            dark: (0x7A, 0x58, 0x22)
+        )
+        static let successText = EditorColorToken.hex(
+            light: (0x1F, 0x7A, 0x3B),
+            dark: (0x7F, 0xDA, 0x8A)
+        )
+        static let successFill = EditorColorToken.hex(
+            light: (0xEA, 0xF7, 0xEE),
+            dark: (0x14, 0x28, 0x1A)
+        )
+        static let danger = EditorColorToken.hex(
+            light: (0xC7, 0x1F, 0x29),
+            dark: (0xFF, 0x7A, 0x83)
+        )
+        static let dangerFill = EditorColorToken.hex(
+            light: (0xFE, 0xEC, 0xEE),
+            dark: (0x32, 0x18, 0x1C)
+        )
     }
 
     enum Typography {
@@ -1693,7 +1886,7 @@ private struct MobileQuickCreateButton: View {
                     Circle()
                         .fill(MobileActionChrome.accentColor)
                         .shadow(
-                            color: Color.black.opacity(MobileQuickCreateButtonChrome.shadowOpacity),
+                            color: EditorDesignTokens.Colors.shadow.color.opacity(MobileQuickCreateButtonChrome.shadowOpacity),
                             radius: MobileQuickCreateButtonChrome.shadowRadius,
                             x: 0,
                             y: MobileQuickCreateButtonChrome.shadowYOffset
@@ -2292,10 +2485,7 @@ enum AttachmentImageSelectionChrome {
     static let imageBorderBlue = EditorDesignTokens.Colors.border.blue
 
     static func imageBorderColor(isSelected: Bool) -> Color {
-        if isSelected {
-            return EditorDesignTokens.Colors.border.color.opacity(imageBorderOpacity(isSelected: true))
-        }
-        return Color.black.opacity(imageBorderOpacity(isSelected: false))
+        EditorDesignTokens.Colors.border.color.opacity(imageBorderOpacity(isSelected: isSelected))
     }
 }
 
@@ -2442,6 +2632,29 @@ enum TextEditableBlockChromePolicy {
             return EditorBlockChrome.listBackgroundOpacity
         }
     }
+}
+
+enum SpecialBlockSurfaceChrome {
+    static let codeBackgroundToken = EditorDesignTokens.Colors.codeBlockBackground
+    static let calloutBackgroundToken = EditorDesignTokens.Colors.calloutBackground
+    static let quoteBackgroundToken = EditorDesignTokens.Colors.quoteBackground
+    static let attachmentBackgroundToken = EditorDesignTokens.Colors.attachmentBackground
+    static let drawingCanvasBackgroundToken = EditorDesignTokens.Colors.drawingCanvasBackground
+}
+
+enum StatusChrome {
+    static let warningTextToken = EditorDesignTokens.Colors.warningText
+    static let warningFillToken = EditorDesignTokens.Colors.warningFill
+    static let warningStrokeToken = EditorDesignTokens.Colors.warningStroke
+}
+
+enum ConflictDiffChrome {
+    static let unchangedTextToken = EditorDesignTokens.Colors.secondaryText
+    static let unchangedFillToken = EditorDesignTokens.Colors.controlBackgroundSubtle
+    static let removedTextToken = EditorDesignTokens.Colors.danger
+    static let removedFillToken = EditorDesignTokens.Colors.dangerFill
+    static let addedTextToken = EditorDesignTokens.Colors.successText
+    static let addedFillToken = EditorDesignTokens.Colors.successFill
 }
 
 enum ListMarkerColumnAlignmentResolver {
@@ -2852,16 +3065,17 @@ enum MobileFormatPaletteActionResolver {
 }
 
 enum CompactChrome {
-    static let backgroundRed: Double = PageListChrome.backgroundRed
-    static let backgroundGreen: Double = PageListChrome.backgroundGreen
-    static let backgroundBlue: Double = PageListChrome.backgroundBlue
+    static let backgroundToken = PageListChrome.backgroundToken
+    static let backgroundRed: Double = backgroundToken.red
+    static let backgroundGreen: Double = backgroundToken.green
+    static let backgroundBlue: Double = backgroundToken.blue
 
     static var backgroundYellowBias: Double {
         max(0, ((backgroundRed + backgroundGreen) / 2) - backgroundBlue)
     }
 
     static var backgroundColor: Color {
-        Color(red: backgroundRed, green: backgroundGreen, blue: backgroundBlue)
+        backgroundToken.color
     }
 }
 
@@ -2873,16 +3087,17 @@ enum CompactDocumentListChrome {
 }
 
 enum PageListChrome {
-    static let backgroundRed: Double = EditorDesignTokens.Colors.documentListBackground.red
-    static let backgroundGreen: Double = EditorDesignTokens.Colors.documentListBackground.green
-    static let backgroundBlue: Double = EditorDesignTokens.Colors.documentListBackground.blue
+    static let backgroundToken = EditorDesignTokens.Colors.documentListBackground
+    static let backgroundRed: Double = backgroundToken.red
+    static let backgroundGreen: Double = backgroundToken.green
+    static let backgroundBlue: Double = backgroundToken.blue
     static let rowDividerOpacity: Double = 0.82
     static let selectedFillOpacity: Double = 0.055
     static let batchFillOpacity: Double = 0.10
     static let batchBorderOpacity: Double = 0.28
 
     static var backgroundColor: Color {
-        Color(red: backgroundRed, green: backgroundGreen, blue: backgroundBlue)
+        backgroundToken.color
     }
 
     static var dividerColor: Color {
@@ -2952,6 +3167,7 @@ enum TableBlockChrome {
     static let selectorSelectedIndicatorOpacity: Double = 0.38
     static let selectorSelectedIndicatorThickness: Double = 1.5
     static let selectorSelectedIndicatorInset: Double = 10
+    static let headerBackgroundToken = EditorDesignTokens.Colors.tableHeaderBackground
 }
 
 enum TableBlockDefaultGridResolver {
@@ -3792,10 +4008,10 @@ private struct MobileFormatPalette: View {
         .background(.regularMaterial)
         .overlay(
             RoundedRectangle(cornerRadius: MobileFormatPaletteChrome.cardCornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.74), lineWidth: 1)
+                .stroke(EditorDesignTokens.Colors.border.color.opacity(0.74), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: MobileFormatPaletteChrome.cardCornerRadius, style: .continuous))
-        .shadow(color: Color.black.opacity(0.14), radius: 22, x: 0, y: 8)
+        .shadow(color: EditorDesignTokens.Colors.shadow.color.opacity(0.14), radius: 22, x: 0, y: 8)
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .offset(y: settledOffset)
@@ -3853,13 +4069,13 @@ private struct MobileFormatPalette: View {
                         .font(.system(size: 20, weight: .semibold))
                 }
             }
-            .foregroundStyle(isSelected ? MobileActionChrome.accentColor : Color.primary.opacity(isEnabled ? 0.94 : 0.26))
+            .foregroundStyle(isSelected ? MobileActionChrome.accentColor : EditorDesignTokens.Colors.primaryText.color.opacity(isEnabled ? 0.94 : 0.26))
             .frame(maxWidth: .infinity)
             .frame(height: MobileFormatPaletteChrome.buttonHeight)
             .background(paletteButtonBackground(isEnabled: isEnabled, isSelected: isSelected))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.white.opacity(isEnabled ? 0.52 : 0.20), lineWidth: 1)
+                    .stroke(EditorDesignTokens.Colors.border.color.opacity(isEnabled ? 0.52 : 0.20), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
@@ -3875,7 +4091,7 @@ private struct MobileFormatPalette: View {
             .fill(
                 isSelected
                     ? MobileActionChrome.accentColor.opacity(MobileActionChrome.selectedButtonFillOpacity)
-                    : Color.white.opacity(isEnabled ? 0.78 : 0.34)
+                    : EditorDesignTokens.Colors.elevatedSurface.color.opacity(isEnabled ? 0.78 : 0.34)
             )
     }
 
@@ -4014,7 +4230,7 @@ private struct MobileBlockSelectionToolbar: View {
         .tint(MobileActionChrome.accentColor)
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(Color.black.opacity(0.08))
+                .fill(EditorDesignTokens.Colors.border.color.opacity(0.72))
                 .frame(height: 0.5)
         }
         .accessibilityIdentifier("editor.mobile-selection-toolbar")
@@ -5122,7 +5338,7 @@ private struct CompactPageDestination: View {
                 }
             }
         } else {
-            Color.white
+            EditorDesignTokens.Colors.editorBackground.color
                 .navigationTitle("编辑器")
         }
     }
@@ -5307,12 +5523,14 @@ enum SidebarChrome {
     static let selectedStrokeOpacity: Double = 0.025
     static let headerBadgeSize: Double = 30
     static let headerBadgeCornerRadius: Double = 8
-    static let backgroundRed: Double = EditorDesignTokens.Colors.sidebarBackground.red
-    static let backgroundGreen: Double = EditorDesignTokens.Colors.sidebarBackground.green
-    static let backgroundBlue: Double = EditorDesignTokens.Colors.sidebarBackground.blue
-    static let selectedFillRed: Double = EditorDesignTokens.Colors.border.red
-    static let selectedFillGreen: Double = EditorDesignTokens.Colors.border.green
-    static let selectedFillBlue: Double = EditorDesignTokens.Colors.border.blue
+    static let backgroundToken = EditorDesignTokens.Colors.sidebarBackground
+    static let selectedFillToken = EditorDesignTokens.Colors.border
+    static let backgroundRed: Double = backgroundToken.red
+    static let backgroundGreen: Double = backgroundToken.green
+    static let backgroundBlue: Double = backgroundToken.blue
+    static let selectedFillRed: Double = selectedFillToken.red
+    static let selectedFillGreen: Double = selectedFillToken.green
+    static let selectedFillBlue: Double = selectedFillToken.blue
 
     static var backgroundYellowBias: Double {
         max(0, ((backgroundRed + backgroundGreen) / 2) - backgroundBlue)
@@ -5323,11 +5541,11 @@ enum SidebarChrome {
     }
 
     static var backgroundColor: Color {
-        Color(red: backgroundRed, green: backgroundGreen, blue: backgroundBlue)
+        backgroundToken.color
     }
 
     static var selectedFillColor: Color {
-        Color(red: selectedFillRed, green: selectedFillGreen, blue: selectedFillBlue)
+        selectedFillToken.color
     }
 
     static var selectedForegroundColor: Color {
@@ -7676,7 +7894,7 @@ private struct PageRow: View {
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
-                                .background(Color.secondary.opacity(0.10))
+                                .background(EditorDesignTokens.Colors.border.color.opacity(0.42))
                                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                         }
                     }
@@ -7981,7 +8199,7 @@ private struct PageRowImageAttachmentThumbnail: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.secondary.opacity(0.08))
+                    .background(SpecialBlockSurfaceChrome.attachmentBackgroundToken.color)
             }
         }
         .frame(width: 112, height: 72)
@@ -8037,12 +8255,12 @@ private struct PageRowFileAttachmentPill: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
-                .background(Color.secondary.opacity(0.12))
+                .background(EditorDesignTokens.Colors.border.color.opacity(0.42))
                 .clipShape(Capsule())
         }
         .frame(width: 108, height: 72, alignment: .leading)
         .padding(.horizontal, 10)
-        .background(Color.secondary.opacity(0.055))
+        .background(SpecialBlockSurfaceChrome.attachmentBackgroundToken.color)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .accessibilityLabel("文件附件")
         .accessibilityValue(attachment.originalFilename)
@@ -8662,18 +8880,18 @@ private struct EditorCanvasView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(StatusChrome.warningTextToken.color)
 
                         Text(markdownImportStatusText)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(EditorDesignTokens.Colors.secondaryText.color)
                     }
                     .padding(.vertical, 6)
                     .padding(.horizontal, 8)
-                    .background(Color.orange.opacity(0.08))
+                    .background(StatusChrome.warningFillToken.color)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+                            .stroke(StatusChrome.warningStrokeToken.color, lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .accessibilityIdentifier("editor.markdown-import-status")
@@ -9700,7 +9918,7 @@ private struct EditorCanvasView: View {
         if isMobileOutlinePresented {
             GeometryReader { proxy in
                 ZStack(alignment: .trailing) {
-                    Color.black.opacity(0.10)
+                    EditorDesignTokens.Colors.shadow.color.opacity(0.22)
                         .ignoresSafeArea()
                         .onTapGesture {
                             closeMobileOutline()
@@ -9722,9 +9940,9 @@ private struct EditorCanvasView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .stroke(Color.white.opacity(0.68), lineWidth: 1)
+                            .stroke(EditorDesignTokens.Colors.border.color.opacity(0.68), lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.18), radius: 28, x: -10, y: 0)
+                    .shadow(color: EditorDesignTokens.Colors.shadow.color.opacity(0.18), radius: 28, x: -10, y: 0)
                     .padding(.vertical, 16)
                     .padding(.trailing, 10)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -11883,7 +12101,7 @@ private struct MobileOutlineDrawer: View {
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 34, height: 34)
-                        .background(Color.black.opacity(0.045))
+                        .background(EditorDesignTokens.Colors.controlBackground.color.opacity(0.72))
                         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                         .contentShape(Rectangle())
                 }
@@ -11903,7 +12121,7 @@ private struct MobileOutlineDrawer: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
-                .background(Color.black.opacity(0.035))
+                .background(EditorDesignTokens.Colors.controlBackgroundSubtle.color)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("editor.mobile-outline.empty")
@@ -11934,7 +12152,7 @@ private struct MobileOutlineDrawer: View {
                                 .padding(.leading, CGFloat(max(item.level - 1, 0)) * 14)
                                 .padding(.vertical, 9)
                                 .padding(.horizontal, 10)
-                                .background(Color.black.opacity(0.035))
+                                .background(EditorDesignTokens.Colors.controlBackgroundSubtle.color)
                                 .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                                 .contentShape(Rectangle())
                             }
@@ -12110,7 +12328,7 @@ private struct ConflictResolutionRow: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(StatusChrome.warningTextToken.color)
                     .frame(width: 16)
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -12256,22 +12474,22 @@ private struct ConflictDiffView: View {
     private func foregroundColor(for kind: ConflictTextDiffSegmentKind) -> Color {
         switch kind {
         case .unchanged:
-            return .secondary
+            return ConflictDiffChrome.unchangedTextToken.color
         case .removed:
-            return .red
+            return ConflictDiffChrome.removedTextToken.color
         case .added:
-            return .green
+            return ConflictDiffChrome.addedTextToken.color
         }
     }
 
     private func backgroundColor(for kind: ConflictTextDiffSegmentKind) -> Color {
         switch kind {
         case .unchanged:
-            return Color.secondary.opacity(0.05)
+            return ConflictDiffChrome.unchangedFillToken.color
         case .removed:
-            return Color.red.opacity(0.10)
+            return ConflictDiffChrome.removedFillToken.color
         case .added:
-            return Color.green.opacity(0.12)
+            return ConflictDiffChrome.addedFillToken.color
         }
     }
 }
@@ -12706,15 +12924,15 @@ enum SearchHighlightOverlayPolicy {
     static let rectCornerRadius: CGFloat = 3
 
     static var rowFillColor: Color {
-        Color(red: 1.0, green: 0.84, blue: 0.26).opacity(0.24)
+        EditorDesignTokens.Colors.searchHighlightFill.color.opacity(0.24)
     }
 
     static var rectFillColor: Color {
-        Color(red: 1.0, green: 0.84, blue: 0.26).opacity(0.30)
+        EditorDesignTokens.Colors.searchHighlightFill.color.opacity(0.30)
     }
 
     static var rectStrokeColor: Color {
-        Color(red: 0.86, green: 0.54, blue: 0.04).opacity(0.56)
+        EditorDesignTokens.Colors.searchHighlightStroke.color.opacity(0.56)
     }
 
     static func highlightsWholeRow(rectCount: Int) -> Bool {
@@ -13470,10 +13688,10 @@ private struct BlockRowView: View {
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
-            .background(Color(red: 0.965, green: 0.968, blue: 0.972))
+            .background(SpecialBlockSurfaceChrome.codeBackgroundToken.color)
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+                    .stroke(EditorDesignTokens.Colors.border.color, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .accessibilityElement(children: .contain)
@@ -13508,10 +13726,10 @@ private struct BlockRowView: View {
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
-            .background(Color(red: 0.964, green: 0.968, blue: 0.974))
+            .background(SpecialBlockSurfaceChrome.calloutBackgroundToken.color)
             .overlay(
                 RoundedRectangle(cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius))
-                    .stroke(Color.secondary.opacity(0.10), lineWidth: 1)
+                    .stroke(EditorDesignTokens.Colors.border.color.opacity(0.75), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius)))
             .accessibilityElement(children: .contain)
@@ -13531,7 +13749,7 @@ private struct BlockRowView: View {
             .padding(.vertical, 8)
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-            .background(EditorDesignTokens.Colors.border.color.opacity(0.44))
+            .background(SpecialBlockSurfaceChrome.quoteBackgroundToken.color)
             .clipShape(RoundedRectangle(cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius), style: .continuous))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(descriptor.accessibilityLabel)
@@ -14487,7 +14705,7 @@ private struct DragPreviewBlock: View {
     }
 
     private var invisibleSpacer: some View {
-        Color.white.opacity(layout.invisibleSpacerOpacity)
+        EditorDesignTokens.Colors.editorBackground.color.opacity(layout.invisibleSpacerOpacity)
     }
 
     private var previewText: String {
@@ -14828,7 +15046,7 @@ private struct StructuredTableBlockEditor: View {
             return MobileActionChrome.accentColor.opacity(0.045)
         }
         return rowIndex == 0
-            ? EditorDesignTokens.Colors.border.color.opacity(0.18)
+            ? TableBlockChrome.headerBackgroundToken.color
             : EditorDesignTokens.Colors.editorBackground.color
     }
 
@@ -15009,7 +15227,7 @@ private struct TableInsertControl: View {
                 width: CGFloat(TableBlockChrome.primaryControlDiameter),
                 height: CGFloat(TableBlockChrome.primaryControlDiameter)
             )
-            .background(Color.white.opacity(0.01))
+            .background(EditorDesignTokens.Colors.editorBackground.color.opacity(0.01))
             .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
@@ -15519,10 +15737,10 @@ private struct BlockReferenceBlockRow: View {
             }
             .padding(.vertical, 7)
             .padding(.horizontal, 8)
-            .background(Color.secondary.opacity(0.06))
+            .background(EditorDesignTokens.Colors.controlBackgroundSubtle.color)
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+                    .stroke(EditorDesignTokens.Colors.border.color.opacity(0.62), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
@@ -15780,7 +15998,7 @@ private struct DrawingBlockRow: View {
                 onDataChange(nextDocument.dataRepresentation())
             }
             .frame(minHeight: 220)
-            .background(Color(red: 0.985, green: 0.988, blue: 0.992))
+            .background(SpecialBlockSurfaceChrome.drawingCanvasBackgroundToken.color)
             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -16268,16 +16486,16 @@ private struct AttachmentBlockRow: View {
             } else if diagnosticReason?.showsWarningIcon == true || isPreviewFailed {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.title3)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(StatusChrome.warningTextToken.color)
                     .frame(width: 52, height: 40)
-                    .background(Color.orange.opacity(0.08))
+                    .background(StatusChrome.warningFillToken.color)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .accessibilityHidden(true)
             } else if isPreviewPending || diagnosticReason == .waitingForSync {
                 ProgressView()
                     .controlSize(.small)
                     .frame(width: 52, height: 40)
-                    .background(Color.white.opacity(0.65))
+                    .background(EditorDesignTokens.Colors.elevatedSurface.color.opacity(0.65))
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .accessibilityLabel("正在生成附件预览")
                     .accessibilityIdentifier("editor.attachment.\(block.id).preview-pending")
@@ -16322,7 +16540,7 @@ private struct AttachmentBlockRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(red: 0.965, green: 0.968, blue: 0.972))
+        .background(SpecialBlockSurfaceChrome.attachmentBackgroundToken.color)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .accessibilityIdentifier(descriptor.accessibilityIdentifier)
         .accessibilityLabel(descriptor.accessibilityLabel)

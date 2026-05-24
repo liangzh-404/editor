@@ -344,17 +344,37 @@ final class NativeTextBlockEditorTests: XCTestCase {
 
     #if os(macOS)
     func testNativeTextCursorChromeUsesEditorAccentColor() {
-        XCTAssertEqual(NativeTextCursorChrome.nsColor.redComponent, EditorDesignTokens.Colors.accent.red, accuracy: 0.0001)
-        XCTAssertEqual(NativeTextCursorChrome.nsColor.greenComponent, EditorDesignTokens.Colors.accent.green, accuracy: 0.0001)
-        XCTAssertEqual(NativeTextCursorChrome.nsColor.blueComponent, EditorDesignTokens.Colors.accent.blue, accuracy: 0.0001)
+        let color = NativeTextCursorChrome.nsColor(for: .light)
+        XCTAssertEqual(color.redComponent, EditorDesignTokens.Colors.accent.components(for: .light).red, accuracy: 0.0001)
+        XCTAssertEqual(color.greenComponent, EditorDesignTokens.Colors.accent.components(for: .light).green, accuracy: 0.0001)
+        XCTAssertEqual(color.blueComponent, EditorDesignTokens.Colors.accent.components(for: .light).blue, accuracy: 0.0001)
+    }
+
+    func testNativeTextCursorChromeResolvesDarkAccentColor() {
+        let color = NativeTextCursorChrome.nsColor(for: .dark)
+        XCTAssertEqual(color.redComponent, EditorDesignTokens.Colors.accent.components(for: .dark).red, accuracy: 0.0001)
+        XCTAssertEqual(color.greenComponent, EditorDesignTokens.Colors.accent.components(for: .dark).green, accuracy: 0.0001)
+        XCTAssertEqual(color.blueComponent, EditorDesignTokens.Colors.accent.components(for: .dark).blue, accuracy: 0.0001)
     }
     #elseif os(iOS)
     func testNativeTextCursorChromeUsesEditorAccentColor() {
-        XCTAssertEqual(NativeTextCursorChrome.uiColor.cgColor.components?[0], EditorDesignTokens.Colors.accent.red, accuracy: 0.0001)
-        XCTAssertEqual(NativeTextCursorChrome.uiColor.cgColor.components?[1], EditorDesignTokens.Colors.accent.green, accuracy: 0.0001)
-        XCTAssertEqual(NativeTextCursorChrome.uiColor.cgColor.components?[2], EditorDesignTokens.Colors.accent.blue, accuracy: 0.0001)
+        let color = NativeTextCursorChrome.uiColor(for: .light)
+        XCTAssertEqual(color.cgColor.components?[0], EditorDesignTokens.Colors.accent.components(for: .light).red, accuracy: 0.0001)
+        XCTAssertEqual(color.cgColor.components?[1], EditorDesignTokens.Colors.accent.components(for: .light).green, accuracy: 0.0001)
+        XCTAssertEqual(color.cgColor.components?[2], EditorDesignTokens.Colors.accent.components(for: .light).blue, accuracy: 0.0001)
+    }
+
+    func testNativeTextCursorChromeResolvesDarkAccentColor() {
+        let color = NativeTextCursorChrome.uiColor(for: .dark)
+        XCTAssertEqual(color.cgColor.components?[0], EditorDesignTokens.Colors.accent.components(for: .dark).red, accuracy: 0.0001)
+        XCTAssertEqual(color.cgColor.components?[1], EditorDesignTokens.Colors.accent.components(for: .dark).green, accuracy: 0.0001)
+        XCTAssertEqual(color.cgColor.components?[2], EditorDesignTokens.Colors.accent.components(for: .dark).blue, accuracy: 0.0001)
     }
     #endif
+
+    func testNativeInlineMarkdownChromeUsesAdaptiveInlineCodeBackground() {
+        XCTAssertEqual(NativeInlineMarkdownStyleChrome.inlineCodeBackgroundToken, EditorDesignTokens.Colors.inlineCodeBackground)
+    }
 
     func testNativeTextKeyboardRestorePolicyDoesNotStealFocusAfterResponderTransfer() {
         XCTAssertTrue(

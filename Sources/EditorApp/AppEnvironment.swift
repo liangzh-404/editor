@@ -702,6 +702,6 @@ private struct AppStartupFailureView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.white)
+        .background(EditorDesignTokens.Colors.editorBackground.color)
     }
 }
