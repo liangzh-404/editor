@@ -1247,9 +1247,11 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             )
         } catch let timeout as CloudKitOperationTimeoutError {
             EditorLog.sync.error(
-                "cloudkit_incremental_fetch_timed_out operation=\(timeout.operationName, privacy: .public) timeout=\(timeout.timeout, privacy: .public) action=full_snapshot_fallback"
+                "cloudkit_incremental_fetch_timed_out operation=\(timeout.operationName, privacy: .public) timeout=\(timeout.timeout, privacy: .public) action=retry_from_scratch"
             )
-            fetchedChanges = try fullSnapshotRecordChangeSet(recordFetcher: recordFetcher)
+            fetchedChanges = try recordFetcher.fetchRecordChanges(
+                sinceServerChangeTokenData: nil
+            )
         }
         let recordsByType = fetchedChanges.recordsByType
         let pageRecords = currentGenerationRecords(recordsByType["PageRecord"] ?? [])
@@ -1276,21 +1278,6 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             fullSnapshotPageIDs: fullSnapshotPageIDs,
             deletedRecords: deletedRecords,
             serverChangeTokenData: fetchedChanges.serverChangeTokenData
-        )
-    }
-
-    private func fullSnapshotRecordChangeSet(
-        recordFetcher: CloudKitRecordFetching
-    ) throws -> CloudKitFetchedRecordChangeSet {
-        let recordsByType = try Dictionary(
-            uniqueKeysWithValues: Self.recordTypes.map { recordType in
-                (recordType, try recordFetcher.fetchRecords(recordType: recordType))
-            }
-        )
-        return CloudKitFetchedRecordChangeSet(
-            recordsByType: recordsByType,
-            deletedRecordIDsByType: [:],
-            serverChangeTokenData: nil
         )
     }
 

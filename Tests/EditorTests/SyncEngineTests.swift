@@ -1506,36 +1506,41 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(fetcher.fetchRecordsCalls, [])
     }
 
-    func testCloudKitPrivateDatabaseAdapterFallsBackToFullSnapshotWhenIncrementalFetchTimesOut() throws {
+    func testCloudKitPrivateDatabaseAdapterRetriesFromScratchWhenIncrementalFetchTimesOut() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
-        let fetcher = TimeoutThenFullSnapshotRecordFetcher(recordsByType: [
-            "WorkspaceRecord": [
-                makeRecord(type: "WorkspaceRecord", entityType: "workspace", entityID: "workspace-fallback") {
-                    $0["name"] = "Fallback Workspace" as CKRecordValue
-                }
+        let nextServerChangeTokenData = Data("next-token".utf8)
+        let fetcher = TimeoutThenScratchRecordChangeFetcher(
+            recordsByType: [
+                "WorkspaceRecord": [
+                    makeRecord(type: "WorkspaceRecord", entityType: "workspace", entityID: "workspace-fallback") {
+                        $0["name"] = "Fallback Workspace" as CKRecordValue
+                    }
+                ],
+                "PageRecord": [
+                    makeRecord(type: "PageRecord", entityType: "page", entityID: "page-fallback") {
+                        $0["workspaceID"] = "workspace-fallback" as CKRecordValue
+                        $0["title"] = "Fallback Page" as CKRecordValue
+                        $0["orderKey"] = "000001" as CKRecordValue
+                        $0["isArchived"] = NSNumber(value: false)
+                    }
+                ]
             ],
-            "PageRecord": [
-                makeRecord(type: "PageRecord", entityType: "page", entityID: "page-fallback") {
-                    $0["workspaceID"] = "workspace-fallback" as CKRecordValue
-                    $0["title"] = "Fallback Page" as CKRecordValue
-                    $0["orderKey"] = "000001" as CKRecordValue
-                    $0["isArchived"] = NSNumber(value: false)
-                }
-            ]
-        ])
+            nextServerChangeTokenData: nextServerChangeTokenData
+        )
 
+        let staleServerChangeTokenData = Data("stale-token".utf8)
         let changeSet = try CloudKitPrivateDatabaseAdapter(
             database: database,
             recordFetcher: fetcher
-        ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
+        ).fetchRemoteChanges(sinceServerChangeTokenData: staleServerChangeTokenData)
 
         XCTAssertEqual(changeSet.workspaceChanges.map(\.workspaceID), ["workspace-fallback"])
         XCTAssertEqual(changeSet.pageChanges.map(\.pageID), ["page-fallback"])
-        XCTAssertNil(changeSet.serverChangeTokenData)
-        XCTAssertEqual(fetcher.receivedServerChangeTokenData, nil)
-        XCTAssertEqual(fetcher.fetchRecordsCalls, CloudKitPrivateDatabaseAdapter.recordTypes)
+        XCTAssertEqual(changeSet.serverChangeTokenData, nextServerChangeTokenData)
+        XCTAssertEqual(fetcher.receivedServerChangeTokenData, [staleServerChangeTokenData, nil])
+        XCTAssertEqual(fetcher.fetchRecordsCalls, [])
     }
 
     func testFetchRemoteChangesAppliesDiaryPageMappingAfterPage() throws {
@@ -2688,13 +2693,15 @@ final class TokenAwareCloudKitRecordFetcher: CloudKitRecordFetching {
     }
 }
 
-final class TimeoutThenFullSnapshotRecordFetcher: CloudKitRecordFetching {
+final class TimeoutThenScratchRecordChangeFetcher: CloudKitRecordFetching {
     let recordsByType: [String: [CKRecord]]
-    private(set) var receivedServerChangeTokenData: Data?
+    let nextServerChangeTokenData: Data?
+    private(set) var receivedServerChangeTokenData: [Data?] = []
     private(set) var fetchRecordsCalls: [String] = []
 
-    init(recordsByType: [String: [CKRecord]]) {
+    init(recordsByType: [String: [CKRecord]], nextServerChangeTokenData: Data?) {
         self.recordsByType = recordsByType
+        self.nextServerChangeTokenData = nextServerChangeTokenData
     }
 
     func fetchRecords(recordType: String) throws -> [CKRecord] {
@@ -2705,8 +2712,15 @@ final class TimeoutThenFullSnapshotRecordFetcher: CloudKitRecordFetching {
     func fetchRecordChanges(
         sinceServerChangeTokenData serverChangeTokenData: Data?
     ) throws -> CloudKitFetchedRecordChangeSet {
-        receivedServerChangeTokenData = serverChangeTokenData
-        throw CloudKitOperationTimeoutError(operationName: "fetchRecordChanges", timeout: 75)
+        receivedServerChangeTokenData.append(serverChangeTokenData)
+        guard receivedServerChangeTokenData.count > 1 else {
+            throw CloudKitOperationTimeoutError(operationName: "fetchRecordChanges", timeout: 75)
+        }
+        return CloudKitFetchedRecordChangeSet(
+            recordsByType: recordsByType,
+            deletedRecordIDsByType: [:],
+            serverChangeTokenData: nextServerChangeTokenData
+        )
     }
 }
 
