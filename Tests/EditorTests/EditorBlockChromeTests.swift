@@ -1,6 +1,88 @@
 import XCTest
 
 final class EditorBlockChromeTests: XCTestCase {
+    func testInternalLinkTriggerDetectsOpenWikiPrefixAtCaret() {
+        let triggerText = "See [[Spe"
+        let triggerSelection = EditorTextSelection(
+            blockID: "block",
+            location: (triggerText as NSString).length,
+            length: 0
+        )
+
+        XCTAssertEqual(
+            InlineInternalLinkTrigger.query(
+                text: triggerText,
+                selection: triggerSelection
+            ),
+            "Spe"
+        )
+        XCTAssertEqual(
+            InlineInternalLinkTrigger.replacementSelection(
+                text: triggerText,
+                selection: triggerSelection
+            ),
+            EditorTextSelection(
+                blockID: "block",
+                location: ("See " as NSString).length,
+                length: ("[[Spe" as NSString).length
+            )
+        )
+        XCTAssertNil(
+            InlineInternalLinkTrigger.query(
+                text: "See [[Specs]]",
+                selection: EditorTextSelection(
+                    blockID: "block",
+                    location: ("See [[Specs]]" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+    }
+
+    func testInternalLinkChoiceBuildsReadableLabels() {
+        let page = PageSummary(id: "page-specs", workspaceID: "workspace", title: "Specs")
+        let block = BlockSnapshot(
+            id: "block-api",
+            pageID: "page-specs",
+            parentBlockID: nil,
+            orderKey: "000001",
+            type: .paragraph,
+            textPlain: "API contract"
+        )
+
+        XCTAssertEqual(InlineInternalLinkChoice.label(page: page, block: nil), "Specs")
+        XCTAssertEqual(InlineInternalLinkChoice.label(page: page, block: block), "Specs#API contract")
+    }
+
+    func testInternalLinkChoiceFilterSearchesBeforeLimitingResults() {
+        let filler = (1...8).map { index in
+            InlineInternalLinkChoice(
+                id: "page-filler-\(index)",
+                targetPageID: "page-filler-\(index)",
+                targetBlockID: nil,
+                title: "Filler \(index)",
+                subtitle: "页面"
+            )
+        }
+        let target = InlineInternalLinkChoice(
+            id: "block-target",
+            targetPageID: "page-target",
+            targetBlockID: "block-target",
+            title: "Reference Target#Deep block",
+            subtitle: "Deep block"
+        )
+        let choices = filler + [target]
+
+        XCTAssertEqual(
+            InlineInternalLinkChoiceFilter.filtered(choices, query: "Reference").map(\.id),
+            ["block-target"]
+        )
+        XCTAssertEqual(
+            InlineInternalLinkChoiceFilter.filtered(choices, query: "", limit: 3).map(\.id),
+            ["page-filler-1", "page-filler-2", "page-filler-3"]
+        )
+    }
+
     func testInlineLinkActivationRoutesInternalAndExternalDestinations() {
         var openedInternal: (String, String?)?
         var openedExternal: URL?
@@ -298,6 +380,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.addParagraphBlock, in: .compactIOS))
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.attachment, in: .compactIOS))
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.bold, in: .compactIOS))
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.insertInternalLink, in: .compactIOS))
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.undoTextEdit, in: .compactIOS))
     }
 
