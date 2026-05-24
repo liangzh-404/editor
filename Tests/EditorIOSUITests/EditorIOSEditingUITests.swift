@@ -73,6 +73,60 @@ final class EditorIOSEditingUITests: XCTestCase {
             app.buttons["editor.insert-attachment"].exists,
             "iPhone editor should not show a separate attachment button"
         )
+
+        app.buttons["editor.page-actions"].tap()
+
+        XCTAssertTrue(
+            app.buttons["新增文本块"].waitForExistence(timeout: 2),
+            "The compact iOS page actions menu should keep block editing actions"
+        )
+        XCTAssertFalse(app.buttons["写作模式"].exists, "Writing mode should stay out of the compact iOS page actions menu")
+        XCTAssertFalse(app.buttons["专注模式"].exists, "Focus mode should stay out of the compact iOS page actions menu")
+        XCTAssertFalse(app.buttons["导入 Markdown"].exists, "Import should stay out of the compact iOS page actions menu")
+        XCTAssertFalse(app.buttons["导入 Obsidian"].exists, "Obsidian import should stay out of the compact iOS page actions menu")
+        XCTAssertFalse(app.buttons["导出 Markdown"].exists, "Export should stay out of the compact iOS page actions menu")
+    }
+
+    @MainActor
+    func testIPhoneCanvasTailRightSwipeRevealsDocumentList() {
+        let app = makeApp()
+        app.launch()
+
+        let tailRegion = app.buttons["editor.canvas-edit-region"]
+        XCTAssertTrue(tailRegion.waitForExistence(timeout: 5), "The blank region below blocks should be reachable")
+
+        tailRegion.swipeRight()
+
+        XCTAssertTrue(
+            app.buttons["editor.page.page-welcome"].waitForExistence(timeout: 5),
+            "A right swipe in the blank region below blocks should reveal the document list"
+        )
+    }
+
+    @MainActor
+    func testIPhoneLibraryRowsHaveSeparatedTouchTargets() {
+        let app = makeApp()
+        app.launch()
+
+        let documentListBackButton = app.navigationBars.buttons["全部文档"]
+        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Editor should expose the document-list back button")
+        documentListBackButton.tap()
+
+        let libraryBackButton = app.navigationBars.buttons["资料库"]
+        XCTAssertTrue(libraryBackButton.waitForExistence(timeout: 5), "Document list should expose the library back button")
+        libraryBackButton.tap()
+
+        let allDocuments = app.buttons["editor.compact.all-documents"]
+        let diary = app.buttons["editor.compact.diary"]
+        XCTAssertTrue(allDocuments.waitForExistence(timeout: 5), "Library should show All Documents")
+        XCTAssertTrue(diary.waitForExistence(timeout: 5), "Library should show Diary")
+        XCTAssertGreaterThanOrEqual(allDocuments.frame.height, 52, "All Documents needs a full touch target")
+        XCTAssertGreaterThanOrEqual(diary.frame.height, 52, "Diary needs a full touch target")
+        XCTAssertGreaterThanOrEqual(
+            diary.frame.minY - allDocuments.frame.maxY,
+            8,
+            "Diary should be visually separated from All Documents to reduce accidental taps"
+        )
     }
 
     @MainActor

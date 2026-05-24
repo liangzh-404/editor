@@ -625,6 +625,54 @@ enum EditorDisplayMode: Equatable, Sendable {
     }
 }
 
+enum PageActionsMenuScope: Equatable, Sendable {
+    case regular
+    case compactIOS
+}
+
+enum PageActionsMenuCommand: Equatable, Hashable, Sendable {
+    case writingMode
+    case focusMode
+    case addParagraphBlock
+    case pageReference
+    case blockReference
+    case attachment
+    case contentFont
+    case insertLink
+    case bold
+    case italic
+    case strikethrough
+    case inlineCode
+    case undoTextEdit
+    case redoTextEdit
+    case importMarkdown
+    case importObsidian
+    case exportMarkdown
+}
+
+enum PageActionsMenuVisibilityPolicy {
+    static func isVisible(_ command: PageActionsMenuCommand, in scope: PageActionsMenuScope) -> Bool {
+        switch scope {
+        case .regular:
+            return true
+        case .compactIOS:
+            return !compactHiddenCommands.contains(command)
+        }
+    }
+
+    static func hasVisibleCommand(_ commands: [PageActionsMenuCommand], in scope: PageActionsMenuScope) -> Bool {
+        commands.contains { isVisible($0, in: scope) }
+    }
+
+    private static let compactHiddenCommands: Set<PageActionsMenuCommand> = [
+        .writingMode,
+        .focusMode,
+        .importMarkdown,
+        .importObsidian,
+        .exportMarkdown
+    ]
+}
+
 struct EditorInsertMarkdownLinkActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
@@ -1788,7 +1836,7 @@ private struct CompactHomeView: View {
     }
 
     private var librarySection: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: CGFloat(CompactLibraryChrome.navigationRowSpacing)) {
             ForEach(CompactLibraryNavigationModel.items(snapshot: viewModel.snapshot)) { item in
                 compactNavigationRow(item: item)
             }
@@ -1796,7 +1844,7 @@ private struct CompactHomeView: View {
     }
 
     private var tagSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: CGFloat(CompactLibraryChrome.navigationRowSpacing)) {
             Text("标签")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(CompactLibraryChrome.mutedForegroundColor)
@@ -1816,7 +1864,12 @@ private struct CompactHomeView: View {
                 .font(.body.weight(.medium))
                 .foregroundStyle(CompactLibraryChrome.primaryForegroundColor)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+                .padding(.vertical, CGFloat(CompactLibraryChrome.tagRowVerticalPadding))
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: CGFloat(CompactLibraryChrome.navigationRowMinHeight),
+                    alignment: .leading
+                )
                 .background(
                     RoundedRectangle(cornerRadius: CGFloat(CompactLibraryChrome.rowCornerRadius), style: .continuous)
                         .fill(CompactLibraryChrome.unselectedRowColor)
@@ -1843,13 +1896,24 @@ private struct CompactHomeView: View {
             }
             .foregroundStyle(isSelected ? CompactLibraryChrome.primaryForegroundColor : CompactLibraryChrome.mutedForegroundColor)
             .padding(.horizontal, 12)
-            .padding(.vertical, 11)
+            .padding(.vertical, CGFloat(CompactLibraryChrome.navigationRowVerticalPadding))
+            .frame(
+                maxWidth: .infinity,
+                minHeight: CGFloat(CompactLibraryChrome.navigationRowMinHeight),
+                alignment: .leading
+            )
             .background(
                 RoundedRectangle(cornerRadius: CGFloat(CompactLibraryChrome.rowCornerRadius), style: .continuous)
                     .fill(isSelected ? CompactLibraryChrome.selectedRowColor : Color.clear)
             )
         }
         .buttonStyle(.plain)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: CGFloat(CompactLibraryChrome.navigationRowMinHeight),
+            alignment: .leading
+        )
+        .contentShape(Rectangle())
         .accessibilityIdentifier(item.identifier)
     }
 
@@ -3122,6 +3186,10 @@ enum CompactLibraryChrome {
     static let primaryForegroundToken = EditorDesignTokens.Colors.primaryText
     static let mutedForegroundToken = EditorDesignTokens.Colors.secondaryText
     static let rowCornerRadius: Double = 13
+    static let navigationRowSpacing: Double = 12
+    static let navigationRowMinHeight: Double = 56
+    static let navigationRowVerticalPadding: Double = 14
+    static let tagRowVerticalPadding: Double = 12
     static let selectedRowOpacity: Double = 0.08
     static let unselectedRowOpacity: Double = 0.035
 
@@ -3693,6 +3761,24 @@ enum MobileBlockSwipeActionResolver {
         }
 
         return .selectBlock
+    }
+}
+
+enum MobileCanvasTailSwipeAction: Equatable, Sendable {
+    case revealPageList
+}
+
+enum MobileCanvasTailSwipeActionResolver {
+    static let horizontalThreshold = MobileBlockSwipeActionResolver.horizontalThreshold
+    static let horizontalDominanceRatio = MobileBlockSwipeActionResolver.horizontalDominanceRatio
+
+    static func action(translation: CGSize) -> MobileCanvasTailSwipeAction? {
+        guard translation.width >= horizontalThreshold,
+              translation.width > abs(translation.height) * horizontalDominanceRatio else {
+            return nil
+        }
+
+        return .revealPageList
     }
 }
 
@@ -9201,7 +9287,10 @@ private struct EditorCanvasView: View {
                     )
                 }
 
-                CanvasTailFocusRegion(isEmpty: blocks.isEmpty) {
+                CanvasTailFocusRegion(
+                    isEmpty: blocks.isEmpty,
+                    onRevealPageList: onMobileRevealPageList
+                ) {
                     focusCanvas()
                 } onMoveDroppedBlocksToEnd: { draggedBlockIDs in
                     activeBlockDropTarget = BlockDropTargetLifecycleReducer
@@ -9955,156 +10044,208 @@ private struct EditorCanvasView: View {
     }
 #endif
 
+    private var pageActionsMenuScope: PageActionsMenuScope {
+#if os(iOS)
+        return .compactIOS
+#else
+        return .regular
+#endif
+    }
+
+    private func showsPageAction(_ command: PageActionsMenuCommand) -> Bool {
+        PageActionsMenuVisibilityPolicy.isVisible(command, in: pageActionsMenuScope)
+    }
+
+    private func showsPageActionSection(_ commands: [PageActionsMenuCommand]) -> Bool {
+        PageActionsMenuVisibilityPolicy.hasVisibleCommand(commands, in: pageActionsMenuScope)
+    }
+
     private var pageActionsMenu: some View {
         Menu {
-            Section("视图") {
-                Button {
-                    onDisplayModeChange(displayMode == .writing ? .standard : .writing)
-                } label: {
-                    Label(displayMode == .writing ? "退出写作模式" : "写作模式", systemImage: "sidebar.trailing")
-                }
+            if showsPageActionSection([.writingMode, .focusMode]) {
+                Section("视图") {
+                    if showsPageAction(.writingMode) {
+                        Button {
+                            onDisplayModeChange(displayMode == .writing ? .standard : .writing)
+                        } label: {
+                            Label(displayMode == .writing ? "退出写作模式" : "写作模式", systemImage: "sidebar.trailing")
+                        }
+                    }
 
-                Button {
-                    onDisplayModeChange(displayMode == .focus ? .standard : .focus)
-                } label: {
-                    Label(displayMode == .focus ? "退出专注模式" : "专注模式", systemImage: "rectangle.center.inset.filled")
+                    if showsPageAction(.focusMode) {
+                        Button {
+                            onDisplayModeChange(displayMode == .focus ? .standard : .focus)
+                        } label: {
+                            Label(displayMode == .focus ? "退出专注模式" : "专注模式", systemImage: "rectangle.center.inset.filled")
+                        }
+                    }
                 }
             }
 
             Section("块") {
-                Button {
-                    _ = onAddParagraphBlock()
-                } label: {
-                    Label("新增文本块", systemImage: "plus")
-                }
-                .accessibilityIdentifier("editor.add-block")
-
-                Menu {
-                    ForEach(pageReferenceTargets) { targetPage in
-                        Button {
-                            onAddPageReference(targetPage.id)
-                        } label: {
-                            Label(targetPage.title, systemImage: "doc.text")
-                        }
+                if showsPageAction(.addParagraphBlock) {
+                    Button {
+                        _ = onAddParagraphBlock()
+                    } label: {
+                        Label("新增文本块", systemImage: "plus")
                     }
-                } label: {
-                    Label("页面引用", systemImage: "doc.badge.plus")
+                    .accessibilityIdentifier("editor.add-block")
                 }
-                .disabled(pageReferenceTargets.isEmpty)
 
-                Menu {
-                    ForEach(blockReferenceTargets) { targetBlock in
-                        Button {
-                            onAddBlockReference(targetBlock.id)
-                        } label: {
-                            Label(blockReferenceTitle(for: targetBlock), systemImage: "text.quote")
+                if showsPageAction(.pageReference) {
+                    Menu {
+                        ForEach(pageReferenceTargets) { targetPage in
+                            Button {
+                                onAddPageReference(targetPage.id)
+                            } label: {
+                                Label(targetPage.title, systemImage: "doc.text")
+                            }
                         }
+                    } label: {
+                        Label("页面引用", systemImage: "doc.badge.plus")
                     }
-                } label: {
-                    Label("块引用", systemImage: "text.badge.plus")
+                    .disabled(pageReferenceTargets.isEmpty)
                 }
-                .disabled(blockReferenceTargets.isEmpty)
 
-                Button {
-                    handleAttachmentImportButton()
-                } label: {
-                    Label("附件", systemImage: "paperclip")
+                if showsPageAction(.blockReference) {
+                    Menu {
+                        ForEach(blockReferenceTargets) { targetBlock in
+                            Button {
+                                onAddBlockReference(targetBlock.id)
+                            } label: {
+                                Label(blockReferenceTitle(for: targetBlock), systemImage: "text.quote")
+                            }
+                        }
+                    } label: {
+                        Label("块引用", systemImage: "text.badge.plus")
+                    }
+                    .disabled(blockReferenceTargets.isEmpty)
                 }
-                .disabled(page == nil)
-                .accessibilityIdentifier("editor.insert-attachment")
+
+                if showsPageAction(.attachment) {
+                    Button {
+                        handleAttachmentImportButton()
+                    } label: {
+                        Label("附件", systemImage: "paperclip")
+                    }
+                    .disabled(page == nil)
+                    .accessibilityIdentifier("editor.insert-attachment")
+                }
             }
 
             Section("文本") {
-                Menu {
-                    ForEach(EditorContentFont.allCases) { font in
-                        Button {
-                            contentFontRawValue = font.rawValue
-                        } label: {
-                            Label(
-                                font.displayName,
-                                systemImage: contentFont == font ? "checkmark" : "textformat"
-                            )
+                if showsPageAction(.contentFont) {
+                    Menu {
+                        ForEach(EditorContentFont.allCases) { font in
+                            Button {
+                                contentFontRawValue = font.rawValue
+                            } label: {
+                                Label(
+                                    font.displayName,
+                                    systemImage: contentFont == font ? "checkmark" : "textformat"
+                                )
+                            }
                         }
+                    } label: {
+                        Label("正文字体", systemImage: "textformat")
                     }
-                } label: {
-                    Label("正文字体", systemImage: "textformat")
+                    .accessibilityIdentifier("editor.content-font-menu")
                 }
-                .accessibilityIdentifier("editor.content-font-menu")
 
-                Button {
-                    _ = presentInlineLinkInsertionFromCurrentTarget()
-                } label: {
-                    Label("链接", systemImage: "link")
+                if showsPageAction(.insertLink) {
+                    Button {
+                        _ = presentInlineLinkInsertionFromCurrentTarget()
+                    } label: {
+                        Label("链接", systemImage: "link")
+                    }
+                    .disabled(inlineLinkToolbarTargetBlockID == nil)
                 }
-                .disabled(inlineLinkToolbarTargetBlockID == nil)
 
-                Button {
-                    applyMarkdownInlineFormat(.bold)
-                } label: {
-                    Label("加粗", systemImage: "bold")
+                if showsPageAction(.bold) {
+                    Button {
+                        applyMarkdownInlineFormat(.bold)
+                    } label: {
+                        Label("加粗", systemImage: "bold")
+                    }
+                    .disabled(inlineFormatTarget == nil)
                 }
-                .disabled(inlineFormatTarget == nil)
 
-                Button {
-                    applyMarkdownInlineFormat(.italic)
-                } label: {
-                    Label("斜体", systemImage: "italic")
+                if showsPageAction(.italic) {
+                    Button {
+                        applyMarkdownInlineFormat(.italic)
+                    } label: {
+                        Label("斜体", systemImage: "italic")
+                    }
+                    .disabled(inlineFormatTarget == nil)
                 }
-                .disabled(inlineFormatTarget == nil)
 
-                Button {
-                    applyMarkdownInlineFormat(.strikethrough)
-                } label: {
-                    Label("删除线", systemImage: "strikethrough")
+                if showsPageAction(.strikethrough) {
+                    Button {
+                        applyMarkdownInlineFormat(.strikethrough)
+                    } label: {
+                        Label("删除线", systemImage: "strikethrough")
+                    }
+                    .disabled(inlineFormatTarget == nil)
                 }
-                .disabled(inlineFormatTarget == nil)
 
-                Button {
-                    applyMarkdownInlineFormat(.code)
-                } label: {
-                    Label("代码", systemImage: "chevron.left.forwardslash.chevron.right")
+                if showsPageAction(.inlineCode) {
+                    Button {
+                        applyMarkdownInlineFormat(.code)
+                    } label: {
+                        Label("代码", systemImage: "chevron.left.forwardslash.chevron.right")
+                    }
+                    .disabled(inlineFormatTarget == nil)
                 }
-                .disabled(inlineFormatTarget == nil)
             }
 
             Section("页面") {
-                Button {
-                    onUndoTextEdit()
-                } label: {
-                    Label("撤销编辑", systemImage: "arrow.uturn.backward")
+                if showsPageAction(.undoTextEdit) {
+                    Button {
+                        onUndoTextEdit()
+                    } label: {
+                        Label("撤销编辑", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(!canUndoTextEdit)
                 }
-                .disabled(!canUndoTextEdit)
 
-                Button {
-                    onRedoTextEdit()
-                } label: {
-                    Label("重做编辑", systemImage: "arrow.uturn.forward")
+                if showsPageAction(.redoTextEdit) {
+                    Button {
+                        onRedoTextEdit()
+                    } label: {
+                        Label("重做编辑", systemImage: "arrow.uturn.forward")
+                    }
+                    .disabled(!canRedoTextEdit)
                 }
-                .disabled(!canRedoTextEdit)
 
-                Button {
-                    handleMarkdownImportButton()
-                } label: {
-                    Label("导入 Markdown", systemImage: "square.and.arrow.down")
+                if showsPageAction(.importMarkdown) {
+                    Button {
+                        handleMarkdownImportButton()
+                    } label: {
+                        Label("导入 Markdown", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(page == nil)
+                    .accessibilityIdentifier("editor.import-markdown")
                 }
-                .disabled(page == nil)
-                .accessibilityIdentifier("editor.import-markdown")
 
-                Button {
-                    handleObsidianVaultImportButton()
-                } label: {
-                    Label("导入 Obsidian", systemImage: "folder.badge.plus")
+                if showsPageAction(.importObsidian) {
+                    Button {
+                        handleObsidianVaultImportButton()
+                    } label: {
+                        Label("导入 Obsidian", systemImage: "folder.badge.plus")
+                    }
+                    .disabled(page == nil)
+                    .accessibilityIdentifier("editor.import-obsidian")
                 }
-                .disabled(page == nil)
-                .accessibilityIdentifier("editor.import-obsidian")
 
-                Button {
-                    handleMarkdownExportButton()
-                } label: {
-                    Label("导出 Markdown", systemImage: "square.and.arrow.up")
+                if showsPageAction(.exportMarkdown) {
+                    Button {
+                        handleMarkdownExportButton()
+                    } label: {
+                        Label("导出 Markdown", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(page == nil)
+                    .accessibilityIdentifier("editor.export-markdown")
                 }
-                .disabled(page == nil)
-                .accessibilityIdentifier("editor.export-markdown")
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -14442,10 +14583,32 @@ private struct CanvasTrailingInsertRegion: View {
 
 private struct CanvasTailFocusRegion: View {
     let isEmpty: Bool
+    let onRevealPageList: (() -> Void)?
     let onFocus: () -> Void
     let onMoveDroppedBlocksToEnd: ([String]) -> Bool
 
+    init(
+        isEmpty: Bool,
+        onRevealPageList: (() -> Void)? = nil,
+        onFocus: @escaping () -> Void,
+        onMoveDroppedBlocksToEnd: @escaping ([String]) -> Bool
+    ) {
+        self.isEmpty = isEmpty
+        self.onRevealPageList = onRevealPageList
+        self.onFocus = onFocus
+        self.onMoveDroppedBlocksToEnd = onMoveDroppedBlocksToEnd
+    }
+
+    @ViewBuilder
     var body: some View {
+#if os(iOS)
+        focusButton.simultaneousGesture(revealPageListSwipeGesture)
+#else
+        focusButton
+#endif
+    }
+
+    private var focusButton: some View {
         Button(action: onFocus) {
             Rectangle()
                 .fill(Color.primary.opacity(0.001))
@@ -14460,6 +14623,18 @@ private struct CanvasTailFocusRegion: View {
         .accessibilityValue("点击后将光标移动到最后一个文本块末尾")
         .accessibilityIdentifier(isEmpty ? "editor.empty-canvas-edit-region" : "editor.canvas-edit-region")
     }
+
+#if os(iOS)
+    private var revealPageListSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .onEnded { value in
+                guard MobileCanvasTailSwipeActionResolver.action(translation: value.translation) == .revealPageList else {
+                    return
+                }
+                onRevealPageList?()
+            }
+    }
+#endif
 }
 
 private struct EditorBlockDropDelegate: DropDelegate {

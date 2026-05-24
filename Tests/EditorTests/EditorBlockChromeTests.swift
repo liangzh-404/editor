@@ -103,6 +103,35 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(MobileNavigationBarChrome.collapsedTitleVerticalOffset, 0)
     }
 
+    func testCompactIOSPageActionsMenuHidesDesktopAndTransferActions() {
+        let hiddenCommands: [PageActionsMenuCommand] = [
+            .writingMode,
+            .focusMode,
+            .importMarkdown,
+            .importObsidian,
+            .exportMarkdown
+        ]
+        hiddenCommands.forEach { command in
+            XCTAssertFalse(
+                PageActionsMenuVisibilityPolicy.isVisible(command, in: .compactIOS),
+                "\(command) should stay out of the compact iOS page actions menu"
+            )
+        }
+
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.addParagraphBlock, in: .compactIOS))
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.attachment, in: .compactIOS))
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.bold, in: .compactIOS))
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.undoTextEdit, in: .compactIOS))
+    }
+
+    func testRegularPageActionsMenuKeepsDesktopAndTransferActions() {
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.writingMode, in: .regular))
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.focusMode, in: .regular))
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.importMarkdown, in: .regular))
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.importObsidian, in: .regular))
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.exportMarkdown, in: .regular))
+    }
+
     func testPageTitleDisplayPolicyUsesPlaceholderOnlyForEmptyDisplaySurfaces() {
         XCTAssertEqual(PageTitleDisplayPolicy.emptyTitlePlaceholder, "未命名")
         XCTAssertEqual(PageTitleDisplayPolicy.listTitle(for: ""), "未命名")
@@ -636,6 +665,13 @@ final class EditorBlockChromeTests: XCTestCase {
             MobileQuickCreateMenuModel.longPressActions,
             [.dailyDiary, .newDocument]
         )
+    }
+
+    func testCompactLibraryRowsHaveEnoughSeparationForTouchAccuracy() {
+        XCTAssertGreaterThanOrEqual(CompactLibraryChrome.navigationRowMinHeight, 52)
+        XCTAssertGreaterThanOrEqual(CompactLibraryChrome.navigationRowSpacing, 10)
+        XCTAssertGreaterThanOrEqual(CompactLibraryChrome.navigationRowVerticalPadding, 14)
+        XCTAssertGreaterThanOrEqual(CompactLibraryChrome.tagRowVerticalPadding, 12)
     }
 
     func testNestedListVerticalRhythmKeepsDropSlotsSubtleLikeCraft() {
@@ -1296,6 +1332,16 @@ final class EditorBlockChromeTests: XCTestCase {
             MobileBlockRowSwipeGestureAttachmentResolver.attachment(usesNativeTextEditor: false),
             .rowHighPriority
         )
+    }
+
+    func testMobileCanvasTailSwipeRevealsPageListOnlyOnHorizontalRightSwipe() {
+        XCTAssertEqual(
+            MobileCanvasTailSwipeActionResolver.action(translation: CGSize(width: 72, height: 8)),
+            .revealPageList
+        )
+        XCTAssertNil(MobileCanvasTailSwipeActionResolver.action(translation: CGSize(width: -72, height: 8)))
+        XCTAssertNil(MobileCanvasTailSwipeActionResolver.action(translation: CGSize(width: 40, height: 4)))
+        XCTAssertNil(MobileCanvasTailSwipeActionResolver.action(translation: CGSize(width: 72, height: 72)))
     }
 
     func testMobileBlockSelectionReducerAddsAndTogglesBlocks() {
