@@ -927,7 +927,11 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
             }
             semaphore.signal()
         }
-        semaphore.wait()
+        try operationWaiter.wait(
+            for: semaphore,
+            operationName: "fetchRecord",
+            cancel: {}
+        )
 
         return try fetchBox.result?.get() ?? {
             throw CloudKitPrivateDatabaseAdapterError.missingSavedRecord
@@ -938,18 +942,18 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
         try zoneEnsurer.ensureRecordZoneExists()
 
         let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
-        var response = try fetch(query: query)
+        var response = try fetch(query: query, operationName: "fetchRecords:\(recordType)")
         var records = try Self.records(from: response.matchResults)
 
         while let cursor = response.queryCursor {
-            response = try fetch(cursor: cursor)
+            response = try fetch(cursor: cursor, operationName: "fetchRecords:\(recordType):cursor")
             records.append(contentsOf: try Self.records(from: response.matchResults))
         }
 
         return records
     }
 
-    private func fetch(query: CKQuery) throws -> QueryFetchResponse {
+    private func fetch(query: CKQuery, operationName: String) throws -> QueryFetchResponse {
         let semaphore = DispatchSemaphore(value: 0)
         final class FetchBox: @unchecked Sendable {
             var result: Result<QueryFetchResponse, Error>?
@@ -960,12 +964,16 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
             fetchBox.result = result
             semaphore.signal()
         }
-        semaphore.wait()
+        try operationWaiter.wait(
+            for: semaphore,
+            operationName: operationName,
+            cancel: {}
+        )
 
         return try fetchBox.result?.get() ?? (matchResults: [], queryCursor: nil)
     }
 
-    private func fetch(cursor: CKQueryOperation.Cursor) throws -> QueryFetchResponse {
+    private func fetch(cursor: CKQueryOperation.Cursor, operationName: String) throws -> QueryFetchResponse {
         let semaphore = DispatchSemaphore(value: 0)
         final class FetchBox: @unchecked Sendable {
             var result: Result<QueryFetchResponse, Error>?
@@ -976,7 +984,11 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
             fetchBox.result = result
             semaphore.signal()
         }
-        semaphore.wait()
+        try operationWaiter.wait(
+            for: semaphore,
+            operationName: operationName,
+            cancel: {}
+        )
 
         return try fetchBox.result?.get() ?? (matchResults: [], queryCursor: nil)
     }
@@ -1228,9 +1240,17 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         guard let recordFetcher else {
             throw CloudKitPrivateDatabaseAdapterError.remoteFetchUnavailable
         }
-        let fetchedChanges = try recordFetcher.fetchRecordChanges(
-            sinceServerChangeTokenData: serverChangeTokenData
-        )
+        let fetchedChanges: CloudKitFetchedRecordChangeSet
+        do {
+            fetchedChanges = try recordFetcher.fetchRecordChanges(
+                sinceServerChangeTokenData: serverChangeTokenData
+            )
+        } catch let timeout as CloudKitOperationTimeoutError {
+            EditorLog.sync.error(
+                "cloudkit_incremental_fetch_timed_out operation=\(timeout.operationName, privacy: .public) timeout=\(timeout.timeout, privacy: .public) action=full_snapshot_fallback"
+            )
+            fetchedChanges = try fullSnapshotRecordChangeSet(recordFetcher: recordFetcher)
+        }
         let recordsByType = fetchedChanges.recordsByType
         let pageRecords = currentGenerationRecords(recordsByType["PageRecord"] ?? [])
         let pageChanges = pageRecords.compactMap(remotePageChange)
@@ -1256,6 +1276,21 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             fullSnapshotPageIDs: fullSnapshotPageIDs,
             deletedRecords: deletedRecords,
             serverChangeTokenData: fetchedChanges.serverChangeTokenData
+        )
+    }
+
+    private func fullSnapshotRecordChangeSet(
+        recordFetcher: CloudKitRecordFetching
+    ) throws -> CloudKitFetchedRecordChangeSet {
+        let recordsByType = try Dictionary(
+            uniqueKeysWithValues: Self.recordTypes.map { recordType in
+                (recordType, try recordFetcher.fetchRecords(recordType: recordType))
+            }
+        )
+        return CloudKitFetchedRecordChangeSet(
+            recordsByType: recordsByType,
+            deletedRecordIDsByType: [:],
+            serverChangeTokenData: nil
         )
     }
 
