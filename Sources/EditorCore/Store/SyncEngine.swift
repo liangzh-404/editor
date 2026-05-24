@@ -449,7 +449,9 @@ protocol CloudKitRemoteChangeFetching {
 }
 
 protocol CloudKitRemoteSnapshotFetching {
-    func fetchCurrentGenerationSnapshot() throws -> CloudKitRemoteChangeSet
+    func fetchCurrentGenerationSnapshot(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitRemoteChangeSet
 }
 
 struct CloudKitRemoteChangeSet: Equatable, Sendable {
@@ -906,7 +908,7 @@ final class CloudKitPrivateDatabaseSubscriptionEnsurer: CloudKitSubscriptionEnsu
 }
 
 final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordReading {
-    static let recordZoneChangeBatchLimit = 200
+    static let recordZoneChangeBatchLimit = 1_000
 
     private let database: CKDatabase
     private let zoneEnsurer: CloudKitRecordZoneEnsuring
@@ -1313,22 +1315,15 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         return try remoteChangeSet(from: fetchedChanges)
     }
 
-    func fetchCurrentGenerationSnapshot() throws -> CloudKitRemoteChangeSet {
+    func fetchCurrentGenerationSnapshot(
+        sinceServerChangeTokenData serverChangeTokenData: Data?
+    ) throws -> CloudKitRemoteChangeSet {
         guard let recordFetcher else {
             throw CloudKitPrivateDatabaseAdapterError.remoteFetchUnavailable
         }
-        let recordsByType = try Dictionary(
-            uniqueKeysWithValues: Self.recordTypes.map { recordType in
-                (
-                    recordType,
-                    try recordFetcher.fetchCurrentGenerationRecords(recordType: recordType)
-                )
-            }
-        )
         return try remoteChangeSet(
-            from: CloudKitFetchedRecordChangeSet(
-                recordsByType: recordsByType,
-                serverChangeTokenData: nil
+            from: recordFetcher.fetchRecordChanges(
+                sinceServerChangeTokenData: serverChangeTokenData
             )
         )
     }
@@ -2226,7 +2221,9 @@ struct RemoteNotificationSyncHandler {
 
 final class SyncEngine {
     private static let serverChangeTokenScope = "privateDatabase"
-    private static let currentGenerationSnapshotBackfillScope = "currentGenerationSnapshotBackfill.\(CloudKitSyncGeneration.current)"
+    private static let legacyCurrentGenerationSnapshotBackfillScope = "currentGenerationSnapshotBackfill.\(CloudKitSyncGeneration.current)"
+    private static let currentGenerationSnapshotBackfillCompletedScope = "currentGenerationSnapshotBackfill.completed.\(CloudKitSyncGeneration.current)"
+    private static let currentGenerationSnapshotBackfillTokenScope = "currentGenerationSnapshotBackfill.token.\(CloudKitSyncGeneration.current)"
     private static let snapshotBackfillPageThreshold = 50
 
     private let syncRepository: SyncRepository
@@ -2293,26 +2290,43 @@ final class SyncEngine {
         if let remoteSnapshotFetcher,
            try shouldRunCurrentGenerationSnapshotBackfill() {
             let pageCount = try syncRepository.pageRecordCount()
+            let snapshotTokenData = try syncRepository.serverChangeTokenData(
+                scope: Self.currentGenerationSnapshotBackfillTokenScope
+            )
             recordRuntimeDiagnostic(
                 eventName: "foreground_sync_snapshot_backfill_started",
                 payloadJSON: Self.diagnosticPayloadJSON([
                     "page_count": "\(pageCount)",
+                    "has_token": snapshotTokenData == nil ? "false" : "true",
                     "generation": CloudKitSyncGeneration.current
                 ])
             )
-            let snapshotChangeSet = try remoteSnapshotFetcher.fetchCurrentGenerationSnapshot()
-            let snapshotSummary = try applyRemoteChangeSet(snapshotChangeSet, mergeEngine: mergeEngine)
-            try syncRepository.markRemoteSnapshotBackfillCompleted(
-                scope: Self.currentGenerationSnapshotBackfillScope
+            let snapshotChangeSet = try remoteSnapshotFetcher.fetchCurrentGenerationSnapshot(
+                sinceServerChangeTokenData: snapshotTokenData
             )
+            let snapshotSummary = try applyRemoteChangeSet(snapshotChangeSet, mergeEngine: mergeEngine)
+            if let serverChangeTokenData = snapshotChangeSet.serverChangeTokenData {
+                try syncRepository.saveServerChangeTokenData(
+                    serverChangeTokenData,
+                    scope: Self.currentGenerationSnapshotBackfillTokenScope
+                )
+            }
+            if !snapshotSummary.hasMoreChanges {
+                try syncRepository.markRemoteSnapshotBackfillCompleted(
+                    scope: Self.currentGenerationSnapshotBackfillCompletedScope
+                )
+                try syncRepository.clearServerChangeTokenData(
+                    scope: Self.currentGenerationSnapshotBackfillTokenScope
+                )
+            }
             recordRuntimeDiagnostic(
                 eventName: "foreground_sync_snapshot_backfill_completed",
-                payloadJSON: "{\"fetched_count\":\(snapshotSummary.appliedCount)}"
+                payloadJSON: "{\"fetched_count\":\(snapshotSummary.appliedCount),\"has_more_changes\":\(snapshotSummary.hasMoreChanges)}"
             )
-            if snapshotSummary.appliedCount > 0 {
+            if snapshotSummary.appliedCount > 0 || snapshotSummary.hasMoreChanges {
                 return SyncFetchSummary(
                     appliedCount: snapshotSummary.appliedCount,
-                    hasMoreChanges: true
+                    hasMoreChanges: snapshotSummary.hasMoreChanges
                 )
             }
         }
@@ -2350,12 +2364,20 @@ final class SyncEngine {
     }
 
     private func shouldRunCurrentGenerationSnapshotBackfill() throws -> Bool {
+        guard try !syncRepository.hasCompletedRemoteSnapshotBackfill(
+            scope: Self.currentGenerationSnapshotBackfillCompletedScope
+        ) else {
+            return false
+        }
+        if try syncRepository.serverChangeTokenData(
+            scope: Self.currentGenerationSnapshotBackfillTokenScope
+        ) != nil {
+            return true
+        }
         guard try syncRepository.pageRecordCount() <= Self.snapshotBackfillPageThreshold else {
             return false
         }
-        return try !syncRepository.hasCompletedRemoteSnapshotBackfill(
-            scope: Self.currentGenerationSnapshotBackfillScope
-        )
+        return true
     }
 
     private func applyRemoteChangeSet(
@@ -2363,17 +2385,17 @@ final class SyncEngine {
         mergeEngine: SyncMergeEngine
     ) throws -> SyncFetchSummary {
         for change in changeSet.workspaceChanges {
-            try applyRemoteChange(entityType: "workspace", entityID: change.workspaceID) {
+            try applyRemoteUpsert(entityType: "workspace", entityID: change.workspaceID) {
                 try mergeEngine.applyRemoteWorkspace(change)
             }
         }
         for change in changeSet.notebookChanges {
-            try applyRemoteChange(entityType: "notebook", entityID: change.notebookID) {
+            try applyRemoteUpsert(entityType: "notebook", entityID: change.notebookID) {
                 try mergeEngine.applyRemoteNotebook(change)
             }
         }
         for change in changeSet.pageChanges {
-            try applyRemoteChange(entityType: "page", entityID: change.pageID) {
+            try applyRemoteUpsert(entityType: "page", entityID: change.pageID) {
                 try mergeEngine.applyRemotePage(change)
             }
         }
@@ -2394,7 +2416,7 @@ final class SyncEngine {
                 )
                 continue
             }
-            try applyRemoteChange(entityType: "diaryPage", entityID: change.pageID) {
+            try applyRemoteUpsert(entityType: "diaryPage", entityID: change.pageID) {
                 try mergeEngine.applyRemoteDiaryPage(change)
             }
         }
@@ -2430,17 +2452,17 @@ final class SyncEngine {
                 )
                 continue
             }
-            try applyRemoteChange(entityType: "tag", entityID: change.tagID) {
+            try applyRemoteUpsert(entityType: "tag", entityID: change.tagID) {
                 try mergeEngine.applyRemoteTag(change)
             }
         }
         for change in changeSet.pageTagChanges {
-            try applyRemoteChange(entityType: "pageTag", entityID: change.entityID) {
+            try applyRemoteUpsert(entityType: "pageTag", entityID: change.entityID) {
                 try mergeEngine.applyRemotePageTag(change)
             }
         }
         for change in changeSet.attachmentChanges {
-            try applyRemoteChange(entityType: "attachment", entityID: change.attachmentID) {
+            try applyRemoteUpsert(entityType: "attachment", entityID: change.attachmentID) {
                 try mergeEngine.applyRemoteAttachment(change)
             }
         }
@@ -2486,11 +2508,18 @@ final class SyncEngine {
                         remoteUpdatedAt: remotePageUpdatedAtByID[pageID] ?? Self.latestUpdatedAt(in: pageBlockChanges)
                     )
                 }
+                for change in pageBlockChanges {
+                    try syncRepository.markRemoteApplied(
+                        entityType: "block",
+                        entityID: change.blockID,
+                        recordName: Self.remoteRecordName(entityType: "block", entityID: change.blockID)
+                    )
+                }
                 continue
             }
 
             for change in pageBlockChanges {
-                try applyRemoteChange(
+                try applyRemoteUpsert(
                     entityType: "block",
                     entityID: change.blockID,
                     details: "page_id=\(change.pageID) parent_block_id=\(change.parentBlockID ?? "nil")"
@@ -2500,7 +2529,7 @@ final class SyncEngine {
             }
         }
         for deletion in changeSet.deletedRecords {
-            try applyRemoteChange(entityType: deletion.entityType, entityID: deletion.entityID) {
+            try applyRemoteDeletion(entityType: deletion.entityType, entityID: deletion.entityID) {
                 try mergeEngine.applyRemoteDeletion(deletion)
             }
         }
@@ -2519,6 +2548,34 @@ final class SyncEngine {
                 + changeSet.deletedRecords.count,
             hasMoreChanges: changeSet.hasMoreChanges
         )
+    }
+
+    private func applyRemoteUpsert(
+        entityType: String,
+        entityID: String,
+        details: String? = nil,
+        apply: () throws -> Void
+    ) throws {
+        try applyRemoteChange(
+            entityType: entityType,
+            entityID: entityID,
+            details: details,
+            apply: apply
+        )
+        try syncRepository.markRemoteApplied(
+            entityType: entityType,
+            entityID: entityID,
+            recordName: Self.remoteRecordName(entityType: entityType, entityID: entityID)
+        )
+    }
+
+    private func applyRemoteDeletion(
+        entityType: String,
+        entityID: String,
+        apply: () throws -> Void
+    ) throws {
+        try applyRemoteChange(entityType: entityType, entityID: entityID, apply: apply)
+        try syncRepository.forgetRemoteApplied(entityType: entityType, entityID: entityID)
     }
 
     private func applyRemoteChange(
@@ -2551,6 +2608,10 @@ final class SyncEngine {
         changes.compactMap(\.updatedAt).max()
     }
 
+    private static func remoteRecordName(entityType: String, entityID: String) -> String {
+        "\(CloudKitSyncGeneration.current).\(entityType).\(entityID)"
+    }
+
     private static func diagnosticPayloadJSON(_ payload: [String: Any]) -> String {
         guard JSONSerialization.isValidJSONObject(payload),
               let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
@@ -2562,6 +2623,16 @@ final class SyncEngine {
 
     @discardableResult
     func uploadPendingChanges() throws -> SyncUploadSummary {
+        let repairedLegacyCreateCount = try syncRepository.repairLegacySnapshotBackfillCreateBacklog(
+            legacyScope: Self.legacyCurrentGenerationSnapshotBackfillScope,
+            recordNamePrefix: "\(CloudKitSyncGeneration.current)."
+        )
+        if repairedLegacyCreateCount > 0 {
+            recordRuntimeDiagnostic(
+                eventName: "foreground_sync_legacy_snapshot_backlog_repaired",
+                payloadJSON: "{\"repaired_count\":\(repairedLegacyCreateCount)}"
+            )
+        }
         try syncRepository.enqueueUnsyncedLocalRecords()
         let changes = prioritizedUploadChanges(try syncRepository.pendingChanges())
         var uploadedCount = 0

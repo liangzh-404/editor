@@ -532,6 +532,252 @@ final class SyncRepository {
         )
     }
 
+    func markRemoteApplied(
+        entityType: String,
+        entityID: String,
+        recordName: String,
+        changeTag: String? = nil
+    ) throws {
+        try database.execute(
+            """
+            INSERT OR REPLACE INTO sync_records (
+                id,
+                entity_type,
+                entity_id,
+                record_name,
+                change_tag,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text("\(entityType)-\(entityID)"),
+                .text(entityType),
+                .text(entityID),
+                .text(recordName),
+                changeTag.map(SQLiteValue.text) ?? .null,
+                .text(dateFormatter.string(from: Date()))
+            ]
+        )
+
+        try database.execute(
+            """
+            DELETE FROM sync_changes
+            WHERE entity_type = ?
+              AND entity_id = ?
+              AND change_type = 'create'
+            """,
+            bindings: [
+                .text(entityType),
+                .text(entityID)
+            ]
+        )
+    }
+
+    func forgetRemoteApplied(entityType: String, entityID: String) throws {
+        try database.execute(
+            """
+            DELETE FROM sync_records
+            WHERE entity_type = ?
+              AND entity_id = ?
+            """,
+            bindings: [
+                .text(entityType),
+                .text(entityID)
+            ]
+        )
+    }
+
+    func repairLegacySnapshotBackfillCreateBacklog(
+        legacyScope: String,
+        recordNamePrefix: String
+    ) throws -> Int {
+        guard let legacyCompletedAt = try remoteSnapshotBackfillUpdatedAt(scope: legacyScope) else {
+            return 0
+        }
+
+        let now = dateFormatter.string(from: Date())
+        var repairedCount = 0
+        repairedCount += try adoptLegacySnapshotCreates(
+            entityType: "workspace",
+            entityIDExpression: "workspaces.id",
+            sourceSQL: "workspaces",
+            sourceTimestampExpression: "workspaces.updated_at",
+            sourcePredicate: nil,
+            legacyCompletedAt: legacyCompletedAt,
+            recordNamePrefix: recordNamePrefix,
+            now: now
+        )
+        repairedCount += try adoptLegacySnapshotCreates(
+            entityType: "notebook",
+            entityIDExpression: "notebooks.id",
+            sourceSQL: "notebooks",
+            sourceTimestampExpression: "notebooks.updated_at",
+            sourcePredicate: nil,
+            legacyCompletedAt: legacyCompletedAt,
+            recordNamePrefix: recordNamePrefix,
+            now: now
+        )
+        repairedCount += try adoptLegacySnapshotCreates(
+            entityType: "tag",
+            entityIDExpression: "tags.id",
+            sourceSQL: "tags",
+            sourceTimestampExpression: "tags.updated_at",
+            sourcePredicate: nil,
+            legacyCompletedAt: legacyCompletedAt,
+            recordNamePrefix: recordNamePrefix,
+            now: now
+        )
+        repairedCount += try adoptLegacySnapshotCreates(
+            entityType: "page",
+            entityIDExpression: "pages.id",
+            sourceSQL: "pages",
+            sourceTimestampExpression: "pages.updated_at",
+            sourcePredicate: nil,
+            legacyCompletedAt: legacyCompletedAt,
+            recordNamePrefix: recordNamePrefix,
+            now: now
+        )
+        repairedCount += try adoptLegacySnapshotCreates(
+            entityType: "diaryPage",
+            entityIDExpression: "diary_pages.page_id",
+            sourceSQL: "diary_pages",
+            sourceTimestampExpression: "diary_pages.updated_at",
+            sourcePredicate: nil,
+            legacyCompletedAt: legacyCompletedAt,
+            recordNamePrefix: recordNamePrefix,
+            now: now
+        )
+        repairedCount += try adoptLegacySnapshotCreates(
+            entityType: "pageTag",
+            entityIDExpression: "page_tags.page_id || '.' || page_tags.tag_id",
+            sourceSQL: "page_tags",
+            sourceTimestampExpression: "page_tags.created_at",
+            sourcePredicate: nil,
+            legacyCompletedAt: legacyCompletedAt,
+            recordNamePrefix: recordNamePrefix,
+            now: now
+        )
+        repairedCount += try adoptLegacySnapshotCreates(
+            entityType: "attachment",
+            entityIDExpression: "attachments.id",
+            sourceSQL: "attachments",
+            sourceTimestampExpression: "attachments.updated_at",
+            sourcePredicate: nil,
+            legacyCompletedAt: legacyCompletedAt,
+            recordNamePrefix: recordNamePrefix,
+            now: now
+        )
+        repairedCount += try adoptLegacySnapshotCreates(
+            entityType: "block",
+            entityIDExpression: "blocks.id",
+            sourceSQL: "blocks",
+            sourceTimestampExpression: "blocks.updated_at",
+            sourcePredicate: "blocks.is_deleted = 0",
+            legacyCompletedAt: legacyCompletedAt,
+            recordNamePrefix: recordNamePrefix,
+            now: now
+        )
+        return repairedCount
+    }
+
+    private func remoteSnapshotBackfillUpdatedAt(scope: String) throws -> String? {
+        try database.query(
+            """
+            SELECT updated_at
+            FROM sync_server_change_tokens
+            WHERE scope = ?
+            LIMIT 1
+            """,
+            bindings: [.text(scope)]
+        ).first?["updated_at"] ?? nil
+    }
+
+    private func adoptLegacySnapshotCreates(
+        entityType: String,
+        entityIDExpression: String,
+        sourceSQL: String,
+        sourceTimestampExpression: String,
+        sourcePredicate: String?,
+        legacyCompletedAt: String,
+        recordNamePrefix: String,
+        now: String
+    ) throws -> Int {
+        let predicatePrefix = sourcePredicate.map { "\($0) AND " } ?? ""
+        let countRow = try database.query(
+            """
+            SELECT COUNT(*) AS count
+            FROM \(sourceSQL)
+            JOIN sync_changes
+              ON sync_changes.entity_type = ?
+             AND sync_changes.entity_id = \(entityIDExpression)
+             AND sync_changes.change_type = 'create'
+            WHERE \(predicatePrefix)julianday(\(sourceTimestampExpression)) <= julianday(?)
+            """,
+            bindings: [
+                .text(entityType),
+                .text(legacyCompletedAt)
+            ]
+        ).first
+        let repairedCount = Int(countRow?["count"] ?? "") ?? 0
+        guard repairedCount > 0 else {
+            return 0
+        }
+
+        try database.execute(
+            """
+            INSERT OR REPLACE INTO sync_records (
+                id,
+                entity_type,
+                entity_id,
+                record_name,
+                change_tag,
+                updated_at
+            )
+            SELECT ? || '-' || \(entityIDExpression),
+                   ?,
+                   \(entityIDExpression),
+                   ? || ? || '.' || \(entityIDExpression),
+                   NULL,
+                   ?
+            FROM \(sourceSQL)
+            JOIN sync_changes
+              ON sync_changes.entity_type = ?
+             AND sync_changes.entity_id = \(entityIDExpression)
+             AND sync_changes.change_type = 'create'
+            WHERE \(predicatePrefix)julianday(\(sourceTimestampExpression)) <= julianday(?)
+            """,
+            bindings: [
+                .text(entityType),
+                .text(entityType),
+                .text(recordNamePrefix),
+                .text(entityType),
+                .text(now),
+                .text(entityType),
+                .text(legacyCompletedAt)
+            ]
+        )
+
+        try database.execute(
+            """
+            DELETE FROM sync_changes
+            WHERE entity_type = ?
+              AND change_type = 'create'
+              AND entity_id IN (
+                  SELECT \(entityIDExpression)
+                  FROM \(sourceSQL)
+                  WHERE \(predicatePrefix)julianday(\(sourceTimestampExpression)) <= julianday(?)
+              )
+            """,
+            bindings: [
+                .text(entityType),
+                .text(legacyCompletedAt)
+            ]
+        )
+
+        return repairedCount
+    }
+
     func syncRecords() throws -> [SyncRecord] {
         try database.query(
             """
