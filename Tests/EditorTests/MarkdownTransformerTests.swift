@@ -744,6 +744,61 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testInlineLinkScannerFindsWikiPageAndBlockLinks() {
+        let text = "See [[Specs]] and [[Specs#API contract]] today"
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text),
+            [
+                InlineLinkRun(
+                    kind: .internalWiki(label: "Specs", pageTitle: "Specs", blockText: nil),
+                    fullRange: NSRange(location: ("See " as NSString).length, length: ("[[Specs]]" as NSString).length),
+                    activeRange: NSRange(location: ("See [[" as NSString).length, length: ("Specs" as NSString).length)
+                ),
+                InlineLinkRun(
+                    kind: .internalWiki(label: "Specs#API contract", pageTitle: "Specs", blockText: "API contract"),
+                    fullRange: NSRange(location: ("See [[Specs]] and " as NSString).length, length: ("[[Specs#API contract]]" as NSString).length),
+                    activeRange: NSRange(location: ("See [[Specs]] and [[" as NSString).length, length: ("Specs#API contract" as NSString).length)
+                )
+            ]
+        )
+    }
+
+    func testInlineLinkScannerFindsMarkdownAndPlainExternalLinks() {
+        let text = "Read [Swift](https://swift.org), <https://example.com>, and https://apple.com."
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text).map(\.kind),
+            [
+                .external(label: "Swift", url: "https://swift.org"),
+                .external(label: "https://example.com", url: "https://example.com"),
+                .external(label: "https://apple.com", url: "https://apple.com")
+            ]
+        )
+    }
+
+    func testInlineLinkScannerIgnoresCodeSpansAndImages() {
+        let text = "`[[Specs]]` ![Logo](https://example.com/logo.png) [[Live]]"
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text).map(\.kind),
+            [.internalWiki(label: "Live", pageTitle: "Live", blockText: nil)]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerStylesWikiLinks() {
+        let text = "See [[Specs]] and [Swift](https://swift.org)"
+
+        XCTAssertTrue(
+            MarkdownInlineStyleScanner.runs(in: text).contains(
+                MarkdownInlineStyleRun(
+                    kind: .link,
+                    range: NSRange(location: ("See [[" as NSString).length, length: ("Specs" as NSString).length)
+                )
+            )
+        )
+    }
+
     func testMarkdownInlineStyleScannerFindsBoldCodeAndLinkLabelRanges() {
         let text = "Use **bold** and `code` from [Swift](https://swift.org)."
 
