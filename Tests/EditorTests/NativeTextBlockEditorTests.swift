@@ -2372,6 +2372,50 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(EditorCanvasRenderPolicy.usesLazyBlockStack)
     }
 
+    func testBlockRenderLayoutIndexPrecomputesNestingAndOrderedListOrdinals() {
+        let blocks = [
+            BlockSnapshot(id: "intro", pageID: "page", parentBlockID: nil, orderKey: "a", type: .paragraph, textPlain: "Intro"),
+            BlockSnapshot(id: "one", pageID: "page", parentBlockID: nil, orderKey: "b", type: .orderedListItem, textPlain: "One"),
+            BlockSnapshot(id: "one-child", pageID: "page", parentBlockID: "one", orderKey: "c", type: .paragraph, textPlain: "Child"),
+            BlockSnapshot(id: "two", pageID: "page", parentBlockID: nil, orderKey: "d", type: .orderedListItem, textPlain: "Two"),
+            BlockSnapshot(id: "break", pageID: "page", parentBlockID: nil, orderKey: "e", type: .paragraph, textPlain: "Break"),
+            BlockSnapshot(id: "restart", pageID: "page", parentBlockID: nil, orderKey: "f", type: .orderedListItem, textPlain: "Restart")
+        ]
+
+        let index = BlockRenderLayoutIndex(blocks: blocks)
+
+        XCTAssertEqual(index.nestingLevel(for: "one-child"), 1)
+        XCTAssertEqual(index.listOrdinal(for: "one"), 1)
+        XCTAssertEqual(index.listOrdinal(for: "two"), 2)
+        XCTAssertEqual(index.listOrdinal(for: "restart"), 1)
+        XCTAssertNil(index.listOrdinal(for: "intro"))
+    }
+
+    func testBlockFrameReportingSkipsParagraphRowsDuringIdleLongPageScroll() {
+        XCTAssertTrue(
+            BlockFrameReportingPolicy.shouldReportFrame(
+                blockType: .heading2,
+                isBlockSelectionMarqueeActive: false,
+                hasOutlineItems: true
+            )
+        )
+        XCTAssertFalse(
+            BlockFrameReportingPolicy.shouldReportFrame(
+                blockType: .paragraph,
+                isBlockSelectionMarqueeActive: false,
+                hasOutlineItems: true
+            ),
+            "Idle long-page scrolling should not publish every paragraph frame just to keep the outline active."
+        )
+        XCTAssertTrue(
+            BlockFrameReportingPolicy.shouldReportFrame(
+                blockType: .paragraph,
+                isBlockSelectionMarqueeActive: true,
+                hasOutlineItems: true
+            )
+        )
+    }
+
     func testEditorCanvasScrollMetricsTrackVisibleBlocksAndLargePageState() {
         var tracker = EditorCanvasScrollMetricsTracker(
             pageID: "page-1",

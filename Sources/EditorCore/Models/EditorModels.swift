@@ -624,12 +624,86 @@ struct AttachmentSnapshot: Identifiable, Equatable, Sendable {
     }
 }
 
+struct PageListPreview: Equatable, Sendable {
+    let excerpt: String?
+    let imageAttachment: AttachmentSnapshot?
+    let fileAttachment: AttachmentSnapshot?
+}
+
+enum PageListPreviewResolver {
+    static func preview(
+        page: PageSummary,
+        snapshot: WorkspaceSnapshot
+    ) -> PageListPreview {
+        if snapshot.blocks.contains(where: { $0.pageID == page.id }) {
+            return preview(
+                pageID: page.id,
+                blocks: snapshot.blocks,
+                attachments: snapshot.attachments,
+                isEncrypted: page.isEncrypted
+            )
+        }
+        return snapshot.pageListPreviews[page.id] ?? preview(
+            pageID: page.id,
+            blocks: snapshot.blocks,
+            attachments: snapshot.attachments,
+            isEncrypted: page.isEncrypted
+        )
+    }
+
+    static func preview(
+        pageID: String,
+        blocks: [BlockSnapshot],
+        attachments: [AttachmentSnapshot],
+        isEncrypted: Bool = false
+    ) -> PageListPreview {
+        guard !isEncrypted else {
+            return PageListPreview(
+                excerpt: nil,
+                imageAttachment: nil,
+                fileAttachment: nil
+            )
+        }
+
+        let pageBlocks = blocks.filter { $0.pageID == pageID }
+        let excerpt = pageBlocks.first { block in
+            block.type == .paragraph
+                && !block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imageAttachment = attachment(
+            in: attachments,
+            matching: pageBlocks.first { $0.type == .attachmentImage }
+        )
+        let fileAttachment = attachment(
+            in: attachments,
+            matching: pageBlocks.first { $0.type == .attachmentFile }
+        )
+
+        return PageListPreview(
+            excerpt: excerpt,
+            imageAttachment: imageAttachment,
+            fileAttachment: imageAttachment == nil ? fileAttachment : nil
+        )
+    }
+
+    private static func attachment(
+        in attachments: [AttachmentSnapshot],
+        matching block: BlockSnapshot?
+    ) -> AttachmentSnapshot? {
+        guard let block else {
+            return nil
+        }
+        return attachments.first { $0.matches(block: block) }
+    }
+}
+
 struct WorkspaceSnapshot: Equatable, Sendable {
     let workspaces: [WorkspaceSummary]
     let notebooks: [NotebookSummary]
     let pages: [PageSummary]
     let archivedPages: [PageSummary]
     let blocks: [BlockSnapshot]
+    let pageListPreviews: [String: PageListPreview]
     let attachments: [AttachmentSnapshot]
     let tags: [TagSummary]
     let pageTags: [PageTagAssignment]
@@ -679,6 +753,7 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         pages: [PageSummary],
         archivedPages: [PageSummary] = [],
         blocks: [BlockSnapshot],
+        pageListPreviews: [String: PageListPreview] = [:],
         attachments: [AttachmentSnapshot],
         tags: [TagSummary] = [],
         pageTags: [PageTagAssignment] = [],
@@ -695,6 +770,7 @@ struct WorkspaceSnapshot: Equatable, Sendable {
         self.pages = pages
         self.archivedPages = archivedPages
         self.blocks = blocks
+        self.pageListPreviews = pageListPreviews
         self.attachments = attachments
         self.tags = tags
         self.pageTags = pageTags
@@ -728,6 +804,7 @@ extension WorkspaceSnapshot {
             pages: pages,
             archivedPages: archivedPages,
             blocks: blocks.filter { $0.pageID != pageID } + replacementBlocks,
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -750,6 +827,7 @@ extension WorkspaceSnapshot {
             blocks: blocks.map { block in
                 block.id == blockID ? block.replacing(type: type, text: text) : block
             },
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -780,6 +858,7 @@ extension WorkspaceSnapshot {
             blocks: blocks.map { block in
                 block.id == blockID ? block.replacingTableRows(rows, text: text) : block
             },
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -802,6 +881,7 @@ extension WorkspaceSnapshot {
             blocks: blocks.map { block in
                 block.id == blockID ? block.replacingAttachmentDisplayWidth(displayWidth) : block
             },
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -824,6 +904,7 @@ extension WorkspaceSnapshot {
             blocks: blocks.map { block in
                 block.id == blockID ? block.replacingTaskItemCompletion(isCompleted) : block
             },
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -846,6 +927,7 @@ extension WorkspaceSnapshot {
             blocks: blocks.map { block in
                 block.id == blockID ? block.replacingToggleExpansion(isExpanded) : block
             },
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -868,6 +950,7 @@ extension WorkspaceSnapshot {
             blocks: blocks.map { block in
                 block.id == blockID ? block.replacingCodeBlockLineWrapping(isWrapped) : block
             },
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -902,6 +985,7 @@ extension WorkspaceSnapshot {
             },
             archivedPages: archivedPages,
             blocks: blocks,
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -950,6 +1034,7 @@ extension WorkspaceSnapshot {
                     : page
             },
             blocks: blocks,
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -998,6 +1083,7 @@ extension WorkspaceSnapshot {
                     : page
             },
             blocks: blocks,
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -1046,6 +1132,7 @@ extension WorkspaceSnapshot {
                     : page
             },
             blocks: blocks,
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -1075,6 +1162,7 @@ extension WorkspaceSnapshot {
             pages: pages,
             archivedPages: archivedPages,
             blocks: blocks,
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,

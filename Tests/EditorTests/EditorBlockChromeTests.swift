@@ -232,6 +232,55 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testEditorBlockChromeKeepsReadableParagraphSpacing() {
+        XCTAssertGreaterThanOrEqual(
+            EditorBlockChrome.blockSpacing,
+            8,
+            "Long documents need visible breathing room between paragraph blocks."
+        )
+        XCTAssertEqual(
+            EditorBlockChrome.listMarkerTopPadding,
+            3,
+            "List marker alignment is a guarded visual seam and should stay pinned while increasing paragraph spacing."
+        )
+        XCTAssertEqual(
+            InlineLeadingControlFrameDescriptor().textVerticalOffset,
+            -4,
+            "Task and toggle body text still need the established vertical compensation."
+        )
+    }
+
+    func testTopBarTitleUsesScrollAwareVisibilityAndLargerDesktopChrome() {
+        XCTAssertGreaterThanOrEqual(TopBarPageTitleChrome.desktopFontSize, 16)
+
+        var state = TopBarPageTitleVisibilityState()
+        state = state.updated(
+            titleFrame: CGRect(x: 0, y: 118, width: 480, height: 44),
+            scrollOffsetY: 0,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+        XCTAssertFalse(state.isVisible)
+
+        state = state.updated(
+            scrollOffsetY: 180,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+        XCTAssertTrue(
+            state.isVisible,
+            "The top-bar title should appear after the body title has scrolled under the toolbar."
+        )
+    }
+
+    func testMobileOutlineDrawerKeepsVerticalScrollAndRendersMarkdownTitles() throws {
+        XCTAssertTrue(OutlinePanelScrollPolicy.showsScrollIndicators)
+        XCTAssertGreaterThanOrEqual(OutlinePanelScrollPolicy.maxHeight(for: .standard), 360)
+        XCTAssertTrue(MobileOutlineDrawerScrollPolicy.allowsParentCloseGestureSimultaneously)
+        XCTAssertTrue(MobileOutlineDrawerScrollPolicy.showsScrollIndicators)
+
+        let display = try OutlineTitleMarkdownRenderer.displayText(for: "**重点**章节")
+        XCTAssertEqual(display, "重点章节")
+    }
+
     func testPageTitleFocusSchedulingStartsImmediatelyOnCompact() {
         XCTAssertEqual(PageTitleFocusSchedulingPolicy.compactRetryDelays.first, 0)
         XCTAssertLessThanOrEqual(
@@ -720,8 +769,8 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
-    func testCraftQuietChromeKeepsListRowsUnboxedAndCompact() {
-        XCTAssertEqual(EditorBlockChrome.blockSpacing, 0)
+    func testCraftQuietChromeKeepsListRowsUnboxedWithReadableParagraphSpacing() {
+        XCTAssertEqual(EditorBlockChrome.blockSpacing, 8)
         XCTAssertEqual(EditorBlockChrome.rowVerticalPadding, 0)
         XCTAssertEqual(EditorBlockChrome.listVerticalPadding, 0)
         XCTAssertEqual(EditorBlockChrome.listBackgroundOpacity, 0)

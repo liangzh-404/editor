@@ -188,6 +188,19 @@ final class PageRepository: @unchecked Sendable {
                 kind: AttachmentKind(utiType: utiType)
             )
         }
+        let previewPages = pages + archivedPages
+        let pageListPreviewBlocks = try loadPageListPreviewBlocks(pageIDs: previewPages.map(\.id))
+        let pageListPreviews = Dictionary(uniqueKeysWithValues: previewPages.map { page in
+            (
+                page.id,
+                PageListPreviewResolver.preview(
+                    pageID: page.id,
+                    blocks: pageListPreviewBlocks,
+                    attachments: attachments,
+                    isEncrypted: page.isEncrypted
+                )
+            )
+        })
 
         let tagRepository = TagRepository(database: database)
         let tags = try selectedWorkspaceID.map { try tagRepository.tags(workspaceID: $0) } ?? []
@@ -257,6 +270,7 @@ final class PageRepository: @unchecked Sendable {
             pages: pages,
             archivedPages: archivedPages,
             blocks: blocks,
+            pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,
             pageTags: pageTags,
@@ -2770,70 +2784,129 @@ final class PageRepository: @unchecked Sendable {
             ORDER BY blocks.page_id ASC, blocks.order_key ASC
             """,
             bindings: pageIDs.map(SQLiteValue.text)
-        ).map { row in
-            let type = BlockType(rawValue: row["type"] ?? "") ?? .paragraph
-            let isEncrypted = Self.sqliteBool(row["is_encrypted"])
-            let payloadJSON = decryptedBlockValueForSnapshot(
-                row["payload_json"] ?? "",
-                isEncrypted: isEncrypted,
-                fallback: "{}",
-                blockID: row["id"] ?? ""
-            )
-            let textPlain = decryptedBlockValueForSnapshot(
-                row["text_plain"] ?? "",
-                isEncrypted: isEncrypted,
-                fallback: "",
-                blockID: row["id"] ?? ""
-            )
-            let taskItemIsCompleted = type == .taskItem
-                ? Self.taskItemIsCompleted(payloadJSON: payloadJSON)
-                : false
-            let toggleIsExpanded = type == .toggle
-                ? Self.toggleIsExpanded(payloadJSON: payloadJSON)
-                : true
-            let codeBlockLineWrapping = type == .codeBlock
-                ? Self.codeBlockLineWrapping(payloadJSON: payloadJSON)
-                : true
-            let pageReferenceTargetPageID: String?
-            let blockReferenceTargetBlockID: String?
-            switch type {
-            case .pageReference:
-                pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: payloadJSON)
-                blockReferenceTargetBlockID = nil
-            case .blockReference:
-                pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: payloadJSON)
-                blockReferenceTargetBlockID = Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
-            default:
-                pageReferenceTargetPageID = nil
-                blockReferenceTargetBlockID = nil
-            }
-            return BlockSnapshot(
-                id: row["id"] ?? "",
-                pageID: row["page_id"] ?? "",
-                parentBlockID: row["parent_block_id"] ?? nil,
-                orderKey: row["order_key"] ?? "",
-                type: type,
-                textPlain: textPlain,
-                taskItemIsCompleted: taskItemIsCompleted,
-                toggleIsExpanded: toggleIsExpanded,
-                codeBlockLineWrapping: codeBlockLineWrapping,
-                pageReferenceTargetPageID: pageReferenceTargetPageID,
-                blockReferenceTargetBlockID: blockReferenceTargetBlockID,
-                tableRows: Self.tableRows(
-                    type: type,
-                    payloadJSON: payloadJSON,
-                    text: textPlain
-                ),
-                attachmentID: Self.attachmentID(
-                    type: type,
-                    payloadJSON: payloadJSON
-                ),
-                attachmentDisplayWidth: Self.attachmentDisplayWidth(
-                    type: type,
-                    payloadJSON: payloadJSON
-                )
-            )
+        ).map(blockSnapshot(from:))
+    }
+
+    private func loadPageListPreviewBlocks(pageIDs: [String]) throws -> [BlockSnapshot] {
+        guard !pageIDs.isEmpty else {
+            return []
         }
+
+        let placeholders = Array(repeating: "?", count: pageIDs.count).joined(separator: ", ")
+        return try database.query(
+            """
+            SELECT blocks.id AS id,
+                   blocks.page_id AS page_id,
+                   blocks.parent_block_id AS parent_block_id,
+                   blocks.order_key AS order_key,
+                   blocks.type AS type,
+                   blocks.payload_json AS payload_json,
+                   blocks.text_plain AS text_plain,
+                   pages.is_encrypted AS is_encrypted
+            FROM blocks
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.page_id IN (\(placeholders))
+              AND blocks.is_deleted = 0
+              AND pages.is_encrypted = 0
+              AND (
+                  blocks.id = (
+                      SELECT candidate.id
+                      FROM blocks AS candidate
+                      WHERE candidate.page_id = blocks.page_id
+                        AND candidate.is_deleted = 0
+                        AND candidate.type = 'paragraph'
+                        AND length(trim(candidate.text_plain)) > 0
+                      ORDER BY candidate.order_key ASC
+                      LIMIT 1
+                  )
+                  OR blocks.id = (
+                      SELECT candidate.id
+                      FROM blocks AS candidate
+                      WHERE candidate.page_id = blocks.page_id
+                        AND candidate.is_deleted = 0
+                        AND candidate.type = 'attachmentImage'
+                      ORDER BY candidate.order_key ASC
+                      LIMIT 1
+                  )
+                  OR blocks.id = (
+                      SELECT candidate.id
+                      FROM blocks AS candidate
+                      WHERE candidate.page_id = blocks.page_id
+                        AND candidate.is_deleted = 0
+                        AND candidate.type = 'attachmentFile'
+                      ORDER BY candidate.order_key ASC
+                      LIMIT 1
+                  )
+              )
+            ORDER BY blocks.page_id ASC, blocks.order_key ASC
+            """,
+            bindings: pageIDs.map(SQLiteValue.text)
+        ).map(blockSnapshot(from:))
+    }
+
+    private func blockSnapshot(from row: SQLiteRow) -> BlockSnapshot {
+        let type = BlockType(rawValue: row["type"] ?? "") ?? .paragraph
+        let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+        let payloadJSON = decryptedBlockValueForSnapshot(
+            row["payload_json"] ?? "",
+            isEncrypted: isEncrypted,
+            fallback: "{}",
+            blockID: row["id"] ?? ""
+        )
+        let textPlain = decryptedBlockValueForSnapshot(
+            row["text_plain"] ?? "",
+            isEncrypted: isEncrypted,
+            fallback: "",
+            blockID: row["id"] ?? ""
+        )
+        let taskItemIsCompleted = type == .taskItem
+            ? Self.taskItemIsCompleted(payloadJSON: payloadJSON)
+            : false
+        let toggleIsExpanded = type == .toggle
+            ? Self.toggleIsExpanded(payloadJSON: payloadJSON)
+            : true
+        let codeBlockLineWrapping = type == .codeBlock
+            ? Self.codeBlockLineWrapping(payloadJSON: payloadJSON)
+            : true
+        let pageReferenceTargetPageID: String?
+        let blockReferenceTargetBlockID: String?
+        switch type {
+        case .pageReference:
+            pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: payloadJSON)
+            blockReferenceTargetBlockID = nil
+        case .blockReference:
+            pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: payloadJSON)
+            blockReferenceTargetBlockID = Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
+        default:
+            pageReferenceTargetPageID = nil
+            blockReferenceTargetBlockID = nil
+        }
+        return BlockSnapshot(
+            id: row["id"] ?? "",
+            pageID: row["page_id"] ?? "",
+            parentBlockID: row["parent_block_id"] ?? nil,
+            orderKey: row["order_key"] ?? "",
+            type: type,
+            textPlain: textPlain,
+            taskItemIsCompleted: taskItemIsCompleted,
+            toggleIsExpanded: toggleIsExpanded,
+            codeBlockLineWrapping: codeBlockLineWrapping,
+            pageReferenceTargetPageID: pageReferenceTargetPageID,
+            blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            tableRows: Self.tableRows(
+                type: type,
+                payloadJSON: payloadJSON,
+                text: textPlain
+            ),
+            attachmentID: Self.attachmentID(
+                type: type,
+                payloadJSON: payloadJSON
+            ),
+            attachmentDisplayWidth: Self.attachmentDisplayWidth(
+                type: type,
+                payloadJSON: payloadJSON
+            )
+        )
     }
 
     private static func pageTitle(fromBlockText text: String) -> String {

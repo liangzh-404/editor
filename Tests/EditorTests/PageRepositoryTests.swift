@@ -52,6 +52,30 @@ final class PageRepositoryTests: XCTestCase {
         )
     }
 
+    func testStartupMetadataIncludesPageListPreviewWithoutHydratingFullBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let page = try repository.createPage(workspaceID: workspaceID, title: "Preview before click")
+        _ = try repository.appendBlock(pageID: page.id, type: .heading1, text: "Heading should not be excerpt")
+        _ = try repository.appendBlock(pageID: page.id, type: .paragraph, text: "中栏启动时就应该看到这段预览")
+        for index in 0..<40 {
+            _ = try repository.appendBlock(pageID: page.id, type: .paragraph, text: "Long body \(index)")
+        }
+
+        let startupSnapshot = try repository.loadWorkspaceSnapshot(blockPageIDs: [])
+
+        XCTAssertEqual(startupSnapshot.blocks, [])
+        XCTAssertEqual(
+            startupSnapshot.pageListPreviews[page.id]?.excerpt,
+            "中栏启动时就应该看到这段预览",
+            "Middle-column previews should not depend on clicking the page and hydrating all blocks."
+        )
+    }
+
     func testBootstrapIsIdempotent() throws {
         let database = try migratedDatabase()
         defer { database.close() }

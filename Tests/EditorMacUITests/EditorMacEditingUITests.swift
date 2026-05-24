@@ -2488,6 +2488,15 @@ final class EditorMacEditingUITests: XCTestCase {
             "The first seeded large-page block should expose its text value"
         )
 
+        let pageTitle = app.textFields["editor.page-title"]
+        XCTAssertTrue(pageTitle.waitForExistence(timeout: 5), "Large pages should expose an editable body title")
+        pageTitle.click()
+        app.typeText(" Responsive")
+        XCTAssertTrue(
+            pageTitle.waitForValue(containing: "Responsive", timeout: 5),
+            "Clicking the title in a large page should still focus the title editor before scrolling"
+        )
+
         let canvas = app.scrollViews["editor.canvas-scroll"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 5), "The editor canvas scroll view should be addressable")
 

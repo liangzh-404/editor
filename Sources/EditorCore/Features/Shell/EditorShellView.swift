@@ -407,6 +407,13 @@ struct MobileNavigationTitleVisibilityState: Equatable, Sendable {
     }
 }
 
+typealias TopBarPageTitleVisibilityState = MobileNavigationTitleVisibilityState
+
+enum TopBarPageTitleChrome {
+    static let desktopFontSize: CGFloat = 16
+    static let desktopMaxWidth: CGFloat = 420
+}
+
 enum EditorCanvasWidthPolicy {
     static func maxWidth(hasVisibleAuxiliaryRail: Bool) -> Double {
         EditorDesignTokens.Layout.editorExpandedMaxWidth
@@ -2323,7 +2330,7 @@ private struct PageRowStatusBadges: View {
 }
 
 enum EditorBlockChrome {
-    static let blockSpacing: Double = 0
+    static let blockSpacing: Double = 8
     static let rowVerticalPadding: Double = 0
     static let listVerticalPadding: Double = 0
     static let listHorizontalPadding: Double = 0
@@ -4753,59 +4760,6 @@ enum SlashCommandMenuScrollPolicy {
     }
 }
 
-struct PageListPreview: Equatable, Sendable {
-    let excerpt: String?
-    let imageAttachment: AttachmentSnapshot?
-    let fileAttachment: AttachmentSnapshot?
-}
-
-enum PageListPreviewResolver {
-    static func preview(
-        pageID: String,
-        blocks: [BlockSnapshot],
-        attachments: [AttachmentSnapshot],
-        isEncrypted: Bool = false
-    ) -> PageListPreview {
-        guard !isEncrypted else {
-            return PageListPreview(
-                excerpt: nil,
-                imageAttachment: nil,
-                fileAttachment: nil
-            )
-        }
-
-        let pageBlocks = blocks.filter { $0.pageID == pageID }
-        let excerpt = pageBlocks.first { block in
-            block.type == .paragraph
-                && !block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }?.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
-        let imageAttachment = attachment(
-            in: attachments,
-            matching: pageBlocks.first { $0.type == .attachmentImage }
-        )
-        let fileAttachment = attachment(
-            in: attachments,
-            matching: pageBlocks.first { $0.type == .attachmentFile }
-        )
-
-        return PageListPreview(
-            excerpt: excerpt,
-            imageAttachment: imageAttachment,
-            fileAttachment: imageAttachment == nil ? fileAttachment : nil
-        )
-    }
-
-    private static func attachment(
-        in attachments: [AttachmentSnapshot],
-        matching block: BlockSnapshot?
-    ) -> AttachmentSnapshot? {
-        guard let block else {
-            return nil
-        }
-        return attachments.first { $0.matches(block: block) }
-    }
-}
-
 enum PageReferencePreviewResolver {
     static func previewText(targetPageID: String?, blocks: [BlockSnapshot]) -> String? {
         guard let targetPageID else {
@@ -5239,12 +5193,7 @@ enum CompactCollectionPageListModel {
                 id: page.id,
                 page: page,
                 tagNames: tagNames(for: page, snapshot: snapshot),
-                preview: PageListPreviewResolver.preview(
-                    pageID: page.id,
-                    blocks: snapshot.blocks,
-                    attachments: snapshot.attachments,
-                    isEncrypted: page.isEncrypted
-                )
+                preview: PageListPreviewResolver.preview(page: page, snapshot: snapshot)
             )
         }
     }
@@ -7120,12 +7069,7 @@ private struct PageListView: View {
             isSelected: viewModel.selectedPageID == page.id,
             isMarkedForBatch: selectedPageIDs.contains(page.id),
             tagNames: tagNames,
-            preview: PageListPreviewResolver.preview(
-                pageID: page.id,
-                blocks: viewModel.snapshot.blocks,
-                attachments: viewModel.snapshot.attachments,
-                isEncrypted: page.isEncrypted
-            ),
+            preview: PageListPreviewResolver.preview(page: page, snapshot: viewModel.snapshot),
             usesRichPreview: true,
             onBatchSelectionToggle: showsMiddleColumnRowControls ? {
                 togglePageBatchSelection(page.id)
@@ -9140,9 +9084,7 @@ private struct ArchivedPageRow: View {
 
 private enum EditorCanvasCoordinateSpace {
     static let blockSelection = "editor.canvas.block-selection"
-#if os(iOS)
     static let mobileNavigationTitle = "editor.canvas.mobile-navigation-title"
-#endif
 }
 
 private enum PageListCoordinateSpace {
@@ -10068,6 +10010,8 @@ private struct EditorCanvasView: View {
     @State private var isPageTitleInteractionActive = false
     @State private var isPageTitleFocusRequestActive = false
     @State private var pageTitleTextViewHeight: CGFloat = 44
+#elseif os(macOS)
+    @State private var desktopNavigationTitleState = TopBarPageTitleVisibilityState()
 #endif
 
     var body: some View {
@@ -10150,6 +10094,7 @@ private struct EditorCanvasView: View {
                         .onSubmit {
                             focusFirstEditableBlockFromPageTitle()
                         }
+                        .background(titleFrameReporter)
 #endif
 
                     Spacer(minLength: 12)
@@ -10207,16 +10152,18 @@ private struct EditorCanvasView: View {
 #endif
 
                 let blockDragPayloadIndex = BlockDragPayloadIndex(blocks: blocks)
+                let blockLayoutIndex = BlockRenderLayoutIndex(blocks: blocks)
                 ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
                     let dragPayloadBlockIDs = blockDragPayloadIndex.payloadBlockIDs(rootBlockID: block.id)
                     let searchHighlight = pendingSearchHighlight?.blockID == block.id ? pendingSearchHighlight : nil
+                    let blockNestingLevel = blockLayoutIndex.nestingLevel(for: block.id)
 
                     if index == 0 {
                         BlockDropSlot(
                             destinationBlockID: block.id,
                             slotKind: .before,
                             activeDropTarget: $activeBlockDropTarget,
-                            destinationLevel: nestingLevel(for: block),
+                            destinationLevel: blockNestingLevel,
                             moveDroppedBlocks: moveDroppedBlocks
                         )
                     }
@@ -10232,8 +10179,8 @@ private struct EditorCanvasView: View {
                         ),
                         contentFont: contentFont,
                         editorSession: editorSession,
-                        nestingLevel: nestingLevel(for: block),
-                        listOrdinal: ListBlockOrdinalResolver.ordinal(for: block, at: index, in: blocks),
+                        nestingLevel: blockNestingLevel,
+                        listOrdinal: blockLayoutIndex.listOrdinal(for: block.id),
                         dragPayloadBlockIDs: dragPayloadBlockIDs,
                         canMoveUp: index > 0,
                         canMoveDown: index < blocks.count - 1,
@@ -10452,7 +10399,10 @@ private struct EditorCanvasView: View {
                         onBlockTextChange(block.id, text)
                     }
                     .id(block.id)
-                    .background(blockSelectionFrameReporter(block.id))
+                    .background(blockSelectionFrameReporter(
+                        block.id,
+                        isEnabled: shouldReportBlockFrame(for: block)
+                    ))
                     .onAppear {
                         scheduleVisibleBlockAppeared(block.id, index: index)
                     }
@@ -10465,7 +10415,7 @@ private struct EditorCanvasView: View {
                             isEnabled: MobileBlockDragActivationPolicy.usesWholeRowDropTarget,
                             destinationBlockID: block.id,
                             activeDropTarget: $activeBlockDropTarget,
-                            destinationLevel: nestingLevel(for: block),
+                            destinationLevel: blockNestingLevel,
                             moveDroppedBlocks: moveDroppedBlocks
                         )
                     )
@@ -10475,7 +10425,7 @@ private struct EditorCanvasView: View {
                         destinationBlockID: block.id,
                         slotKind: .after,
                         activeDropTarget: $activeBlockDropTarget,
-                        destinationLevel: nestingLevel(for: block),
+                        destinationLevel: blockNestingLevel,
                         moveDroppedBlocks: moveDroppedBlocks
                     )
                 }
@@ -10537,16 +10487,22 @@ private struct EditorCanvasView: View {
             .onPreferenceChange(AttachmentResizeHandleFramePreferenceKey.self) { frames in
                 attachmentResizeHandleFrames = frames
             }
-#if os(iOS)
             .onPreferenceChange(MobilePageTitleFramePreferenceKey.self) { frame in
+#if os(iOS)
                 updateMobileNavigationTitleVisibility(titleFrame: frame)
+#elseif os(macOS)
+                updateDesktopNavigationTitleVisibility(titleFrame: frame)
+#endif
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentOffset.y
             } action: { _, offsetY in
+#if os(iOS)
                 updateMobileNavigationTitleVisibility(scrollOffsetY: offsetY)
-            }
+#elseif os(macOS)
+                updateDesktopNavigationTitleVisibility(scrollOffsetY: offsetY)
 #endif
+            }
             .overlay(alignment: .topLeading) {
                 if let blockSelectionMarqueeRect {
                     BlockSelectionMarqueeOverlay(rect: blockSelectionMarqueeRect)
@@ -10603,9 +10559,7 @@ private struct EditorCanvasView: View {
 #endif
         }
         .background(EditorDesignTokens.Colors.editorBackground.color)
-#if os(iOS)
         .coordinateSpace(name: EditorCanvasCoordinateSpace.mobileNavigationTitle)
-#endif
 #if os(iOS)
         .safeAreaInset(edge: .bottom) {
             if !editorSession.selectedBlockIDs.isEmpty {
@@ -10813,6 +10767,7 @@ private struct EditorCanvasView: View {
             isPageTitleInteractionActive = false
             isPageTitleFocusRequestActive = false
 #elseif os(macOS)
+            resetDesktopNavigationTitleVisibility()
             desktopOutlineSelectedBlockID = nil
             isDesktopOutlineTriggerHovered = false
             isDesktopOutlinePopoverHovered = false
@@ -11032,6 +10987,48 @@ private struct EditorCanvasView: View {
             mobileNavigationTitleState = nextState
         }
     }
+#elseif os(macOS)
+    @ViewBuilder
+    private var desktopNavigationTitleView: some View {
+        if desktopNavigationTitleState.isVisible {
+            Text(PageTitleDisplayPolicy.listTitle(for: page?.title ?? ""))
+                .font(.system(size: TopBarPageTitleChrome.desktopFontSize, weight: .semibold))
+                .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+                .lineLimit(1)
+                .frame(maxWidth: TopBarPageTitleChrome.desktopMaxWidth, alignment: .trailing)
+                .transition(.opacity)
+                .accessibilityIdentifier("editor.desktop-navigation-title")
+        }
+    }
+
+    private func resetDesktopNavigationTitleVisibility() {
+        let nextState = TopBarPageTitleVisibilityState()
+        setDesktopNavigationTitleState(nextState)
+    }
+
+    private func updateDesktopNavigationTitleVisibility(
+        titleFrame: CGRect? = nil,
+        scrollOffsetY: CGFloat? = nil
+    ) {
+        let nextState = desktopNavigationTitleState.updated(
+            titleFrame: titleFrame,
+            scrollOffsetY: scrollOffsetY,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+        setDesktopNavigationTitleState(nextState)
+    }
+
+    private func setDesktopNavigationTitleState(_ nextState: TopBarPageTitleVisibilityState) {
+        guard desktopNavigationTitleState != nextState else {
+            return
+        }
+        DispatchQueue.main.async {
+            if desktopNavigationTitleState != nextState {
+                desktopNavigationTitleState = nextState
+            }
+        }
+    }
+#endif
 
     private var titleFrameReporter: some View {
         GeometryReader { proxy in
@@ -11041,7 +11038,6 @@ private struct EditorCanvasView: View {
             )
         }
     }
-#endif
 
     private var pageReferenceTargets: [PageSummary] {
         pages.filter { targetPage in
@@ -11195,6 +11191,8 @@ private struct EditorCanvasView: View {
 
     private var macCanvasToolbar: some View {
         HStack(spacing: 10) {
+            desktopNavigationTitleView
+
             pageInfoButton
             pageActionsMenu
 
@@ -11266,7 +11264,7 @@ private struct EditorCanvasView: View {
                     .accessibilityIdentifier("editor.mobile-outline-drawer")
                 }
                 .contentShape(Rectangle())
-                .highPriorityGesture(mobileOutlineCloseGesture)
+                .simultaneousGesture(mobileOutlineCloseGesture)
             }
         }
     }
@@ -12200,12 +12198,23 @@ private struct EditorCanvasView: View {
         onDeleteBlock(fallbackBlockID)
     }
 
-    private func blockSelectionFrameReporter(_ blockID: String) -> some View {
-        GeometryReader { proxy in
-            Color.clear.preference(
-                key: BlockRowFramePreferenceKey.self,
-                value: [blockID: proxy.frame(in: .named(EditorCanvasCoordinateSpace.blockSelection))]
-            )
+    private func shouldReportBlockFrame(for block: BlockSnapshot) -> Bool {
+        BlockFrameReportingPolicy.shouldReportFrame(
+            blockType: block.type,
+            isBlockSelectionMarqueeActive: blockSelectionMarqueeStart != nil,
+            hasOutlineItems: !outlineItems.isEmpty
+        )
+    }
+
+    @ViewBuilder
+    private func blockSelectionFrameReporter(_ blockID: String, isEnabled: Bool = true) -> some View {
+        if isEnabled {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: BlockRowFramePreferenceKey.self,
+                    value: [blockID: proxy.frame(in: .named(EditorCanvasCoordinateSpace.blockSelection))]
+                )
+            }
         }
     }
 
@@ -13355,7 +13364,7 @@ private struct ExternalLinksPanel: View {
     }
 }
 
-private enum OutlinePanelStyle {
+enum OutlinePanelStyle {
     case standard
     case inline
     case popover
@@ -13407,6 +13416,36 @@ private enum OutlinePanelStyle {
     }
 }
 
+enum OutlinePanelScrollPolicy {
+    static let showsScrollIndicators = true
+
+    static func maxHeight(for style: OutlinePanelStyle) -> CGFloat {
+        switch style {
+        case .standard:
+            return 420
+        case .inline, .popover:
+            return 360
+        }
+    }
+}
+
+enum OutlineTitleMarkdownRenderer {
+    static func attributedString(for markdown: String) throws -> AttributedString {
+        try AttributedString(
+            markdown: markdown,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )
+    }
+
+    static func displayText(for markdown: String) throws -> String {
+        String(try attributedString(for: markdown).characters)
+    }
+
+    static func fallbackAttributedString(for markdown: String) -> AttributedString {
+        (try? attributedString(for: markdown)) ?? AttributedString(markdown)
+    }
+}
+
 private struct OutlinePanel: View {
     let outlineItems: [PageOutlineItem]
     let activeBlockID: String?
@@ -13422,49 +13461,54 @@ private struct OutlinePanel: View {
                     .accessibilityIdentifier("editor.outline")
             }
 
-            ForEach(outlineItems) { item in
-                let isActive = item.blockID == activeBlockID
-                Button {
-                    onSelectOutlineItem(item)
-                } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: style.showsLevelBadges ? 8 : 0) {
-                        if style.showsLevelBadges {
-                            Text("H\(min(max(item.level, 1), 6))")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
-                                .frame(width: 22, height: 18)
-                                .background(EditorDesignTokens.Colors.border.color.opacity(0.62))
-                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                        }
+            ScrollView(.vertical, showsIndicators: OutlinePanelScrollPolicy.showsScrollIndicators) {
+                LazyVStack(alignment: .leading, spacing: style == .standard ? 2 : 1) {
+                    ForEach(outlineItems) { item in
+                        let isActive = item.blockID == activeBlockID
+                        Button {
+                            onSelectOutlineItem(item)
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: style.showsLevelBadges ? 8 : 0) {
+                                if style.showsLevelBadges {
+                                    Text("H\(min(max(item.level, 1), 6))")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                                        .frame(width: 22, height: 18)
+                                        .background(EditorDesignTokens.Colors.border.color.opacity(0.62))
+                                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                }
 
-                        Text(item.title)
-                            .font(titleFont)
-                            .lineLimit(1)
-                            .foregroundStyle(titleColor(isActive: isActive))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.leading, CGFloat(max(item.level - 1, 0)) * style.indentWidth)
-                    .padding(.horizontal, style.rowHorizontalPadding)
-                    .padding(.vertical, style.rowVerticalPadding)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(activeBackground(isActive: isActive))
-                    )
-                    .overlay(alignment: .leading) {
-                        if isActive && style == .standard {
-                            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                .fill(EditorDesignTokens.Colors.accent.color.opacity(0.78))
-                                .frame(width: 3)
-                                .padding(.vertical, 6)
+                                Text(OutlineTitleMarkdownRenderer.fallbackAttributedString(for: item.title))
+                                    .font(titleFont)
+                                    .lineLimit(1)
+                                    .foregroundStyle(titleColor(isActive: isActive))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(.leading, CGFloat(max(item.level - 1, 0)) * style.indentWidth)
+                            .padding(.horizontal, style.rowHorizontalPadding)
+                            .padding(.vertical, style.rowVerticalPadding)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(activeBackground(isActive: isActive))
+                            )
+                            .overlay(alignment: .leading) {
+                                if isActive && style == .standard {
+                                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                        .fill(EditorDesignTokens.Colors.accent.color.opacity(0.78))
+                                        .frame(width: 3)
+                                        .padding(.vertical, 6)
+                                }
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Outline heading \(outlineAccessibilityTitle(for: item))")
+                        .accessibilityValue("Level \(item.level)")
+                        .accessibilityIdentifier("editor.outline.\(item.blockID)")
                     }
                 }
-                .buttonStyle(.plain)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Outline heading \(item.title)")
-                .accessibilityValue("Level \(item.level)")
-                .accessibilityIdentifier("editor.outline.\(item.blockID)")
             }
+            .frame(maxHeight: OutlinePanelScrollPolicy.maxHeight(for: style), alignment: .top)
         }
         .padding(.top, style.topPadding)
         .accessibilityElement(children: .contain)
@@ -13513,6 +13557,15 @@ private struct OutlinePanel: View {
             return EditorDesignTokens.Colors.accent.color.opacity(0.08)
         }
     }
+
+    private func outlineAccessibilityTitle(for item: PageOutlineItem) -> String {
+        (try? OutlineTitleMarkdownRenderer.displayText(for: item.title)) ?? item.title
+    }
+}
+
+enum MobileOutlineDrawerScrollPolicy {
+    static let allowsParentCloseGestureSimultaneously = true
+    static let showsScrollIndicators = true
 }
 
 #if os(iOS)
@@ -13562,7 +13615,7 @@ private struct MobileOutlineDrawer: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("editor.mobile-outline.empty")
             } else {
-                ScrollView(.vertical, showsIndicators: false) {
+                ScrollView(.vertical, showsIndicators: MobileOutlineDrawerScrollPolicy.showsScrollIndicators) {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(outlineItems) { item in
                             Button {
@@ -13574,7 +13627,7 @@ private struct MobileOutlineDrawer: View {
                                         .frame(width: 3, height: item.level == 1 ? 22 : 16)
 
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.title)
+                                        Text(OutlineTitleMarkdownRenderer.fallbackAttributedString(for: item.title))
                                             .font(.callout.weight(item.level == 1 ? .semibold : .medium))
                                             .foregroundStyle(.primary)
                                             .lineLimit(1)
@@ -13594,7 +13647,7 @@ private struct MobileOutlineDrawer: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityElement(children: .combine)
-                            .accessibilityLabel("大纲标题 \(item.title)")
+                            .accessibilityLabel("大纲标题 \(outlineAccessibilityTitle(for: item))")
                             .accessibilityValue("\(item.level) 级")
                             .accessibilityIdentifier("editor.mobile-outline.\(item.blockID)")
                         }
@@ -13605,6 +13658,10 @@ private struct MobileOutlineDrawer: View {
         .padding(.top, 20)
         .padding(.horizontal, 18)
         .padding(.bottom, 22)
+    }
+
+    private func outlineAccessibilityTitle(for item: PageOutlineItem) -> String {
+        (try? OutlineTitleMarkdownRenderer.displayText(for: item.title)) ?? item.title
     }
 }
 #endif
@@ -14072,6 +14129,95 @@ struct ListBlockOrdinalResolver: Equatable, Sendable {
             candidateIndex -= 1
         }
         return ordinal
+    }
+}
+
+struct BlockRenderLayoutIndex: Equatable, Sendable {
+    private let nestingLevelsByBlockID: [String: Int]
+    private let orderedListOrdinalsByBlockID: [String: Int]
+
+    init(blocks: [BlockSnapshot]) {
+        let blocksByID = Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0) })
+        var nestingCache: [String: Int] = [:]
+        var nestingLevels: [String: Int] = [:]
+        for block in blocks {
+            nestingLevels[block.id] = Self.nestingLevel(
+                for: block,
+                blocksByID: blocksByID,
+                cache: &nestingCache,
+                visitingBlockIDs: []
+            )
+        }
+
+        var orderedRunsByParentID: [String?: Int] = [:]
+        var orderedOrdinals: [String: Int] = [:]
+        for block in blocks {
+            if block.type == .orderedListItem {
+                let ordinal = (orderedRunsByParentID[block.parentBlockID] ?? 0) + 1
+                orderedRunsByParentID[block.parentBlockID] = ordinal
+                orderedOrdinals[block.id] = ordinal
+            } else {
+                orderedRunsByParentID[block.parentBlockID] = 0
+            }
+        }
+
+        self.nestingLevelsByBlockID = nestingLevels
+        self.orderedListOrdinalsByBlockID = orderedOrdinals
+    }
+
+    func nestingLevel(for blockID: String) -> Int {
+        nestingLevelsByBlockID[blockID] ?? 0
+    }
+
+    func listOrdinal(for blockID: String) -> Int? {
+        orderedListOrdinalsByBlockID[blockID]
+    }
+
+    private static func nestingLevel(
+        for block: BlockSnapshot,
+        blocksByID: [String: BlockSnapshot],
+        cache: inout [String: Int],
+        visitingBlockIDs: Set<String>
+    ) -> Int {
+        if let cached = cache[block.id] {
+            return cached
+        }
+        guard !visitingBlockIDs.contains(block.id) else {
+            cache[block.id] = 0
+            return 0
+        }
+        guard let parentBlockID = block.parentBlockID,
+              let parent = blocksByID[parentBlockID],
+              parent.id != block.id else {
+            cache[block.id] = 0
+            return 0
+        }
+        var nextVisitingBlockIDs = visitingBlockIDs
+        nextVisitingBlockIDs.insert(block.id)
+        let level = min(
+            6,
+            nestingLevel(
+                for: parent,
+                blocksByID: blocksByID,
+                cache: &cache,
+                visitingBlockIDs: nextVisitingBlockIDs
+            ) + 1
+        )
+        cache[block.id] = level
+        return level
+    }
+}
+
+enum BlockFrameReportingPolicy {
+    static func shouldReportFrame(
+        blockType: BlockType,
+        isBlockSelectionMarqueeActive: Bool,
+        hasOutlineItems: Bool
+    ) -> Bool {
+        if isBlockSelectionMarqueeActive {
+            return true
+        }
+        return hasOutlineItems && blockType.isHeading
     }
 }
 

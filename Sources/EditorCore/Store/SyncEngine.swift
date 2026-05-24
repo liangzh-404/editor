@@ -310,7 +310,6 @@ enum CloudKitRuntimeProbeError: Error, CustomStringConvertible {
     }
 }
 
-#if DEBUG
 struct CloudKitRuntimeProbeDiagnosticRequest: Equatable {
     static let enabledKey = "EDITOR_CLOUDKIT_RUNTIME_PROBE_DIAGNOSTIC"
 
@@ -356,6 +355,7 @@ struct RemoteNotificationSyncDiagnosticRequest: Equatable {
     }
 }
 
+#if DEBUG
 struct CloudKitSyncDiagnosticResult: Equatable {
     enum Status: Equatable {
         case skipped
