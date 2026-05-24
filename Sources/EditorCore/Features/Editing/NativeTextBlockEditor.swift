@@ -318,6 +318,12 @@ enum NativeInlineLinkPointHitGuard {
         }
         return linkBounds.contains(point)
     }
+
+    static func contains(point: CGPoint, fragmentBounds: [CGRect]) -> Bool {
+        fragmentBounds.contains {
+            !$0.isNull && !$0.isEmpty && $0.contains(point)
+        }
+    }
 }
 
 enum NativeTextMarkdownSyntaxMarkerAttributes {
@@ -2341,6 +2347,7 @@ private final class EditorNSTextView: NSTextView {
         guard characterRange.length > 0 else {
             return nil
         }
+        // AppKit only exposes the first rect here; this intentionally prefers false negatives for wrapped links.
         var actualRange = NSRange(location: NSNotFound, length: 0)
         let screenRect = firstRect(forCharacterRange: characterRange, actualRange: &actualRange)
         guard actualRange.location != NSNotFound,
@@ -3990,7 +3997,7 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
         }
         guard NativeInlineLinkPointHitGuard.contains(
             point: point,
-            linkBounds: renderedBounds(for: activation.range)
+            fragmentBounds: renderedFragmentBounds(for: activation.range)
         ) else {
             return
         }
@@ -3998,10 +4005,10 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
         _ = onInlineLinkActivation(activation, selectedRange)
     }
 
-    private func renderedBounds(for characterRange: NSRange) -> CGRect? {
+    private func renderedFragmentBounds(for characterRange: NSRange) -> [CGRect] {
         guard characterRange.length > 0,
               characterRange.location < textStorage.length else {
-            return nil
+            return []
         }
         let clampedRange = NSRange(
             location: characterRange.location,
@@ -4013,14 +4020,26 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
             actualCharacterRange: nil
         )
         guard glyphRange.length > 0 else {
-            return nil
+            return []
         }
-        let glyphBounds = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-        guard !glyphBounds.isNull,
-              !glyphBounds.isEmpty else {
-            return nil
+
+        var fragments: [CGRect] = []
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, fragmentGlyphRange, _ in
+            let intersection = NSIntersectionRange(fragmentGlyphRange, glyphRange)
+            guard intersection.length > 0 else {
+                return
+            }
+            let glyphBounds = self.layoutManager.boundingRect(forGlyphRange: intersection, in: self.textContainer)
+            guard !glyphBounds.isNull,
+                  !glyphBounds.isEmpty else {
+                return
+            }
+            fragments.append(glyphBounds.intersection(usedRect).offsetBy(
+                dx: self.textContainerInset.left,
+                dy: self.textContainerInset.top
+            ))
         }
-        return glyphBounds.offsetBy(dx: textContainerInset.left, dy: textContainerInset.top)
+        return fragments
     }
 
     @objc private func moveBlockUp() {

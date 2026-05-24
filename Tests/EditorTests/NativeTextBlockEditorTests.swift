@@ -371,6 +371,20 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testNativeInlineLinkPointHitGuardRejectsPointInsideUnionGapBetweenFragments() {
+        let fragmentBounds = [
+            CGRect(x: 10, y: 4, width: 80, height: 18),
+            CGRect(x: 10, y: 26, width: 24, height: 18)
+        ]
+
+        XCTAssertFalse(
+            NativeInlineLinkPointHitGuard.contains(
+                point: CGPoint(x: 70, y: 34),
+                fragmentBounds: fragmentBounds
+            )
+        )
+    }
+
     func testNativeTextInsertionPointRectResolverClampsTallCaretToFontLineHeight() {
         let originalRect = CGRect(x: 12, y: 4, width: 2, height: 28)
 
