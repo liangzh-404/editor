@@ -846,9 +846,10 @@ enum NativeTextStyleApplicationPolicy {
     static func shouldApplyStyle(
         cached: NativeTextStyleFingerprint?,
         next: NativeTextStyleFingerprint,
-        isComposing: Bool
+        isComposing: Bool,
+        baseAttributesWereReset: Bool = false
     ) -> Bool {
-        !isComposing && cached != next
+        !isComposing && (baseAttributesWereReset || cached != next)
     }
 }
 
@@ -1540,7 +1541,6 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.onPromoteBlockToPageByKeyboard = onPromoteBlockToPageByKeyboard
         textView.setAccessibilityIdentifier("editor.text.\(blockID)")
         textView.delegate = context.coordinator
-        context.coordinator.applyModelText(text, to: textView)
         textView.font = nsFont
         textView.textColor = EditorDesignTokens.Colors.primaryText.nsColor
         textView.insertionPointColor = NativeTextCursorChrome.nsColor
@@ -1558,6 +1558,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         configureLineWrapping(textView: textView)
+        context.coordinator.applyModelText(text, to: textView)
         context.coordinator.scheduleHeightMeasurement(for: textView)
         context.coordinator.handleFocusRequestIfNeeded(textView: textView)
         if textView.textLayoutManager == nil {
@@ -1653,20 +1654,34 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             textView.onCancelSelectionByKeyboard = onCancelSelectionByKeyboard
             textView.onPromoteBlockToPageByKeyboard = onPromoteBlockToPageByKeyboard
         }
+        let didResetBaseAttributes = applyBaseTextAttributes(to: textView)
+        textView.insertionPointColor = NativeTextCursorChrome.nsColor
+        textView.defaultParagraphStyle = paragraphStyle
+        configureLineWrapping(textView: textView)
         if NativeTextCompositionPolicy.shouldApplyModelText(isComposing: textView.hasMarkedText()),
            textView.string != text {
             context.coordinator.applyModelText(text, to: textView)
         }
-        textView.font = nsFont
-        textView.textColor = EditorDesignTokens.Colors.primaryText.nsColor
-        textView.insertionPointColor = NativeTextCursorChrome.nsColor
-        textView.defaultParagraphStyle = paragraphStyle
-        configureLineWrapping(textView: textView)
         if NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.hasMarkedText()) {
-            context.coordinator.applyTextStyles(to: textView)
+            context.coordinator.applyTextStyles(to: textView, baseAttributesWereReset: didResetBaseAttributes)
         }
         context.coordinator.scheduleHeightMeasurement(for: textView)
         context.coordinator.handleFocusRequestIfNeeded(textView: textView)
+    }
+
+    @discardableResult
+    private func applyBaseTextAttributes(to textView: NSTextView) -> Bool {
+        var didResetAttributes = false
+        if textView.font?.fontName != nsFont.fontName || textView.font?.pointSize != nsFont.pointSize {
+            textView.font = nsFont
+            didResetAttributes = true
+        }
+        let primaryTextColor = EditorDesignTokens.Colors.primaryText.nsColor
+        if textView.textColor?.isEqual(primaryTextColor) != true {
+            textView.textColor = primaryTextColor
+            didResetAttributes = true
+        }
+        return didResetAttributes
     }
 
     private func configureLineWrapping(textView: NSTextView) {
@@ -1761,12 +1776,13 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             scheduleHeightMeasurement(for: textView)
         }
 
-        func applyTextStyles(to textView: NSTextView) {
+        func applyTextStyles(to textView: NSTextView, baseAttributesWereReset: Bool = false) {
             let nextFingerprint = styleFingerprint(for: textView)
             guard NativeTextStyleApplicationPolicy.shouldApplyStyle(
                 cached: appliedStyleFingerprint,
                 next: nextFingerprint,
-                isComposing: textView.hasMarkedText()
+                isComposing: textView.hasMarkedText(),
+                baseAttributesWereReset: baseAttributesWereReset
             ) else {
                 return
             }
@@ -2727,7 +2743,6 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
         textView.accessibilityIdentifier = "editor.text.\(blockID)"
         textView.delegate = context.coordinator
-        context.coordinator.applyModelText(text, to: textView)
         textView.font = uiFont
         textView.textColor = EditorDesignTokens.Colors.primaryText.uiColor
         textView.tintColor = NativeTextCursorChrome.uiColor
@@ -2743,6 +2758,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         configureLineWrapping(textView: textView)
         textView.adjustsFontForContentSizeCategory = true
+        context.coordinator.applyModelText(text, to: textView)
         context.coordinator.configureKeyboardAccessory(
             keyboardAccessory,
             height: keyboardAccessoryHeight,
@@ -2849,15 +2865,14 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                 textView.installBlockDragInteractionIfNeeded(delegate: context.coordinator)
             }
         }
+        let didResetBaseAttributes = applyBaseTextAttributes(to: textView)
+        textView.tintColor = NativeTextCursorChrome.uiColor
+        textView.typingAttributes = baseTextAttributes
+        configureLineWrapping(textView: textView)
         if NativeTextCompositionPolicy.shouldApplyModelText(isComposing: textView.markedTextRange != nil),
            textView.text != text {
             context.coordinator.applyModelText(text, to: textView)
         }
-        textView.font = uiFont
-        textView.textColor = EditorDesignTokens.Colors.primaryText.uiColor
-        textView.tintColor = NativeTextCursorChrome.uiColor
-        textView.typingAttributes = baseTextAttributes
-        configureLineWrapping(textView: textView)
         context.coordinator.configureKeyboardAccessory(
             keyboardAccessory,
             height: keyboardAccessoryHeight,
@@ -2865,10 +2880,25 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             for: textView
         )
         if NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.markedTextRange != nil) {
-            context.coordinator.applyTextStyles(to: textView)
+            context.coordinator.applyTextStyles(to: textView, baseAttributesWereReset: didResetBaseAttributes)
         }
         context.coordinator.scheduleHeightMeasurement(for: textView)
         context.coordinator.handleFocusRequestIfNeeded(textView: textView)
+    }
+
+    @discardableResult
+    private func applyBaseTextAttributes(to textView: UITextView) -> Bool {
+        var didResetAttributes = false
+        if textView.font?.fontName != uiFont.fontName || textView.font?.pointSize != uiFont.pointSize {
+            textView.font = uiFont
+            didResetAttributes = true
+        }
+        let primaryTextColor = EditorDesignTokens.Colors.primaryText.uiColor
+        if textView.textColor?.isEqual(primaryTextColor) != true {
+            textView.textColor = primaryTextColor
+            didResetAttributes = true
+        }
+        return didResetAttributes
     }
 
     private func configureLineWrapping(textView: UITextView) {
@@ -3085,12 +3115,13 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             scheduleHeightMeasurement(for: textView)
         }
 
-        func applyTextStyles(to textView: UITextView) {
+        func applyTextStyles(to textView: UITextView, baseAttributesWereReset: Bool = false) {
             let nextFingerprint = styleFingerprint(for: textView)
             guard NativeTextStyleApplicationPolicy.shouldApplyStyle(
                 cached: appliedStyleFingerprint,
                 next: nextFingerprint,
-                isComposing: textView.markedTextRange != nil
+                isComposing: textView.markedTextRange != nil,
+                baseAttributesWereReset: baseAttributesWereReset
             ) else {
                 return
             }

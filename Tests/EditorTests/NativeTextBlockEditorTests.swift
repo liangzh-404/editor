@@ -170,6 +170,22 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(
             NativeTextStyleApplicationPolicy.shouldApplyStyle(
                 cached: key,
+                next: key,
+                isComposing: false,
+                baseAttributesWereReset: true
+            )
+        )
+        XCTAssertFalse(
+            NativeTextStyleApplicationPolicy.shouldApplyStyle(
+                cached: key,
+                next: key,
+                isComposing: true,
+                baseAttributesWereReset: true
+            )
+        )
+        XCTAssertTrue(
+            NativeTextStyleApplicationPolicy.shouldApplyStyle(
+                cached: key,
                 next: NativeTextStyleFingerprint(
                     blockType: .paragraph,
                     text: "Hello **world**!",

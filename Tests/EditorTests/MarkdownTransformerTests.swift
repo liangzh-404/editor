@@ -912,6 +912,33 @@ final class MarkdownTransformerTests: XCTestCase {
         )
     }
 
+    func testMarkdownInlineStyleScannerIncludesBoldSyntaxMarkersInImportedHeadings() {
+        let text = "0.1.1 **行程概览**"
+
+        let runs = MarkdownInlineStyleScanner.runs(in: text, includingSyntaxMarkers: true)
+
+        XCTAssertEqual(
+            runs,
+            [
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("0.1.1 " as NSString).length, length: 2)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .bold,
+                    range: NSRange(
+                        location: ("0.1.1 **" as NSString).length,
+                        length: ("行程概览" as NSString).length
+                    )
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("0.1.1 **行程概览" as NSString).length, length: 2)
+                )
+            ]
+        )
+    }
+
     func testMarkdownInlineStyleScannerDoesNotStyleMarkersInsideCodeSpan() {
         let text = "Literal `**not bold**` then **bold**"
 
