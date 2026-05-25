@@ -56,6 +56,68 @@ final class BacklinkRepositoryTests: XCTestCase {
         )
     }
 
+    func testBlockUpdateIndexesInlineWikiLinkWithSourceRange() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        try pageRepository.updateBlockText(blockID: blockID, text: "See [[欢迎]]")
+
+        let rows = try database.query(
+            """
+            SELECT target_page_id, link_text, source_range_location, source_range_length, link_kind
+            FROM links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(blockID)]
+        )
+        XCTAssertEqual(rows.first?["target_page_id"], pageID)
+        XCTAssertEqual(rows.first?["link_text"], "欢迎")
+        XCTAssertEqual(rows.first?["source_range_location"], String(("See " as NSString).length))
+        XCTAssertEqual(rows.first?["source_range_length"], String(("[[欢迎]]" as NSString).length))
+        XCTAssertEqual(rows.first?["link_kind"], "inline_internal")
+    }
+
+    func testStableInlinePageOnlyTargetDoesNotFallbackToBlockTarget() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let sourceBlockID = try XCTUnwrap(snapshot.blocks.first?.id)
+        let targetPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Specs")
+        _ = try pageRepository.appendBlock(pageID: targetPage.id, type: .paragraph, text: "API contract")
+        let currentPayloadJSON = """
+        {"inline_links":[{"label":"Specs#API contract","target_page_id":"\(targetPage.id)"}],"text":"Draft"}
+        """
+        try database.execute(
+            """
+            UPDATE blocks
+            SET text_plain = ?,
+                payload_json = ?
+            WHERE id = ?
+            """,
+            bindings: [.text("Draft"), .text(currentPayloadJSON), .text(sourceBlockID)]
+        )
+
+        try pageRepository.updateBlockText(blockID: sourceBlockID, text: "See [[Specs#API contract]]")
+
+        let row = try XCTUnwrap(try database.query(
+            """
+            SELECT target_page_id, target_block_id, link_text
+            FROM links
+            WHERE source_block_id = ?
+            """,
+            bindings: [.text(sourceBlockID)]
+        ).first)
+        XCTAssertEqual(row["target_page_id"], targetPage.id)
+        XCTAssertNil(row["target_block_id"] ?? nil)
+        XCTAssertEqual(row["link_text"], "Specs#API contract")
+    }
+
     func testBlockUpdateMaintainsExternalMarkdownLinksForSourcePage() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -91,6 +153,22 @@ final class BacklinkRepositoryTests: XCTestCase {
         )
     }
 
+    func testBlockUpdateIndexesPlainExternalURLs() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+        let pageRepository = PageRepository(database: database)
+        let snapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let blockID = try XCTUnwrap(snapshot.blocks.first?.id)
+
+        try pageRepository.updateBlockText(blockID: blockID, text: "Visit https://swift.org now")
+
+        XCTAssertEqual(
+            try BacklinkRepository(database: database).externalLinks(sourcePageID: pageID).map(\.targetURL),
+            ["https://swift.org"]
+        )
+    }
+
     func testExternalLinkDestinationURLRequiresScheme() throws {
         XCTAssertEqual(
             ExternalLink(
@@ -117,7 +195,7 @@ final class BacklinkRepositoryTests: XCTestCase {
     func testExternalMarkdownLinksIgnoreImagesAndLocalTargets() throws {
         XCTAssertEqual(
             BacklinkRepository.externalMarkdownLinks(
-                in: "![Logo](https://example.com/logo.png) [Guide](README.md) [Swift](https://swift.org)"
+                in: "![Logo](https://example.com/logo.png) [Guide](README.md) [Script](javascript:alert(1)) [Swift](https://swift.org)"
             ).map(\.url),
             ["https://swift.org"]
         )

@@ -57,7 +57,8 @@ final class BacklinkRepository {
         blockID: String,
         text: String,
         pageReferenceTargetPageID: String? = nil,
-        blockReferenceTargetBlockID: String? = nil
+        blockReferenceTargetBlockID: String? = nil,
+        inlineInternalLinks: [InlineInternalLinkTarget] = []
     ) throws {
         try database.execute(
             """
@@ -87,31 +88,63 @@ final class BacklinkRepository {
                 targetPageID: pageReferenceTargetPageID,
                 targetBlockID: blockReferenceTargetBlockID,
                 targetURL: nil,
-                linkText: text
+                linkText: text,
+                sourceRange: nil,
+                linkKind: "block_reference"
             )
             return
         }
 
-        for linkText in Self.pageReferenceTexts(in: text) {
-            let targetPageID = try targetPageID(forTitle: linkText)
-            try insertLink(
-                sourcePageID: sourcePageID,
-                sourceBlockID: blockID,
-                targetPageID: targetPageID,
-                targetBlockID: nil,
-                targetURL: nil,
-                linkText: linkText
-            )
+        var indexedExternalURLs = Set<String>()
+        for run in InlineLinkScanner.links(in: text) {
+            switch run.kind {
+            case .internalWiki(let label, let pageTitle, let blockText):
+                let stable = inlineInternalLinks.first { $0.label == label }
+                let fallback = try resolveInlineTarget(pageTitle: pageTitle, blockText: blockText)
+                let targetPageID: String?
+                let targetBlockID: String?
+                if let stable {
+                    targetPageID = stable.targetPageID
+                    targetBlockID = stable.targetBlockID
+                } else {
+                    targetPageID = fallback.pageID
+                    targetBlockID = fallback.blockID
+                }
+                try insertLink(
+                    sourcePageID: sourcePageID,
+                    sourceBlockID: blockID,
+                    targetPageID: targetPageID,
+                    targetBlockID: targetBlockID,
+                    targetURL: nil,
+                    linkText: label,
+                    sourceRange: run.fullRange,
+                    linkKind: "inline_internal"
+                )
+            case .external(let label, let url):
+                indexedExternalURLs.insert(url)
+                try insertLink(
+                    sourcePageID: sourcePageID,
+                    sourceBlockID: blockID,
+                    targetPageID: nil,
+                    targetBlockID: nil,
+                    targetURL: url,
+                    linkText: label,
+                    sourceRange: run.fullRange,
+                    linkKind: "inline_external"
+                )
+            }
         }
 
-        for externalLink in Self.externalMarkdownLinks(in: text) {
+        for externalLink in Self.externalMarkdownLinks(in: text) where !indexedExternalURLs.contains(externalLink.url) {
             try insertLink(
                 sourcePageID: sourcePageID,
                 sourceBlockID: blockID,
                 targetPageID: nil,
                 targetBlockID: nil,
                 targetURL: externalLink.url,
-                linkText: externalLink.text
+                linkText: externalLink.text,
+                sourceRange: nil,
+                linkKind: "inline_external"
             )
         }
     }
@@ -185,13 +218,37 @@ final class BacklinkRepository {
         ).first?["id"] ?? nil
     }
 
+    private func resolveInlineTarget(pageTitle: String, blockText: String?) throws -> (pageID: String?, blockID: String?) {
+        let pageID = try targetPageID(forTitle: pageTitle)
+        guard let pageID,
+              let blockText,
+              !blockText.isEmpty else {
+            return (pageID, nil)
+        }
+
+        let blockID = try database.query(
+            """
+            SELECT id
+            FROM blocks
+            WHERE page_id = ? AND text_plain = ? AND is_deleted = 0
+            ORDER BY order_key ASC
+            LIMIT 1
+            """,
+            bindings: [.text(pageID), .text(blockText)]
+        ).first?["id"] ?? nil
+
+        return (pageID, blockID)
+    }
+
     private func insertLink(
         sourcePageID: String,
         sourceBlockID: String,
         targetPageID: String?,
         targetBlockID: String?,
         targetURL: String?,
-        linkText: String
+        linkText: String,
+        sourceRange: NSRange?,
+        linkKind: String
     ) throws {
         try database.execute(
             """
@@ -203,9 +260,12 @@ final class BacklinkRepository {
                 target_block_id,
                 target_url,
                 link_text,
+                source_range_location,
+                source_range_length,
+                link_kind,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             bindings: [
                 .text("link-\(UUID().uuidString.lowercased())"),
@@ -215,6 +275,9 @@ final class BacklinkRepository {
                 targetBlockID.map(SQLiteValue.text) ?? .null,
                 targetURL.map(SQLiteValue.text) ?? .null,
                 .text(linkText),
+                sourceRange.map { .integer($0.location) } ?? .null,
+                sourceRange.map { .integer($0.length) } ?? .null,
+                .text(linkKind),
                 .text(ISO8601DateFormatter().string(from: Date()))
             ]
         )
@@ -275,14 +338,6 @@ final class BacklinkRepository {
     }
 
     private static func isExternalURL(_ url: String) -> Bool {
-        guard !url.isEmpty,
-              let schemeEnd = url.firstIndex(of: ":"),
-              schemeEnd > url.startIndex else {
-            return false
-        }
-
-        return url[..<schemeEnd].allSatisfy { character in
-            character.isLetter || character.isNumber || character == "+" || character == "-" || character == "."
-        }
+        MarkdownInlineLinkSchemeValidator.hasValidScheme(url)
     }
 }

@@ -409,7 +409,7 @@ enum MarkdownInlineLinkComposer {
         let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedLabel.isEmpty,
               !trimmedURL.isEmpty,
-              URLComponents(string: trimmedURL)?.scheme != nil else {
+              MarkdownInlineLinkSchemeValidator.hasValidScheme(trimmedURL) else {
             return nil
         }
 
@@ -646,6 +646,268 @@ struct MarkdownInlineLinkEditTarget: Equatable, Sendable {
     }
 }
 
+enum InlineLinkKind: Equatable, Sendable {
+    case internalWiki(label: String, pageTitle: String, blockText: String?)
+    case external(label: String, url: String)
+}
+
+struct InlineLinkRun: Equatable, Sendable {
+    let kind: InlineLinkKind
+    let fullRange: NSRange
+    let activeRange: NSRange
+}
+
+enum InlineLinkScanner {
+    static func links(in text: String) -> [InlineLinkRun] {
+        let nsText = text as NSString
+        let codeRanges = MarkdownInlineStyleScanner.runs(in: text)
+            .compactMap { $0.kind == .code ? $0.range : nil }
+        let wikiRuns = wikiLinks(in: nsText, excluding: codeRanges)
+        let markdownRuns = markdownExternalLinks(in: nsText, excluding: codeRanges + wikiRuns.map(\.fullRange))
+        let autolinkRuns = autolinks(
+            in: nsText,
+            excluding: codeRanges + wikiRuns.map(\.fullRange) + markdownRuns.map(\.fullRange)
+        )
+        let plainRuns = plainExternalLinks(
+            in: nsText,
+            excluding: codeRanges + wikiRuns.map(\.fullRange) + markdownRuns.map(\.fullRange) + autolinkRuns.map(\.fullRange)
+        )
+        return (wikiRuns + markdownRuns + autolinkRuns + plainRuns)
+            .sorted { lhs, rhs in
+                lhs.fullRange.location == rhs.fullRange.location
+                    ? lhs.fullRange.length < rhs.fullRange.length
+                    : lhs.fullRange.location < rhs.fullRange.location
+            }
+    }
+
+    static func link(containing location: Int, in text: String) -> InlineLinkRun? {
+        links(in: text).first {
+            NSLocationInRange(location, $0.activeRange) || NSLocationInRange(location, $0.fullRange)
+        }
+    }
+
+    private static func wikiLinks(in text: NSString, excluding excludedRanges: [NSRange]) -> [InlineLinkRun] {
+        var runs: [InlineLinkRun] = []
+        var searchStart = 0
+        while searchStart < text.length {
+            let opening = text.range(
+                of: "[[",
+                options: [],
+                range: NSRange(location: searchStart, length: text.length - searchStart)
+            )
+            guard opening.location != NSNotFound else { break }
+            let contentStart = NSMaxRange(opening)
+            let closing = text.range(
+                of: "]]",
+                options: [],
+                range: NSRange(location: contentStart, length: text.length - contentStart)
+            )
+            guard closing.location != NSNotFound else { break }
+            let fullRange = NSRange(location: opening.location, length: NSMaxRange(closing) - opening.location)
+            let activeRange = NSRange(location: contentStart, length: closing.location - contentStart)
+            if activeRange.length > 0,
+               !overlaps(fullRange, excludedRanges) {
+                let label = text.substring(with: activeRange).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !label.isEmpty {
+                    let parts = label.split(separator: "#", maxSplits: 1).map(String.init)
+                    runs.append(
+                        InlineLinkRun(
+                            kind: .internalWiki(
+                                label: label,
+                                pageTitle: parts[0].trimmingCharacters(in: .whitespacesAndNewlines),
+                                blockText: parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespacesAndNewlines) : nil
+                            ),
+                            fullRange: fullRange,
+                            activeRange: activeRange
+                        )
+                    )
+                }
+            }
+            searchStart = NSMaxRange(closing)
+        }
+        return runs
+    }
+
+    private static func markdownExternalLinks(in text: NSString, excluding excludedRanges: [NSRange]) -> [InlineLinkRun] {
+        var runs: [InlineLinkRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = text.range(
+                of: "[",
+                options: [],
+                range: NSRange(location: searchStart, length: text.length - searchStart)
+            )
+            guard opening.location != NSNotFound else { break }
+            if overlaps(opening, excludedRanges) {
+                searchStart = NSMaxRange(opening)
+                continue
+            }
+            if opening.location > 0,
+               text.substring(with: NSRange(location: opening.location - 1, length: 1)) == "!" {
+                searchStart = NSMaxRange(opening)
+                continue
+            }
+
+            let labelEnd = text.range(
+                of: "](",
+                options: [],
+                range: NSRange(location: NSMaxRange(opening), length: text.length - NSMaxRange(opening))
+            )
+            guard labelEnd.location != NSNotFound else {
+                searchStart = NSMaxRange(opening)
+                continue
+            }
+
+            let urlStart = NSMaxRange(labelEnd)
+            let urlEnd = text.range(
+                of: ")",
+                options: [],
+                range: NSRange(location: urlStart, length: text.length - urlStart)
+            )
+            guard urlEnd.location != NSNotFound else {
+                searchStart = urlStart
+                continue
+            }
+
+            let labelRange = NSRange(location: NSMaxRange(opening), length: labelEnd.location - NSMaxRange(opening))
+            let urlRange = NSRange(location: urlStart, length: urlEnd.location - urlStart)
+            let fullRange = NSRange(location: opening.location, length: NSMaxRange(urlEnd) - opening.location)
+            let label = text.substring(with: labelRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = text.substring(with: urlRange).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if labelRange.length > 0,
+               !label.isEmpty,
+               hasValidScheme(url),
+               !overlaps(fullRange, excludedRanges) {
+                runs.append(
+                    InlineLinkRun(
+                        kind: .external(label: label, url: url),
+                        fullRange: fullRange,
+                        activeRange: labelRange
+                    )
+                )
+            }
+            searchStart = NSMaxRange(urlEnd)
+        }
+
+        return runs
+    }
+
+    private static func autolinks(in text: NSString, excluding excludedRanges: [NSRange]) -> [InlineLinkRun] {
+        var runs: [InlineLinkRun] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = text.range(
+                of: "<",
+                options: [],
+                range: NSRange(location: searchStart, length: text.length - searchStart)
+            )
+            guard opening.location != NSNotFound else { break }
+            let contentStart = NSMaxRange(opening)
+            let closing = text.range(
+                of: ">",
+                options: [],
+                range: NSRange(location: contentStart, length: text.length - contentStart)
+            )
+            guard closing.location != NSNotFound else {
+                searchStart = contentStart
+                continue
+            }
+
+            let fullRange = NSRange(location: opening.location, length: NSMaxRange(closing) - opening.location)
+            let activeRange = NSRange(location: contentStart, length: closing.location - contentStart)
+            let url = text.substring(with: activeRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            if activeRange.length > 0,
+               hasValidScheme(url),
+               !overlaps(fullRange, excludedRanges) {
+                runs.append(
+                    InlineLinkRun(
+                        kind: .external(label: url, url: url),
+                        fullRange: fullRange,
+                        activeRange: activeRange
+                    )
+                )
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return runs
+    }
+
+    private static func plainExternalLinks(in text: NSString, excluding excludedRanges: [NSRange]) -> [InlineLinkRun] {
+        let pattern = #"\b(?:https?://|mailto:)[^\s<>\[\]]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return []
+        }
+
+        return regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).compactMap { match in
+            let range = trimmedPlainURLRange(match.range, in: text)
+            guard range.length > 0,
+                  !overlaps(range, excludedRanges),
+                  !isMarkdownURLRange(range, in: text) else {
+                return nil
+            }
+            let url = text.substring(with: range)
+            guard hasValidScheme(url) else {
+                return nil
+            }
+            return InlineLinkRun(
+                kind: .external(label: url, url: url),
+                fullRange: range,
+                activeRange: range
+            )
+        }
+    }
+
+    private static func hasValidScheme(_ urlString: String) -> Bool {
+        MarkdownInlineLinkSchemeValidator.hasValidScheme(urlString)
+    }
+
+    private static func overlaps(_ range: NSRange, _ excludedRanges: [NSRange]) -> Bool {
+        excludedRanges.contains { NSIntersectionRange($0, range).length > 0 }
+    }
+
+    private static func trimmedPlainURLRange(_ range: NSRange, in text: NSString) -> NSRange {
+        var length = range.length
+        let trailingCharacters = CharacterSet(charactersIn: ".,)]")
+        while length > 0 {
+            let character = text.substring(with: NSRange(location: range.location + length - 1, length: 1))
+            guard character.rangeOfCharacter(from: trailingCharacters) != nil else {
+                break
+            }
+            length -= 1
+        }
+        return NSRange(location: range.location, length: length)
+    }
+
+    private static func isMarkdownURLRange(_ range: NSRange, in text: NSString) -> Bool {
+        let prefixLocation = range.location - 2
+        guard prefixLocation >= 0,
+              text.substring(with: NSRange(location: prefixLocation, length: 2)) == "](" else {
+            return false
+        }
+        let beforeLabel = text.substring(with: NSRange(location: 0, length: prefixLocation))
+        return beforeLabel.range(of: "[", options: .backwards) != nil
+    }
+}
+
+enum MarkdownInlineLinkSchemeValidator {
+    static func hasValidScheme(_ urlString: String) -> Bool {
+        guard let scheme = URLComponents(string: urlString)?.scheme?.lowercased(),
+              !scheme.isEmpty,
+              !blockedSchemes.contains(scheme) else {
+            return false
+        }
+        return scheme.allSatisfy { character in
+            character.isLetter || character.isNumber || character == "+" || character == "-" || character == "."
+        }
+    }
+
+    private static let blockedSchemes: Set<String> = ["javascript"]
+}
+
 enum MarkdownInlineStyleKind: Equatable {
     case syntax
     case bold
@@ -666,6 +928,11 @@ enum MarkdownInlineStyleScanner {
         let nsText = text as NSString
         let codeRuns = codeStyleRuns(in: nsText)
         let codeRanges = codeRuns.map(\.range)
+        let wikiRanges = wikiLinkRanges(in: nsText, excluding: codeRanges)
+        let wikiFullRanges = wikiRanges.map {
+            NSRange(location: $0.openingRange.location, length: NSMaxRange($0.closingRange) - $0.openingRange.location)
+        }
+        let markdownLinkExcludedRanges = codeRanges + wikiFullRanges
         var runs = codeRuns +
             boldStyleRuns(marker: "**", in: nsText, excluding: codeRanges) +
             boldStyleRuns(marker: "__", in: nsText, excluding: codeRanges) +
@@ -673,8 +940,9 @@ enum MarkdownInlineStyleScanner {
             underscoreItalicStyleRuns(in: nsText, excluding: codeRanges) +
             strikethroughStyleRuns(in: nsText, excluding: codeRanges) +
             highlightStyleRuns(in: nsText, excluding: codeRanges) +
-            linkStyleRuns(in: nsText, excluding: codeRanges) +
-            autolinkStyleRuns(in: nsText, excluding: codeRanges)
+            linkStyleRuns(in: nsText, excluding: markdownLinkExcludedRanges) +
+            autolinkStyleRuns(in: nsText, excluding: codeRanges) +
+            wikiLinkStyleRuns(ranges: wikiRanges)
         if includingSyntaxMarkers {
             runs += codeSyntaxRuns(in: nsText)
             runs += pairedSyntaxRuns(marker: "**", in: nsText, excluding: codeRanges)
@@ -683,8 +951,9 @@ enum MarkdownInlineStyleScanner {
             runs += underscoreItalicSyntaxRuns(in: nsText, excluding: codeRanges)
             runs += pairedSyntaxRuns(marker: "~~", in: nsText, excluding: codeRanges)
             runs += pairedSyntaxRuns(marker: "==", in: nsText, excluding: codeRanges)
-            runs += linkSyntaxRuns(in: nsText, excluding: codeRanges)
+            runs += linkSyntaxRuns(in: nsText, excluding: markdownLinkExcludedRanges)
             runs += autolinkSyntaxRuns(in: nsText, excluding: codeRanges)
+            runs += wikiLinkSyntaxRuns(ranges: wikiRanges)
         }
         return runs.sorted { lhs, rhs in
             if lhs.range.location == rhs.range.location {
@@ -1071,7 +1340,7 @@ enum MarkdownInlineStyleScanner {
             let urlRange = NSRange(location: urlLocation, length: urlEnd.location - urlLocation)
             let url = text.substring(with: urlRange)
             if labelRange.length > 0,
-               URLComponents(string: url)?.scheme != nil,
+               MarkdownInlineLinkSchemeValidator.hasValidScheme(url),
                !overlapsAny(labelRange, excludedRanges) {
                 runs.append(MarkdownInlineStyleRun(kind: .link, range: labelRange))
             }
@@ -1116,7 +1385,7 @@ enum MarkdownInlineStyleScanner {
             let urlRange = NSRange(location: urlLocation, length: urlEnd.location - urlLocation)
             let url = text.substring(with: urlRange)
             if labelRange.length > 0,
-               URLComponents(string: url)?.scheme != nil,
+               MarkdownInlineLinkSchemeValidator.hasValidScheme(url),
                !overlapsAny(labelRange, excludedRanges) {
                 runs.append(MarkdownInlineStyleRun(kind: .syntax, range: opening))
                 runs.append(
@@ -1181,7 +1450,68 @@ enum MarkdownInlineStyleScanner {
             )
             let content = text.substring(with: contentRange)
             if contentRange.length > 0,
-               URLComponents(string: content)?.scheme != nil,
+               MarkdownInlineLinkSchemeValidator.hasValidScheme(content),
+               !overlapsAny(contentRange, excludedRanges) {
+                ranges.append((opening, contentRange, closing))
+            }
+            searchStart = NSMaxRange(closing)
+        }
+
+        return ranges
+    }
+
+    private static func wikiLinkStyleRuns(
+        ranges: [(openingRange: NSRange, contentRange: NSRange, closingRange: NSRange)]
+    ) -> [MarkdownInlineStyleRun] {
+        ranges
+            .map { MarkdownInlineStyleRun(kind: .link, range: $0.contentRange) }
+    }
+
+    private static func wikiLinkSyntaxRuns(
+        ranges: [(openingRange: NSRange, contentRange: NSRange, closingRange: NSRange)]
+    ) -> [MarkdownInlineStyleRun] {
+        ranges.flatMap { range in
+            [
+                MarkdownInlineStyleRun(kind: .syntax, range: range.openingRange),
+                MarkdownInlineStyleRun(kind: .syntax, range: range.closingRange)
+            ]
+        }
+    }
+
+    private static func wikiLinkRanges(
+        in text: NSString,
+        excluding excludedRanges: [NSRange]
+    ) -> [(openingRange: NSRange, contentRange: NSRange, closingRange: NSRange)] {
+        var ranges: [(openingRange: NSRange, contentRange: NSRange, closingRange: NSRange)] = []
+        var searchStart = 0
+
+        while searchStart < text.length {
+            let opening = nextRange(
+                of: "[[",
+                in: text,
+                from: searchStart,
+                excluding: excludedRanges
+            )
+            guard opening.location != NSNotFound else {
+                break
+            }
+
+            let closing = nextRange(
+                of: "]]",
+                in: text,
+                from: NSMaxRange(opening),
+                excluding: excludedRanges
+            )
+            guard closing.location != NSNotFound else {
+                searchStart = NSMaxRange(opening)
+                continue
+            }
+
+            let contentRange = NSRange(
+                location: NSMaxRange(opening),
+                length: closing.location - NSMaxRange(opening)
+            )
+            if contentRange.length > 0,
                !overlapsAny(contentRange, excludedRanges) {
                 ranges.append((opening, contentRange, closing))
             }

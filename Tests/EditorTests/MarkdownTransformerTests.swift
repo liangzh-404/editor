@@ -646,8 +646,13 @@ final class MarkdownTransformerTests: XCTestCase {
             MarkdownInlineLinkComposer.markdown(label: " Swift ", url: " https://swift.org "),
             "[Swift](https://swift.org)"
         )
+        XCTAssertEqual(
+            MarkdownInlineLinkComposer.markdown(label: " Local ", url: " x-editor://page/specs "),
+            "[Local](x-editor://page/specs)"
+        )
         XCTAssertNil(MarkdownInlineLinkComposer.markdown(label: "", url: "https://swift.org"))
         XCTAssertNil(MarkdownInlineLinkComposer.markdown(label: "Swift", url: "swift.org"))
+        XCTAssertNil(MarkdownInlineLinkComposer.markdown(label: "Script", url: "javascript:alert(1)"))
     }
 
     func testMarkdownInlineLinkInserterReplacesSelectionAndSelectsLabel() throws {
@@ -762,6 +767,130 @@ final class MarkdownTransformerTests: XCTestCase {
                     length: 0
                 )
             )
+        )
+    }
+
+    func testInlineLinkScannerFindsWikiPageAndBlockLinks() {
+        let text = "See [[Specs]] and [[Specs#API contract]] today"
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text),
+            [
+                InlineLinkRun(
+                    kind: .internalWiki(label: "Specs", pageTitle: "Specs", blockText: nil),
+                    fullRange: NSRange(location: ("See " as NSString).length, length: ("[[Specs]]" as NSString).length),
+                    activeRange: NSRange(location: ("See [[" as NSString).length, length: ("Specs" as NSString).length)
+                ),
+                InlineLinkRun(
+                    kind: .internalWiki(label: "Specs#API contract", pageTitle: "Specs", blockText: "API contract"),
+                    fullRange: NSRange(location: ("See [[Specs]] and " as NSString).length, length: ("[[Specs#API contract]]" as NSString).length),
+                    activeRange: NSRange(location: ("See [[Specs]] and [[" as NSString).length, length: ("Specs#API contract" as NSString).length)
+                )
+            ]
+        )
+    }
+
+    func testInlineLinkScannerFindsMarkdownAndPlainExternalLinks() {
+        let text = "Read [Swift](https://swift.org), <https://example.com>, and https://apple.com."
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text).map(\.kind),
+            [
+                .external(label: "Swift", url: "https://swift.org"),
+                .external(label: "https://example.com", url: "https://example.com"),
+                .external(label: "https://apple.com", url: "https://apple.com")
+            ]
+        )
+    }
+
+    func testInlineLinkScannerFindsMarkdownLinksWithCustomExternalSchemes() {
+        let text = "Open [Local](x-editor://page/specs) now"
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text).map(\.kind),
+            [
+                .external(label: "Local", url: "x-editor://page/specs")
+            ]
+        )
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text).filter { $0.kind == .link },
+            [
+                MarkdownInlineStyleRun(
+                    kind: .link,
+                    range: NSRange(location: ("Open [" as NSString).length, length: ("Local" as NSString).length)
+                )
+            ]
+        )
+    }
+
+    func testInlineLinkScannerFindsMixedWikiAndMarkdownLinks() {
+        let text = "See [[Specs]] and [Swift](https://swift.org)"
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text).map(\.kind),
+            [
+                .internalWiki(label: "Specs", pageTitle: "Specs", blockText: nil),
+                .external(label: "Swift", url: "https://swift.org")
+            ]
+        )
+    }
+
+    func testInlineLinkScannerIgnoresCodeSpansAndImages() {
+        let text = "`[[Specs]]` ![Logo](https://example.com/logo.png) [[Live]]"
+
+        XCTAssertEqual(
+            InlineLinkScanner.links(in: text).map(\.kind),
+            [.internalWiki(label: "Live", pageTitle: "Live", blockText: nil)]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerIgnoresUnsupportedLinkSchemes() {
+        let text = "Use [Script](javascript:alert(1)), <javascript:alert(1)>, and javascript:alert(1)"
+
+        XCTAssertEqual(MarkdownInlineStyleScanner.runs(in: text), [])
+    }
+
+    func testMarkdownInlineStyleScannerStylesWikiLinks() {
+        let text = "See [[Specs]] and [Swift](https://swift.org)"
+
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text).filter { $0.kind == .link },
+            [
+                MarkdownInlineStyleRun(
+                    kind: .link,
+                    range: NSRange(location: ("See [[" as NSString).length, length: ("Specs" as NSString).length)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .link,
+                    range: NSRange(location: ("See [[Specs]] and [" as NSString).length, length: ("Swift" as NSString).length)
+                )
+            ]
+        )
+    }
+
+    func testMarkdownInlineStyleScannerStylesWikiAndMarkdownLinkSyntaxMarkers() {
+        let text = "See [[Specs]] and [Swift](https://swift.org)"
+
+        XCTAssertEqual(
+            MarkdownInlineStyleScanner.runs(in: text, includingSyntaxMarkers: true).filter { $0.kind != .link },
+            [
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("See " as NSString).length, length: ("[[" as NSString).length)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("See [[Specs" as NSString).length, length: ("]]" as NSString).length)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("See [[Specs]] and " as NSString).length, length: ("[" as NSString).length)
+                ),
+                MarkdownInlineStyleRun(
+                    kind: .syntax,
+                    range: NSRange(location: ("See [[Specs]] and [Swift" as NSString).length, length: ("](https://swift.org)" as NSString).length)
+                )
+            ]
         )
     }
 

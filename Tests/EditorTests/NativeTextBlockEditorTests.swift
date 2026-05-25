@@ -315,6 +315,76 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(MobileNativeTextBlockDragPolicy.disablesSystemTextDropInteraction)
     }
 
+    func testNativeInlineLinkResolverFindsInternalWikiLinkAtCharacterIndex() {
+        let text = "See [[Specs]] today"
+        let activation = NativeInlineLinkActivationResolver.activation(
+            text: text,
+            characterIndex: ("See [[Spe" as NSString).length
+        )
+
+        XCTAssertEqual(
+            activation,
+            NativeInlineLinkActivation(
+                range: NSRange(location: ("See " as NSString).length, length: ("[[Specs]]" as NSString).length),
+                destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+            )
+        )
+    }
+
+    func testNativeInlineLinkResolverFindsExternalURLAtCharacterIndex() {
+        let text = "Read [Swift](https://swift.org)"
+        let activation = NativeInlineLinkActivationResolver.activation(
+            text: text,
+            characterIndex: ("Read [Sw" as NSString).length
+        )
+
+        XCTAssertEqual(
+            activation?.destination,
+            .externalURL("https://swift.org")
+        )
+    }
+
+    func testNativeInlineLinkResolverIgnoresNonLinkCharacter() {
+        XCTAssertNil(
+            NativeInlineLinkActivationResolver.activation(
+                text: "See [[Specs]] today",
+                characterIndex: ("See [[Specs]] to" as NSString).length
+            )
+        )
+    }
+
+    func testNativeInlineLinkPointHitGuardAcceptsPointInsideLinkBounds() {
+        XCTAssertTrue(
+            NativeInlineLinkPointHitGuard.contains(
+                point: CGPoint(x: 18, y: 12),
+                linkBounds: CGRect(x: 10, y: 4, width: 80, height: 18)
+            )
+        )
+    }
+
+    func testNativeInlineLinkPointHitGuardRejectsPointOutsideRenderedLinkBounds() {
+        XCTAssertFalse(
+            NativeInlineLinkPointHitGuard.contains(
+                point: CGPoint(x: 140, y: 12),
+                linkBounds: CGRect(x: 10, y: 4, width: 80, height: 18)
+            )
+        )
+    }
+
+    func testNativeInlineLinkPointHitGuardRejectsPointInsideUnionGapBetweenFragments() {
+        let fragmentBounds = [
+            CGRect(x: 10, y: 4, width: 80, height: 18),
+            CGRect(x: 10, y: 26, width: 24, height: 18)
+        ]
+
+        XCTAssertFalse(
+            NativeInlineLinkPointHitGuard.contains(
+                point: CGPoint(x: 70, y: 34),
+                fragmentBounds: fragmentBounds
+            )
+        )
+    }
+
     func testNativeTextInsertionPointRectResolverClampsTallCaretToFontLineHeight() {
         let originalRect = CGRect(x: 12, y: 4, width: 2, height: 28)
 

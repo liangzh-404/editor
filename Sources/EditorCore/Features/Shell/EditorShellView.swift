@@ -9,6 +9,169 @@ import AppKit
 import UIKit
 #endif
 
+enum InlineLinkActivationRoute: Equatable {
+    case internalLink(targetPageID: String, targetBlockID: String?)
+    case externalURL(URL)
+}
+
+enum InlineLinkActivationRouter {
+    static func route(
+        _ route: InlineLinkActivationRoute,
+        openInternal: (String, String?) -> Void,
+        openExternal: (URL) -> Void
+    ) {
+        switch route {
+        case .internalLink(let targetPageID, let targetBlockID):
+            openInternal(targetPageID, targetBlockID)
+        case .externalURL(let url):
+            openExternal(url)
+        }
+    }
+}
+
+enum InlineInternalLinkTrigger {
+    static func query(text: String, selection: EditorTextSelection, isComposing: Bool = false) -> String? {
+        guard !isComposing else { return nil }
+        guard selection.length == 0 else { return nil }
+        let nsText = text as NSString
+        guard selection.location <= nsText.length else { return nil }
+        let prefix = nsText.substring(to: selection.location) as NSString
+        let openingRange = prefix.range(of: "[[", options: [.backwards])
+        guard openingRange.location != NSNotFound else { return nil }
+        let queryLocation = NSMaxRange(openingRange)
+        let query = prefix.substring(from: queryLocation)
+        guard !query.contains("]]") else { return nil }
+        return query
+    }
+
+    static func replacementSelection(
+        text: String,
+        selection: EditorTextSelection,
+        isComposing: Bool = false
+    ) -> EditorTextSelection? {
+        guard query(text: text, selection: selection, isComposing: isComposing) != nil else { return nil }
+        let prefix = (text as NSString).substring(to: selection.location) as NSString
+        let openingRange = prefix.range(of: "[[", options: [.backwards])
+        guard openingRange.location != NSNotFound else { return nil }
+        return EditorTextSelection(
+            blockID: selection.blockID,
+            location: openingRange.location,
+            length: selection.location - openingRange.location
+        )
+    }
+}
+
+struct InlineInternalLinkChoice: Identifiable, Equatable {
+    let id: String
+    let targetPageID: String
+    let targetBlockID: String?
+    let title: String
+    let subtitle: String
+
+    static func label(page: PageSummary, block: BlockSnapshot?) -> String {
+        guard let block else { return page.title }
+        let summary = block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
+        return summary.isEmpty ? page.title : "\(page.title)#\(summary)"
+    }
+}
+
+enum InlineInternalLinkChoiceFilter {
+    static let resultLimit = 8
+
+    static func filtered(
+        _ choices: [InlineInternalLinkChoice],
+        query: String,
+        limit: Int = resultLimit
+    ) -> [InlineInternalLinkChoice] {
+        guard limit > 0 else { return [] }
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filteredChoices: [InlineInternalLinkChoice]
+        if trimmedQuery.isEmpty {
+            filteredChoices = choices
+        } else {
+            filteredChoices = choices.filter {
+                $0.title.localizedCaseInsensitiveContains(trimmedQuery)
+                    || $0.subtitle.localizedCaseInsensitiveContains(trimmedQuery)
+            }
+        }
+        return Array(filteredChoices.prefix(limit))
+    }
+}
+
+enum InlineLinkActivationSourceSelectionResolver {
+    static func sourceSelection(
+        blockID: String,
+        activation: NativeInlineLinkActivation,
+        selectedRange: NSRange
+    ) -> EditorTextSelection? {
+        switch activation.destination {
+        case .internalLink:
+            return EditorTextSelection(
+                blockID: blockID,
+                location: activation.range.location,
+                length: activation.range.length
+            )
+        case .externalURL:
+            return nil
+        }
+    }
+}
+
+enum InlineInternalLinkFallbackRouteResolver {
+    static func route(
+        activation: NativeInlineLinkActivation,
+        pages: [PageSummary],
+        blocks: [BlockSnapshot]
+    ) -> InlineLinkActivationRoute? {
+        guard case .internalLink(_, let pageTitle, let blockText) = activation.destination else {
+            return nil
+        }
+        let matchingPages = pages.filter { $0.title == pageTitle }
+        guard matchingPages.count == 1,
+              let targetPage = matchingPages.first else {
+            return nil
+        }
+
+        guard let blockText else {
+            return .internalLink(targetPageID: targetPage.id, targetBlockID: nil)
+        }
+
+        let matchingBlocks = blocks.filter {
+            $0.pageID == targetPage.id
+                && $0.textPlain.trimmingCharacters(in: .whitespacesAndNewlines) == blockText
+        }
+        guard matchingBlocks.count == 1,
+              let targetBlock = matchingBlocks.first else {
+            return nil
+        }
+        return .internalLink(targetPageID: targetPage.id, targetBlockID: targetBlock.id)
+    }
+}
+
+enum InlineInternalLinkActivationRouteResolver {
+    static func route(
+        activation: NativeInlineLinkActivation,
+        sourceBlock: BlockSnapshot,
+        pages: [PageSummary],
+        blocks: [BlockSnapshot]
+    ) -> InlineLinkActivationRoute? {
+        guard case .internalLink(let label, _, _) = activation.destination else {
+            return nil
+        }
+        if let storedTarget = sourceBlock.inlineInternalLinks.first(where: { $0.label == label }) {
+            return .internalLink(
+                targetPageID: storedTarget.targetPageID,
+                targetBlockID: storedTarget.targetBlockID
+            )
+        }
+        return InlineInternalLinkFallbackRouteResolver.route(
+            activation: activation,
+            pages: pages,
+            blocks: blocks
+        )
+    }
+}
+
 enum EditorThemeScheme: Equatable, Sendable {
     case light
     case dark
@@ -651,6 +814,7 @@ enum PageActionsMenuCommand: Equatable, Hashable, Sendable {
     case attachment
     case contentFont
     case insertLink
+    case insertInternalLink
     case bold
     case italic
     case strikethrough
@@ -973,6 +1137,14 @@ private struct ThreeColumnEditorShell: View {
                             selection: selection
                         )
                     },
+                    onInsertInlineInternalLinkAtSelection: { blockID, targetPageID, targetBlockID, selection in
+                        viewModel.insertInlineInternalLinkForUI(
+                            blockID: blockID,
+                            targetPageID: targetPageID,
+                            targetBlockID: targetBlockID,
+                            selection: selection
+                        )
+                    },
                     onRemoveMarkdownLinkAtSelection: { blockID, selection in
                         viewModel.removeMarkdownLinkForUI(blockID: blockID, selection: selection)
                     },
@@ -1048,6 +1220,14 @@ private struct ThreeColumnEditorShell: View {
                     },
                     onOpenBlockReference: { targetPageID, targetBlockID in
                         viewModel.openBlockReference(targetPageID: targetPageID, targetBlockID: targetBlockID)
+                    },
+                    onOpenInlineInternalLink: { sourceBlockID, targetPageID, targetBlockID, sourceSelection in
+                        viewModel.openInlineInternalLinkForUI(
+                            sourceBlockID: sourceBlockID,
+                            targetPageID: targetPageID,
+                            targetBlockID: targetBlockID,
+                            sourceSelection: sourceSelection
+                        )
                     },
                     onAcceptConflict: { conflict in
                         viewModel.acceptRemoteConflictForUI(id: conflict.id)
@@ -1141,6 +1321,9 @@ private struct ThreeColumnEditorShell: View {
                     },
                     onPendingPageTitleFocusHandled: {
                         _ = viewModel.consumePendingPageTitleFocusPageID()
+                    },
+                    onConsumePendingNavigationFocusSelection: { blockID in
+                        viewModel.consumePendingNavigationFocusSelection(for: blockID)
                     },
                     onRemoveTagFromSelectedPage: { tagID in
                         viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
@@ -1331,6 +1514,14 @@ private struct ThreeColumnEditorShell: View {
                         selection: selection
                     )
                 },
+                onInsertInlineInternalLinkAtSelection: { blockID, targetPageID, targetBlockID, selection in
+                    viewModel.insertInlineInternalLinkForUI(
+                        blockID: blockID,
+                        targetPageID: targetPageID,
+                        targetBlockID: targetBlockID,
+                        selection: selection
+                    )
+                },
                 onRemoveMarkdownLinkAtSelection: { blockID, selection in
                     viewModel.removeMarkdownLinkForUI(blockID: blockID, selection: selection)
                 },
@@ -1406,6 +1597,14 @@ private struct ThreeColumnEditorShell: View {
                 },
                 onOpenBlockReference: { targetPageID, targetBlockID in
                     viewModel.openBlockReference(targetPageID: targetPageID, targetBlockID: targetBlockID)
+                },
+                onOpenInlineInternalLink: { sourceBlockID, targetPageID, targetBlockID, sourceSelection in
+                    viewModel.openInlineInternalLinkForUI(
+                        sourceBlockID: sourceBlockID,
+                        targetPageID: targetPageID,
+                        targetBlockID: targetBlockID,
+                        sourceSelection: sourceSelection
+                    )
                 },
                 onAcceptConflict: { conflict in
                     viewModel.acceptRemoteConflictForUI(id: conflict.id)
@@ -1499,6 +1698,9 @@ private struct ThreeColumnEditorShell: View {
                 },
                 onPendingPageTitleFocusHandled: {
                     _ = viewModel.consumePendingPageTitleFocusPageID()
+                },
+                onConsumePendingNavigationFocusSelection: { blockID in
+                    viewModel.consumePendingNavigationFocusSelection(for: blockID)
                 },
                 onRemoveTagFromSelectedPage: { tagID in
                     viewModel.removeTagFromSelectedPageForUI(tagID: tagID)
@@ -5492,6 +5694,14 @@ private struct CompactPageDestination: View {
                         blockID: blockID,
                         label: label,
                         url: url,
+                        selection: selection
+                    )
+                },
+                onInsertInlineInternalLinkAtSelection: { blockID, targetPageID, targetBlockID, selection in
+                    viewModel.insertInlineInternalLinkForUI(
+                        blockID: blockID,
+                        targetPageID: targetPageID,
+                        targetBlockID: targetBlockID,
                         selection: selection
                     )
                 },
@@ -9872,6 +10082,8 @@ private enum PageInfoDateFormatter {
 }
 
 private struct EditorCanvasView: View {
+    @Environment(\.openURL) private var openURL
+
     let page: PageSummary?
     let pages: [PageSummary]
     let blocks: [BlockSnapshot]
@@ -9906,6 +10118,7 @@ private struct EditorCanvasView: View {
     let onAddBlockReference: (String) -> Void
     let onInsertMarkdownLink: (String, String, String) -> Bool
     let onInsertMarkdownLinkAtSelection: (String, String, String, EditorTextSelection) -> EditorTextSelection?
+    let onInsertInlineInternalLinkAtSelection: (String, String, String?, EditorTextSelection) -> EditorTextSelection?
     let onRemoveMarkdownLinkAtSelection: (String, EditorTextSelection) -> EditorTextSelection?
     let onApplyMarkdownInlineFormat: (String, MarkdownInlineFormat, EditorTextSelection) -> EditorTextSelection?
     let onUndoTextEdit: () -> Void
@@ -9930,6 +10143,7 @@ private struct EditorCanvasView: View {
     let onOpenPageReference: (String) -> Void
     let onOpenParentPage: () -> Bool
     let onOpenBlockReference: (String, String) -> Void
+    var onOpenInlineInternalLink: (String, String, String?, EditorTextSelection?) -> Bool = { _, _, _, _ in false }
     let onAcceptConflict: (ConflictSnapshot) -> Void
     let onAcceptAllConflicts: () -> Void
     let onAcceptLocalConflict: (ConflictSnapshot) -> Void
@@ -9958,6 +10172,7 @@ private struct EditorCanvasView: View {
     let onMobileRevealPageList: (() -> Void)?
     let onPendingBlockFocusHandled: () -> Void
     var onPendingPageTitleFocusHandled: () -> Void = {}
+    var onConsumePendingNavigationFocusSelection: (String) -> EditorTextSelection? = { _ in nil }
     var onRemoveTagFromSelectedPage: (String) -> Bool = { _ in false }
     var onCreateAndAssignTagToSelectedPage: (String) -> Bool = { _ in false }
     @State private var isAttachmentImporterPresented = false
@@ -9969,6 +10184,9 @@ private struct EditorCanvasView: View {
     @State private var isMarkdownExporterPresented = false
     @State private var isInlineLinkPopoverPresented = false
     @State private var activeInlineLinkTarget: (blockID: String, selection: EditorTextSelection?)?
+    @State private var isInlineInternalLinkChooserPresented = false
+    @State private var activeInlineInternalLinkTarget: (blockID: String, selection: EditorTextSelection)?
+    @State private var inlineInternalLinkSearchQuery = ""
     @State private var inlineLinkLabel = ""
     @State private var inlineLinkURL = ""
     @State private var isEditingInlineLink = false
@@ -10298,6 +10516,13 @@ private struct EditorCanvasView: View {
                         onOpenBlockReference: { targetPageID, targetBlockID in
                             onOpenBlockReference(targetPageID, targetBlockID)
                         },
+                        onInlineLinkActivation: { activation, selectedRange in
+                            handleInlineLinkActivation(
+                                activation,
+                                selectedRange: selectedRange,
+                                in: block
+                            )
+                        },
                         onChangeType: { type in
                             onBlockTypeChange(block.id, type)
                         },
@@ -10550,9 +10775,15 @@ private struct EditorCanvasView: View {
                 }
             }
 #if os(macOS)
+            inlineInternalLinkManualChooserOverlay
+            inlineInternalLinkTriggerOverlay
+
             macCanvasToolbar
                 .padding(.top, 24)
                 .padding(.trailing, macCanvasToolbarTrailingPadding)
+#else
+            inlineInternalLinkManualChooserOverlay
+            inlineInternalLinkTriggerOverlay
 #endif
 #if os(iOS)
             mobileOutlineDrawerLayer
@@ -11387,6 +11618,15 @@ private struct EditorCanvasView: View {
                     .disabled(inlineLinkToolbarTargetBlockID == nil)
                 }
 
+                if showsPageAction(.insertInternalLink) {
+                    Button {
+                        _ = presentInlineInternalLinkChooserFromCurrentTarget()
+                    } label: {
+                        Label("内部链接", systemImage: "link.badge.plus")
+                    }
+                    .disabled(inlineInternalLinkTarget == nil || inlineInternalLinkChoices.isEmpty)
+                }
+
                 if showsPageAction(.bold) {
                     Button {
                         applyMarkdownInlineFormat(.bold)
@@ -11510,6 +11750,87 @@ private struct EditorCanvasView: View {
         }
     }
 
+    private var inlineInternalLinkChoices: [InlineInternalLinkChoice] {
+        let pagesByID = Dictionary(uniqueKeysWithValues: pages.map { ($0.id, $0) })
+        let pageChoices = pages.compactMap { page -> InlineInternalLinkChoice? in
+            let label = InlineInternalLinkChoice.label(page: page, block: nil)
+            guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return InlineInternalLinkChoice(
+                id: "page-\(page.id)",
+                targetPageID: page.id,
+                targetBlockID: nil,
+                title: label,
+                subtitle: "页面"
+            )
+        }
+        let blockChoices = allBlocks.compactMap { block -> InlineInternalLinkChoice? in
+            guard block.type.supportsInlineMarkdownStyling,
+                  !block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let page = pagesByID[block.pageID] else {
+                return nil
+            }
+            let label = InlineInternalLinkChoice.label(page: page, block: block)
+            return InlineInternalLinkChoice(
+                id: "block-\(block.id)",
+                targetPageID: page.id,
+                targetBlockID: block.id,
+                title: label,
+                subtitle: block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        return pageChoices + blockChoices
+    }
+
+    private func filteredInlineInternalLinkChoices(query: String) -> [InlineInternalLinkChoice] {
+        InlineInternalLinkChoiceFilter.filtered(inlineInternalLinkChoices, query: query)
+    }
+
+    @ViewBuilder
+    private var inlineInternalLinkManualChooserOverlay: some View {
+        if isInlineInternalLinkChooserPresented,
+           let target = activeInlineInternalLinkTarget {
+            let choices = filteredInlineInternalLinkChoices(query: inlineInternalLinkSearchQuery)
+            inlineInternalLinkChooser(
+                choices: choices,
+                searchText: $inlineInternalLinkSearchQuery,
+                onChoose: { choice in
+                    insertInlineInternalLink(
+                        blockID: target.blockID,
+                        choice: choice,
+                        selection: target.selection
+                    )
+                }
+            )
+            .padding(.top, 72)
+            .padding(.leading, 56)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .zIndex(31)
+        }
+    }
+
+    @ViewBuilder
+    private var inlineInternalLinkTriggerOverlay: some View {
+        if !isInlineInternalLinkChooserPresented,
+           let target = inlineInternalLinkTriggerTarget {
+            let choices = filteredInlineInternalLinkChoices(query: target.query)
+            if !choices.isEmpty {
+                inlineInternalLinkChooser(choices: choices) { choice in
+                    insertInlineInternalLink(
+                        blockID: target.blockID,
+                        choice: choice,
+                        selection: target.selection
+                    )
+                }
+                .padding(.top, 72)
+                .padding(.leading, 56)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .zIndex(30)
+            }
+        }
+    }
+
 #if os(iOS)
     private func revealMobilePageList() {
         onMobileRevealPageList?()
@@ -11584,6 +11905,45 @@ private struct EditorCanvasView: View {
 
     private var inlineLinkTargetBlockID: String? {
         inlineLinkTarget?.blockID
+    }
+
+    private var inlineInternalLinkTarget: (blockID: String, selection: EditorTextSelection)? {
+        if let selection = editorSession.textSelection,
+           let block = blocks.first(where: { $0.id == selection.blockID && $0.type.supportsInlineMarkdownStyling }),
+           isValid(selection: selection, for: block) {
+            return (block.id, selection)
+        }
+
+        if let focusedBlockID = editorSession.focusedBlockID,
+           let block = blocks.first(where: { $0.id == focusedBlockID && $0.type.supportsInlineMarkdownStyling }) {
+            return (block.id, endSelection(for: block))
+        }
+
+        if let block = blocks.last(where: { $0.type.supportsInlineMarkdownStyling }) {
+            return (block.id, endSelection(for: block))
+        }
+
+        return nil
+    }
+
+    private var inlineInternalLinkTriggerTarget: (blockID: String, selection: EditorTextSelection, query: String)? {
+        guard let selection = editorSession.textSelection,
+              let block = blocks.first(where: { $0.id == selection.blockID && $0.type.supportsInlineMarkdownStyling }),
+              isValid(selection: selection, for: block),
+              let query = InlineInternalLinkTrigger.query(
+                text: block.textPlain,
+                selection: selection,
+                isComposing: editorSession.composingBlockID == selection.blockID
+              ),
+              let replacementSelection = InlineInternalLinkTrigger.replacementSelection(
+                text: block.textPlain,
+                selection: selection,
+                isComposing: editorSession.composingBlockID == selection.blockID
+              ) else {
+            return nil
+        }
+
+        return (block.id, replacementSelection, query)
     }
 
     private var inlineLinkKeyboardTarget: (blockID: String, selection: EditorTextSelection?)? {
@@ -11831,6 +12191,19 @@ private struct EditorCanvasView: View {
         .padding(12)
     }
 
+    private func inlineInternalLinkChooser(
+        choices: [InlineInternalLinkChoice],
+        searchText: Binding<String>? = nil,
+        onChoose: @escaping (InlineInternalLinkChoice) -> Void
+    ) -> some View {
+        InlineInternalLinkChooserView(choices: choices, searchText: searchText, onChoose: { choice in
+            onChoose(choice)
+            isInlineInternalLinkChooserPresented = false
+            activeInlineInternalLinkTarget = nil
+            inlineInternalLinkSearchQuery = ""
+        })
+    }
+
     private func blockReferenceTitle(for block: BlockSnapshot) -> String {
         let pageTitle = pages.first { $0.id == block.pageID }?.title ?? "页面"
         return "\(pageTitle): \(block.textPlain)"
@@ -11863,6 +12236,27 @@ private struct EditorCanvasView: View {
         isEditingInlineLink = false
         isInlineLinkPopoverPresented = false
         activeInlineLinkTarget = nil
+    }
+
+    @discardableResult
+    private func insertInlineInternalLink(
+        blockID: String,
+        choice: InlineInternalLinkChoice,
+        selection: EditorTextSelection
+    ) -> EditorTextSelection? {
+        guard let nextSelection = onInsertInlineInternalLinkAtSelection(
+            blockID,
+            choice.targetPageID,
+            choice.targetBlockID,
+            selection
+        ) else {
+            return nil
+        }
+        pendingFocusRequest = BlockFocusRequest(blockID: blockID, selection: nextSelection)
+        isInlineInternalLinkChooserPresented = false
+        activeInlineInternalLinkTarget = nil
+        inlineInternalLinkSearchQuery = ""
+        return nextSelection
     }
 
     private func removeInlineLink() {
@@ -11936,6 +12330,17 @@ private struct EditorCanvasView: View {
         return true
     }
 
+    private func presentInlineInternalLinkChooserFromCurrentTarget() -> Bool {
+        guard let target = inlineInternalLinkTarget else {
+            return false
+        }
+
+        activeInlineInternalLinkTarget = target
+        isInlineInternalLinkChooserPresented = true
+        inlineInternalLinkSearchQuery = ""
+        return true
+    }
+
 #if os(macOS)
     private func presentInlineLinkInsertionFromKeyboardShortcut() -> Bool {
         guard let target = inlineLinkKeyboardTarget else {
@@ -11983,6 +12388,53 @@ private struct EditorCanvasView: View {
         )
     }
 
+    private func handleInlineLinkActivation(
+        _ activation: NativeInlineLinkActivation,
+        selectedRange: NSRange,
+        in block: BlockSnapshot
+    ) -> Bool {
+        guard let route = inlineLinkActivationRoute(for: activation, in: block) else {
+            return false
+        }
+        var didRoute = false
+        InlineLinkActivationRouter.route(
+            route,
+            openInternal: { targetPageID, targetBlockID in
+                let sourceSelection = InlineLinkActivationSourceSelectionResolver.sourceSelection(
+                    blockID: block.id,
+                    activation: activation,
+                    selectedRange: selectedRange
+                )
+                didRoute = onOpenInlineInternalLink(block.id, targetPageID, targetBlockID, sourceSelection)
+            },
+            openExternal: { url in
+                openURL(url)
+                didRoute = true
+            }
+        )
+        return didRoute
+    }
+
+    private func inlineLinkActivationRoute(
+        for activation: NativeInlineLinkActivation,
+        in block: BlockSnapshot
+    ) -> InlineLinkActivationRoute? {
+        switch activation.destination {
+        case .internalLink:
+            return InlineInternalLinkActivationRouteResolver.route(
+                activation: activation,
+                sourceBlock: block,
+                pages: pages,
+                blocks: allBlocks
+            )
+        case .externalURL(let urlString):
+            guard let url = URL(string: urlString) else {
+                return nil
+            }
+            return .externalURL(url)
+        }
+    }
+
     private func schedulePendingFocusIfNeeded(
         _ blockID: String?,
         requestID: UUID?,
@@ -12028,6 +12480,9 @@ private struct EditorCanvasView: View {
             reasonLabel = "page_changed"
         case .retry:
             reasonLabel = "retry"
+        }
+        if let selection = onConsumePendingNavigationFocusSelection(blockID) {
+            pendingFocusRequest = BlockFocusRequest(blockID: blockID, selection: selection)
         }
         EditorLog.focus.debug(
             "editor_focus_request_scheduled block_id=\(blockID, privacy: .public) source=view_model reason=\(reasonLabel, privacy: .public)"
@@ -14014,6 +14469,61 @@ private struct MarkdownFileDocument: FileDocument {
     }
 }
 
+private struct InlineInternalLinkChooserView: View {
+    let choices: [InlineInternalLinkChoice]
+    let searchText: Binding<String>?
+    let onChoose: (InlineInternalLinkChoice) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let searchText {
+                TextField("搜索页面或块", text: searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("editor.inline-internal-link.search")
+            }
+
+            if choices.isEmpty {
+                Text("没有匹配结果")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 8)
+            } else {
+                ForEach(choices) { choice in
+                    Button {
+                        onChoose(choice)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(choice.title)
+                                .font(.callout)
+                                .lineLimit(1)
+                            Text(choice.subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .accessibilityIdentifier("editor.inline-internal-link.result.\(choice.id)")
+                }
+            }
+        }
+        .frame(width: 280, alignment: .leading)
+        .padding(8)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor.inline-internal-link.chooser")
+    }
+}
+
 private struct BlockFocusRequest: Equatable {
     let id = UUID()
     let blockID: String
@@ -14603,6 +15113,7 @@ private struct BlockRowView: View {
     let onUndoTextEdit: () -> Void
     let onOpenPageReference: (String) -> Void
     let onOpenBlockReference: (String, String) -> Void
+    let onInlineLinkActivation: (NativeInlineLinkActivation, NSRange) -> Bool
     let onChangeType: (BlockType) -> Void
     let onConvertToPage: () -> Void
     let onTaskItemCompletionChange: (Bool) -> Void
@@ -14680,6 +15191,7 @@ private struct BlockRowView: View {
         onUndoTextEdit: @escaping () -> Void = {},
         onOpenPageReference: @escaping (String) -> Void = { _ in },
         onOpenBlockReference: @escaping (String, String) -> Void = { _, _ in },
+        onInlineLinkActivation: @escaping (NativeInlineLinkActivation, NSRange) -> Bool = { _, _ in false },
         onChangeType: @escaping (BlockType) -> Void = { _ in },
         onConvertToPage: @escaping () -> Void = {},
         onTaskItemCompletionChange: @escaping (Bool) -> Void = { _ in },
@@ -14745,6 +15257,7 @@ private struct BlockRowView: View {
         self.onUndoTextEdit = onUndoTextEdit
         self.onOpenPageReference = onOpenPageReference
         self.onOpenBlockReference = onOpenBlockReference
+        self.onInlineLinkActivation = onInlineLinkActivation
         self.onChangeType = onChangeType
         self.onConvertToPage = onConvertToPage
         self.onTaskItemCompletionChange = onTaskItemCompletionChange
@@ -14831,6 +15344,9 @@ private struct BlockRowView: View {
         .accessibilityIdentifier(rowAccessibilityIdentifier)
         .accessibilityLabel(rowAccessibilityValue)
         .accessibilityValue(rowAccessibilityValue)
+        .overlay(alignment: .topLeading) {
+            inlineInternalLinkActionLayer
+        }
         .simultaneousGesture(
             TapGesture().onEnded {
                 handleRowTap()
@@ -14945,6 +15461,42 @@ private struct BlockRowView: View {
                 onImageDisplayWidthChange: onAttachmentImageDisplayWidthChange
             )
         }
+    }
+
+    @ViewBuilder
+    private var inlineInternalLinkActionLayer: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(block.inlineInternalLinks, id: \.label) { target in
+                inlineInternalLinkAccessibilityProxy(target)
+            }
+        }
+        .frame(width: 1, height: 1, alignment: .topLeading)
+    }
+
+    private func inlineInternalLinkAccessibilityProxy(_ target: InlineInternalLinkTarget) -> some View {
+        Link(target.label, destination: URL(string: "editor-inline-link://\(block.id)/\(target.label.hashValue)")!)
+            .environment(\.openURL, OpenURLAction { _ in
+                _ = activateInlineInternalLinkProxy(target)
+                return .handled
+            })
+            .font(.system(size: 1))
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .accessibilityLabel(target.label)
+            .accessibilityIdentifier("editor.inline-link.\(block.id).\(target.label)")
+    }
+
+    private func activateInlineInternalLinkProxy(_ target: InlineInternalLinkTarget) -> Bool {
+        let markdown = "[[\(target.label)]]"
+        let range = (block.textPlain as NSString).range(of: markdown)
+        guard range.location != NSNotFound else {
+            return false
+        }
+        let activation = NativeInlineLinkActivation(
+            range: range,
+            destination: .internalLink(label: target.label, pageTitle: "", blockText: nil)
+        )
+        return onInlineLinkActivation(activation, NSRange(location: range.location, length: 0))
     }
 
     private var rowBackground: some View {
@@ -15493,6 +16045,7 @@ private struct BlockRowView: View {
             onExtendBlockSelectionByKeyboard: onExtendBlockSelectionByKeyboard,
             onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
             onInsertLinkByKeyboard: onInsertLinkByKeyboard,
+            onInlineLinkActivation: onInlineLinkActivation,
             onInsertBlockAfter: onInsertBlockAfter,
             onReplaceTextAtSelection: onReplaceTextAtSelection,
             onPasteTextAtSelection: onPasteTextAtSelection,

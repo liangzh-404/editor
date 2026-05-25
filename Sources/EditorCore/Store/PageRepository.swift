@@ -300,6 +300,74 @@ final class PageRepository: @unchecked Sendable {
         try updateBlock(blockID: blockID, type: type, text: text)
     }
 
+    @discardableResult
+    func insertInlineInternalLink(
+        blockID: String,
+        targetPageID: String,
+        targetBlockID: String?,
+        selection: EditorTextSelection
+    ) throws -> EditorTextSelection? {
+        guard selection.blockID == blockID else {
+            return nil
+        }
+        let source = try blockInlineTextSource(blockID: blockID)
+        guard source.type.supportsInlineMarkdownStyling else {
+            return nil
+        }
+        let nsText = source.text as NSString
+        guard selection.location >= 0,
+              selection.length >= 0,
+              selection.location <= nsText.length,
+              selection.length <= nsText.length - selection.location else {
+            return nil
+        }
+        let selectionRange = NSRange(location: selection.location, length: selection.length)
+        let textWithoutSelection = nsText.replacingCharacters(in: selectionRange, with: "")
+        let existingInlineLinks = InlineInternalLinkTarget.pruned(
+            payloadJSON: source.payloadJSON,
+            visibleText: textWithoutSelection
+        )
+        let visibleLabelCounts = Self.inlineInternalLinkLabelCounts(in: textWithoutSelection)
+        let rawLabel = try inlineInternalLinkRawLabel(targetPageID: targetPageID, targetBlockID: targetBlockID)
+        guard let baseLabel = Self.normalizedInlineInternalLinkLabel(rawLabel) else {
+            return nil
+        }
+        let label = uniqueInlineInternalLinkLabel(
+            baseLabel: baseLabel,
+            targetPageID: targetPageID,
+            targetBlockID: targetBlockID,
+            existingInlineLinks: existingInlineLinks,
+            visibleLabelCounts: visibleLabelCounts
+        )
+        let markdown = "[[\(label)]]"
+
+        let nextText = nsText.replacingCharacters(
+            in: selectionRange,
+            with: markdown
+        )
+        var inlineLinks = existingInlineLinks
+        inlineLinks.removeAll { $0.label == label }
+        inlineLinks.append(
+            InlineInternalLinkTarget(
+                label: label,
+                targetPageID: targetPageID,
+                targetBlockID: targetBlockID
+            )
+        )
+
+        try updateBlock(
+            blockID: blockID,
+            type: source.type,
+            text: nextText,
+            inlineInternalLinks: inlineLinks
+        )
+        return EditorTextSelection(
+            blockID: blockID,
+            location: selection.location + 2,
+            length: (label as NSString).length
+        )
+    }
+
     func updatePageTitle(pageID: String, title: String) throws {
         let rows = try database.query(
             """
@@ -1073,7 +1141,8 @@ final class PageRepository: @unchecked Sendable {
         toggleIsExpanded explicitToggleIsExpanded: Bool? = nil,
         codeBlockLineWrapping explicitCodeBlockLineWrapping: Bool? = nil,
         tableRows explicitTableRows: [[String]]? = nil,
-        attachmentDisplayWidth explicitAttachmentDisplayWidth: Double? = nil
+        attachmentDisplayWidth explicitAttachmentDisplayWidth: Double? = nil,
+        inlineInternalLinks explicitInlineInternalLinks: [InlineInternalLinkTarget]? = nil
     ) throws {
         let now = Self.timestamp()
         let currentRows = try database.query(
@@ -1149,6 +1218,10 @@ final class PageRepository: @unchecked Sendable {
                 displayWidth: displayWidth
             )
         } else {
+            let inlineInternalLinks = try explicitInlineInternalLinks ?? resolvedInlineInternalLinks(
+                currentPayloadJSON: currentPayloadJSON,
+                visibleText: text
+            )
             payloadJSON = try blockPayloadJSON(
                 type: type,
                 text: text,
@@ -1157,6 +1230,7 @@ final class PageRepository: @unchecked Sendable {
                 codeBlockLineWrapping: codeBlockLineWrapping,
                 pageReferenceTargetPageID: referenceTargets.pageID,
                 blockReferenceTargetBlockID: referenceTargets.blockID,
+                inlineInternalLinks: inlineInternalLinks,
                 tableRows: explicitTableRows
             )
         }
@@ -1207,11 +1281,16 @@ final class PageRepository: @unchecked Sendable {
             )
             try deleteSearchIndexForPage(pageID: currentRow["page_id"] ?? "", blockIDs: [blockID])
         } else {
+            let inlineInternalLinks = explicitInlineInternalLinks ?? InlineInternalLinkTarget.pruned(
+                payloadJSON: currentPayloadJSON,
+                visibleText: text
+            )
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: blockID,
                 text: text,
                 pageReferenceTargetPageID: referenceTargets.pageID,
-                blockReferenceTargetBlockID: referenceTargets.blockID
+                blockReferenceTargetBlockID: referenceTargets.blockID,
+                inlineInternalLinks: inlineInternalLinks
             )
         }
     }
@@ -1386,6 +1465,7 @@ final class PageRepository: @unchecked Sendable {
             """
             SELECT blocks.type,
                    blocks.text_plain,
+                   blocks.payload_json,
                    blocks.page_id AS page_id,
                    pages.is_encrypted AS is_encrypted
             FROM blocks
@@ -1401,11 +1481,16 @@ final class PageRepository: @unchecked Sendable {
 
         let isEncrypted = Self.sqliteBool(row["is_encrypted"])
         let text = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+        let currentPayloadJSON = try decryptedStoredValue(row["payload_json"] ?? "", isEncrypted: isEncrypted)
         let payloadJSON = try storedValue(
             try blockPayloadJSON(
                 type: .toggle,
                 text: text,
-                toggleIsExpanded: isExpanded
+                toggleIsExpanded: isExpanded,
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: currentPayloadJSON,
+                    visibleText: text
+                )
             ),
             isEncrypted: isEncrypted
         )
@@ -1436,7 +1521,11 @@ final class PageRepository: @unchecked Sendable {
         } else {
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: blockID,
-                text: text
+                text: text,
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: currentPayloadJSON,
+                    visibleText: text
+                )
             )
         }
     }
@@ -1446,6 +1535,7 @@ final class PageRepository: @unchecked Sendable {
             """
             SELECT blocks.type,
                    blocks.text_plain,
+                   blocks.payload_json,
                    blocks.page_id AS page_id,
                    pages.is_encrypted AS is_encrypted
             FROM blocks
@@ -1506,6 +1596,7 @@ final class PageRepository: @unchecked Sendable {
             """
             SELECT blocks.type,
                    blocks.text_plain,
+                   blocks.payload_json,
                    blocks.page_id AS page_id,
                    pages.is_encrypted AS is_encrypted
             FROM blocks
@@ -1521,11 +1612,16 @@ final class PageRepository: @unchecked Sendable {
 
         let isEncrypted = Self.sqliteBool(row["is_encrypted"])
         let text = try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted)
+        let currentPayloadJSON = try decryptedStoredValue(row["payload_json"] ?? "", isEncrypted: isEncrypted)
         let payloadJSON = try storedValue(
             try blockPayloadJSON(
                 type: .taskItem,
                 text: text,
-                taskItemIsCompleted: isCompleted
+                taskItemIsCompleted: isCompleted,
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: currentPayloadJSON,
+                    visibleText: text
+                )
             ),
             isEncrypted: isEncrypted
         )
@@ -1556,7 +1652,11 @@ final class PageRepository: @unchecked Sendable {
         } else {
             try BacklinkRepository(database: database).rebuildLinksForBlock(
                 blockID: blockID,
-                text: text
+                text: text,
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: currentPayloadJSON,
+                    visibleText: text
+                )
             )
         }
     }
@@ -2893,6 +2993,7 @@ final class PageRepository: @unchecked Sendable {
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            inlineInternalLinks: InlineInternalLinkTarget.decoded(from: payloadJSON),
             tableRows: Self.tableRows(
                 type: type,
                 payloadJSON: payloadJSON,
@@ -3232,9 +3333,203 @@ final class PageRepository: @unchecked Sendable {
                 blockID: row["id"] ?? "",
                 text: row["text_plain"] ?? "",
                 pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
-                blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
+                blockReferenceTargetBlockID: Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON),
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: payloadJSON,
+                    visibleText: row["text_plain"] ?? ""
+                )
             )
         }
+    }
+
+    private struct BlockInlineTextSource {
+        let type: BlockType
+        let text: String
+        let payloadJSON: String
+        let isEncrypted: Bool
+    }
+
+    private func blockInlineTextSource(blockID: String) throws -> BlockInlineTextSource {
+        let rows = try database.query(
+            """
+            SELECT blocks.type AS type,
+                   blocks.text_plain AS text_plain,
+                   blocks.payload_json AS payload_json,
+                   pages.is_encrypted AS is_encrypted
+            FROM blocks
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ? AND blocks.is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(blockID)]
+        )
+        guard let row = rows.first else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        let isEncrypted = Self.sqliteBool(row["is_encrypted"])
+        return BlockInlineTextSource(
+            type: BlockType(rawValue: row["type"] ?? "") ?? .paragraph,
+            text: try decryptedStoredValue(row["text_plain"] ?? "", isEncrypted: isEncrypted),
+            payloadJSON: try decryptedStoredValue(row["payload_json"] ?? "", isEncrypted: isEncrypted),
+            isEncrypted: isEncrypted
+        )
+    }
+
+    private func resolvedInlineInternalLinks(
+        currentPayloadJSON: String,
+        visibleText: String
+    ) throws -> [InlineInternalLinkTarget] {
+        var inlineLinks = InlineInternalLinkTarget.pruned(
+            payloadJSON: currentPayloadJSON,
+            visibleText: visibleText
+        )
+        var resolvedLabels = Set(inlineLinks.map(\.label))
+
+        for run in InlineLinkScanner.links(in: visibleText) {
+            guard case .internalWiki(let label, let pageTitle, let blockText) = run.kind,
+                  !resolvedLabels.contains(label),
+                  let target = try resolvedInlineInternalLinkTarget(pageTitle: pageTitle, blockText: blockText) else {
+                continue
+            }
+            inlineLinks.append(
+                InlineInternalLinkTarget(
+                    label: label,
+                    targetPageID: target.pageID,
+                    targetBlockID: target.blockID
+                )
+            )
+            resolvedLabels.insert(label)
+        }
+
+        return inlineLinks
+    }
+
+    private func resolvedInlineInternalLinkTarget(
+        pageTitle: String,
+        blockText: String?
+    ) throws -> (pageID: String, blockID: String?)? {
+        guard let pageID = try database.query(
+            """
+            SELECT id
+            FROM pages
+            WHERE title = ? AND is_archived = 0
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            bindings: [.text(pageTitle)]
+        ).first?["id"] ?? nil else {
+            return nil
+        }
+
+        guard let blockText,
+              !blockText.isEmpty else {
+            return (pageID, nil)
+        }
+
+        let blockID = try database.query(
+            """
+            SELECT id
+            FROM blocks
+            WHERE page_id = ? AND text_plain = ? AND is_deleted = 0
+            ORDER BY order_key ASC
+            LIMIT 1
+            """,
+            bindings: [.text(pageID), .text(blockText)]
+        ).first?["id"] ?? nil
+
+        return (pageID, blockID)
+    }
+
+    private func inlineInternalLinkRawLabel(targetPageID: String, targetBlockID: String?) throws -> String {
+        let pageRows = try database.query(
+            """
+            SELECT title, is_encrypted
+            FROM pages
+            WHERE id = ? AND is_archived = 0
+            LIMIT 1
+            """,
+            bindings: [.text(targetPageID)]
+        )
+        guard let pageRow = pageRows.first else {
+            throw PageRepositoryError.pageNotFound
+        }
+
+        let pageIsEncrypted = Self.sqliteBool(pageRow["is_encrypted"])
+        let pageTitle = try decryptedStoredValue(pageRow["title"] ?? "", isEncrypted: pageIsEncrypted)
+        guard let targetBlockID else {
+            return pageTitle
+        }
+
+        let blockRows = try database.query(
+            """
+            SELECT blocks.text_plain AS text_plain,
+                   pages.is_encrypted AS is_encrypted
+            FROM blocks
+            INNER JOIN pages ON pages.id = blocks.page_id
+            WHERE blocks.id = ?
+              AND blocks.page_id = ?
+              AND blocks.is_deleted = 0
+            LIMIT 1
+            """,
+            bindings: [.text(targetBlockID), .text(targetPageID)]
+        )
+        guard let blockRow = blockRows.first else {
+            throw PageRepositoryError.blockNotFound
+        }
+
+        let blockIsEncrypted = Self.sqliteBool(blockRow["is_encrypted"])
+        let blockText = try decryptedStoredValue(blockRow["text_plain"] ?? "", isEncrypted: blockIsEncrypted)
+        return "\(pageTitle)#\(blockText)"
+    }
+
+    private static func normalizedInlineInternalLinkLabel(_ rawLabel: String) -> String? {
+        let trimmedLabel = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLabel.isEmpty else {
+            return nil
+        }
+        let normalizedLabel = trimmedLabel
+            .replacingOccurrences(of: "[[", with: "(")
+            .replacingOccurrences(of: "]]", with: ")")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalizedLabel.isEmpty ? nil : normalizedLabel
+    }
+
+    private func uniqueInlineInternalLinkLabel(
+        baseLabel: String,
+        targetPageID: String,
+        targetBlockID: String?,
+        existingInlineLinks: [InlineInternalLinkTarget],
+        visibleLabelCounts: [String: Int]
+    ) -> String {
+        var candidate = baseLabel
+        var suffix = 2
+        while true {
+            let matchingLinks = existingInlineLinks.filter { $0.label == candidate }
+            let visibleCount = visibleLabelCounts[candidate] ?? 0
+            if matchingLinks.contains(where: {
+                $0.targetPageID == targetPageID && $0.targetBlockID == targetBlockID
+            }) {
+                if visibleCount <= matchingLinks.count {
+                    return candidate
+                }
+            } else if matchingLinks.isEmpty && visibleCount == 0 {
+                return candidate
+            }
+            candidate = "\(baseLabel) (\(suffix))"
+            suffix += 1
+        }
+    }
+
+    private static func inlineInternalLinkLabelCounts(in text: String) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for run in InlineLinkScanner.links(in: text) {
+            guard case .internalWiki(let label, _, _) = run.kind else {
+                continue
+            }
+            counts[label, default: 0] += 1
+        }
+        return counts
     }
 
     private func siblingBlocks(pageID: String, parentBlockID: String?) throws -> [String] {
@@ -3350,9 +3645,10 @@ final class PageRepository: @unchecked Sendable {
         codeBlockLineWrapping: Bool = true,
         pageReferenceTargetPageID: String? = nil,
         blockReferenceTargetBlockID: String? = nil,
+        inlineInternalLinks: [InlineInternalLinkTarget] = [],
         tableRows explicitTableRows: [[String]]? = nil
     ) throws -> String {
-        let payload: [String: Any]
+        var payload: [String: Any]
         switch type {
         case .divider:
             payload = [:]
@@ -3395,6 +3691,10 @@ final class PageRepository: @unchecked Sendable {
                 defaultPayload["target_page_id"] = pageReferenceTargetPageID
             }
             payload = defaultPayload
+        }
+        if type.supportsInlineMarkdownStyling,
+           !inlineInternalLinks.isEmpty {
+            payload["inline_links"] = InlineInternalLinkTarget.payloadRows(for: inlineInternalLinks)
         }
 
         let data = try JSONSerialization.data(
@@ -3445,6 +3745,7 @@ final class PageRepository: @unchecked Sendable {
                 codeBlockLineWrapping: block.codeBlockLineWrapping,
                 pageReferenceTargetPageID: block.pageReferenceTargetPageID,
                 blockReferenceTargetBlockID: block.blockReferenceTargetBlockID,
+                inlineInternalLinks: block.inlineInternalLinks,
                 tableRows: block.tableRows
             )
         }

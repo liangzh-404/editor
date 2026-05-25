@@ -1,6 +1,289 @@
 import XCTest
 
 final class EditorBlockChromeTests: XCTestCase {
+    func testInternalLinkTriggerDetectsOpenWikiPrefixAtCaret() {
+        let triggerText = "See [[Spe"
+        let triggerSelection = EditorTextSelection(
+            blockID: "block",
+            location: (triggerText as NSString).length,
+            length: 0
+        )
+
+        XCTAssertEqual(
+            InlineInternalLinkTrigger.query(
+                text: triggerText,
+                selection: triggerSelection
+            ),
+            "Spe"
+        )
+        XCTAssertEqual(
+            InlineInternalLinkTrigger.replacementSelection(
+                text: triggerText,
+                selection: triggerSelection
+            ),
+            EditorTextSelection(
+                blockID: "block",
+                location: ("See " as NSString).length,
+                length: ("[[Spe" as NSString).length
+            )
+        )
+        XCTAssertNil(
+            InlineInternalLinkTrigger.query(
+                text: "See [[Specs]]",
+                selection: EditorTextSelection(
+                    blockID: "block",
+                    location: ("See [[Specs]]" as NSString).length,
+                    length: 0
+                )
+            )
+        )
+    }
+
+    func testInternalLinkTriggerIgnoresOpenWikiPrefixDuringTextComposition() {
+        let triggerText = "See [[Spe"
+        let triggerSelection = EditorTextSelection(
+            blockID: "block",
+            location: (triggerText as NSString).length,
+            length: 0
+        )
+
+        XCTAssertNil(
+            InlineInternalLinkTrigger.query(
+                text: triggerText,
+                selection: triggerSelection,
+                isComposing: true
+            )
+        )
+        XCTAssertNil(
+            InlineInternalLinkTrigger.replacementSelection(
+                text: triggerText,
+                selection: triggerSelection,
+                isComposing: true
+            )
+        )
+    }
+
+    func testInternalLinkChoiceBuildsReadableLabels() {
+        let page = PageSummary(id: "page-specs", workspaceID: "workspace", title: "Specs")
+        let block = BlockSnapshot(
+            id: "block-api",
+            pageID: "page-specs",
+            parentBlockID: nil,
+            orderKey: "000001",
+            type: .paragraph,
+            textPlain: "API contract"
+        )
+
+        XCTAssertEqual(InlineInternalLinkChoice.label(page: page, block: nil), "Specs")
+        XCTAssertEqual(InlineInternalLinkChoice.label(page: page, block: block), "Specs#API contract")
+    }
+
+    func testInternalLinkChoiceFilterSearchesBeforeLimitingResults() {
+        let filler = (1...8).map { index in
+            InlineInternalLinkChoice(
+                id: "page-filler-\(index)",
+                targetPageID: "page-filler-\(index)",
+                targetBlockID: nil,
+                title: "Filler \(index)",
+                subtitle: "页面"
+            )
+        }
+        let target = InlineInternalLinkChoice(
+            id: "block-target",
+            targetPageID: "page-target",
+            targetBlockID: "block-target",
+            title: "Reference Target#Deep block",
+            subtitle: "Deep block"
+        )
+        let choices = filler + [target]
+
+        XCTAssertEqual(
+            InlineInternalLinkChoiceFilter.filtered(choices, query: "Reference").map(\.id),
+            ["block-target"]
+        )
+        XCTAssertEqual(
+            InlineInternalLinkChoiceFilter.filtered(choices, query: "", limit: 3).map(\.id),
+            ["page-filler-1", "page-filler-2", "page-filler-3"]
+        )
+    }
+
+    func testInlineLinkActivationRoutesInternalAndExternalDestinations() {
+        var openedInternal: (String, String?)?
+        var openedExternal: URL?
+
+        InlineLinkActivationRouter.route(
+            .internalLink(targetPageID: "page-specs", targetBlockID: "block-api"),
+            openInternal: { pageID, blockID in openedInternal = (pageID, blockID) },
+            openExternal: { url in openedExternal = url }
+        )
+
+        XCTAssertEqual(openedInternal?.0, "page-specs")
+        XCTAssertEqual(openedInternal?.1, "block-api")
+        XCTAssertNil(openedExternal)
+
+        InlineLinkActivationRouter.route(
+            .externalURL(URL(string: "https://swift.org")!),
+            openInternal: { pageID, blockID in XCTFail("External URL should not invoke internal opener: \(pageID), \(blockID ?? "nil")") },
+            openExternal: { url in openedExternal = url }
+        )
+
+        XCTAssertEqual(openedInternal?.0, "page-specs")
+        XCTAssertEqual(openedInternal?.1, "block-api")
+        XCTAssertEqual(openedExternal?.absoluteString, "https://swift.org")
+    }
+
+    func testInlineLinkActivationSourceSelectionUsesActivationRangeForInternalLinks() {
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 12, length: 9),
+            destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+        )
+
+        let sourceSelection = InlineLinkActivationSourceSelectionResolver.sourceSelection(
+            blockID: "source-block",
+            activation: activation,
+            selectedRange: NSRange(location: 2, length: 0)
+        )
+
+        XCTAssertEqual(
+            sourceSelection,
+            EditorTextSelection(blockID: "source-block", location: 12, length: 9)
+        )
+    }
+
+    func testInlineLinkActivationSourceSelectionIgnoresExternalLinks() {
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 12, length: 19),
+            destination: .externalURL("https://swift.org")
+        )
+
+        XCTAssertNil(
+            InlineLinkActivationSourceSelectionResolver.sourceSelection(
+                blockID: "source-block",
+                activation: activation,
+                selectedRange: NSRange(location: 2, length: 0)
+            )
+        )
+    }
+
+    func testInlineInternalLinkFallbackRouteReturnsNilForDuplicatePageTitles() {
+        let pages = [
+            PageSummary(id: "page-a", workspaceID: "workspace", title: "Specs"),
+            PageSummary(id: "page-b", workspaceID: "workspace", title: "Specs")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 4, length: 9),
+            destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+        )
+
+        XCTAssertNil(
+            InlineInternalLinkFallbackRouteResolver.route(
+                activation: activation,
+                pages: pages,
+                blocks: []
+            )
+        )
+    }
+
+    func testInlineInternalLinkRouteUsesMetadataBeforeAmbiguousFallback() {
+        let sourceBlock = BlockSnapshot(
+            id: "source-block",
+            pageID: "source-page",
+            parentBlockID: nil,
+            orderKey: "a",
+            type: .paragraph,
+            textPlain: "[[Specs]]",
+            inlineInternalLinks: [
+                InlineInternalLinkTarget(
+                    label: "Specs",
+                    targetPageID: "page-b",
+                    targetBlockID: "block-b"
+                )
+            ]
+        )
+        let pages = [
+            PageSummary(id: "page-a", workspaceID: "workspace", title: "Specs"),
+            PageSummary(id: "page-b", workspaceID: "workspace", title: "Specs")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 0, length: 9),
+            destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+        )
+
+        XCTAssertEqual(
+            InlineInternalLinkActivationRouteResolver.route(
+                activation: activation,
+                sourceBlock: sourceBlock,
+                pages: pages,
+                blocks: []
+            ),
+            .internalLink(targetPageID: "page-b", targetBlockID: "block-b")
+        )
+    }
+
+    func testInlineInternalLinkFallbackRouteResolvesUniquePageTitle() {
+        let pages = [
+            PageSummary(id: "page-specs", workspaceID: "workspace", title: "Specs")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 4, length: 9),
+            destination: .internalLink(label: "Specs", pageTitle: "Specs", blockText: nil)
+        )
+
+        XCTAssertEqual(
+            InlineInternalLinkFallbackRouteResolver.route(
+                activation: activation,
+                pages: pages,
+                blocks: []
+            ),
+            .internalLink(targetPageID: "page-specs", targetBlockID: nil)
+        )
+    }
+
+    func testInlineInternalLinkFallbackRouteReturnsNilForDuplicateBlockTextInTargetPage() {
+        let pages = [
+            PageSummary(id: "page-specs", workspaceID: "workspace", title: "Specs")
+        ]
+        let blocks = [
+            BlockSnapshot(id: "block-a", pageID: "page-specs", parentBlockID: nil, orderKey: "a", type: .paragraph, textPlain: "API"),
+            BlockSnapshot(id: "block-b", pageID: "page-specs", parentBlockID: nil, orderKey: "b", type: .paragraph, textPlain: "API")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 4, length: 13),
+            destination: .internalLink(label: "Specs#API", pageTitle: "Specs", blockText: "API")
+        )
+
+        XCTAssertNil(
+            InlineInternalLinkFallbackRouteResolver.route(
+                activation: activation,
+                pages: pages,
+                blocks: blocks
+            )
+        )
+    }
+
+    func testInlineInternalLinkFallbackRouteResolvesUniqueBlockTextInTargetPage() {
+        let pages = [
+            PageSummary(id: "page-specs", workspaceID: "workspace", title: "Specs")
+        ]
+        let blocks = [
+            BlockSnapshot(id: "block-api", pageID: "page-specs", parentBlockID: nil, orderKey: "a", type: .paragraph, textPlain: "API"),
+            BlockSnapshot(id: "block-other", pageID: "page-specs", parentBlockID: nil, orderKey: "b", type: .paragraph, textPlain: "Other")
+        ]
+        let activation = NativeInlineLinkActivation(
+            range: NSRange(location: 4, length: 13),
+            destination: .internalLink(label: "Specs#API", pageTitle: "Specs", blockText: "API")
+        )
+
+        XCTAssertEqual(
+            InlineInternalLinkFallbackRouteResolver.route(
+                activation: activation,
+                pages: pages,
+                blocks: blocks
+            ),
+            .internalLink(targetPageID: "page-specs", targetBlockID: "block-api")
+        )
+    }
+
     func testCraftThingsDesignTokensMatchDesktopEditorialPalette() {
         assertColor(EditorDesignTokens.Colors.appBackground, red: 0xF7, green: 0xF7, blue: 0xF5)
         assertColor(EditorDesignTokens.Colors.sidebarBackground, red: 0xF2, green: 0xF2, blue: 0xEF)
@@ -121,6 +404,7 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.addParagraphBlock, in: .compactIOS))
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.attachment, in: .compactIOS))
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.bold, in: .compactIOS))
+        XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.insertInternalLink, in: .compactIOS))
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.undoTextEdit, in: .compactIOS))
     }
 

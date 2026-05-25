@@ -278,6 +278,54 @@ enum MarkdownInlineLinkKeyboardResolver {
     }
 }
 
+enum NativeInlineLinkDestination: Equatable, Sendable {
+    case internalLink(label: String, pageTitle: String, blockText: String?)
+    case externalURL(String)
+}
+
+struct NativeInlineLinkActivation: Equatable, Sendable {
+    let range: NSRange
+    let destination: NativeInlineLinkDestination
+}
+
+enum NativeInlineLinkActivationResolver {
+    static func activation(text: String, characterIndex: Int) -> NativeInlineLinkActivation? {
+        guard characterIndex >= 0 else { return nil }
+        guard let run = InlineLinkScanner.link(containing: characterIndex, in: text) else {
+            return nil
+        }
+        switch run.kind {
+        case .internalWiki(let label, let pageTitle, let blockText):
+            return NativeInlineLinkActivation(
+                range: run.fullRange,
+                destination: .internalLink(label: label, pageTitle: pageTitle, blockText: blockText)
+            )
+        case .external(_, let url):
+            return NativeInlineLinkActivation(
+                range: run.fullRange,
+                destination: .externalURL(url)
+            )
+        }
+    }
+}
+
+enum NativeInlineLinkPointHitGuard {
+    static func contains(point: CGPoint, linkBounds: CGRect?) -> Bool {
+        guard let linkBounds,
+              !linkBounds.isNull,
+              !linkBounds.isEmpty else {
+            return false
+        }
+        return linkBounds.contains(point)
+    }
+
+    static func contains(point: CGPoint, fragmentBounds: [CGRect]) -> Bool {
+        fragmentBounds.contains {
+            !$0.isNull && !$0.isEmpty && $0.contains(point)
+        }
+    }
+}
+
 enum NativeTextMarkdownSyntaxMarkerAttributes {
 #if os(macOS)
     static func appKit(baseFont: NSFont) -> [NSAttributedString.Key: Any] {
@@ -1075,6 +1123,7 @@ struct NativeTextBlockEditor: View {
     let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
+    let onInlineLinkActivation: ((NativeInlineLinkActivation, NSRange) -> Bool)?
     let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
     let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onPasteTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
@@ -1110,6 +1159,7 @@ struct NativeTextBlockEditor: View {
         onExtendBlockSelectionByKeyboard: @escaping (BlockKeyboardFocusDirection) -> Bool = { _ in false },
         onApplyInlineFormatByKeyboard: @escaping (MarkdownInlineFormat, EditorTextSelection) -> Bool = { _, _ in false },
         onInsertLinkByKeyboard: @escaping (EditorTextSelection) -> Bool = { _ in false },
+        onInlineLinkActivation: ((NativeInlineLinkActivation, NSRange) -> Bool)? = nil,
         onInsertBlockAfter: @escaping (EditorTextSelection) -> EditorTextSelection? = { _ in nil },
         onReplaceTextAtSelection: @escaping (EditorTextSelection, String) -> EditorTextSelection? = { _, _ in nil },
         onPasteTextAtSelection: @escaping (EditorTextSelection, String) -> EditorTextSelection? = { _, _ in nil },
@@ -1143,6 +1193,7 @@ struct NativeTextBlockEditor: View {
         self.onExtendBlockSelectionByKeyboard = onExtendBlockSelectionByKeyboard
         self.onApplyInlineFormatByKeyboard = onApplyInlineFormatByKeyboard
         self.onInsertLinkByKeyboard = onInsertLinkByKeyboard
+        self.onInlineLinkActivation = onInlineLinkActivation
         self.onInsertBlockAfter = onInsertBlockAfter
         self.onReplaceTextAtSelection = onReplaceTextAtSelection
         self.onPasteTextAtSelection = onPasteTextAtSelection
@@ -1180,6 +1231,7 @@ struct NativeTextBlockEditor: View {
                 onExtendBlockSelectionByKeyboard: onExtendBlockSelectionByKeyboard,
                 onApplyInlineFormatByKeyboard: onApplyInlineFormatByKeyboard,
                 onInsertLinkByKeyboard: onInsertLinkByKeyboard,
+                onInlineLinkActivation: onInlineLinkActivation,
                 onInsertBlockAfter: onInsertBlockAfter,
                 onReplaceTextAtSelection: onReplaceTextAtSelection,
                 onPasteTextAtSelection: onPasteTextAtSelection,
@@ -1438,6 +1490,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
+    let onInlineLinkActivation: ((NativeInlineLinkActivation, NSRange) -> Bool)?
     let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
     let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onPasteTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
@@ -1513,6 +1566,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                 )
             )
         }
+        textView.onInlineLinkActivation = onInlineLinkActivation
         textView.onInsertBlockAfter = { selectedRange in
             onInsertBlockAfter(
                 EditorTextSelection(
@@ -1627,6 +1681,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                     )
                 )
             }
+            textView.onInlineLinkActivation = onInlineLinkActivation
             textView.onInsertBlockAfter = { selectedRange in
                 onInsertBlockAfter(
                     EditorTextSelection(
@@ -2233,6 +2288,7 @@ private final class EditorNSTextView: NSTextView {
     var onSlashCommandSelectionByKeyboard: (() -> Bool)?
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
+    var onInlineLinkActivation: ((NativeInlineLinkActivation, NSRange) -> Bool)?
     var onInsertBlockAfter: ((NSRange) -> Bool)?
     var onPasteTextAtSelection: ((NSRange, String) -> Bool)?
     var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
@@ -2258,8 +2314,49 @@ private final class EditorNSTextView: NSTextView {
                 window.makeFirstResponder(self)
             }
         }
+        if handleInlineLinkActivation(at: event) {
+            onMouseFocusResult?(window?.firstResponder === self)
+            return
+        }
         super.mouseDown(with: event)
         onMouseFocusResult?(window?.firstResponder === self)
+    }
+
+    private func handleInlineLinkActivation(at event: NSEvent) -> Bool {
+        guard let onInlineLinkActivation else {
+            return false
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        let characterIndex = characterIndexForInsertion(at: point)
+        guard let activation = NativeInlineLinkActivationResolver.activation(
+            text: string,
+            characterIndex: characterIndex
+        ) else {
+            return false
+        }
+        guard NativeInlineLinkPointHitGuard.contains(
+            point: point,
+            linkBounds: renderedBounds(for: activation.range)
+        ) else {
+            return false
+        }
+        return onInlineLinkActivation(activation, selectedRange())
+    }
+
+    private func renderedBounds(for characterRange: NSRange) -> CGRect? {
+        guard characterRange.length > 0 else {
+            return nil
+        }
+        // AppKit only exposes the first rect here; this intentionally prefers false negatives for wrapped links.
+        var actualRange = NSRange(location: NSNotFound, length: 0)
+        let screenRect = firstRect(forCharacterRange: characterRange, actualRange: &actualRange)
+        guard actualRange.location != NSNotFound,
+              !screenRect.isNull,
+              !screenRect.isEmpty,
+              let window else {
+            return nil
+        }
+        return convert(window.convertFromScreen(screenRect), from: nil)
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
@@ -2652,6 +2749,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let onExtendBlockSelectionByKeyboard: (BlockKeyboardFocusDirection) -> Bool
     let onApplyInlineFormatByKeyboard: (MarkdownInlineFormat, EditorTextSelection) -> Bool
     let onInsertLinkByKeyboard: (EditorTextSelection) -> Bool
+    let onInlineLinkActivation: ((NativeInlineLinkActivation, NSRange) -> Bool)?
     let onInsertBlockAfter: (EditorTextSelection) -> EditorTextSelection?
     let onReplaceTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
     let onPasteTextAtSelection: (EditorTextSelection, String) -> EditorTextSelection?
@@ -2704,6 +2802,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                 )
             )
         }
+        textView.onInlineLinkActivation = onInlineLinkActivation
         textView.onInsertBlockAfter = { selectedRange in
             onInsertBlockAfter(
                 EditorTextSelection(
@@ -2755,6 +2854,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.onPasteAttachmentURLs = onPasteAttachmentURLs
         textView.onHorizontalSwipe = onHorizontalSwipe
         textView.installHorizontalSwipeRecognizersIfNeeded()
+        textView.installInlineLinkTapRecognizerIfNeeded()
         textView.textDragDelegate = context.coordinator
         if MobileNativeTextBlockDragPolicy.disablesSystemTextDragInteraction {
             textView.textDragInteraction?.isEnabled = false
@@ -2827,6 +2927,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                     )
                 )
             }
+            textView.onInlineLinkActivation = onInlineLinkActivation
             textView.onInsertBlockAfter = { selectedRange in
                 onInsertBlockAfter(
                     EditorTextSelection(
@@ -2878,6 +2979,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             textView.onPasteAttachmentURLs = onPasteAttachmentURLs
             textView.onHorizontalSwipe = onHorizontalSwipe
             textView.installHorizontalSwipeRecognizersIfNeeded()
+            textView.installInlineLinkTapRecognizerIfNeeded()
             textView.textDragDelegate = context.coordinator
             if MobileNativeTextBlockDragPolicy.disablesSystemTextDragInteraction {
                 textView.textDragInteraction?.isEnabled = false
@@ -3676,6 +3778,7 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     var onSlashCommandSelectionByKeyboard: (() -> Bool)?
     var onKeyboardInlineFormat: ((MarkdownInlineFormat, NSRange) -> Bool)?
     var onKeyboardLinkInsertion: ((NSRange) -> Bool)?
+    var onInlineLinkActivation: ((NativeInlineLinkActivation, NSRange) -> Bool)?
     var onInsertBlockAfter: ((NSRange) -> Bool)?
     var onPasteTextAtSelection: ((NSRange, String) -> Bool)?
     var onMergeBlockWithPrevious: ((NSRange) -> Bool)?
@@ -3688,6 +3791,7 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
     var onPasteAttachmentURLs: (([URL]) -> Bool)?
     var onHorizontalSwipe: ((CGFloat) -> Bool)?
     private var didInstallHorizontalSwipeRecognizers = false
+    private var didInstallInlineLinkTapRecognizer = false
     private var blockDragInteraction: UIDragInteraction?
 
     override var intrinsicContentSize: CGSize {
@@ -3721,6 +3825,19 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
         horizontalPan.cancelsTouchesInView = false
         horizontalPan.delegate = self
         addGestureRecognizer(horizontalPan)
+    }
+
+    func installInlineLinkTapRecognizerIfNeeded() {
+        guard !didInstallInlineLinkTapRecognizer else {
+            return
+        }
+        didInstallInlineLinkTapRecognizer = true
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleInlineLinkTap(_:)))
+        tap.numberOfTapsRequired = 1
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        addGestureRecognizer(tap)
     }
 
     func installBlockDragInteractionIfNeeded(delegate: UIDragInteractionDelegate) {
@@ -3859,6 +3976,70 @@ private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
         }
 
         _ = onHorizontalSwipe?(translation.x)
+    }
+
+    @objc private func handleInlineLinkTap(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended,
+              let onInlineLinkActivation else {
+            return
+        }
+
+        let point = recognizer.location(in: self)
+        guard let position = closestPosition(to: point) else {
+            return
+        }
+        let characterIndex = offset(from: beginningOfDocument, to: position)
+        guard let activation = NativeInlineLinkActivationResolver.activation(
+            text: text ?? "",
+            characterIndex: characterIndex
+        ) else {
+            return
+        }
+        guard NativeInlineLinkPointHitGuard.contains(
+            point: point,
+            fragmentBounds: renderedFragmentBounds(for: activation.range)
+        ) else {
+            return
+        }
+
+        _ = onInlineLinkActivation(activation, selectedRange)
+    }
+
+    private func renderedFragmentBounds(for characterRange: NSRange) -> [CGRect] {
+        guard characterRange.length > 0,
+              characterRange.location < textStorage.length else {
+            return []
+        }
+        let clampedRange = NSRange(
+            location: characterRange.location,
+            length: min(characterRange.length, textStorage.length - characterRange.location)
+        )
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: clampedRange,
+            actualCharacterRange: nil
+        )
+        guard glyphRange.length > 0 else {
+            return []
+        }
+
+        var fragments: [CGRect] = []
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, fragmentGlyphRange, _ in
+            let intersection = NSIntersectionRange(fragmentGlyphRange, glyphRange)
+            guard intersection.length > 0 else {
+                return
+            }
+            let glyphBounds = self.layoutManager.boundingRect(forGlyphRange: intersection, in: self.textContainer)
+            guard !glyphBounds.isNull,
+                  !glyphBounds.isEmpty else {
+                return
+            }
+            fragments.append(glyphBounds.intersection(usedRect).offsetBy(
+                dx: self.textContainerInset.left,
+                dy: self.textContainerInset.top
+            ))
+        }
+        return fragments
     }
 
     @objc private func moveBlockUp() {

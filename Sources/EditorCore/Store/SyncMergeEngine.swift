@@ -708,7 +708,11 @@ final class SyncMergeEngine {
                     pageReferenceTargetPageID: pageReferenceTargetPageID,
                     blockReferenceTargetBlockID: remote.type == .blockReference
                         ? Self.blockReferenceTargetBlockID(payloadJSON: remote.payloadJSON)
-                        : nil
+                        : nil,
+                    inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                        payloadJSON: remote.payloadJSON,
+                        visibleText: remote.textPlain
+                    )
                 )
                 try syncPageParentLink(
                     sourceBlockID: remote.blockID,
@@ -797,7 +801,11 @@ final class SyncMergeEngine {
                 pageReferenceTargetPageID: pageReferenceTargetPageID,
                 blockReferenceTargetBlockID: remote.type == .blockReference
                     ? Self.blockReferenceTargetBlockID(payloadJSON: remote.payloadJSON)
-                    : nil
+                    : nil,
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: remote.payloadJSON,
+                    visibleText: remote.textPlain
+                )
             )
             try syncPageParentLink(
                 sourceBlockID: remote.blockID,
@@ -837,7 +845,8 @@ final class SyncMergeEngine {
         let mergedText = AutomaticTextMerge.merge(local: localText, remote: remote.textPlain)
         let payloadJSON = try AutomaticTextMerge.payloadJSON(
             updating: localRow["payload_json"] ?? "",
-            text: mergedText
+            text: mergedText,
+            preservingInlineLinksFrom: [remote.payloadJSON]
         )
         let localRevision = Int(localRow["revision"] ?? "") ?? 0
         let mergedRevision = max(localRevision, remote.revision) + 1
@@ -876,7 +885,11 @@ final class SyncMergeEngine {
                 pageReferenceTargetPageID: Self.pageReferenceTargetPageID(payloadJSON: payloadJSON),
                 blockReferenceTargetBlockID: remote.type == .blockReference
                     ? Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
-                    : nil
+                    : nil,
+                inlineInternalLinks: InlineInternalLinkTarget.pruned(
+                    payloadJSON: payloadJSON,
+                    visibleText: mergedText
+                )
             )
         }
         try syncPageParentLink(

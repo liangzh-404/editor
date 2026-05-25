@@ -352,6 +352,75 @@ enum AttachmentKind: String, Equatable, Sendable {
     }
 }
 
+struct InlineInternalLinkTarget: Equatable, Sendable {
+    let label: String
+    let targetPageID: String
+    let targetBlockID: String?
+
+    static func decoded(from payloadJSON: String) -> [InlineInternalLinkTarget] {
+        guard let data = payloadJSON.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = payload["inline_links"] as? [[String: Any]] else {
+            return []
+        }
+
+        return rows.compactMap { row in
+            guard let label = row["label"] as? String,
+                  !label.isEmpty,
+                  let targetPageID = row["target_page_id"] as? String,
+                  !targetPageID.isEmpty else {
+                return nil
+            }
+            return InlineInternalLinkTarget(
+                label: label,
+                targetPageID: targetPageID,
+                targetBlockID: row["target_block_id"] as? String
+            )
+        }
+    }
+
+    static func pruned(payloadJSON: String, visibleText: String) -> [InlineInternalLinkTarget] {
+        pruned(payloadJSONs: [payloadJSON], visibleText: visibleText)
+    }
+
+    static func pruned(payloadJSONs: [String], visibleText: String) -> [InlineInternalLinkTarget] {
+        let visibleLabels = Set(InlineLinkScanner.links(in: visibleText).compactMap { run -> String? in
+            guard case .internalWiki(let label, _, _) = run.kind else {
+                return nil
+            }
+            return label
+        })
+        guard !visibleLabels.isEmpty else {
+            return []
+        }
+
+        var seenLabels: Set<String> = []
+        var links: [InlineInternalLinkTarget] = []
+        for payloadJSON in payloadJSONs {
+            for link in decoded(from: payloadJSON)
+                where visibleLabels.contains(link.label) && !seenLabels.contains(link.label) {
+                links.append(link)
+                seenLabels.insert(link.label)
+            }
+        }
+        return links
+    }
+
+    static func payloadRows(for inlineLinks: [InlineInternalLinkTarget]) -> [[String: Any]] {
+        inlineLinks.map { link in
+            var row: [String: Any] = [
+                "label": link.label,
+                "target_page_id": link.targetPageID
+            ]
+            if let targetBlockID = link.targetBlockID,
+               !targetBlockID.isEmpty {
+                row["target_block_id"] = targetBlockID
+            }
+            return row
+        }
+    }
+}
+
 struct BlockSnapshot: Identifiable, Equatable, Sendable {
     let id: String
     let pageID: String
@@ -364,6 +433,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
     let codeBlockLineWrapping: Bool
     let pageReferenceTargetPageID: String?
     let blockReferenceTargetBlockID: String?
+    let inlineInternalLinks: [InlineInternalLinkTarget]
     let tableRows: [[String]]
     let attachmentID: String?
     let attachmentDisplayWidth: Double?
@@ -380,6 +450,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
         codeBlockLineWrapping: Bool = true,
         pageReferenceTargetPageID: String? = nil,
         blockReferenceTargetBlockID: String? = nil,
+        inlineInternalLinks: [InlineInternalLinkTarget] = [],
         tableRows: [[String]] = [],
         attachmentID: String? = nil,
         attachmentDisplayWidth: Double? = nil
@@ -395,6 +466,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
         self.codeBlockLineWrapping = codeBlockLineWrapping
         self.pageReferenceTargetPageID = pageReferenceTargetPageID
         self.blockReferenceTargetBlockID = blockReferenceTargetBlockID
+        self.inlineInternalLinks = type.supportsInlineMarkdownStyling ? inlineInternalLinks : []
         self.tableRows = Self.normalizedTableRows(type: type, text: textPlain, rows: tableRows)
         self.attachmentID = type.isAttachment ? attachmentID : nil
         self.attachmentDisplayWidth = type == .attachmentImage ? attachmentDisplayWidth : nil
@@ -417,6 +489,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: type == .codeBlock && self.type == .codeBlock ? codeBlockLineWrapping : true,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: type == .blockReference ? blockReferenceTargetBlockID : nil,
+            inlineInternalLinks: type.supportsInlineMarkdownStyling ? inlineInternalLinks : [],
             tableRows: type == .table && self.type == .table ? tableRows : [],
             attachmentID: type.isAttachment && type == self.type ? attachmentID : nil,
             attachmentDisplayWidth: type == .attachmentImage && type == self.type ? attachmentDisplayWidth : nil
@@ -436,6 +509,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            inlineInternalLinks: inlineInternalLinks,
             tableRows: tableRows,
             attachmentID: attachmentID,
             attachmentDisplayWidth: attachmentDisplayWidth
@@ -455,6 +529,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            inlineInternalLinks: inlineInternalLinks,
             tableRows: tableRows,
             attachmentID: attachmentID,
             attachmentDisplayWidth: attachmentDisplayWidth
@@ -474,6 +549,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: type == .codeBlock ? isWrapped : true,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            inlineInternalLinks: inlineInternalLinks,
             tableRows: tableRows,
             attachmentID: attachmentID,
             attachmentDisplayWidth: attachmentDisplayWidth
@@ -493,6 +569,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            inlineInternalLinks: inlineInternalLinks,
             tableRows: type == .table ? rows : [],
             attachmentID: attachmentID,
             attachmentDisplayWidth: attachmentDisplayWidth
@@ -512,6 +589,7 @@ struct BlockSnapshot: Identifiable, Equatable, Sendable {
             codeBlockLineWrapping: codeBlockLineWrapping,
             pageReferenceTargetPageID: pageReferenceTargetPageID,
             blockReferenceTargetBlockID: blockReferenceTargetBlockID,
+            inlineInternalLinks: inlineInternalLinks,
             tableRows: tableRows,
             attachmentID: attachmentID,
             attachmentDisplayWidth: displayWidth
