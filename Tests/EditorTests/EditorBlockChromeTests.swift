@@ -587,8 +587,9 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testMobileOutlineDrawerKeepsVerticalScrollAndRendersMarkdownTitles() throws {
-        XCTAssertTrue(OutlinePanelScrollPolicy.showsScrollIndicators)
-        XCTAssertGreaterThanOrEqual(OutlinePanelScrollPolicy.maxHeight(for: .standard), 360)
+        XCTAssertFalse(OutlinePanelScrollPolicy.showsScrollIndicators)
+        XCTAssertGreaterThanOrEqual(OutlinePanelScrollPolicy.maxHeight(for: .standard), 520)
+        XCTAssertGreaterThanOrEqual(OutlinePanelScrollPolicy.maxHeight(for: .inline), 620)
         XCTAssertTrue(MobileOutlineDrawerScrollPolicy.allowsParentCloseGestureSimultaneously)
         XCTAssertTrue(MobileOutlineDrawerScrollPolicy.showsScrollIndicators)
 
@@ -2427,6 +2428,45 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testCompactPageSwipeRevealPolicyOnlyTracksIntentionalHorizontalReveal() {
+        XCTAssertFalse(
+            CompactPageSwipeRevealPolicy.shouldTrackDrag(
+                translation: CGSize(width: -24, height: 22),
+                currentOffset: 0
+            ),
+            "Diagonal drags in the list should keep vertical scrolling responsive."
+        )
+        XCTAssertFalse(
+            CompactPageSwipeRevealPolicy.shouldTrackDrag(
+                translation: CGSize(width: 42, height: 4),
+                currentOffset: 0
+            ),
+            "A closed row should not track right drags; those belong to navigation or vertical scrolling."
+        )
+        XCTAssertTrue(
+            CompactPageSwipeRevealPolicy.shouldTrackDrag(
+                translation: CGSize(width: -54, height: 12),
+                currentOffset: 0
+            )
+        )
+        XCTAssertTrue(
+            CompactPageSwipeRevealPolicy.shouldTrackDrag(
+                translation: CGSize(width: 32, height: 6),
+                currentOffset: -CompactPageSwipeActionChrome.actionWidth
+            ),
+            "An already open row still needs right drags so the user can close the actions."
+        )
+    }
+
+    func testIOSInteractivePopGesturePolicyAllowsPageDepthPopEvenWhenBackButtonIsHidden() {
+        XCTAssertFalse(IOSInteractivePopGesturePolicy.shouldBegin(isEnabled: false, navigationDepth: 2))
+        XCTAssertFalse(IOSInteractivePopGesturePolicy.shouldBegin(isEnabled: true, navigationDepth: 1))
+        XCTAssertTrue(
+            IOSInteractivePopGesturePolicy.shouldBegin(isEnabled: true, navigationDepth: 2),
+            "The compact editor hides the system back button, so the edge-swipe bridge must not inherit SwiftUI's disabled delegate decision."
+        )
+    }
+
     func testArchiveUndoVisibilityStaysOutOfSearchAndArchiveSections() {
         XCTAssertFalse(
             ArchiveUndoVisibilityPolicy.isVisible(canUndoPageArchive: true, selectedCollection: .search),
@@ -3817,6 +3857,11 @@ final class EditorBlockChromeTests: XCTestCase {
     }
 
     func testPageListRenderWindowPolicyWarmsAndExpandsInBatches() {
+#if os(iOS)
+        XCTAssertFalse(PageListRenderWindowPolicy.allowsAutomaticWarmup)
+#else
+        XCTAssertTrue(PageListRenderWindowPolicy.allowsAutomaticWarmup)
+#endif
         XCTAssertEqual(
             PageListRenderWindowPolicy.warmedLimit(
                 currentLimit: PageListRenderWindowPolicy.initialLimit,

@@ -982,7 +982,7 @@ extension FocusedValues {
 }
 
 struct ForegroundSyncActivationPolicy {
-    static let foregroundPollingIntervalNanoseconds: UInt64 = 30_000_000_000
+    static let foregroundPollingIntervalNanoseconds: UInt64 = 10_000_000_000
     static let activationSyncDelayNanoseconds: UInt64 = 700_000_000
 
     func shouldSync(for phase: ScenePhase) -> Bool {
@@ -2204,6 +2204,13 @@ private struct CompactEditorShell: View {
                 _ = pushPendingCollectionIfNeeded()
             }
         }
+#if os(iOS)
+        .background {
+            IOSInteractivePopGestureBridge(isEnabled: path.last?.isPageRoute == true)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+#endif
     }
 
     private var compactPathBinding: Binding<[CompactRoute]> {
@@ -2497,6 +2504,15 @@ private extension CompactRoute {
             return false
         }
     }
+
+    var isPageRoute: Bool {
+        switch self {
+        case .page:
+            return true
+        case .pages, .collection:
+            return false
+        }
+    }
 }
 
 private struct CompactHomeView: View {
@@ -2522,7 +2538,7 @@ private struct CompactHomeView: View {
                 .padding(.bottom, 18)
         }
 #if os(iOS)
-        .highPriorityGesture(compactForwardSwipeGesture)
+        .simultaneousGesture(compactForwardSwipeGesture)
         .toolbarBackground(CompactLibraryChrome.backgroundColor, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.light, for: .navigationBar)
@@ -2928,9 +2944,26 @@ enum CompactPageSwipeRevealPolicy {
     static let closeThresholdRatio: CGFloat = 0.58
     static let minimumActionWidthScale: CGFloat = 0.62
     static let fadeSlideDistance: CGFloat = 18
+    static let trackingMinimumDistance: CGFloat = 24
+    static let trackingHorizontalDominanceRatio: CGFloat = 1.35
 
     static func visibleWidth(horizontalOffset: CGFloat, maximumRevealWidth: CGFloat) -> CGFloat {
         min(max(-horizontalOffset, 0), maximumRevealWidth)
+    }
+
+    static func shouldTrackDrag(translation: CGSize, currentOffset: CGFloat) -> Bool {
+        let horizontalDistance = abs(translation.width)
+        let verticalDistance = abs(translation.height)
+        guard horizontalDistance >= trackingMinimumDistance,
+              horizontalDistance > verticalDistance * trackingHorizontalDominanceRatio else {
+            return false
+        }
+
+        if currentOffset < 0 {
+            return true
+        }
+
+        return translation.width < 0
     }
 
     static func revealProgress(visibleWidth: CGFloat, maximumRevealWidth: CGFloat) -> CGFloat {
@@ -4640,6 +4673,12 @@ enum MobileBlockSwipeActionResolver {
         }
 
         return .selectBlock
+    }
+}
+
+enum IOSInteractivePopGesturePolicy {
+    static func shouldBegin(isEnabled: Bool, navigationDepth: Int) -> Bool {
+        isEnabled && navigationDepth > 1
     }
 }
 
@@ -8422,7 +8461,8 @@ private struct PageListView: View {
     }
 
     private func schedulePageRenderExpansionIfNeeded(visibleCount: Int) {
-        guard visibleCount > pageRenderLimit else {
+        guard PageListRenderWindowPolicy.allowsAutomaticWarmup,
+              visibleCount > pageRenderLimit else {
             return
         }
         pageRenderExpansionTask?.cancel()
@@ -9061,6 +9101,14 @@ enum PageListRenderWindowPolicy {
     static let expansionBatchSize = 96
     static let warmupDelayNanoseconds: UInt64 = 200_000_000
 
+    static var allowsAutomaticWarmup: Bool {
+#if os(iOS)
+        false
+#else
+        true
+#endif
+    }
+
     static func renderedPages(
         _ pages: [PageSummary],
         selectedPageID: String?,
@@ -9258,11 +9306,10 @@ private struct CompactPageListView: View {
         .toolbarBackground(CompactChrome.backgroundColor, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.light, for: .navigationBar)
-        .highPriorityGesture(
+        .simultaneousGesture(
             DragGesture(minimumDistance: 56, coordinateSpace: .local)
                 .onEnded { value in
-                    guard value.translation.width > 56,
-                          abs(value.translation.width) > abs(value.translation.height) * 1.25 else {
+                    guard MobileCanvasTailSwipeActionResolver.action(translation: value.translation) == .revealPageList else {
                         return
                     }
                     onRevealMainMenu()
@@ -9415,12 +9462,10 @@ private struct CompactCollectionPageListView: View {
                     guard !listGestureStartedWithOpenSwipeActions else {
                         return
                     }
-                    guard abs(value.translation.width) > abs(value.translation.height) * 1.25 else {
+                    guard MobileCanvasTailSwipeActionResolver.action(translation: value.translation) == .revealPageList else {
                         return
                     }
-                    if value.translation.width > 56 {
-                        onRevealMainMenu()
-                    }
+                    onRevealMainMenu()
                 }
         )
 #endif
@@ -9715,7 +9760,7 @@ private struct CompactPageSwipeActionsRow<Content: View>: View {
                 .allowsHitTesting(horizontalOffset == 0)
         }
         .contentShape(Rectangle())
-        .highPriorityGesture(swipeGesture)
+        .simultaneousGesture(swipeGesture)
         .onChange(of: activeSwipeActionPageID) { _, pageID in
             if pageID != page.id, horizontalOffset != 0 {
                 updateHorizontalOffset(0, animated: true)
@@ -9768,24 +9813,32 @@ private struct CompactPageSwipeActionsRow<Content: View>: View {
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 18, coordinateSpace: .local)
             .onChanged { value in
-                guard abs(value.translation.width) > abs(value.translation.height) else {
+                let startOffset = dragStartHorizontalOffset ?? horizontalOffset
+                guard CompactPageSwipeRevealPolicy.shouldTrackDrag(
+                    translation: value.translation,
+                    currentOffset: startOffset
+                ) else {
                     return
                 }
                 if dragStartHorizontalOffset == nil {
                     dragStartHorizontalOffset = horizontalOffset
                 }
-                let startOffset = dragStartHorizontalOffset ?? horizontalOffset
                 updateHorizontalOffset(startOffset + value.translation.width, animated: false)
             }
             .onEnded { value in
                 defer {
                     dragStartHorizontalOffset = nil
                 }
-                guard abs(value.translation.width) > abs(value.translation.height) else {
-                    updateHorizontalOffset(0, animated: true)
+                let startOffset = dragStartHorizontalOffset ?? horizontalOffset
+                guard CompactPageSwipeRevealPolicy.shouldTrackDrag(
+                    translation: value.translation,
+                    currentOffset: startOffset
+                ) else {
+                    if horizontalOffset != 0 {
+                        updateHorizontalOffset(0, animated: true)
+                    }
                     return
                 }
-                let startOffset = dragStartHorizontalOffset ?? horizontalOffset
                 let projectedOffset = min(
                     0,
                     max(startOffset + value.predictedEndTranslation.width, -maximumRevealWidth)
@@ -11147,10 +11200,15 @@ private struct PageTitleUIKitTextView: UIViewRepresentable {
     private static func titleFont(contentFont: EditorContentFont) -> UIFont {
         let size = CGFloat(EditorDesignTokens.Typography.documentTitleSize)
         if let postScriptName = contentFont.pageTitlePostScriptName,
-           let font = UIFont(name: postScriptName, size: size) {
+           let font = registeredUIFont(name: postScriptName, size: size) {
             return font
         }
         return UIFont.systemFont(ofSize: size, weight: .semibold)
+    }
+
+    private static func registeredUIFont(name postScriptName: String, size: CGFloat) -> UIFont? {
+        EditorBundledFontRegistry.registerBundledFontsIfNeeded()
+        return UIFont(name: postScriptName, size: size)
     }
 
     final class DynamicHeightTitleTextView: UITextView {
@@ -12646,7 +12704,7 @@ private struct EditorCanvasView: View {
             isPresented: $isMarkdownExporterPresented,
             document: markdownExportDocument,
             contentType: MarkdownFileDocument.markdownContentType,
-            defaultFilename: "\(page?.title ?? "页面").md"
+            defaultFilename: markdownExportDefaultFilename
         ) { result in
             switch result {
             case .success(let destinationURL):
@@ -12764,8 +12822,13 @@ private struct EditorCanvasView: View {
         EditorContentFont(rawValue: contentFontRawValue) ?? EditorContentFont.defaultFont
     }
 
+    private var markdownExportDefaultFilename: String {
+        "\(page?.title ?? "页面").md"
+    }
+
     private var pageTitleFont: Font {
         if let postScriptName = contentFont.pageTitlePostScriptName {
+            EditorBundledFontRegistry.registerBundledFontsIfNeeded()
             return .custom(postScriptName, size: EditorDesignTokens.Typography.documentTitleSize)
         }
         return .system(size: EditorDesignTokens.Typography.documentTitleSize, weight: .semibold)
@@ -15446,6 +15509,96 @@ private struct IOSEditorKeyboardShortcutBridge: UIViewRepresentable {
 }
 #endif
 
+#if os(iOS)
+private struct IOSInteractivePopGestureBridge: UIViewControllerRepresentable {
+    let isEnabled: Bool
+
+    func makeUIViewController(context: Context) -> Controller {
+        Controller(isEnabled: isEnabled)
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.isEnabled = isEnabled
+        controller.updateInteractivePopGesture()
+    }
+
+    static func dismantleUIViewController(_ controller: Controller, coordinator: ()) {
+        controller.restoreInteractivePopGestureDelegate()
+    }
+
+    final class Controller: UIViewController, UIGestureRecognizerDelegate {
+        var isEnabled: Bool {
+            didSet {
+                updateInteractivePopGesture()
+            }
+        }
+        private weak var previousDelegate: UIGestureRecognizerDelegate?
+
+        init(isEnabled: Bool) {
+            self.isEnabled = isEnabled
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            updateInteractivePopGesture()
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            restoreInteractivePopGestureDelegate()
+        }
+
+        func updateInteractivePopGesture() {
+            guard let gesture = navigationController?.interactivePopGestureRecognizer else {
+                return
+            }
+
+            guard isEnabled else {
+                restoreInteractivePopGestureDelegate()
+                return
+            }
+
+            if gesture.delegate !== self {
+                previousDelegate = gesture.delegate
+                gesture.delegate = self
+            }
+            gesture.isEnabled = true
+        }
+
+        func restoreInteractivePopGestureDelegate() {
+            guard let gesture = navigationController?.interactivePopGestureRecognizer,
+                  gesture.delegate === self else {
+                return
+            }
+            gesture.delegate = previousDelegate
+            previousDelegate = nil
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            IOSInteractivePopGesturePolicy.shouldBegin(
+                isEnabled: isEnabled,
+                navigationDepth: navigationController?.viewControllers.count ?? 0
+            )
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            previousDelegate?.gestureRecognizer?(
+                gestureRecognizer,
+                shouldRecognizeSimultaneouslyWith: otherGestureRecognizer
+            ) ?? false
+        }
+    }
+}
+#endif
+
 #if os(macOS)
 private enum DesktopInlineOutlineStyle {
     case inline
@@ -15747,14 +15900,14 @@ enum OutlinePanelStyle {
 }
 
 enum OutlinePanelScrollPolicy {
-    static let showsScrollIndicators = true
+    static let showsScrollIndicators = false
 
     static func maxHeight(for style: OutlinePanelStyle) -> CGFloat {
         switch style {
         case .standard:
-            return 420
+            return 520
         case .inline, .popover:
-            return 360
+            return 620
         }
     }
 }
@@ -15791,50 +15944,61 @@ private struct OutlinePanel: View {
                     .accessibilityIdentifier("editor.outline")
             }
 
-            ScrollView(.vertical, showsIndicators: OutlinePanelScrollPolicy.showsScrollIndicators) {
-                LazyVStack(alignment: .leading, spacing: style == .standard ? 2 : 1) {
-                    ForEach(outlineItems) { item in
-                        let isActive = item.blockID == activeBlockID
-                        Button {
-                            onSelectOutlineItem(item)
-                        } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: style.showsLevelBadges ? 8 : 0) {
-                                if style.showsLevelBadges {
-                                    Text("H\(min(max(item.level, 1), 6))")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
-                                        .frame(width: 22, height: 18)
-                                        .background(EditorDesignTokens.Colors.border.color.opacity(0.62))
-                                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                                }
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: OutlinePanelScrollPolicy.showsScrollIndicators) {
+                    LazyVStack(alignment: .leading, spacing: style == .standard ? 2 : 1) {
+                        ForEach(outlineItems) { item in
+                            let isActive = item.blockID == activeBlockID
+                            Button {
+                                onSelectOutlineItem(item)
+                            } label: {
+                                HStack(alignment: .firstTextBaseline, spacing: style.showsLevelBadges ? 8 : 0) {
+                                    if style.showsLevelBadges {
+                                        Text("H\(min(max(item.level, 1), 6))")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color)
+                                            .frame(width: 22, height: 18)
+                                            .background(EditorDesignTokens.Colors.border.color.opacity(0.62))
+                                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                    }
 
-                                Text(OutlineTitleMarkdownRenderer.fallbackAttributedString(for: item.title))
-                                    .font(titleFont)
-                                    .lineLimit(1)
-                                    .foregroundStyle(titleColor(isActive: isActive))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .padding(.leading, CGFloat(max(item.level - 1, 0)) * style.indentWidth)
-                            .padding(.horizontal, style.rowHorizontalPadding)
-                            .padding(.vertical, style.rowVerticalPadding)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(activeBackground(isActive: isActive))
-                            )
-                            .overlay(alignment: .leading) {
-                                if isActive && style == .standard {
-                                    RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                        .fill(EditorDesignTokens.Colors.accent.color.opacity(0.78))
-                                        .frame(width: 3)
-                                        .padding(.vertical, 6)
+                                    Text(OutlineTitleMarkdownRenderer.fallbackAttributedString(for: item.title))
+                                        .font(titleFont)
+                                        .lineLimit(1)
+                                        .foregroundStyle(titleColor(isActive: isActive))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .padding(.leading, CGFloat(max(item.level - 1, 0)) * style.indentWidth)
+                                .padding(.horizontal, style.rowHorizontalPadding)
+                                .padding(.vertical, style.rowVerticalPadding)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .fill(activeBackground(isActive: isActive))
+                                )
+                                .overlay(alignment: .leading) {
+                                    if isActive && style == .standard {
+                                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                            .fill(EditorDesignTokens.Colors.accent.color.opacity(0.78))
+                                            .frame(width: 3)
+                                            .padding(.vertical, 6)
+                                    }
                                 }
                             }
+                            .buttonStyle(.plain)
+                            .id(item.blockID)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("Outline heading \(outlineAccessibilityTitle(for: item))")
+                            .accessibilityValue("Level \(item.level)")
+                            .accessibilityIdentifier("editor.outline.\(item.blockID)")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel("Outline heading \(outlineAccessibilityTitle(for: item))")
-                        .accessibilityValue("Level \(item.level)")
-                        .accessibilityIdentifier("editor.outline.\(item.blockID)")
+                    }
+                }
+                .onChange(of: activeBlockID) { _, blockID in
+                    guard let blockID else {
+                        return
+                    }
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        proxy.scrollTo(blockID, anchor: .center)
                     }
                 }
             }
@@ -17037,9 +17201,11 @@ enum DeferredTextBlockEditorPolicy {
     }
 }
 
+@MainActor
 enum DeferredTextBlockPreviewFontPolicy {
     static func font(contentFont: EditorContentFont, blockType: BlockType) -> Font {
         if let postScriptName = contentFont.postScriptName(for: blockType) {
+            EditorBundledFontRegistry.registerBundledFontsIfNeeded()
             return .custom(postScriptName, size: size(for: blockType))
         }
 
@@ -17497,6 +17663,8 @@ private struct MobileLargePageTextPreviewUIKitRow: UIViewRepresentable {
     func makeUIView(context: Context) -> MobileLargePageTextPreviewUIKitRowView {
         let view = MobileLargePageTextPreviewUIKitRowView()
         view.isAccessibilityElement = false
+        view.isOpaque = false
+        view.backgroundColor = .clear
         return view
     }
 
@@ -17526,6 +17694,29 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
     private var nestingLevel = 0
     private var listOrdinal: Int?
     private var isBlockSelected = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureTransparentBacking()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureTransparentBacking()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            setNeedsDisplay()
+        }
+    }
+
+    private func configureTransparentBacking() {
+        isOpaque = false
+        backgroundColor = .clear
+        contentMode = .redraw
+    }
 
     func configure(
         block: BlockSnapshot,
@@ -17629,7 +17820,7 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
     }
 
     private func drawListItem(_ block: BlockSnapshot, in rect: CGRect) {
-        EditorDesignTokens.Colors.border.uiColor
+        resolvedUIColor(EditorDesignTokens.Colors.border)
             .withAlphaComponent(EditorBlockChrome.listBackgroundOpacity)
             .setFill()
         UIRectFill(rect)
@@ -17649,7 +17840,7 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
         }
         let markerAttributes: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 15, weight: .regular),
-            .foregroundColor: EditorDesignTokens.Colors.secondaryText.uiColor
+            .foregroundColor: resolvedUIColor(EditorDesignTokens.Colors.secondaryText)
         ]
         (markerText as NSString).draw(in: markerRect, withAttributes: markerAttributes)
 
@@ -17663,16 +17854,16 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
     }
 
     private func drawCodeBlock(_ block: BlockSnapshot, in rect: CGRect) {
-        SpecialBlockSurfaceChrome.codeBackgroundToken.uiColor.setFill()
+        resolvedUIColor(SpecialBlockSurfaceChrome.codeBackgroundToken).setFill()
         let path = UIBezierPath(roundedRect: rect, cornerRadius: 6)
         path.fill()
-        EditorDesignTokens.Colors.border.uiColor.setStroke()
+        resolvedUIColor(EditorDesignTokens.Colors.border).setStroke()
         path.lineWidth = 1
         path.stroke()
 
         let iconAttributes: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 13),
-            .foregroundColor: EditorDesignTokens.Colors.secondaryText.uiColor
+            .foregroundColor: resolvedUIColor(EditorDesignTokens.Colors.secondaryText)
         ]
         ("{}" as NSString).draw(
             in: CGRect(x: rect.minX + 8, y: rect.minY + 6, width: 40, height: 18),
@@ -17684,7 +17875,7 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
     }
 
     private func drawQuote(_ block: BlockSnapshot, in rect: CGRect) {
-        SpecialBlockSurfaceChrome.quoteBackgroundToken.uiColor.setFill()
+        resolvedUIColor(SpecialBlockSurfaceChrome.quoteBackgroundToken).setFill()
         UIBezierPath(
             roundedRect: rect,
             cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius)
@@ -17694,13 +17885,13 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
     }
 
     private func drawCallout(_ block: BlockSnapshot, in rect: CGRect) {
-        SpecialBlockSurfaceChrome.calloutBackgroundToken.uiColor.setFill()
+        resolvedUIColor(SpecialBlockSurfaceChrome.calloutBackgroundToken).setFill()
         let path = UIBezierPath(
             roundedRect: rect,
             cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius)
         )
         path.fill()
-        EditorDesignTokens.Colors.border.uiColor.withAlphaComponent(0.75).setStroke()
+        resolvedUIColor(EditorDesignTokens.Colors.border).withAlphaComponent(0.75).setStroke()
         path.lineWidth = 1
         path.stroke()
         let textRect = rect.insetBy(dx: 8, dy: 6).offsetBy(dx: 24, dy: 0)
@@ -17735,7 +17926,7 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
         guard borderOpacity > 0 else {
             return
         }
-        EditorDesignTokens.Colors.accent.uiColor.withAlphaComponent(borderOpacity).setStroke()
+        resolvedUIColor(EditorDesignTokens.Colors.accent).withAlphaComponent(borderOpacity).setStroke()
         path.lineWidth = 1
         path.stroke()
     }
@@ -17796,16 +17987,18 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
         paragraphStyle.lineSpacing = 2
         return [
             .font: uiFont(blockType: blockType),
-            .foregroundColor: EditorDesignTokens.Colors.primaryText.uiColor,
+            .foregroundColor: resolvedUIColor(EditorDesignTokens.Colors.primaryText),
             .paragraphStyle: paragraphStyle
         ]
     }
 
     private func uiFont(blockType: BlockType) -> UIFont {
         let size = DeferredTextBlockPreviewFontPolicy.size(for: blockType)
-        if let postScriptName = contentFont.postScriptName(for: blockType),
-           let font = UIFont(name: postScriptName, size: size) {
-            return font
+        if let postScriptName = contentFont.postScriptName(for: blockType) {
+            EditorBundledFontRegistry.registerBundledFontsIfNeeded()
+            if let font = UIFont(name: postScriptName, size: size) {
+                return font
+            }
         }
         switch blockType {
         case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
@@ -17841,9 +18034,9 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
             return .clear
         }
         if isBlockSelected {
-            return EditorDesignTokens.Colors.accent.uiColor.withAlphaComponent(opacity)
+            return resolvedUIColor(EditorDesignTokens.Colors.accent).withAlphaComponent(opacity)
         }
-        return EditorDesignTokens.Colors.border.uiColor.withAlphaComponent(opacity)
+        return resolvedUIColor(EditorDesignTokens.Colors.border).withAlphaComponent(opacity)
     }
 
     private func headingAccentUIColor(level: Int) -> UIColor {
@@ -17851,12 +18044,16 @@ private final class MobileLargePageTextPreviewUIKitRowView: UIView {
         case 1:
             return UIColor(red: 0.68, green: 0.29, blue: 0.41, alpha: 1)
         case 2:
-            return EditorDesignTokens.Colors.accent.uiColor
+            return resolvedUIColor(EditorDesignTokens.Colors.accent)
         case 3:
-            return EditorDesignTokens.Colors.warningText.uiColor
+            return resolvedUIColor(EditorDesignTokens.Colors.warningText)
         default:
-            return EditorDesignTokens.Colors.secondaryText.uiColor
+            return resolvedUIColor(EditorDesignTokens.Colors.secondaryText)
         }
+    }
+
+    private func resolvedUIColor(_ token: EditorColorToken) -> UIColor {
+        token.uiColor.resolvedColor(with: traitCollection)
     }
 
     private var rowVerticalPadding: CGFloat {
@@ -18241,9 +18438,11 @@ private final class MobileLargePageTextPreviewAppKitRowView: NSView {
 
     private func nsFont(blockType: BlockType) -> NSFont {
         let size = DeferredTextBlockPreviewFontPolicy.size(for: blockType)
-        if let postScriptName = contentFont.postScriptName(for: blockType),
-           let font = NSFont(name: postScriptName, size: size) {
-            return font
+        if let postScriptName = contentFont.postScriptName(for: blockType) {
+            EditorBundledFontRegistry.registerBundledFontsIfNeeded()
+            if let font = NSFont(name: postScriptName, size: size) {
+                return font
+            }
         }
         switch blockType {
         case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
@@ -19779,7 +19978,7 @@ private struct BlockRowView: View {
         )
         .accessibilityIdentifier("editor.text.\(block.id)")
 #if os(iOS)
-        .highPriorityGesture(mobileHorizontalSwipeGesture)
+        .simultaneousGesture(mobileHorizontalSwipeGesture)
 #endif
     }
 

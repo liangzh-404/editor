@@ -535,6 +535,56 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(NativeInlineMarkdownStyleChrome.inlineCodeBackgroundToken, EditorDesignTokens.Colors.inlineCodeBackground)
     }
 
+    @MainActor
+    func testNativeInlineMarkdownSyntheticVariantsKeepBundledFontFace() throws {
+        XCTAssertTrue(
+            NativeInlineMarkdownFontVariantResolver.usesSyntheticVariant(
+                fontName: EditorContentFont.lxgwWenKaiPostScriptName
+            )
+        )
+
+        #if os(macOS)
+        EditorBundledFontRegistry.registerBundledFontsIfNeeded()
+        let baseFont = try XCTUnwrap(NSFont(name: EditorContentFont.lxgwWenKaiPostScriptName, size: 18))
+
+        let boldAttributes = NativeInlineMarkdownFontVariantResolver.appKitBoldAttributes(baseFont: baseFont)
+        XCTAssertEqual((boldAttributes[.font] as? NSFont)?.fontName, baseFont.fontName)
+        XCTAssertEqual(
+            try XCTUnwrap(boldAttributes[.strokeWidth] as? CGFloat),
+            NativeInlineMarkdownFontVariantResolver.syntheticBoldStrokeWidth
+        )
+
+        let italicAttributes = NativeInlineMarkdownFontVariantResolver.appKitItalicAttributes(baseFont: baseFont)
+        XCTAssertEqual((italicAttributes[.font] as? NSFont)?.fontName, baseFont.fontName)
+        XCTAssertEqual(
+            try XCTUnwrap(italicAttributes[.obliqueness] as? CGFloat),
+            NativeInlineMarkdownFontVariantResolver.syntheticItalicObliqueness
+        )
+
+        let systemBoldAttributes = NativeInlineMarkdownFontVariantResolver.appKitBoldAttributes(
+            baseFont: NSFont.systemFont(ofSize: 18)
+        )
+        XCTAssertNil(systemBoldAttributes[.strokeWidth])
+        #elseif os(iOS)
+        EditorBundledFontRegistry.registerBundledFontsIfNeeded()
+        let baseFont = try XCTUnwrap(UIFont(name: EditorContentFont.lxgwWenKaiPostScriptName, size: 18))
+
+        let boldAttributes = NativeInlineMarkdownFontVariantResolver.uiKitBoldAttributes(baseFont: baseFont)
+        XCTAssertEqual((boldAttributes[.font] as? UIFont)?.fontName, baseFont.fontName)
+        XCTAssertEqual(
+            try XCTUnwrap(boldAttributes[.strokeWidth] as? CGFloat),
+            NativeInlineMarkdownFontVariantResolver.syntheticBoldStrokeWidth
+        )
+
+        let italicAttributes = NativeInlineMarkdownFontVariantResolver.uiKitItalicAttributes(baseFont: baseFont)
+        XCTAssertEqual((italicAttributes[.font] as? UIFont)?.fontName, baseFont.fontName)
+        XCTAssertEqual(
+            try XCTUnwrap(italicAttributes[.obliqueness] as? CGFloat),
+            NativeInlineMarkdownFontVariantResolver.syntheticItalicObliqueness
+        )
+        #endif
+    }
+
     func testNativeTextKeyboardRestorePolicyDoesNotStealFocusAfterResponderTransfer() {
         XCTAssertTrue(
             NativeTextKeyboardRestorePolicy.shouldRestoreSystemKeyboard(

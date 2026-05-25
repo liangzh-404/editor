@@ -828,6 +828,36 @@ final class SyncRepository {
         }
     }
 
+    func syncedEntityIDs(entityType: String) throws -> Set<String> {
+        Set(try database.query(
+            """
+            SELECT entity_id
+            FROM sync_records
+            WHERE entity_type = ?
+            """,
+            bindings: [.text(entityType)]
+        ).compactMap { row in
+            row["entity_id"]
+        })
+    }
+
+    func pageIDsWithPendingLocalContentChanges() throws -> Set<String> {
+        Set(try database.query(
+            """
+            SELECT entity_id AS page_id
+            FROM sync_changes
+            WHERE entity_type = 'page'
+            UNION
+            SELECT blocks.page_id AS page_id
+            FROM sync_changes
+            INNER JOIN blocks ON blocks.id = sync_changes.entity_id
+            WHERE sync_changes.entity_type = 'block'
+            """
+        ).compactMap { row in
+            row["page_id"]
+        })
+    }
+
     func saveServerChangeTokenData(_ tokenData: Data, scope: String) throws {
         try database.execute(
             """

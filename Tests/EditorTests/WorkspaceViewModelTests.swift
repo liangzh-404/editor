@@ -5440,7 +5440,52 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testForegroundSyncDefersRemoteBacklogDrainToAvoidForegroundSpin() throws {
+    func testForegroundSyncContinuesRemoteBacklogDrainWithoutWaitingForPollingInterval() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+        try markExistingLocalRecordsSynced(database: database)
+        let recorder = ForegroundSyncCallRecorder()
+        let scheduler = DeferredWorkspaceSyncScheduler()
+        let viewModel = WorkspaceViewModel(
+            repository: repository,
+            syncEngine: SyncEngine(
+                syncRepository: SyncRepository(database: database),
+                adapter: OrderedForegroundSyncAdapter(recorder: recorder),
+                remoteChangeFetcher: OrderedForegroundSyncFetcher(
+                    recorder: recorder,
+                    hasMoreChangesSequence: [true, false]
+                ),
+                mergeEngine: SyncMergeEngine(database: database),
+                subscriptionEnsurer: OrderedForegroundSyncSubscriptionEnsurer(recorder: recorder)
+            ),
+            syncScheduler: scheduler
+        )
+        try viewModel.load()
+
+        viewModel.syncAfterActivation()
+        try scheduler.runNextScheduledOperation()
+
+        XCTAssertEqual(
+            scheduler.scheduledOperationCount,
+            1,
+            "Remote CloudKit backlog must keep draining immediately so deletes do not linger on other devices."
+        )
+
+        try scheduler.runNextScheduledOperation()
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
+        XCTAssertEqual(recorder.calls, [
+            .ensureSubscription,
+            .fetch,
+            .ensureSubscription,
+            .fetch
+        ])
+    }
+
+    @MainActor
+    func testForegroundSyncRemoteBacklogFallsBackToCooldownAfterImmediateBurst() throws {
         let database = try migratedDatabase()
         defer { database.close() }
 
@@ -5457,7 +5502,7 @@ final class WorkspaceViewModelTests: XCTestCase {
                 adapter: OrderedForegroundSyncAdapter(recorder: recorder),
                 remoteChangeFetcher: OrderedForegroundSyncFetcher(
                     recorder: recorder,
-                    hasMoreChangesSequence: [true, false]
+                    hasMoreChangesSequence: [true, true, true, true, true, false]
                 ),
                 mergeEngine: SyncMergeEngine(database: database),
                 subscriptionEnsurer: OrderedForegroundSyncSubscriptionEnsurer(recorder: recorder)
@@ -5470,30 +5515,22 @@ final class WorkspaceViewModelTests: XCTestCase {
         viewModel.syncAfterActivation()
         try scheduler.runNextScheduledOperation()
 
+        for _ in 0..<4 {
+            XCTAssertEqual(scheduler.scheduledOperationCount, 1)
+            try scheduler.runNextScheduledOperation()
+        }
         XCTAssertEqual(
             scheduler.scheduledOperationCount,
             0,
-            "Remote CloudKit backlog should not spin another foreground sync immediately after a fetch reports more changes"
+            "Remote backlog draining should use a short burst, then yield to a cooldown if CloudKit keeps reporting more empty batches."
         )
 
         viewModel.syncAfterForegroundInterval()
-        XCTAssertEqual(
-            scheduler.scheduledOperationCount,
-            0,
-            "Foreground polling should respect the remote-backlog cooldown"
-        )
+        XCTAssertEqual(scheduler.scheduledOperationCount, 0)
 
-        currentDate = currentDate.addingTimeInterval(30)
+        currentDate = currentDate.addingTimeInterval(10)
         viewModel.syncAfterForegroundInterval()
         XCTAssertEqual(scheduler.scheduledOperationCount, 1)
-
-        try scheduler.runNextScheduledOperation()
-        XCTAssertEqual(recorder.calls, [
-            .ensureSubscription,
-            .fetch,
-            .ensureSubscription,
-            .fetch
-        ])
     }
 
     @MainActor
@@ -5663,7 +5700,7 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertTrue(policy.shouldSync(for: .active))
         XCTAssertEqual(
             ForegroundSyncActivationPolicy.foregroundPollingIntervalNanoseconds,
-            30_000_000_000
+            10_000_000_000
         )
     }
 
