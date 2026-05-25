@@ -27,7 +27,10 @@ final class EditorMacEditingUITests: XCTestCase {
         MainActor.assumeIsolated {
             Self.terminateRunningEditorMacApplications()
         }
-        if let appSupportDirectory {
+        if let appSupportDirectory,
+           ProcessInfo.processInfo.environment["EDITOR_MAC_UI_TEST_DELETE_APP_SUPPORT_ON_TEARDOWN"] == "1" {
+            // Deleting another app's container from the sandboxed UI-test runner can
+            // block on macOS App Data privacy prompts in unattended runs.
             try? FileManager.default.removeItem(at: appSupportDirectory)
         }
         appSupportDirectory = nil
@@ -412,6 +415,8 @@ final class EditorMacEditingUITests: XCTestCase {
     func testWelcomeBlockAcceptsTypedText() {
         let app = XCUIApplication()
         app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory.path
+        app.launchEnvironment["EDITOR_PERFORMANCE_TRACE_ENABLED"] = "1"
+        app.launchEnvironment["EDITOR_PERFORMANCE_DATASET_LABEL"] = "macOS_UITest_Perf"
         app.launch()
 
         openWelcomePageForPageToolbarActions(in: app)
@@ -2540,6 +2545,163 @@ final class EditorMacEditingUITests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testPerformanceTraceWithCurrentDatabaseCoversEditorScroll() throws {
+        try runPerformanceTraceWithCurrentDatabaseCoversEditorScroll(
+            defaultDatasetDirectory: "/tmp/editor-performance-bd57/Current_LargeScroll",
+            defaultDatasetLabel: "macOS_Current_LargeScroll"
+        )
+    }
+
+    @MainActor
+    func testPerformanceTraceWithCurrentX10DatabaseCoversEditorScroll() throws {
+        try runPerformanceTraceWithCurrentDatabaseCoversEditorScroll(
+            defaultDatasetDirectory: "/tmp/editor-performance-bd57/Current_x10_LargeScroll",
+            defaultDatasetLabel: "macOS_Current_x10_LargeScroll"
+        )
+    }
+
+    @MainActor
+    private func runPerformanceTraceWithCurrentDatabaseCoversEditorScroll(
+        defaultDatasetDirectory: String,
+        defaultDatasetLabel: String
+    ) throws {
+        let defaultDatabasePath = "\(defaultDatasetDirectory)/Editor/editor.sqlite"
+        let fallbackAppSupportDirectory = FileManager.default.fileExists(atPath: defaultDatabasePath)
+            ? defaultDatasetDirectory
+            : nil
+        guard let appSupportDirectory = ProcessInfo.processInfo.environment["EDITOR_PERFORMANCE_APP_SUPPORT_DIR"] ?? fallbackAppSupportDirectory,
+              !appSupportDirectory.isEmpty else {
+            throw XCTSkip("Set EDITOR_PERFORMANCE_APP_SUPPORT_DIR to an isolated Current/xN dataset with a large selected page.")
+        }
+
+        let app = XCUIApplication()
+        let datasetLabel = ProcessInfo.processInfo.environment["EDITOR_PERFORMANCE_DATASET_LABEL"]
+            ?? defaultDatasetLabel
+        let traceFilePath = ProcessInfo.processInfo.environment["EDITOR_PERFORMANCE_TRACE_FILE"]
+            ?? "\(appSupportDirectory)/Editor/performance-\(datasetLabel).log"
+        let usesAppDrivenScroll = ProcessInfo.processInfo.environment["EDITOR_PERFORMANCE_USE_XCUITEST_SWIPES"] != "1"
+        app.launchEnvironment["EDITOR_APP_SUPPORT_DIR"] = appSupportDirectory
+        app.launchEnvironment["EDITOR_DISABLE_POST_LAUNCH_MAINTENANCE"] = "1"
+        app.launchEnvironment["EDITOR_PERFORMANCE_TRACE_ENABLED"] = "1"
+        app.launchEnvironment["EDITOR_PERFORMANCE_DATASET_LABEL"] = datasetLabel
+        app.launchEnvironment["EDITOR_PERFORMANCE_TRACE_FILE"] = traceFilePath
+        app.launchEnvironment["EDITOR_UI_TEST_SCROLL_METRICS"] = "1"
+        app.launchEnvironment["EDITOR_UI_TEST_AUTOSCROLL_ON_LAUNCH"] = usesAppDrivenScroll ? "1" : "0"
+        app.launch()
+
+        if usesAppDrivenScroll {
+            XCTAssertTrue(
+                waitForTraceIntegerField(
+                    traceFilePath,
+                    eventName: "editor_scroll_start",
+                    field: "block_count",
+                    atLeast: 750,
+                    timeout: 12
+                ),
+                "Current database scroll trace should launch with a selected large page; trace=\(latestTraceLine(traceFilePath, eventName: "editor_scroll_start"))"
+            )
+            XCTAssertTrue(
+                waitForTraceEvent(traceFilePath, eventName: "editor_autoscroll_probe_done", timeout: 18),
+                "App-driven scroll should finish; trace=\(latestTraceLine(traceFilePath, eventName: "editor_autoscroll_probe_done"))"
+            )
+            XCTAssertTrue(
+                waitForTraceIntegerField(
+                    traceFilePath,
+                    eventName: "editor_scroll_frame_pacing_done",
+                    field: "peak_last_visible_block_index",
+                    atLeast: 80,
+                    timeout: 4
+                ),
+                "Current database editor scroll should realize distant blocks; trace=\(latestTraceLine(traceFilePath, eventName: "editor_scroll_frame_pacing_done"))"
+            )
+            RunLoop.current.run(until: Date().addingTimeInterval(0.7))
+            return
+        }
+
+        let canvas = app.scrollViews["editor.canvas-scroll"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 12), "Current database should expose the editor canvas")
+
+        let scrollMetrics = app.element(identifier: "editor.scroll-metrics-test-output")
+        XCTAssertTrue(
+            scrollMetrics.waitForIntegerField("block_count", atLeast: 750, timeout: 12),
+            "Current database scroll trace should launch with a selected large page; metrics=\(scrollMetrics.stringValue)"
+        )
+
+        if !usesAppDrivenScroll {
+            for _ in 0..<10 {
+                canvas.swipeUp()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+            }
+        }
+
+        XCTAssertTrue(
+            scrollMetrics.waitForIntegerField("peak_last_visible_block_index", atLeast: 80, timeout: 8),
+            "Current database editor scroll should realize distant blocks; metrics=\(scrollMetrics.stringValue)"
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.7))
+    }
+
+}
+
+private extension XCTestCase {
+    func waitForTraceEvent(_ traceFilePath: String, eventName: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !latestTraceLine(traceFilePath, eventName: eventName).isEmpty {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return false
+    }
+
+    func waitForTraceIntegerField(
+        _ traceFilePath: String,
+        eventName: String,
+        field: String,
+        atLeast minimumValue: Int,
+        timeout: TimeInterval
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let matchingLine = latestTraceLine(
+                traceFilePath,
+                eventName: eventName,
+                field: field,
+                atLeast: minimumValue
+            )
+            if !matchingLine.isEmpty {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return false
+    }
+
+    func latestTraceLine(
+        _ traceFilePath: String,
+        eventName: String,
+        field: String? = nil,
+        atLeast minimumValue: Int? = nil
+    ) -> String {
+        guard let traceText = try? String(contentsOfFile: traceFilePath, encoding: .utf8) else {
+            return ""
+        }
+        return traceText
+            .split(separator: "\n")
+            .reversed()
+            .first { line in
+                guard line.contains("name=\(eventName)") else {
+                    return false
+                }
+                guard let field, let minimumValue else {
+                    return true
+                }
+                return (String(line).integerField(field) ?? -1) >= minimumValue
+            }
+            .map(String.init) ?? ""
+    }
 }
 
 private extension XCUIElement {

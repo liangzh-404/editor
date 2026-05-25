@@ -11,6 +11,18 @@ final class DiaryRepositoryTests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    func testDiaryTitleClassificationMatchesChineseAndISODateTitles() {
+        XCTAssertEqual(
+            DiaryTitleClassificationPolicy.diaryDateString(forPageTitle: "2026年5月18日 星期一"),
+            "2026-05-18"
+        )
+        XCTAssertEqual(
+            DiaryTitleClassificationPolicy.diaryDateString(forPageTitle: "2026-05-18 Monday"),
+            "2026-05-18"
+        )
+        XCTAssertNil(DiaryTitleClassificationPolicy.diaryDateString(forPageTitle: "2026年5月18日"))
+    }
+
     func testOpenDailyDiaryPageCreatesNormalPageOnceAndAppearsInDocuments() throws {
         let database = try migratedDatabase()
         defer { database.close() }

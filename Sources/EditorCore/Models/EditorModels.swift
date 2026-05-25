@@ -113,20 +113,21 @@ struct DiaryPageSnapshot: Equatable, Sendable {
 enum DiaryTitleClassificationPolicy {
     private static let chineseTitlePattern = #"^\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s+(?:星期)?([一二三四五六日天]|Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)(?:\s+\d+)?\s*$"#
     private static let isoTitlePattern = #"^\s*(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+(?:星期)?([一二三四五六日天]|Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday))?(?:\s+\d+)?\s*$"#
+    private static let chineseTitleRegex = try! NSRegularExpression(pattern: chineseTitlePattern)
+    private static let isoTitleRegex = try! NSRegularExpression(pattern: isoTitlePattern)
 
     static func diaryDateString(forPageTitle title: String) -> String? {
-        if let chineseDate = diaryDateString(matching: chineseTitlePattern, in: title, requiresWeekday: true) {
+        if let chineseDate = diaryDateString(matching: chineseTitleRegex, in: title, requiresWeekday: true) {
             return chineseDate
         }
-        return diaryDateString(matching: isoTitlePattern, in: title, requiresWeekday: false)
+        return diaryDateString(matching: isoTitleRegex, in: title, requiresWeekday: false)
     }
 
     private static func diaryDateString(
-        matching pattern: String,
+        matching titleRegex: NSRegularExpression,
         in title: String,
         requiresWeekday: Bool
     ) -> String? {
-        let titleRegex = try! NSRegularExpression(pattern: pattern)
         let fullRange = NSRange(title.startIndex..<title.endIndex, in: title)
         guard let match = titleRegex.firstMatch(in: title, range: fullRange),
               match.numberOfRanges == 5,
@@ -798,7 +799,7 @@ extension WorkspaceSnapshot {
     )
 
     func replacingBlocks(pageID: String, blocks replacementBlocks: [BlockSnapshot]) -> WorkspaceSnapshot {
-        WorkspaceSnapshot(
+        return WorkspaceSnapshot(
             workspaces: workspaces,
             notebooks: notebooks,
             pages: pages,
@@ -818,15 +819,96 @@ extension WorkspaceSnapshot {
         )
     }
 
-    func replacingBlock(blockID: String, type: BlockType, text: String) -> WorkspaceSnapshot {
-        WorkspaceSnapshot(
+    func mergingPageListPreviews(_ replacementPreviews: [String: PageListPreview]) -> WorkspaceSnapshot {
+        guard !replacementPreviews.isEmpty else {
+            return self
+        }
+
+        return WorkspaceSnapshot(
             workspaces: workspaces,
             notebooks: notebooks,
             pages: pages,
             archivedPages: archivedPages,
-            blocks: blocks.map { block in
-                block.id == blockID ? block.replacing(type: type, text: text) : block
-            },
+            blocks: blocks,
+            pageListPreviews: pageListPreviews.merging(replacementPreviews) { _, replacement in replacement },
+            attachments: attachments,
+            tags: tags,
+            pageTags: pageTags,
+            activeDiaryEntry: activeDiaryEntry,
+            diaryPages: diaryPages,
+            emptyDiaryPageIDs: emptyDiaryPageIDs,
+            pageParentLinks: pageParentLinks,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID,
+            selectedPageID: selectedPageID
+        )
+    }
+
+    func replacingWorkspaceMetadata(with metadata: WorkspaceSnapshot) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(
+            workspaces: Self.replacingMetadataItems(metadata.workspaces, currentItems: workspaces),
+            notebooks: Self.replacingMetadataItems(metadata.notebooks, currentItems: notebooks),
+            pages: Self.replacingMetadataItems(metadata.pages, currentItems: pages),
+            archivedPages: Self.replacingMetadataItems(metadata.archivedPages, currentItems: archivedPages),
+            blocks: blocks,
+            pageListPreviews: pageListPreviews.merging(metadata.pageListPreviews) { _, replacement in replacement },
+            attachments: Self.replacingMetadataItems(metadata.attachments, currentItems: attachments),
+            tags: Self.replacingMetadataItems(metadata.tags, currentItems: tags),
+            pageTags: Self.replacingPageTagMetadata(metadata.pageTags, currentItems: pageTags),
+            activeDiaryEntry: activeDiaryEntry ?? metadata.activeDiaryEntry,
+            diaryPages: Self.replacingDiaryPageMetadata(metadata.diaryPages, currentItems: diaryPages),
+            emptyDiaryPageIDs: metadata.emptyDiaryPageIDs,
+            pageParentLinks: metadata.pageParentLinks,
+            selectedWorkspaceID: selectedWorkspaceID ?? metadata.selectedWorkspaceID,
+            selectedNotebookID: selectedNotebookID ?? metadata.selectedNotebookID,
+            selectedPageID: selectedPageID ?? metadata.selectedPageID
+        )
+    }
+
+    private static func replacingMetadataItems<Item: Identifiable>(
+        _ metadataItems: [Item],
+        currentItems: [Item]
+    ) -> [Item] where Item.ID == String {
+        let currentByID = Dictionary(uniqueKeysWithValues: currentItems.map { ($0.id, $0) })
+        let metadataIDs = Set(metadataItems.map(\.id))
+        return metadataItems.map { currentByID[$0.id] ?? $0 }
+            + currentItems.filter { !metadataIDs.contains($0.id) }
+    }
+
+    private static func replacingPageTagMetadata(
+        _ metadataItems: [PageTagAssignment],
+        currentItems: [PageTagAssignment]
+    ) -> [PageTagAssignment] {
+        let currentKeys = Set(currentItems.map { "\($0.pageID)\u{1F}\($0.tagID)" })
+        let metadataWithoutCurrentDuplicates = metadataItems.filter {
+            !currentKeys.contains("\($0.pageID)\u{1F}\($0.tagID)")
+        }
+        return metadataWithoutCurrentDuplicates + currentItems
+    }
+
+    private static func replacingDiaryPageMetadata(
+        _ metadataItems: [DiaryPageSnapshot],
+        currentItems: [DiaryPageSnapshot]
+    ) -> [DiaryPageSnapshot] {
+        let currentByPageID = Dictionary(uniqueKeysWithValues: currentItems.map { ($0.pageID, $0) })
+        let metadataPageIDs = Set(metadataItems.map(\.pageID))
+        return metadataItems.map { currentByPageID[$0.pageID] ?? $0 }
+            + currentItems.filter { !metadataPageIDs.contains($0.pageID) }
+    }
+
+    func replacingBlock(blockID: String, type: BlockType, text: String) -> WorkspaceSnapshot {
+        guard let blockIndex = blocks.firstIndex(where: { $0.id == blockID }) else {
+            return self
+        }
+        var updatedBlocks = blocks
+        updatedBlocks[blockIndex] = updatedBlocks[blockIndex].replacing(type: type, text: text)
+
+        return WorkspaceSnapshot(
+            workspaces: workspaces,
+            notebooks: notebooks,
+            pages: pages,
+            archivedPages: archivedPages,
+            blocks: updatedBlocks,
             pageListPreviews: pageListPreviews,
             attachments: attachments,
             tags: tags,

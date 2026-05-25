@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import CloudKit
 import SwiftUI
 import XCTest
@@ -50,6 +51,101 @@ final class WorkspaceViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedPageID, secondPage.id)
         XCTAssertEqual(Set(viewModel.snapshot.blocks.map(\.pageID)), [secondPage.id])
         XCTAssertEqual(viewModel.visibleBlocks.map(\.pageID), [secondPage.id])
+    }
+
+    @MainActor
+    func testSelectingEmptyPageDoesNotRepublishSnapshotJustToHydrateNoBlocks() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let loadedPageID = try XCTUnwrap(snapshot.selectedPageID)
+        let emptyPage = try repository.createPage(workspaceID: workspaceID, title: "Empty")
+        let emptyBlockID = try XCTUnwrap(try repository.loadBlocks(pageID: emptyPage.id).first?.id)
+        try repository.deleteBlock(blockID: emptyBlockID)
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        viewModel.selectPage(id: loadedPageID)
+        XCTAssertEqual(viewModel.visibleBlocks.map(\.pageID), [loadedPageID])
+
+        var snapshotEmissionCount = 0
+        let cancellable = viewModel.$snapshot.dropFirst().sink { _ in
+            snapshotEmissionCount += 1
+        }
+
+        viewModel.selectPage(id: emptyPage.id)
+
+        withExtendedLifetime(cancellable) {
+            XCTAssertEqual(viewModel.selectedPageID, emptyPage.id)
+            XCTAssertEqual(viewModel.visibleBlocks, [])
+            XCTAssertEqual(
+                snapshotEmissionCount,
+                0,
+                "Selecting an empty page must not rewrite the whole snapshot just to publish an empty block list."
+            )
+        }
+    }
+
+    @MainActor
+    func testLowLatencyTextEditDefersSnapshotAndPersistsAfterDebounce() async throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        _ = try repository.bootstrapWorkspaceIfNeeded()
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+        let blockID = try XCTUnwrap(viewModel.visibleBlocks.first?.id)
+
+        var snapshotEmissionCount = 0
+        let cancellable = viewModel.$snapshot.dropFirst().sink { _ in
+            snapshotEmissionCount += 1
+        }
+
+        viewModel.editBlockText(blockID: blockID, text: "Queued without blocking input")
+
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "开始用块写作。")
+        XCTAssertEqual(snapshotEmissionCount, 0)
+        XCTAssertTrue(viewModel.canUndoTextEdit)
+        XCTAssertEqual(
+            try persistedBlockText(database: database, blockID: blockID),
+            "开始用块写作。",
+            "Plain typing should stay in the editor draft and avoid a global snapshot publish until the debounced persistence path runs."
+        )
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(
+            try persistedBlockText(database: database, blockID: blockID),
+            "Queued without blocking input"
+        )
+        XCTAssertEqual(
+            viewModel.visibleBlocks.first?.textPlain,
+            "开始用块写作。",
+            "The background save should not publish the global snapshot while the native editor draft is still active."
+        )
+
+        viewModel.editBlockText(blockID: blockID, text: "Queued without blocking input")
+        viewModel.flushPendingBlockTextPersistenceForUI(blockID: blockID)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Queued without blocking input")
+
+        viewModel.editBlockText(blockID: blockID, text: "Flush when editing ends")
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Queued without blocking input")
+        XCTAssertEqual(
+            try persistedBlockText(database: database, blockID: blockID),
+            "Queued without blocking input"
+        )
+
+        viewModel.flushPendingBlockTextPersistenceForUI(blockID: blockID)
+        XCTAssertEqual(viewModel.visibleBlocks.first?.textPlain, "Flush when editing ends")
+        XCTAssertEqual(
+            try persistedBlockText(database: database, blockID: blockID),
+            "Flush when editing ends"
+        )
+        _ = cancellable
     }
 
     @MainActor
@@ -5211,6 +5307,51 @@ final class WorkspaceViewModelTests: XCTestCase {
         )
     }
 
+    func testMobileKeyboardTraceStabilityPolicyUsesVisualStabilityDelayInsteadOfDidShowLatency() {
+        XCTAssertEqual(
+            MobileKeyboardTraceStabilityPolicy.stableDelayNanoseconds(animationDurationSeconds: 0),
+            50_000_000
+        )
+        XCTAssertEqual(
+            MobileKeyboardTraceStabilityPolicy.stableDelayNanoseconds(animationDurationSeconds: .nan),
+            50_000_000
+        )
+        XCTAssertEqual(
+            MobileKeyboardTraceStabilityPolicy.stableDelayNanoseconds(animationDurationSeconds: 0.3833),
+            383_300_000
+        )
+    }
+
+    func testPageReselectionPolicySkipsOnlySamePageCollectionWithoutDeferredFocus() {
+        XCTAssertTrue(
+            PageReselectionPolicy.shouldSkip(
+                currentPageID: "page-1",
+                currentCollection: .allDocuments,
+                nextPageID: "page-1",
+                nextCollection: .allDocuments,
+                deferredFocusBlockID: nil
+            )
+        )
+        XCTAssertFalse(
+            PageReselectionPolicy.shouldSkip(
+                currentPageID: "page-1",
+                currentCollection: .recent,
+                nextPageID: "page-1",
+                nextCollection: .allDocuments,
+                deferredFocusBlockID: nil
+            )
+        )
+        XCTAssertFalse(
+            PageReselectionPolicy.shouldSkip(
+                currentPageID: "page-1",
+                currentCollection: .allDocuments,
+                nextPageID: "page-1",
+                nextCollection: .allDocuments,
+                deferredFocusBlockID: "block-1"
+            )
+        )
+    }
+
     @MainActor
     func testSyncNowFetchesRemoteChangesAndRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
@@ -5258,6 +5399,13 @@ final class WorkspaceViewModelTests: XCTestCase {
         let database = try SQLiteDatabase.open(path: temporaryDatabasePath())
         try SchemaMigrator.migrate(database: database)
         return database
+    }
+
+    private func persistedBlockText(database: SQLiteDatabase, blockID: String) throws -> String? {
+        try database.query(
+            "SELECT text_plain FROM blocks WHERE id = ? LIMIT 1",
+            bindings: [.text(blockID)]
+        ).first?["text_plain"]
     }
 
     private func markExistingLocalRecordsSynced(database: SQLiteDatabase) throws {

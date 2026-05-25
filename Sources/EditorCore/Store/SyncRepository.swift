@@ -43,29 +43,55 @@ final class SyncRepository {
     }
 
     func enqueue(entityType: String, entityID: String, changeType: String) throws {
-        let createdAt = dateFormatter.string(from: Date())
-        try enqueueCoalesced(
-            entityType: entityType,
-            entityID: entityID,
-            changeType: changeType,
-            createdAt: createdAt
-        )
-        if entityType == "block" {
-            try enqueueParentPageContentChange(blockID: entityID, createdAt: createdAt)
-        }
-
-        EditorLog.sync.debug(
-            "sync_change_enqueued entity_type=\(entityType, privacy: .public) entity_id=\(entityID, privacy: .public) change_type=\(changeType, privacy: .public)"
-        )
-        NotificationCenter.default.post(
-            name: .editorSyncChangeEnqueued,
-            object: database,
-            userInfo: [
-                "entityType": entityType,
-                "entityID": entityID,
-                "changeType": changeType
+        let trace = EditorPerformanceTrace.begin("sync_enqueue") {
+            [
+                "entity_type": entityType,
+                "entity_id": entityID,
+                "change_type": changeType
             ]
-        )
+        }
+        do {
+            let createdAt = dateFormatter.string(from: Date())
+            try enqueueCoalesced(
+                entityType: entityType,
+                entityID: entityID,
+                changeType: changeType,
+                createdAt: createdAt
+            )
+            if entityType == "block" {
+                try enqueueParentPageContentChange(blockID: entityID, createdAt: createdAt)
+            }
+
+            EditorPerformanceTrace.end(trace, as: "sync_enqueue_done") {
+                [
+                    "entity_type": entityType,
+                    "entity_id": entityID,
+                    "change_type": changeType
+                ]
+            }
+            EditorLog.sync.debug(
+                "sync_change_enqueued entity_type=\(entityType, privacy: .public) entity_id=\(entityID, privacy: .public) change_type=\(changeType, privacy: .public)"
+            )
+            NotificationCenter.default.post(
+                name: .editorSyncChangeEnqueued,
+                object: database,
+                userInfo: [
+                    "entityType": entityType,
+                    "entityID": entityID,
+                    "changeType": changeType
+                ]
+            )
+        } catch {
+            EditorPerformanceTrace.end(trace, as: "sync_enqueue_failed") {
+                [
+                    "entity_type": entityType,
+                    "entity_id": entityID,
+                    "change_type": changeType,
+                    "error": String(describing: error)
+                ]
+            }
+            throw error
+        }
     }
 
     private func enqueueCoalesced(

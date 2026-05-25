@@ -651,6 +651,11 @@ struct BlockDragPayloadIndex {
     private let payloadBlockIDsByRootID: [String: [String]]
 
     init(blocks: [BlockSnapshot]) {
+        guard blocks.contains(where: { $0.parentBlockID != nil }) else {
+            payloadBlockIDsByRootID = [:]
+            return
+        }
+
         let parentBlockIDsByID = Dictionary(
             uniqueKeysWithValues: blocks.map { ($0.id, $0.parentBlockID) }
         )
@@ -819,6 +824,122 @@ struct NativeTextModelUpdateGuard {
         isApplyingModelText = false
     }
 }
+
+enum NativeTextAcceptedChangeFallbackSelectionPolicy {
+    static func selectionRange(
+        actualSelection: NSRange,
+        acceptedRange: NSRange,
+        replacementText: String,
+        nextTextLength: Int
+    ) -> NSRange {
+        selectionRange(
+            actualSelection: actualSelection,
+            expectedCaretLocation: acceptedRange.location + (replacementText as NSString).length,
+            nextTextLength: nextTextLength,
+            shouldRepair: !replacementText.isEmpty && acceptedRange.location >= 0 && acceptedRange.length >= 0
+        )
+    }
+
+    static func selectionRange(
+        actualSelection: NSRange,
+        expectedCaretLocation: Int,
+        nextTextLength: Int,
+        shouldRepair: Bool
+    ) -> NSRange {
+        guard shouldRepair,
+              actualSelection.length == 0 else {
+            return actualSelection
+        }
+
+        let expectedLocation = min(nextTextLength, max(0, expectedCaretLocation))
+        guard actualSelection.location < expectedLocation else {
+            return actualSelection
+        }
+
+        return NSRange(location: expectedLocation, length: 0)
+    }
+}
+
+struct NativeTextAcceptedChangeFallbackProposal: Equatable {
+    let text: String
+    let caretLocation: Int
+}
+
+enum NativeTextAcceptedChangeFallbackTextPolicy {
+    static func proposal(
+        currentText: String,
+        mirrorText: String?,
+        acceptedRange: NSRange,
+        replacementText: String
+    ) -> NativeTextAcceptedChangeFallbackProposal? {
+        let currentNSString = currentText as NSString
+        let replacementLength = (replacementText as NSString).length
+        let currentLength = currentNSString.length
+        var baseText = currentText
+        var replacementRange = acceptedRange
+
+        if let mirrorText {
+            let mirrorLength = (mirrorText as NSString).length
+            if mirrorLength > currentLength,
+               acceptedRange.location == currentLength,
+               acceptedRange.length == 0,
+               !replacementText.isEmpty {
+                baseText = mirrorText
+                replacementRange = NSRange(location: mirrorLength, length: 0)
+            }
+        }
+
+        let baseNSString = baseText as NSString
+        guard replacementRange.location >= 0,
+              replacementRange.length >= 0,
+              replacementRange.location <= baseNSString.length,
+              replacementRange.length <= baseNSString.length - replacementRange.location else {
+            return nil
+        }
+
+        let proposedText = baseNSString.replacingCharacters(in: replacementRange, with: replacementText)
+        let proposedLength = (proposedText as NSString).length
+        let caretLocation = min(proposedLength, replacementRange.location + replacementLength)
+        return NativeTextAcceptedChangeFallbackProposal(text: proposedText, caretLocation: caretLocation)
+    }
+
+    static func resolvedText(actualText: String, proposedText: String) -> String {
+        let actualLength = (actualText as NSString).length
+        let proposedLength = (proposedText as NSString).length
+        return actualLength >= proposedLength ? actualText : proposedText
+    }
+}
+
+enum NativeTextDisplayTextPolicy {
+    static func effectiveText(
+        modelText: String,
+        draftText: String?,
+        acceptedTextInputMirror: String?
+    ) -> String {
+        acceptedTextInputMirror ?? draftText ?? modelText
+    }
+}
+
+#if os(iOS)
+@MainActor
+enum MobileKeyboardPerformanceState {
+    private(set) static var isVisible = false
+    private(set) static var lastKeyboardFrame: CGRect = .zero
+
+    static func update(isVisible: Bool, frame: CGRect) {
+        self.isVisible = isVisible
+        lastKeyboardFrame = frame
+    }
+
+    static var metadata: [String: String] {
+        [
+            "keyboard_visible": "\(isVisible)",
+            "keyboard_min_y": String(format: "%.1f", lastKeyboardFrame.minY),
+            "keyboard_height": String(format: "%.1f", lastKeyboardFrame.height)
+        ]
+    }
+}
+#endif
 
 enum NativeTextCompositionPolicy {
     static func shouldApplyModelText(isComposing: Bool) -> Bool {
@@ -1057,6 +1178,11 @@ enum MobileNativeTextBlockDragPolicy {
     }
 }
 
+enum NativeTextModelPropagationPolicy {
+    static let debounceNanoseconds: UInt64 = 180_000_000
+    static let debounceMilliseconds = 180
+}
+
 struct NativeTextBlockEditor: View {
     static let acceptsInactiveWindowFirstMouse = true
 
@@ -1092,6 +1218,7 @@ struct NativeTextBlockEditor: View {
     let keyboardAccessoryHeight: CGFloat?
     let keyboardAccessoryReplacesKeyboard: Bool
     let onTextChange: (String) -> Void
+    let onEditingEnded: () -> Void
     @State private var measuredHeight: CGFloat = 0
 
     init(
@@ -1126,7 +1253,8 @@ struct NativeTextBlockEditor: View {
         keyboardAccessory: AnyView? = nil,
         keyboardAccessoryHeight: CGFloat? = nil,
         keyboardAccessoryReplacesKeyboard: Bool = false,
-        onTextChange: @escaping (String) -> Void
+        onTextChange: @escaping (String) -> Void,
+        onEditingEnded: @escaping () -> Void = {}
     ) {
         self.blockID = blockID
         self.text = text
@@ -1160,6 +1288,7 @@ struct NativeTextBlockEditor: View {
         self.keyboardAccessoryHeight = keyboardAccessoryHeight
         self.keyboardAccessoryReplacesKeyboard = keyboardAccessoryReplacesKeyboard
         self.onTextChange = onTextChange
+        self.onEditingEnded = onEditingEnded
     }
 
     var body: some View {
@@ -1198,7 +1327,8 @@ struct NativeTextBlockEditor: View {
                 keyboardAccessoryReplacesKeyboard: keyboardAccessoryReplacesKeyboard,
                 minimumHeight: minimumHeight,
                 onContentHeightChange: updateMeasuredHeight,
-                onTextChange: onTextChange
+                onTextChange: onTextChange,
+                onEditingEnded: onEditingEnded
             )
 
             if showsPlaceholder {
@@ -1457,6 +1587,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
+    let onEditingEnded: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -1479,6 +1610,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         context.coordinator.textLayoutManager = textLayoutManager
 
         let textView = EditorNSTextView(frame: .zero, textContainer: textContainer)
+        textView.blockID = blockID
         textView.blockType = blockType
         textView.onMouseDown = {
             EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
@@ -1581,7 +1713,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         configureLineWrapping(textView: textView)
-        context.coordinator.applyModelText(text, to: textView)
+        context.coordinator.applyModelText(
+            context.coordinator.effectiveDisplayText(modelText: text),
+            to: textView
+        )
         context.coordinator.scheduleHeightMeasurement(for: textView)
         context.coordinator.handleFocusRequestIfNeeded(textView: textView)
         if textView.textLayoutManager == nil {
@@ -1593,6 +1728,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
     func updateNSView(_ textView: NSTextView, context: Context) {
         context.coordinator.parent = self
         if let textView = textView as? EditorNSTextView {
+            textView.blockID = blockID
             textView.blockType = blockType
             textView.onMouseDown = {
                 EditorLog.focus.debug("editor_native_text_mouse_down block_id=\(blockID, privacy: .public)")
@@ -1681,9 +1817,10 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         textView.insertionPointColor = NativeTextCursorChrome.nsColor
         textView.defaultParagraphStyle = paragraphStyle
         configureLineWrapping(textView: textView)
+        let displayText = context.coordinator.effectiveDisplayText(modelText: text)
         if NativeTextCompositionPolicy.shouldApplyModelText(isComposing: textView.hasMarkedText()),
-           textView.string != text {
-            context.coordinator.applyModelText(text, to: textView)
+           textView.string != displayText {
+            context.coordinator.applyModelText(displayText, to: textView)
         }
         if NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: textView.hasMarkedText()) {
             context.coordinator.applyTextStyles(to: textView, baseAttributesWereReset: didResetBaseAttributes)
@@ -1784,6 +1921,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
         private var measuredHeightFingerprint: NativeTextHeightMeasurementFingerprint?
         private let codeSyntaxHighlighter = Highlight()
         private var codeSyntaxHighlightTask: Task<Void, Never>?
+        private var deferredTextChangeSequence = 0
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
@@ -1797,6 +1935,14 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             textView.string = text
             applyTextStyles(to: textView)
             scheduleHeightMeasurement(for: textView)
+        }
+
+        func effectiveDisplayText(modelText: String) -> String {
+            NativeTextDisplayTextPolicy.effectiveText(
+                modelText: modelText,
+                draftText: parent.session.draftText(for: parent.blockID),
+                acceptedTextInputMirror: parent.session.acceptedTextInputMirror(for: parent.blockID)
+            )
         }
 
         func applyTextStyles(to textView: NSTextView, baseAttributesWereReset: Bool = false) {
@@ -1975,7 +2121,9 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             parent.session.beginEditing(blockID: parent.blockID, reason: .userTap)
             parent.session.clearBlockSelection()
             if let textView = notification.object as? NSTextView {
-                updateSessionSelection(textView: textView)
+                if updateSessionSelection(textView: textView) {
+                    traceNativeSelectionPainted(textView: textView, source: "begin_editing")
+                }
                 updateSessionComposition(textView: textView)
             }
         }
@@ -1987,16 +2135,51 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else {
                 return
             }
-            updateSessionSelection(textView: textView)
+            let trace = EditorPerformanceTrace.begin("native_text_did_change") {
+                [
+                    "platform": "macOS",
+                    "block_id": parent.blockID,
+                    "text_length": "\(textView.string.count)",
+                    "is_composing": "\(textView.hasMarkedText())"
+                ]
+            }
+            if updateSessionSelection(textView: textView) {
+                traceNativeSelectionPainted(textView: textView, source: "text_change")
+            }
             updateSessionComposition(textView: textView)
             guard !textView.hasMarkedText() else {
+                EditorPerformanceTrace.point("ime_composition_update") {
+                    [
+                        "platform": "macOS",
+                        "block_id": parent.blockID,
+                        "text_length": "\(textView.string.count)"
+                    ]
+                }
                 scheduleHeightMeasurement(for: textView)
+                EditorPerformanceTrace.end(trace, as: "native_text_did_change_composing_done")
                 return
             }
-            parent.session.updateDraft(blockID: parent.blockID, text: textView.string)
-            parent.onTextChange(textView.string)
-            applyTextStyles(to: textView)
-            scheduleHeightMeasurement(for: textView)
+            let nextText = textView.string
+            let textLength = nextText.count
+            parent.session.updateDraft(blockID: parent.blockID, text: nextText)
+            EditorPerformanceTrace.point("character_painted") {
+                [
+                    "platform": "macOS",
+                    "block_id": parent.blockID,
+                    "text_length": "\(textLength)",
+                    "source": "native_text_delegate"
+                ]
+            }
+            EditorPerformanceTrace.nextRunLoopPoint("character_next_runloop_painted") {
+                [
+                    "platform": "macOS",
+                    "block_id": parent.blockID,
+                    "text_length": "\(textLength)",
+                    "source": "main_queue_async"
+                ]
+            }
+            EditorPerformanceTrace.end(trace)
+            scheduleDeferredModelTextChange(nextText, textView: textView)
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -2006,24 +2189,71 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else {
                 return
             }
-            updateSessionSelection(textView: textView)
+            if updateSessionSelection(textView: textView) {
+                traceNativeSelectionPainted(textView: textView, source: "selection_change")
+            }
             updateSessionComposition(textView: textView)
         }
 
         func textDidEndEditing(_ notification: Notification) {
+            if let textView = notification.object as? NSTextView {
+                flushDeferredModelTextChange(textView.string)
+            }
+            parent.onEditingEnded()
             _ = parent.session.commitDraft(blockID: parent.blockID)
             parent.session.endEditing(blockID: parent.blockID)
         }
 
+        private func scheduleDeferredModelTextChange(_ text: String, textView: NSTextView) {
+            deferredTextChangeSequence += 1
+            let sequence = deferredTextChangeSequence
+            let blockID = parent.blockID
+            Task { @MainActor [weak self, weak textView] in
+                do {
+                    try await Task.sleep(nanoseconds: NativeTextModelPropagationPolicy.debounceNanoseconds)
+                } catch {
+                    return
+                }
+                guard let self,
+                      sequence == self.deferredTextChangeSequence else {
+                    return
+                }
+                let trace = EditorPerformanceTrace.begin("native_text_model_update") {
+                    [
+                        "platform": "macOS",
+                        "block_id": blockID,
+                        "text_length": "\(text.count)",
+                        "deferred": "true",
+                        "debounce_ms": "\(NativeTextModelPropagationPolicy.debounceMilliseconds)"
+                    ]
+                }
+                self.parent.onTextChange(text)
+                if let textView {
+                    self.applyTextStyles(to: textView)
+                    self.scheduleHeightMeasurement(for: textView)
+                }
+                EditorPerformanceTrace.end(trace)
+            }
+        }
+
+        private func flushDeferredModelTextChange(_ text: String) {
+            deferredTextChangeSequence += 1
+            parent.onTextChange(text)
+        }
+
         func syncCurrentTextSelection(in textView: NSTextView) {
-            updateSessionSelection(textView: textView)
+            if updateSessionSelection(textView: textView) {
+                traceNativeSelectionPainted(textView: textView, source: "sync_selection")
+            }
             parent.session.clearBlockSelection()
         }
 
         func selectCurrentBlock(in textView: NSTextView) {
             let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
             textView.setSelectedRange(fullRange)
-            updateSessionSelection(textView: textView)
+            if updateSessionSelection(textView: textView) {
+                traceNativeSelectionPainted(textView: textView, source: "select_current_block")
+            }
             parent.session.selectBlocks([parent.blockID])
         }
 
@@ -2141,13 +2371,27 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             textView.window?.firstResponder === textView
         }
 
-        private func updateSessionSelection(textView: NSTextView) {
+        private func updateSessionSelection(textView: NSTextView) -> Bool {
             let selectedRange = textView.selectedRange()
-            parent.session.updateSelection(
+            return parent.session.updateSelection(
                 blockID: parent.blockID,
                 location: selectedRange.location,
                 length: selectedRange.length
             )
+        }
+
+        private func traceNativeSelectionPainted(textView: NSTextView, source: String) {
+            let selectedRange = textView.selectedRange()
+            let eventName = selectedRange.length == 0 ? "cursor_painted" : "selection_painted"
+            EditorPerformanceTrace.point(eventName) {
+                [
+                    "platform": "macOS",
+                    "block_id": parent.blockID,
+                    "location": "\(selectedRange.location)",
+                    "length": "\(selectedRange.length)",
+                    "source": source
+                ]
+            }
         }
 
         private func updateSessionComposition(textView: NSTextView) {
@@ -2222,6 +2466,7 @@ private struct PlatformNativeTextView: NSViewRepresentable {
 }
 
 private final class EditorNSTextView: NSTextView {
+    var blockID: String = ""
     var blockType: BlockType = .paragraph
     var onMouseDown: (() -> Void)?
     var onMouseFocusResult: ((Bool) -> Void)?
@@ -2274,6 +2519,17 @@ private final class EditorNSTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        EditorPerformanceTrace.point("keydown_start") {
+            [
+                "platform": "macOS",
+                "block_id": blockID,
+                "key_code": "\(event.keyCode)",
+                "is_composing": "\(hasMarkedText())",
+                "selection_location": "\(selectedRange().location)",
+                "selection_length": "\(selectedRange().length)",
+                "text_length": "\(string.count)"
+            ]
+        }
         guard NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: hasMarkedText()) else {
             super.keyDown(with: event)
             return
@@ -2671,6 +2927,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     let minimumHeight: CGFloat
     let onContentHeightChange: (CGFloat) -> Void
     let onTextChange: (String) -> Void
+    let onEditingEnded: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -2678,6 +2935,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UITextView {
         let textView = EditorUITextView(usingTextLayoutManager: true)
+        textView.blockID = blockID
         textView.blockType = blockType
         textView.onKeyboardMove = onMoveByKeyboard
         textView.onKeyboardIndentation = onIndentationByKeyboard
@@ -2801,6 +3059,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.parent = self
         if let textView = textView as? EditorUITextView {
+            textView.blockID = blockID
             textView.blockType = blockType
             textView.onKeyboardMove = onMoveByKeyboard
             textView.onKeyboardIndentation = onIndentationByKeyboard
@@ -2895,9 +3154,10 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         textView.tintColor = NativeTextCursorChrome.uiColor
         textView.typingAttributes = baseTextAttributes
         configureLineWrapping(textView: textView)
+        let displayText = context.coordinator.effectiveDisplayText(modelText: text)
         if NativeTextCompositionPolicy.shouldApplyModelText(isComposing: textView.markedTextRange != nil),
-           textView.text != text {
-            context.coordinator.applyModelText(text, to: textView)
+           textView.text != displayText {
+            context.coordinator.applyModelText(displayText, to: textView)
         }
         context.coordinator.configureKeyboardAccessory(
             keyboardAccessory,
@@ -3013,6 +3273,8 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         private var configuredKeyboardAccessoryHeight: CGFloat?
         private var configuredKeyboardReplacesKeyboard = false
         private var pendingPostSplitTextSelection: EditorTextSelection?
+        private var deferredTextChangeSequence = 0
+        private var acceptedTextFallbackMirror: String?
 
         init(parent: PlatformNativeTextView) {
             self.parent = parent
@@ -3136,9 +3398,18 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             defer {
                 modelUpdateGuard.finishApplyingModelText()
             }
+            acceptedTextFallbackMirror = text
             textView.text = text
             applyTextStyles(to: textView)
             scheduleHeightMeasurement(for: textView)
+        }
+
+        func effectiveDisplayText(modelText: String) -> String {
+            NativeTextDisplayTextPolicy.effectiveText(
+                modelText: modelText,
+                draftText: parent.session.draftText(for: parent.blockID),
+                acceptedTextInputMirror: parent.session.acceptedTextInputMirror(for: parent.blockID)
+            )
         }
 
         func applyTextStyles(to textView: UITextView, baseAttributesWereReset: Bool = false) {
@@ -3316,34 +3587,83 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            EditorPerformanceTrace.point("mobile_editor_focus_start") {
+                [
+                    "block_id": parent.blockID,
+                    "view": "native_text_view"
+                ].merging(MobileKeyboardPerformanceState.metadata) { _, new in new }
+            }
             parent.session.beginEditing(blockID: parent.blockID, reason: .userTap)
             parent.session.clearBlockSelection()
-            updateSessionSelection(textView: textView)
+            if updateSessionSelection(textView: textView) {
+                traceNativeSelectionPainted(textView: textView, source: "begin_editing")
+            }
             updateSessionComposition(textView: textView)
+            traceMobileCursorVisibility(textView: textView, source: "begin_editing")
         }
 
         func textViewDidChange(_ textView: UITextView) {
             guard modelUpdateGuard.shouldForwardTextChange else {
                 return
             }
-            updateSessionSelection(textView: textView)
+            let trace = EditorPerformanceTrace.begin("native_text_did_change") {
+                [
+                    "platform": "iOS",
+                    "block_id": parent.blockID,
+                    "text_length": "\(textView.text.count)",
+                    "is_composing": "\(textView.markedTextRange != nil)"
+                ]
+            }
+            if updateSessionSelection(textView: textView) {
+                traceNativeSelectionPainted(textView: textView, source: "text_change")
+            }
             updateSessionComposition(textView: textView)
             guard textView.markedTextRange == nil else {
+                EditorPerformanceTrace.point("ime_composition_update") {
+                    [
+                        "platform": "iOS",
+                        "block_id": parent.blockID,
+                        "text_length": "\(textView.text.count)"
+                    ]
+                }
                 scheduleHeightMeasurement(for: textView)
+                EditorPerformanceTrace.end(trace, as: "native_text_did_change_composing_done")
                 return
             }
-            parent.session.updateDraft(blockID: parent.blockID, text: textView.text)
-            parent.onTextChange(textView.text)
-            applyTextStyles(to: textView)
-            scheduleHeightMeasurement(for: textView)
+            let nextText = textView.text ?? ""
+            let textLength = nextText.count
+            acceptedTextFallbackMirror = nextText
+            parent.session.updateAcceptedTextInputMirror(blockID: parent.blockID, text: nextText)
+            parent.session.updateDraft(blockID: parent.blockID, text: nextText)
+            EditorPerformanceTrace.point("character_painted") {
+                [
+                    "platform": "iOS",
+                    "block_id": parent.blockID,
+                    "text_length": "\(textLength)",
+                    "source": "native_text_delegate"
+                ]
+            }
+            EditorPerformanceTrace.nextRunLoopPoint("character_next_runloop_painted") {
+                [
+                    "platform": "iOS",
+                    "block_id": parent.blockID,
+                    "text_length": "\(textLength)",
+                    "source": "main_queue_async"
+                ]
+            }
+            EditorPerformanceTrace.end(trace)
+            scheduleDeferredModelTextChange(nextText, textView: textView)
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard modelUpdateGuard.shouldForwardTextChange else {
                 return
             }
-            updateSessionSelection(textView: textView)
+            if updateSessionSelection(textView: textView) {
+                traceNativeSelectionPainted(textView: textView, source: "selection_change")
+            }
             updateSessionComposition(textView: textView)
+            traceMobileCursorVisibility(textView: textView, source: "selection_change")
         }
 
         func textView(
@@ -3351,6 +3671,17 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             shouldChangeTextIn range: NSRange,
             replacementText text: String
         ) -> Bool {
+            EditorPerformanceTrace.point("keydown_start") {
+                [
+                    "platform": "iOS",
+                    "block_id": parent.blockID,
+                    "is_composing": "\(textView.markedTextRange != nil)",
+                    "replacement_length": "\((text as NSString).length)",
+                    "selection_location": "\(range.location)",
+                    "selection_length": "\(range.length)",
+                    "text_length": "\(textView.text.count)"
+                ]
+            }
             guard NativeTextCompositionPolicy.shouldHandleBlockCommand(isComposing: textView.markedTextRange != nil) else {
                 return true
             }
@@ -3372,6 +3703,10 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                         length: range.length
                     )
                 )
+            }
+            if text.rangeOfCharacter(from: .newlines) == nil {
+                scheduleAcceptedTextChangeFallback(textView: textView, range: range, replacementText: text)
+                return true
             }
             guard NativeTextNewlineReplacementResolver.isSingleNewline(text)
                     || text.rangeOfCharacter(from: .newlines) != nil else {
@@ -3420,10 +3755,172 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             return false
         }
 
+        private func scheduleAcceptedTextChangeFallback(
+            textView: UITextView,
+            range: NSRange,
+            replacementText text: String
+        ) {
+            let currentText = (textView.text ?? "") as NSString
+            guard range.location >= 0,
+                  range.length >= 0,
+                  range.location <= currentText.length,
+                  range.length <= currentText.length - range.location else {
+                return
+            }
+
+            guard let proposal = NativeTextAcceptedChangeFallbackTextPolicy.proposal(
+                currentText: currentText as String,
+                mirrorText: acceptedTextFallbackMirror
+                    ?? parent.session.acceptedTextInputMirror(for: parent.blockID)
+                    ?? parent.session.draftText(for: parent.blockID),
+                acceptedRange: range,
+                replacementText: text
+            ) else {
+                return
+            }
+            acceptedTextFallbackMirror = proposal.text
+            parent.session.updateAcceptedTextInputMirror(blockID: parent.blockID, text: proposal.text)
+            EditorPerformanceTrace.point("native_text_accepted_change_fallback_scheduled") {
+                [
+                    "platform": "iOS",
+                    "block_id": parent.blockID,
+                    "replacement_length": "\((text as NSString).length)",
+                    "range_location": "\(range.location)",
+                    "range_length": "\(range.length)",
+                    "proposed_text_length": "\(proposal.text.count)"
+                ]
+            }
+            DispatchQueue.main.async { [self, textView] in
+                guard self.modelUpdateGuard.shouldForwardTextChange else {
+                    self.traceAcceptedTextChangeFallbackSkipped(reason: "model_update_guard")
+                    return
+                }
+                guard textView.markedTextRange == nil else {
+                    self.traceAcceptedTextChangeFallbackSkipped(reason: "composing")
+                    return
+                }
+
+                let actualText = textView.text ?? ""
+                let nextText = NativeTextAcceptedChangeFallbackTextPolicy.resolvedText(
+                    actualText: actualText,
+                    proposedText: proposal.text
+                )
+                if !text.isEmpty,
+                   range.length == 0,
+                   let currentDraft = self.parent.session.draftText(for: self.parent.blockID),
+                   nextText.count < currentDraft.count {
+                    self.traceAcceptedTextChangeFallbackSkipped(reason: "shorter_than_draft")
+                    return
+                }
+
+                let draftAlreadyUpdated = self.parent.session.draftText(for: self.parent.blockID) == nextText
+                let didRepairText = actualText != nextText
+                if actualText != nextText {
+                    textView.text = nextText
+                }
+                self.acceptedTextFallbackMirror = nextText
+                self.parent.session.updateAcceptedTextInputMirror(blockID: self.parent.blockID, text: nextText)
+                let fallbackSelection = NativeTextAcceptedChangeFallbackSelectionPolicy.selectionRange(
+                    actualSelection: textView.selectedRange,
+                    expectedCaretLocation: proposal.caretLocation,
+                    nextTextLength: (nextText as NSString).length,
+                    shouldRepair: !text.isEmpty
+                )
+                if textView.selectedRange != fallbackSelection {
+                    textView.selectedRange = fallbackSelection
+                }
+                if self.updateSessionSelection(textView: textView) {
+                    self.traceNativeSelectionPainted(textView: textView, source: "should_change_fallback")
+                }
+                self.updateSessionComposition(textView: textView)
+                guard !draftAlreadyUpdated else {
+                    self.traceAcceptedTextChangeFallbackSkipped(reason: didRepairText ? "view_repaired" : "up_to_date")
+                    return
+                }
+                self.parent.session.updateDraft(blockID: self.parent.blockID, text: nextText)
+                EditorPerformanceTrace.point("native_text_accepted_change_fallback_applied") {
+                    [
+                        "platform": "iOS",
+                        "block_id": self.parent.blockID,
+                        "repaired_text": "\(didRepairText)",
+                        "text_length": "\(nextText.count)"
+                    ]
+                }
+                EditorPerformanceTrace.point("character_painted") {
+                    [
+                        "platform": "iOS",
+                        "block_id": self.parent.blockID,
+                        "text_length": "\(nextText.count)",
+                        "source": "should_change_fallback"
+                    ]
+                }
+                EditorPerformanceTrace.nextRunLoopPoint("character_next_runloop_painted") {
+                    [
+                        "platform": "iOS",
+                        "block_id": self.parent.blockID,
+                        "text_length": "\(nextText.count)",
+                        "source": "should_change_fallback"
+                    ]
+                }
+                self.scheduleDeferredModelTextChange(nextText, textView: textView)
+            }
+        }
+
+        private func traceAcceptedTextChangeFallbackSkipped(reason: String) {
+            EditorPerformanceTrace.point("native_text_accepted_change_fallback_skipped") {
+                [
+                    "platform": "iOS",
+                    "block_id": parent.blockID,
+                    "reason": reason
+                ]
+            }
+        }
+
         func textViewDidEndEditing(_ textView: UITextView) {
             pendingPostSplitTextSelection = nil
+            acceptedTextFallbackMirror = nil
+            parent.session.clearAcceptedTextInputMirror(blockID: parent.blockID)
+            flushDeferredModelTextChange(textView.text ?? "")
+            parent.onEditingEnded()
             _ = parent.session.commitDraft(blockID: parent.blockID)
             parent.session.endEditing(blockID: parent.blockID)
+        }
+
+        private func scheduleDeferredModelTextChange(_ text: String, textView: UITextView) {
+            deferredTextChangeSequence += 1
+            let sequence = deferredTextChangeSequence
+            let blockID = parent.blockID
+            Task { @MainActor [weak self, weak textView] in
+                do {
+                    try await Task.sleep(nanoseconds: NativeTextModelPropagationPolicy.debounceNanoseconds)
+                } catch {
+                    return
+                }
+                guard let self,
+                      sequence == self.deferredTextChangeSequence else {
+                    return
+                }
+                let trace = EditorPerformanceTrace.begin("native_text_model_update") {
+                    [
+                        "platform": "iOS",
+                        "block_id": blockID,
+                        "text_length": "\(text.count)",
+                        "deferred": "true",
+                        "debounce_ms": "\(NativeTextModelPropagationPolicy.debounceMilliseconds)"
+                    ]
+                }
+                self.parent.onTextChange(text)
+                if let textView {
+                    self.applyTextStyles(to: textView)
+                    self.scheduleHeightMeasurement(for: textView)
+                }
+                EditorPerformanceTrace.end(trace)
+            }
+        }
+
+        private func flushDeferredModelTextChange(_ text: String) {
+            deferredTextChangeSequence += 1
+            parent.onTextChange(text)
         }
 
         func textDraggableView(
@@ -3466,14 +3963,18 @@ private struct PlatformNativeTextView: UIViewRepresentable {
         }
 
         func syncCurrentTextSelection(in textView: UITextView) {
-            updateSessionSelection(textView: textView)
+            if updateSessionSelection(textView: textView) {
+                traceNativeSelectionPainted(textView: textView, source: "sync_selection")
+            }
             parent.session.clearBlockSelection()
         }
 
         func selectCurrentBlock(in textView: UITextView) {
             let fullRange = NSRange(location: 0, length: (textView.text as NSString).length)
             textView.selectedRange = fullRange
-            updateSessionSelection(textView: textView)
+            if updateSessionSelection(textView: textView) {
+                traceNativeSelectionPainted(textView: textView, source: "select_current_block")
+            }
             parent.session.selectBlocks([parent.blockID])
         }
 
@@ -3581,12 +4082,50 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             return true
         }
 
-        private func updateSessionSelection(textView: UITextView) {
+        private func updateSessionSelection(textView: UITextView) -> Bool {
             parent.session.updateSelection(
                 blockID: parent.blockID,
                 location: textView.selectedRange.location,
                 length: textView.selectedRange.length
             )
+        }
+
+        private func traceNativeSelectionPainted(textView: UITextView, source: String) {
+            let selectedRange = textView.selectedRange
+            let eventName = selectedRange.length == 0 ? "cursor_painted" : "selection_painted"
+            EditorPerformanceTrace.point(eventName) {
+                [
+                    "platform": "iOS",
+                    "block_id": parent.blockID,
+                    "location": "\(selectedRange.location)",
+                    "length": "\(selectedRange.length)",
+                    "source": source
+                ]
+            }
+        }
+
+        private func traceMobileCursorVisibility(textView: UITextView, source: String) {
+            guard EditorPerformanceTrace.isEnabled else {
+                return
+            }
+
+            DispatchQueue.main.async { [weak textView, blockID = parent.blockID] in
+                guard let textView else {
+                    return
+                }
+                let selectedTextRange = textView.selectedTextRange
+                let caretRect = selectedTextRange.map { textView.caretRect(for: $0.end) } ?? .zero
+                let visibleBounds = textView.bounds.insetBy(dx: 0, dy: -8)
+                var metadata = MobileKeyboardPerformanceState.metadata
+                metadata["block_id"] = blockID
+                metadata["source"] = source
+                metadata["cursor_visible"] = "\(visibleBounds.intersects(caretRect))"
+                metadata["caret_min_y"] = String(format: "%.1f", caretRect.minY)
+                metadata["caret_max_y"] = String(format: "%.1f", caretRect.maxY)
+                metadata["visible_min_y"] = String(format: "%.1f", visibleBounds.minY)
+                metadata["visible_max_y"] = String(format: "%.1f", visibleBounds.maxY)
+                EditorPerformanceTrace.point("mobile_editor_cursor_visible", metadata: metadata)
+            }
         }
 
         private func updateSessionComposition(textView: UITextView) {
@@ -3667,6 +4206,7 @@ private struct PlatformNativeTextView: UIViewRepresentable {
 }
 
 private final class EditorUITextView: UITextView, UIGestureRecognizerDelegate {
+    var blockID: String = ""
     var blockType: BlockType = .paragraph
     var onKeyboardMove: ((BlockKeyboardMoveDirection) -> Bool)?
     var onKeyboardIndentation: ((BlockKeyboardIndentationDirection) -> Bool)?

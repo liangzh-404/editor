@@ -33,7 +33,13 @@ enum AppEnvironment {
 
             try SchemaMigrator.migrate(database: database)
             try DataProtectionService.applyNativeProtection(to: URL(fileURLWithPath: databasePath))
-            _ = try PageRepository(database: database).bootstrapWorkspaceIfNeeded()
+            _ = try PageRepository(database: database).bootstrapWorkspaceIfNeeded(
+                blockPageIDs: [],
+                pageMetadataLimit: 500,
+                pageListPreviewLimit: 0,
+                loadsAttachments: false,
+                includesEmptyDiaryPageIDs: false
+            )
             try repairLocalStoreBeforeSync(database: database)
 
             let attachmentsDirectory = try attachmentsDirectory()
@@ -75,7 +81,13 @@ enum AppEnvironment {
             database: database,
             pageVersionRepository: pageVersionRepository
         )
-        let snapshot = try repository.bootstrapWorkspaceIfNeeded(blockPageIDs: [])
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded(
+            blockPageIDs: [],
+            pageMetadataLimit: 500,
+            pageListPreviewLimit: 0,
+            loadsAttachments: false,
+            includesEmptyDiaryPageIDs: false
+        )
         try seedTodayDiaryForUITestingIfNeeded(database: database, snapshot: snapshot)
         try seedLargePageForUITestingIfNeeded(repository: repository, snapshot: snapshot)
         try seedReferenceTargetsForUITestingIfNeeded(repository: repository, snapshot: snapshot)
@@ -136,6 +148,10 @@ enum AppEnvironment {
     }
 
     private static func makeCloudKitAccountMetadataService() -> CloudKitAccountMetadataService? {
+        guard !isCloudKitDisabledByEnvironment() else {
+            EditorLog.sync.debug("cloudkit_account_service_disabled reason=environment")
+            return nil
+        }
         guard CloudKitEntitlementInspector.currentProcessHasCloudKitContainers() else {
             EditorLog.sync.debug("cloudkit_account_service_disabled reason=missing_entitlement")
             return nil
@@ -145,6 +161,9 @@ enum AppEnvironment {
     }
 
     private static func repairLocalStoreBeforeSync(database: SQLiteDatabase) throws {
+        guard ProcessInfo.processInfo.environment["EDITOR_DISABLE_POST_LAUNCH_MAINTENANCE"] != "1" else {
+            return
+        }
         let repairedTagCount = try TagRepository(database: database).repairDuplicateTags()
         try SyncRepository(database: database).enqueueUnsyncedLocalRecords()
         if repairedTagCount > 0 {
@@ -180,6 +199,9 @@ enum AppEnvironment {
     ) {
 #if DEBUG
         guard ProcessInfo.processInfo.environment["EDITOR_UI_TEST_RESET_STORE"] != "1" else {
+            return
+        }
+        guard ProcessInfo.processInfo.environment["EDITOR_DISABLE_POST_LAUNCH_MAINTENANCE"] != "1" else {
             return
         }
 #endif
@@ -230,6 +252,10 @@ enum AppEnvironment {
         database: SQLiteDatabase,
         attachmentsDirectory: URL
     ) -> SyncEngine? {
+        guard !isCloudKitDisabledByEnvironment() else {
+            EditorLog.sync.debug("cloudkit_sync_engine_disabled reason=environment")
+            return nil
+        }
         guard CloudKitEntitlementInspector.currentProcessHasCloudKitContainers() else {
             EditorLog.sync.debug("cloudkit_sync_engine_disabled reason=missing_entitlement")
             return nil
@@ -254,6 +280,13 @@ enum AppEnvironment {
             uploadBatchSize: 50,
             maximumUploadsPerRun: 250
         )
+    }
+
+    private static func isCloudKitDisabledByEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environment["EDITOR_DISABLE_CLOUDKIT_SYNC"] == "1"
+            || environment["EDITOR_PERF_DISABLE_CLOUDKIT"] == "1"
     }
 
 #if DEBUG
