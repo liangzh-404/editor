@@ -18,6 +18,15 @@ enum CloudKitSyncConfiguration {
     }
 }
 
+private enum CloudKitCurrentGenerationRecordMatcher {
+    static func isCurrentGeneration(_ record: CKRecord) -> Bool {
+        if let syncGeneration = record["syncGeneration"] as? String {
+            return syncGeneration == CloudKitSyncGeneration.current
+        }
+        return record.recordID.recordName.hasPrefix("\(CloudKitSyncGeneration.current).")
+    }
+}
+
 enum CloudKitErrorDiagnostic {
     static func describe(_ error: Error) -> String {
         let nsError = error as NSError
@@ -454,6 +463,10 @@ protocol CloudKitRemoteSnapshotFetching {
     ) throws -> CloudKitRemoteChangeSet
 }
 
+protocol CloudKitCurrentGenerationPageIDFetching {
+    func fetchCurrentGenerationPageIDs() throws -> Set<String>
+}
+
 struct CloudKitRemoteChangeSet: Equatable, Sendable {
     let workspaceChanges: [RemoteWorkspaceChange]
     let notebookChanges: [RemoteNotebookChange]
@@ -465,6 +478,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
     let attachmentChanges: [RemoteAttachmentChange]
     let blockChanges: [RemoteBlockChange]
     let fullSnapshotPageIDs: Set<String>
+    let currentSnapshotPageIDs: Set<String>
     let deletedRecords: [RemoteDeletedRecord]
     let serverChangeTokenData: Data?
     let hasMoreChanges: Bool
@@ -480,6 +494,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
         attachmentChanges: [RemoteAttachmentChange] = [],
         blockChanges: [RemoteBlockChange] = [],
         fullSnapshotPageIDs: Set<String> = [],
+        currentSnapshotPageIDs: Set<String>? = nil,
         deletedRecords: [RemoteDeletedRecord] = [],
         serverChangeTokenData: Data? = nil,
         hasMoreChanges: Bool = false
@@ -494,6 +509,7 @@ struct CloudKitRemoteChangeSet: Equatable, Sendable {
         self.attachmentChanges = attachmentChanges
         self.blockChanges = blockChanges
         self.fullSnapshotPageIDs = fullSnapshotPageIDs
+        self.currentSnapshotPageIDs = currentSnapshotPageIDs ?? Set(pageChanges.map(\.pageID))
         self.deletedRecords = deletedRecords
         self.serverChangeTokenData = serverChangeTokenData
         self.hasMoreChanges = hasMoreChanges
@@ -579,7 +595,7 @@ enum CloudKitServerChangeTokenCodec {
 extension CloudKitRecordFetching {
     func fetchCurrentGenerationRecords(recordType: String) throws -> [CKRecord] {
         try fetchRecords(recordType: recordType).filter { record in
-            record["syncGeneration"] as? String == CloudKitSyncGeneration.current
+            CloudKitCurrentGenerationRecordMatcher.isCurrentGeneration(record)
         }
     }
 
@@ -1145,7 +1161,7 @@ final class LiveCloudKitRecordFetcher: CloudKitRecordFetching, CloudKitRecordRea
     }
 }
 
-final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteChangeFetching, CloudKitRemoteSnapshotFetching {
+final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteChangeFetching, CloudKitRemoteSnapshotFetching, CloudKitCurrentGenerationPageIDFetching {
     static let recordTypes = [
         "WorkspaceRecord",
         "NotebookRecord",
@@ -1328,16 +1344,43 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
         return try remoteChangeSet(
             from: recordFetcher.fetchRecordChanges(
                 sinceServerChangeTokenData: serverChangeTokenData
-            )
+            ),
+            isCurrentGenerationSnapshot: true
         )
     }
 
-    private func remoteChangeSet(from fetchedChanges: CloudKitFetchedRecordChangeSet) throws -> CloudKitRemoteChangeSet {
+    func fetchCurrentGenerationPageIDs() throws -> Set<String> {
+        guard let recordFetcher else {
+            throw CloudKitPrivateDatabaseAdapterError.remoteFetchUnavailable
+        }
+        return Set(try recordFetcher
+            .fetchRecords(recordType: "PageRecord")
+            .filter(CloudKitCurrentGenerationRecordMatcher.isCurrentGeneration)
+            .compactMap { record in
+                remotePageChange(record: record)?.pageID
+            })
+    }
+
+    private func remoteChangeSet(
+        from fetchedChanges: CloudKitFetchedRecordChangeSet,
+        isCurrentGenerationSnapshot: Bool = false
+    ) throws -> CloudKitRemoteChangeSet {
         let recordsByType = fetchedChanges.recordsByType
         let pageRecords = currentGenerationRecords(recordsByType["PageRecord"] ?? [])
         let pageChanges = pageRecords.compactMap(remotePageChange)
         let blockRecords = currentGenerationRecords(recordsByType["BlockRecord"] ?? [])
         let fullSnapshotPageIDs = Set<String>()
+        let currentSnapshotPageIDs: Set<String>
+        if isCurrentGenerationSnapshot {
+            if fetchedChanges.hasMoreChanges {
+                currentSnapshotPageIDs = Set(pageChanges.map(\.pageID))
+            } else {
+                currentSnapshotPageIDs = (try? fetchCurrentGenerationPageIDs())
+                    ?? Set(pageChanges.map(\.pageID))
+            }
+        } else {
+            currentSnapshotPageIDs = []
+        }
         let deletedRecords = Self.recordTypes.flatMap { recordType in
             (fetchedChanges.deletedRecordIDsByType[recordType] ?? []).compactMap { recordID in
                 remoteDeletedRecord(recordType: recordType, recordID: recordID)
@@ -1357,6 +1400,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
             },
             blockChanges: blockRecords.compactMap(remoteBlockChange),
             fullSnapshotPageIDs: fullSnapshotPageIDs,
+            currentSnapshotPageIDs: currentSnapshotPageIDs,
             deletedRecords: deletedRecords,
             serverChangeTokenData: fetchedChanges.serverChangeTokenData,
             hasMoreChanges: fetchedChanges.hasMoreChanges
@@ -1947,7 +1991,7 @@ final class CloudKitPrivateDatabaseAdapter: CloudKitSyncAdapter, CloudKitRemoteC
 
     private func currentGenerationRecords(_ records: [CKRecord]) -> [CKRecord] {
         records.filter { record in
-            record["syncGeneration"] as? String == CloudKitSyncGeneration.current
+            CloudKitCurrentGenerationRecordMatcher.isCurrentGeneration(record)
         }
     }
 
@@ -2281,9 +2325,10 @@ struct RemoteNotificationSyncHandler {
 final class SyncEngine {
     private static let serverChangeTokenScope = "privateDatabase"
     private static let legacyCurrentGenerationSnapshotBackfillScope = "currentGenerationSnapshotBackfill.\(CloudKitSyncGeneration.current)"
-    private static let currentGenerationSnapshotBackfillCompletedScope = "currentGenerationSnapshotBackfill.completed.\(CloudKitSyncGeneration.current)"
-    private static let currentGenerationSnapshotBackfillTokenScope = "currentGenerationSnapshotBackfill.token.\(CloudKitSyncGeneration.current)"
-    private static let snapshotBackfillPageThreshold = 50
+    private static let currentGenerationSnapshotBackfillCompletedScope = "currentGenerationSnapshotBackfill.completed.\(CloudKitSyncGeneration.current).reconcileMissingPages.v3"
+    private static let currentGenerationSnapshotBackfillTokenScope = "currentGenerationSnapshotBackfill.token.\(CloudKitSyncGeneration.current).reconcileMissingPages.v3"
+    private static let currentGenerationSnapshotBackfillPageIDsScope = "currentGenerationSnapshotBackfill.pageIDs.\(CloudKitSyncGeneration.current).reconcileMissingPages.v3"
+    private static let snapshotBackfillEmptyBatchDrainLimit = 20
 
     private let syncRepository: SyncRepository
     private let adapter: CloudKitSyncAdapter
@@ -2348,45 +2393,12 @@ final class SyncEngine {
 
         if let remoteSnapshotFetcher,
            try shouldRunCurrentGenerationSnapshotBackfill() {
-            let pageCount = try syncRepository.pageRecordCount()
-            let snapshotTokenData = try syncRepository.serverChangeTokenData(
-                scope: Self.currentGenerationSnapshotBackfillTokenScope
-            )
-            recordRuntimeDiagnostic(
-                eventName: "foreground_sync_snapshot_backfill_started",
-                payloadJSON: Self.diagnosticPayloadJSON([
-                    "page_count": "\(pageCount)",
-                    "has_token": snapshotTokenData == nil ? "false" : "true",
-                    "generation": CloudKitSyncGeneration.current
-                ])
-            )
-            let snapshotChangeSet = try remoteSnapshotFetcher.fetchCurrentGenerationSnapshot(
-                sinceServerChangeTokenData: snapshotTokenData
-            )
-            let snapshotSummary = try applyRemoteChangeSet(snapshotChangeSet, mergeEngine: mergeEngine)
-            if let serverChangeTokenData = snapshotChangeSet.serverChangeTokenData {
-                try syncRepository.saveServerChangeTokenData(
-                    serverChangeTokenData,
-                    scope: Self.currentGenerationSnapshotBackfillTokenScope
-                )
-            }
-            if !snapshotSummary.hasMoreChanges {
-                try syncRepository.markRemoteSnapshotBackfillCompleted(
-                    scope: Self.currentGenerationSnapshotBackfillCompletedScope
-                )
-                try syncRepository.clearServerChangeTokenData(
-                    scope: Self.currentGenerationSnapshotBackfillTokenScope
-                )
-            }
-            recordRuntimeDiagnostic(
-                eventName: "foreground_sync_snapshot_backfill_completed",
-                payloadJSON: "{\"fetched_count\":\(snapshotSummary.appliedCount),\"has_more_changes\":\(snapshotSummary.hasMoreChanges)}"
+            let snapshotSummary = try fetchCurrentGenerationSnapshotBackfill(
+                remoteSnapshotFetcher,
+                mergeEngine: mergeEngine
             )
             if snapshotSummary.appliedCount > 0 || snapshotSummary.hasMoreChanges {
-                return SyncFetchSummary(
-                    appliedCount: snapshotSummary.appliedCount,
-                    hasMoreChanges: snapshotSummary.hasMoreChanges
-                )
+                return snapshotSummary
             }
         }
 
@@ -2422,21 +2434,200 @@ final class SyncEngine {
         return summary
     }
 
+    private func fetchCurrentGenerationSnapshotBackfill(
+        _ remoteSnapshotFetcher: CloudKitRemoteSnapshotFetching,
+        mergeEngine: SyncMergeEngine
+    ) throws -> SyncFetchSummary {
+        var snapshotTokenData = try syncRepository.serverChangeTokenData(
+            scope: Self.currentGenerationSnapshotBackfillTokenScope
+        )
+        if snapshotTokenData == nil {
+            try syncRepository.clearServerChangeTokenData(
+                scope: Self.currentGenerationSnapshotBackfillPageIDsScope
+            )
+        }
+
+        let preflightReconciledMissingPageCount = snapshotTokenData == nil
+            ? try reconcileMissingPagesFromCurrentGenerationPageIDFetcherIfAvailable(
+                remoteSnapshotFetcher,
+                mergeEngine: mergeEngine
+            )
+            : 0
+        var appliedCount = preflightReconciledMissingPageCount
+        var drainedEmptyBatchCount = 0
+
+        while true {
+            let pageCount = try syncRepository.pageRecordCount()
+            recordRuntimeDiagnostic(
+                eventName: "foreground_sync_snapshot_backfill_started",
+                payloadJSON: Self.diagnosticPayloadJSON([
+                    "page_count": "\(pageCount)",
+                    "has_token": snapshotTokenData == nil ? "false" : "true",
+                    "generation": CloudKitSyncGeneration.current
+                ])
+            )
+            let snapshotChangeSet = try remoteSnapshotFetcher.fetchCurrentGenerationSnapshot(
+                sinceServerChangeTokenData: snapshotTokenData
+            )
+            let snapshotSummary = try applyRemoteChangeSet(snapshotChangeSet, mergeEngine: mergeEngine)
+            let accumulatedSnapshotPageIDs = try accumulateCurrentGenerationSnapshotPageIDs(
+                snapshotChangeSet.currentSnapshotPageIDs
+            )
+            if let serverChangeTokenData = snapshotChangeSet.serverChangeTokenData {
+                try syncRepository.saveServerChangeTokenData(
+                    serverChangeTokenData,
+                    scope: Self.currentGenerationSnapshotBackfillTokenScope
+                )
+                snapshotTokenData = serverChangeTokenData
+            }
+            var reconciledMissingPageCount = 0
+            if !snapshotSummary.hasMoreChanges {
+                reconciledMissingPageCount = try reconcileMissingPagesFromCompletedCurrentGenerationSnapshot(
+                    remotePageIDs: accumulatedSnapshotPageIDs,
+                    mergeEngine: mergeEngine
+                )
+                try syncRepository.markRemoteSnapshotBackfillCompleted(
+                    scope: Self.currentGenerationSnapshotBackfillCompletedScope
+                )
+                try syncRepository.clearServerChangeTokenData(
+                    scope: Self.currentGenerationSnapshotBackfillTokenScope
+                )
+                try syncRepository.clearServerChangeTokenData(
+                    scope: Self.currentGenerationSnapshotBackfillPageIDsScope
+                )
+            }
+            let batchAppliedCount = snapshotSummary.appliedCount + reconciledMissingPageCount
+            appliedCount += batchAppliedCount
+            recordRuntimeDiagnostic(
+                eventName: "foreground_sync_snapshot_backfill_completed",
+                payloadJSON: "{\"fetched_count\":\(snapshotSummary.appliedCount),\"preflight_reconciled_missing_pages\":\(preflightReconciledMissingPageCount),\"reconciled_missing_pages\":\(reconciledMissingPageCount),\"drained_empty_batches\":\(drainedEmptyBatchCount),\"has_more_changes\":\(snapshotSummary.hasMoreChanges)}"
+            )
+
+            if !snapshotSummary.hasMoreChanges {
+                return SyncFetchSummary(appliedCount: appliedCount, hasMoreChanges: false)
+            }
+            if appliedCount > 0 || batchAppliedCount > 0 {
+                return SyncFetchSummary(appliedCount: appliedCount, hasMoreChanges: true)
+            }
+            guard snapshotChangeSet.currentSnapshotPageIDs.isEmpty,
+                  snapshotChangeSet.deletedRecords.isEmpty,
+                  snapshotSummary.appliedCount == 0,
+                  snapshotChangeSet.serverChangeTokenData != nil,
+                  drainedEmptyBatchCount < Self.snapshotBackfillEmptyBatchDrainLimit else {
+                return SyncFetchSummary(appliedCount: appliedCount, hasMoreChanges: true)
+            }
+            drainedEmptyBatchCount += 1
+            recordRuntimeDiagnostic(
+                eventName: "foreground_sync_snapshot_empty_batch_drained",
+                payloadJSON: Self.diagnosticPayloadJSON([
+                    "drained_empty_batches": "\(drainedEmptyBatchCount)",
+                    "limit": "\(Self.snapshotBackfillEmptyBatchDrainLimit)"
+                ])
+            )
+        }
+    }
+
     private func shouldRunCurrentGenerationSnapshotBackfill() throws -> Bool {
         guard try !syncRepository.hasCompletedRemoteSnapshotBackfill(
             scope: Self.currentGenerationSnapshotBackfillCompletedScope
         ) else {
             return false
         }
-        if try syncRepository.serverChangeTokenData(
-            scope: Self.currentGenerationSnapshotBackfillTokenScope
-        ) != nil {
-            return true
-        }
-        guard try syncRepository.pageRecordCount() <= Self.snapshotBackfillPageThreshold else {
-            return false
-        }
         return true
+    }
+
+    private func reconcileMissingPagesFromCurrentGenerationPageIDFetcherIfAvailable(
+        _ remoteSnapshotFetcher: CloudKitRemoteSnapshotFetching,
+        mergeEngine: SyncMergeEngine
+    ) throws -> Int {
+        guard let pageIDFetcher = remoteSnapshotFetcher as? CloudKitCurrentGenerationPageIDFetching else {
+            return 0
+        }
+        do {
+            let remotePageIDs = try pageIDFetcher.fetchCurrentGenerationPageIDs()
+            try syncRepository.saveServerChangeTokenData(
+                Self.encodeSnapshotPageIDs(remotePageIDs),
+                scope: Self.currentGenerationSnapshotBackfillPageIDsScope
+            )
+            let reconciledCount = try reconcileMissingPagesFromCompletedCurrentGenerationSnapshot(
+                remotePageIDs: remotePageIDs,
+                mergeEngine: mergeEngine
+            )
+            recordRuntimeDiagnostic(
+                eventName: "foreground_sync_snapshot_page_id_prefetch_completed",
+                payloadJSON: Self.diagnosticPayloadJSON([
+                    "remote_page_count": "\(remotePageIDs.count)",
+                    "reconciled_missing_pages": "\(reconciledCount)"
+                ])
+            )
+            return reconciledCount
+        } catch {
+            recordRuntimeDiagnostic(
+                eventName: "foreground_sync_snapshot_page_id_prefetch_failed",
+                payloadJSON: Self.diagnosticPayloadJSON([
+                    "error": CloudKitErrorDiagnostic.describe(error)
+                ])
+            )
+            EditorLog.sync.error(
+                "foreground_sync_snapshot_page_id_prefetch_failed error=\(CloudKitErrorDiagnostic.describe(error), privacy: .public)"
+            )
+            return 0
+        }
+    }
+
+    private func accumulateCurrentGenerationSnapshotPageIDs(_ pageIDs: Set<String>) throws -> Set<String> {
+        var accumulatedPageIDs = Self.decodeSnapshotPageIDs(
+            try syncRepository.serverChangeTokenData(scope: Self.currentGenerationSnapshotBackfillPageIDsScope)
+        )
+        accumulatedPageIDs.formUnion(pageIDs)
+        try syncRepository.saveServerChangeTokenData(
+            Self.encodeSnapshotPageIDs(accumulatedPageIDs),
+            scope: Self.currentGenerationSnapshotBackfillPageIDsScope
+        )
+        return accumulatedPageIDs
+    }
+
+    private func reconcileMissingPagesFromCompletedCurrentGenerationSnapshot(
+        remotePageIDs: Set<String>,
+        mergeEngine: SyncMergeEngine
+    ) throws -> Int {
+        let syncedPageIDs = try syncRepository.syncedEntityIDs(entityType: "page")
+        let pendingPageIDs = try syncRepository.pageIDsWithPendingLocalContentChanges()
+        let missingPageIDs = syncedPageIDs
+            .subtracting(remotePageIDs)
+            .subtracting(pendingPageIDs)
+        var reconciledCount = 0
+        for pageID in missingPageIDs.sorted() {
+            try applyRemoteDeletion(entityType: "page", entityID: pageID) {
+                try mergeEngine.applyRemoteDeletion(RemoteDeletedRecord(
+                    entityType: "page",
+                    entityID: pageID
+                ))
+            }
+            reconciledCount += 1
+        }
+        if reconciledCount > 0 {
+            recordRuntimeDiagnostic(
+                eventName: "foreground_sync_snapshot_reconciled_missing_pages",
+                payloadJSON: Self.diagnosticPayloadJSON([
+                    "reconciled_count": "\(reconciledCount)",
+                    "remote_page_count": "\(remotePageIDs.count)",
+                    "pending_page_count": "\(pendingPageIDs.count)"
+                ])
+            )
+        }
+        return reconciledCount
+    }
+
+    private static func encodeSnapshotPageIDs(_ pageIDs: Set<String>) -> Data {
+        Data(pageIDs.sorted().joined(separator: "\n").utf8)
+    }
+
+    private static func decodeSnapshotPageIDs(_ data: Data?) -> Set<String> {
+        guard let data, let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+            return []
+        }
+        return Set(text.split(separator: "\n").map(String.init))
     }
 
     private func applyRemoteChangeSet(
@@ -2858,6 +3049,9 @@ final class SyncEngine {
 
     private func uploadPriority(_ change: SyncChange) -> Int {
         if change.changeType == "delete" {
+            if change.entityType == "page" {
+                return 25
+            }
             return 90
         }
 

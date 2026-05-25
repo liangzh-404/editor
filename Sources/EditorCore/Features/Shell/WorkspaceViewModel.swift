@@ -308,6 +308,7 @@ final class WorkspaceViewModel: ObservableObject {
     private var isCloudKitAccountStatusRefreshRunning = false
     private var nextForegroundSyncAttemptAt: Date?
     private var nextRemoteBacklogSyncAttemptAt: Date?
+    private var foregroundRemoteBacklogImmediateDrainCount = 0
     private var syncChangeObservation: SyncChangeObservation?
     private var encryptedPageLastOpenedAt: [String: Date] = [:]
     private var encryptedPageAutoLockTask: Task<Void, Never>?
@@ -324,7 +325,8 @@ final class WorkspaceViewModel: ObservableObject {
     private static let deferredHydrationBlockThreshold = 300
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
     private static let foregroundSyncPartialFailureCooldown: TimeInterval = 30
-    private static let foregroundRemoteBacklogCooldown: TimeInterval = 30
+    private static let foregroundRemoteBacklogCooldown: TimeInterval = 10
+    private static let foregroundRemoteBacklogImmediateDrainLimit = 4
 
     func pageVersionSummaries(pageID: String) throws -> [PageVersionSummary] {
         try pageVersionRepository?.versionSummaries(pageID: pageID) ?? []
@@ -5229,12 +5231,12 @@ final class WorkspaceViewModel: ObservableObject {
     private func finishForegroundSync(_ result: WorkspaceForegroundSyncResult) {
         isForegroundSyncRunning = false
         let shouldRunPendingSync = shouldRunPendingForegroundSync(after: result)
-        let shouldContinueBacklogDrain = shouldContinueForegroundBacklogDrain(after: result)
+        let backlogDrainReason = foregroundBacklogDrainReason(after: result)
         completeForegroundSync(result)
         let hasPendingLocalChangeRerun = isForegroundSyncRerunPending
         isForegroundSyncRerunPending = false
 
-        guard hasPendingLocalChangeRerun || shouldContinueBacklogDrain else {
+        guard hasPendingLocalChangeRerun || backlogDrainReason != nil else {
             return
         }
 
@@ -5243,7 +5245,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         scheduleForegroundSyncIfNeeded(
-            reason: shouldContinueBacklogDrain ? "local_backlog" : "pending_local_change"
+            reason: backlogDrainReason ?? "pending_local_change"
         )
     }
 
@@ -5258,17 +5260,35 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func shouldContinueForegroundBacklogDrain(after result: WorkspaceForegroundSyncResult) -> Bool {
-        switch result {
-        case .success(let summary):
-            shouldContinueForegroundBacklogDrain(summary)
-        case .failure:
-            false
-        }
+        foregroundBacklogDrainReason(after: result) != nil
     }
 
     private func shouldContinueForegroundBacklogDrain(_ summary: WorkspaceForegroundSyncSummary) -> Bool {
-        summary.uploadSummary.uploadedCount > 0
-            && summary.remainingLocalChangeCount > summary.uploadSummary.failedCount
+        foregroundBacklogDrainReason(summary) != nil
+    }
+
+    private func foregroundBacklogDrainReason(after result: WorkspaceForegroundSyncResult) -> String? {
+        switch result {
+        case .success(let summary):
+            foregroundBacklogDrainReason(summary)
+        case .failure:
+            nil
+        }
+    }
+
+    private func foregroundBacklogDrainReason(_ summary: WorkspaceForegroundSyncSummary) -> String? {
+        if summary.uploadSummary.uploadedCount > 0
+            && summary.remainingLocalChangeCount > summary.uploadSummary.failedCount {
+            return "local_backlog"
+        }
+
+        if summary.uploadSummary.failedCount == 0
+            && summary.fetchSummary.hasMoreChanges
+            && foregroundRemoteBacklogImmediateDrainCount < Self.foregroundRemoteBacklogImmediateDrainLimit {
+            return "remote_backlog"
+        }
+
+        return nil
     }
 
     private func completeForegroundSync(_ result: WorkspaceForegroundSyncResult) {
@@ -5284,10 +5304,17 @@ final class WorkspaceViewModel: ObservableObject {
                     "remaining_local_change_count": summary.remainingLocalChangeCount
                 ]
             )
-            if shouldContinueForegroundBacklogDrain(summary) {
+            if foregroundBacklogDrainReason(summary) == "local_backlog" {
                 syncStatusText = "继续同步，剩余 \(summary.remainingLocalChangeCount) 条本地变更"
+                foregroundRemoteBacklogImmediateDrainCount = 0
+                nextForegroundSyncAttemptAt = nil
+            } else if foregroundBacklogDrainReason(summary) == "remote_backlog" {
+                syncStatusText = "远端变更较多，继续同步"
+                foregroundRemoteBacklogImmediateDrainCount += 1
+                nextRemoteBacklogSyncAttemptAt = nil
                 nextForegroundSyncAttemptAt = nil
             } else if summary.uploadSummary.failedCount > 0 {
+                foregroundRemoteBacklogImmediateDrainCount = 0
                 syncStatusText = "已安排同步重试"
                 if shouldUsePartialFailureCooldown(for: summary) {
                     scheduleForegroundSyncPartialFailureCooldown()
@@ -5295,6 +5322,7 @@ final class WorkspaceViewModel: ObservableObject {
                     scheduleForegroundSyncFailureCooldown()
                 }
             } else if summary.remainingLocalChangeCount > 0 {
+                foregroundRemoteBacklogImmediateDrainCount = 0
                 if summary.uploadSummary.uploadedCount > 0 {
                     syncStatusText = "继续同步，剩余 \(summary.remainingLocalChangeCount) 条本地变更"
                 } else {
@@ -5302,13 +5330,16 @@ final class WorkspaceViewModel: ObservableObject {
                 }
                 nextForegroundSyncAttemptAt = nil
             } else if summary.fetchSummary.hasMoreChanges {
+                foregroundRemoteBacklogImmediateDrainCount = 0
                 syncStatusText = "远端变更较多，稍后继续同步"
                 scheduleForegroundSyncRemoteBacklogCooldown()
             } else if summary.fetchSummary.appliedCount > 0 {
+                foregroundRemoteBacklogImmediateDrainCount = 0
                 syncStatusText = "已同步 \(summary.fetchSummary.appliedCount) 条远端变更"
                 nextRemoteBacklogSyncAttemptAt = nil
                 nextForegroundSyncAttemptAt = nil
             } else {
+                foregroundRemoteBacklogImmediateDrainCount = 0
                 syncStatusText = "已同步 \(summary.uploadSummary.uploadedCount) 条变更"
                 nextRemoteBacklogSyncAttemptAt = nil
                 nextForegroundSyncAttemptAt = nil
@@ -5387,10 +5418,11 @@ final class WorkspaceViewModel: ObservableObject {
         }
 
         self.nextRemoteBacklogSyncAttemptAt = nil
+        foregroundRemoteBacklogImmediateDrainCount = 0
     }
 
     private func shouldRespectRemoteBacklogCooldown(reason: String) -> Bool {
-        reason == "activation" || reason == "foreground_interval" || reason == "remote_backlog"
+        reason == "activation" || reason == "foreground_interval"
     }
 
     private func scheduleForegroundSyncCooldown(after interval: TimeInterval) {

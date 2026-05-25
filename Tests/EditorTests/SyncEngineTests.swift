@@ -190,6 +190,33 @@ final class SyncEngineTests: XCTestCase {
         ])
     }
 
+    func testUploadPendingChangesPrioritizesPageDeletesBeforeBlockBacklog() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let syncRepository = SyncRepository(database: database)
+        try syncRepository.enqueue(entityType: "block", entityID: "block-one", changeType: "update")
+        try syncRepository.enqueue(entityType: "block", entityID: "block-two", changeType: "update")
+        try syncRepository.enqueue(entityType: "page", entityID: "deleted-page", changeType: "delete")
+        let adapter = BatchRecordingCloudKitSyncAdapter()
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: adapter,
+            uploadBatchSize: 10,
+            maximumUploadsPerRun: 1
+        ).uploadPendingChanges()
+
+        XCTAssertEqual(result.uploadedCount, 1)
+        XCTAssertEqual(adapter.uploadedChanges, [
+            SyncChange(entityType: "page", entityID: "deleted-page", changeType: "delete")
+        ])
+        XCTAssertEqual(try syncRepository.pendingChanges(), [
+            SyncChange(entityType: "block", entityID: "block-one", changeType: "update"),
+            SyncChange(entityType: "block", entityID: "block-two", changeType: "update")
+        ])
+    }
+
     func testUploadPendingChangesBackfillsExistingDiaryPageMappings() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -676,16 +703,6 @@ final class SyncEngineTests: XCTestCase {
             mergeEngine: SyncMergeEngine(database: database)
         )
 
-        let firstResult = try syncEngine.fetchRemoteChanges()
-        XCTAssertEqual(firstResult, SyncFetchSummary(appliedCount: 0, hasMoreChanges: true))
-        XCTAssertEqual(snapshotFetcher.receivedServerChangeTokenData, [nil])
-        XCTAssertEqual(
-            try syncRepository.serverChangeTokenData(
-                scope: "currentGenerationSnapshotBackfill.token.\(CloudKitSyncGeneration.current)"
-            ),
-            snapshotToken
-        )
-
         let result = try syncEngine.fetchRemoteChanges()
         let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
 
@@ -695,12 +712,12 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(incrementalFetcher.fetchCount, 0)
         XCTAssertTrue(
             try syncRepository.hasCompletedRemoteSnapshotBackfill(
-                scope: "currentGenerationSnapshotBackfill.completed.\(CloudKitSyncGeneration.current)"
+                scope: "currentGenerationSnapshotBackfill.completed.\(CloudKitSyncGeneration.current).reconcileMissingPages.v3"
             )
         )
         XCTAssertNil(
             try syncRepository.serverChangeTokenData(
-                scope: "currentGenerationSnapshotBackfill.token.\(CloudKitSyncGeneration.current)"
+                scope: "currentGenerationSnapshotBackfill.token.\(CloudKitSyncGeneration.current).reconcileMissingPages.v3"
             )
         )
         XCTAssertEqual(
@@ -728,6 +745,186 @@ final class SyncEngineTests: XCTestCase {
             ($0.entityType == "page" && $0.entityID == remotePageID)
                 || ($0.entityType == "block" && $0.entityID == "block-remote-snapshot")
         })
+    }
+
+    func testCurrentGenerationSnapshotBackfillReconcilesSyncedPagesMissingFromRemoteSnapshotInLargeStores() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let syncRepository = SyncRepository(database: database)
+
+        var visibleRemotePageIDs: Set<String> = [try XCTUnwrap(initialSnapshot.selectedPageID)]
+        var stalePageID = try XCTUnwrap(initialSnapshot.selectedPageID)
+        for index in 0..<60 {
+            let page = try pageRepository.createPage(
+                workspaceID: workspaceID,
+                title: index == 0 ? "汇总阅读 stale" : "Remote survivor \(index)"
+            )
+            if index == 0 {
+                stalePageID = page.id
+            } else {
+                visibleRemotePageIDs.insert(page.id)
+            }
+        }
+
+        try markSnapshotSynced(
+            try pageRepository.loadWorkspaceSnapshot(),
+            syncRepository: syncRepository
+        )
+        try syncRepository.saveServerChangeTokenData(
+            Data("legacy-completed".utf8),
+            scope: "currentGenerationSnapshotBackfill.\(CloudKitSyncGeneration.current)"
+        )
+        let snapshotFetcher = StaticRemoteSnapshotFetcher(
+            changeSet: CloudKitRemoteChangeSet(
+                currentSnapshotPageIDs: visibleRemotePageIDs,
+                serverChangeTokenData: Data("snapshot-complete-token".utf8),
+                hasMoreChanges: false
+            )
+        )
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteSnapshotFetcher: snapshotFetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(result, SyncFetchSummary(appliedCount: 1, hasMoreChanges: false))
+        XCTAssertFalse(reloadedSnapshot.pages.contains { $0.id == stalePageID })
+        XCTAssertEqual(reloadedSnapshot.archivedPages.first { $0.id == stalePageID }?.title, "汇总阅读 stale")
+        XCTAssertTrue(
+            try syncRepository.hasCompletedRemoteSnapshotBackfill(
+                scope: "currentGenerationSnapshotBackfill.completed.\(CloudKitSyncGeneration.current).reconcileMissingPages.v3"
+            )
+        )
+    }
+
+    func testCurrentGenerationSnapshotBackfillReconcilesMissingPagesBeforeZoneDrainCompletes() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let syncRepository = SyncRepository(database: database)
+        let stalePage = try pageRepository.createPage(workspaceID: workspaceID, title: "汇总阅读 removed elsewhere")
+        let survivorPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Remote survivor")
+        try markSnapshotSynced(
+            try pageRepository.loadWorkspaceSnapshot(),
+            syncRepository: syncRepository
+        )
+        let snapshotFetcher = StaticRemoteSnapshotFetcher(
+            changeSet: CloudKitRemoteChangeSet(
+                serverChangeTokenData: Data("snapshot-page-one".utf8),
+                hasMoreChanges: true
+            ),
+            currentGenerationPageIDs: [
+                try XCTUnwrap(initialSnapshot.selectedPageID),
+                survivorPage.id
+            ]
+        )
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteSnapshotFetcher: snapshotFetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(result, SyncFetchSummary(appliedCount: 1, hasMoreChanges: true))
+        XCTAssertEqual(snapshotFetcher.currentGenerationPageIDFetchCount, 1)
+        XCTAssertFalse(reloadedSnapshot.pages.contains { $0.id == stalePage.id })
+        XCTAssertEqual(reloadedSnapshot.archivedPages.first { $0.id == stalePage.id }?.title, "汇总阅读 removed elsewhere")
+        XCTAssertTrue(reloadedSnapshot.pages.contains { $0.id == survivorPage.id })
+    }
+
+    func testCurrentGenerationSnapshotBackfillDrainsEmptyHistoricalBatchesBeforeReturning() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let pageRepository = PageRepository(database: database)
+        let initialSnapshot = try pageRepository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(initialSnapshot.selectedWorkspaceID)
+        let syncRepository = SyncRepository(database: database)
+        let stalePage = try pageRepository.createPage(workspaceID: workspaceID, title: "汇总阅读 deleted on macOS")
+        let survivorPage = try pageRepository.createPage(workspaceID: workspaceID, title: "Remote survivor")
+        try markSnapshotSynced(
+            try pageRepository.loadWorkspaceSnapshot(),
+            syncRepository: syncRepository
+        )
+        try syncRepository.saveServerChangeTokenData(
+            Data("snapshot-empty-one".utf8),
+            scope: "currentGenerationSnapshotBackfill.token.\(CloudKitSyncGeneration.current).reconcileMissingPages.v3"
+        )
+        let snapshotFetcher = StaticRemoteSnapshotFetcher(changeSets: [
+            CloudKitRemoteChangeSet(
+                serverChangeTokenData: Data("snapshot-empty-two".utf8),
+                hasMoreChanges: true
+            ),
+            CloudKitRemoteChangeSet(
+                serverChangeTokenData: Data("snapshot-empty-three".utf8),
+                hasMoreChanges: true
+            ),
+            CloudKitRemoteChangeSet(
+                pageChanges: [
+                    RemotePageChange(
+                        pageID: try XCTUnwrap(initialSnapshot.selectedPageID),
+                        workspaceID: workspaceID,
+                        notebookID: nil,
+                        title: "Welcome",
+                        orderKey: "000001",
+                        isArchived: false,
+                        isFavorite: false,
+                        isPinned: false,
+                        isEncrypted: false,
+                        createdAt: nil,
+                        updatedAt: nil
+                    ),
+                    RemotePageChange(
+                        pageID: survivorPage.id,
+                        workspaceID: workspaceID,
+                        notebookID: nil,
+                        title: survivorPage.title,
+                        orderKey: "000002",
+                        isArchived: false,
+                        isFavorite: false,
+                        isPinned: false,
+                        isEncrypted: false,
+                        createdAt: nil,
+                        updatedAt: nil
+                    )
+                ],
+                deletedRecords: [
+                    RemoteDeletedRecord(entityType: "page", entityID: stalePage.id)
+                ],
+                serverChangeTokenData: Data("snapshot-complete".utf8),
+                hasMoreChanges: false
+            )
+        ])
+
+        let result = try SyncEngine(
+            syncRepository: syncRepository,
+            adapter: RecordingCloudKitSyncAdapter(),
+            remoteSnapshotFetcher: snapshotFetcher,
+            mergeEngine: SyncMergeEngine(database: database)
+        ).fetchRemoteChanges()
+        let reloadedSnapshot = try pageRepository.loadWorkspaceSnapshot()
+
+        XCTAssertEqual(snapshotFetcher.fetchCount, 3)
+        XCTAssertEqual(result, SyncFetchSummary(appliedCount: 3, hasMoreChanges: false))
+        XCTAssertFalse(reloadedSnapshot.pages.contains { $0.id == stalePage.id })
+        XCTAssertEqual(reloadedSnapshot.archivedPages.first { $0.id == stalePage.id }?.title, "汇总阅读 deleted on macOS")
+        XCTAssertTrue(
+            try syncRepository.hasCompletedRemoteSnapshotBackfill(
+                scope: "currentGenerationSnapshotBackfill.completed.\(CloudKitSyncGeneration.current).reconcileMissingPages.v3"
+            )
+        )
     }
 
     func testUploadPendingChangesRepairsLegacySnapshotBackfillCreateBacklog() throws {
@@ -1844,6 +2041,8 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(changeSet.pageChanges.map(\.pageID), ["page-current"])
         XCTAssertEqual(changeSet.blockChanges.map(\.blockID), ["block-current"])
         XCTAssertEqual(changeSet.workspaceChanges, [])
+        XCTAssertEqual(changeSet.fullSnapshotPageIDs, [])
+        XCTAssertEqual(changeSet.currentSnapshotPageIDs, ["page-current"])
         XCTAssertEqual(changeSet.serverChangeTokenData, tokenOne)
         XCTAssertTrue(changeSet.hasMoreChanges)
     }
@@ -1902,8 +2101,54 @@ final class SyncEngineTests: XCTestCase {
         ).fetchRemoteChanges(sinceServerChangeTokenData: nil)
 
         XCTAssertEqual(changeSet.fullSnapshotPageIDs, [])
+        XCTAssertEqual(changeSet.currentSnapshotPageIDs, [])
         XCTAssertEqual(changeSet.blockChanges, [])
         XCTAssertEqual(fetcher.fetchRecordsCalls, [])
+    }
+
+    func testCloudKitPrivateDatabaseAdapterTreatsCurrentRecordNamePrefixAsCurrentGenerationWhenFieldIsMissing() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let prefixOnlyCurrentPage = makeRecord(
+            type: "PageRecord",
+            entityType: "page",
+            entityID: "page-prefix-current",
+            syncGeneration: nil
+        ) {
+            $0["workspaceID"] = "workspace-current" as CKRecordValue
+            $0["title"] = "Prefix Current Page" as CKRecordValue
+            $0["orderKey"] = "000001" as CKRecordValue
+            $0["isArchived"] = NSNumber(value: false)
+        }
+        let explicitOldGenerationPage = makeRecord(
+            type: "PageRecord",
+            entityType: "page",
+            entityID: "page-old-field",
+            syncGeneration: "editor-cloudkit-v1"
+        ) {
+            $0["workspaceID"] = "workspace-old" as CKRecordValue
+            $0["title"] = "Old Page" as CKRecordValue
+            $0["orderKey"] = "000002" as CKRecordValue
+            $0["isArchived"] = NSNumber(value: false)
+        }
+        let fetcher = TokenAwareCloudKitRecordFetcher(
+            recordsByType: [
+                "PageRecord": [
+                    prefixOnlyCurrentPage,
+                    explicitOldGenerationPage
+                ]
+            ],
+            nextServerChangeTokenData: Data("next-token".utf8)
+        )
+
+        let pageIDs = try CloudKitPrivateDatabaseAdapter(
+            database: database,
+            recordFetcher: fetcher
+        ).fetchCurrentGenerationPageIDs()
+
+        XCTAssertEqual(pageIDs, ["page-prefix-current"])
+        XCTAssertEqual(fetcher.fetchRecordsCalls, ["PageRecord"])
     }
 
     func testCloudKitPrivateDatabaseAdapterUsesChangedBlocksWithoutSnapshotQuery() throws {
@@ -2957,17 +3202,21 @@ final class StaticRemoteBlockChangeFetcher: CloudKitRemoteChangeFetching {
     }
 }
 
-final class StaticRemoteSnapshotFetcher: CloudKitRemoteSnapshotFetching {
+final class StaticRemoteSnapshotFetcher: CloudKitRemoteSnapshotFetching, CloudKitCurrentGenerationPageIDFetching {
     let changeSets: [CloudKitRemoteChangeSet]
+    let currentGenerationPageIDs: Set<String>?
     private(set) var fetchCount = 0
+    private(set) var currentGenerationPageIDFetchCount = 0
     private(set) var receivedServerChangeTokenData: [Data?] = []
 
-    init(changeSet: CloudKitRemoteChangeSet) {
+    init(changeSet: CloudKitRemoteChangeSet, currentGenerationPageIDs: Set<String>? = nil) {
         self.changeSets = [changeSet]
+        self.currentGenerationPageIDs = currentGenerationPageIDs
     }
 
-    init(changeSets: [CloudKitRemoteChangeSet]) {
+    init(changeSets: [CloudKitRemoteChangeSet], currentGenerationPageIDs: Set<String>? = nil) {
         self.changeSets = changeSets
+        self.currentGenerationPageIDs = currentGenerationPageIDs
     }
 
     func fetchCurrentGenerationSnapshot(
@@ -2976,6 +3225,14 @@ final class StaticRemoteSnapshotFetcher: CloudKitRemoteSnapshotFetching {
         fetchCount += 1
         receivedServerChangeTokenData.append(serverChangeTokenData)
         return changeSets[min(fetchCount - 1, changeSets.count - 1)]
+    }
+
+    func fetchCurrentGenerationPageIDs() throws -> Set<String> {
+        currentGenerationPageIDFetchCount += 1
+        guard let currentGenerationPageIDs else {
+            throw SyncEngineTestError.temporaryUnavailable
+        }
+        return currentGenerationPageIDs
     }
 }
 

@@ -1051,6 +1051,65 @@ enum NativeInlineMarkdownStyleChrome {
     static let inlineCodeBackgroundToken = EditorDesignTokens.Colors.inlineCodeBackground
 }
 
+enum NativeInlineMarkdownFontVariantResolver {
+    static let syntheticBoldStrokeWidth: CGFloat = -2
+    static let syntheticItalicObliqueness: CGFloat = 0.12
+
+    static func usesSyntheticVariant(fontName: String) -> Bool {
+        fontName == EditorContentFont.lxgwWenKaiPostScriptName
+    }
+
+#if os(macOS)
+    static func appKitBoldAttributes(baseFont: NSFont) -> [NSAttributedString.Key: Any] {
+        guard !usesSyntheticVariant(fontName: baseFont.fontName) else {
+            return [
+                .font: baseFont,
+                .strokeWidth: syntheticBoldStrokeWidth
+            ]
+        }
+        return [.font: NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)]
+    }
+
+    static func appKitItalicAttributes(baseFont: NSFont) -> [NSAttributedString.Key: Any] {
+        guard !usesSyntheticVariant(fontName: baseFont.fontName) else {
+            return [
+                .font: baseFont,
+                .obliqueness: syntheticItalicObliqueness
+            ]
+        }
+        return [.font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)]
+    }
+#endif
+
+#if os(iOS)
+    static func uiKitBoldAttributes(baseFont: UIFont) -> [NSAttributedString.Key: Any] {
+        guard !usesSyntheticVariant(fontName: baseFont.fontName) else {
+            return [
+                .font: baseFont,
+                .strokeWidth: syntheticBoldStrokeWidth
+            ]
+        }
+        guard let descriptor = baseFont.fontDescriptor.withSymbolicTraits(.traitBold) else {
+            return [.font: UIFont.boldSystemFont(ofSize: baseFont.pointSize)]
+        }
+        return [.font: UIFont(descriptor: descriptor, size: baseFont.pointSize)]
+    }
+
+    static func uiKitItalicAttributes(baseFont: UIFont) -> [NSAttributedString.Key: Any] {
+        guard !usesSyntheticVariant(fontName: baseFont.fontName) else {
+            return [
+                .font: baseFont,
+                .obliqueness: syntheticItalicObliqueness
+            ]
+        }
+        guard let descriptor = baseFont.fontDescriptor.withSymbolicTraits(.traitItalic) else {
+            return [.font: UIFont.italicSystemFont(ofSize: baseFont.pointSize)]
+        }
+        return [.font: UIFont(descriptor: descriptor, size: baseFont.pointSize)]
+    }
+#endif
+}
+
 enum NativeCodeSyntaxHighlightChrome {
     static func colors(for scheme: EditorThemeScheme) -> HighlightColors {
         switch scheme {
@@ -2089,9 +2148,9 @@ private struct PlatformNativeTextView: NSViewRepresentable {
             case .syntax:
                 return NativeTextMarkdownSyntaxMarkerAttributes.appKit(baseFont: parent.nsFont)
             case .bold:
-                return [.font: boldFont]
+                return NativeInlineMarkdownFontVariantResolver.appKitBoldAttributes(baseFont: parent.nsFont)
             case .italic:
-                return [.font: italicFont]
+                return NativeInlineMarkdownFontVariantResolver.appKitItalicAttributes(baseFont: parent.nsFont)
             case .strikethrough:
                 return [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
             case .highlight:
@@ -2107,14 +2166,6 @@ private struct PlatformNativeTextView: NSViewRepresentable {
                     .underlineStyle: NSUnderlineStyle.single.rawValue
                 ]
             }
-        }
-
-        private var boldFont: NSFont {
-            NSFontManager.shared.convert(parent.nsFont, toHaveTrait: .boldFontMask)
-        }
-
-        private var italicFont: NSFont {
-            NSFontManager.shared.convert(parent.nsFont, toHaveTrait: .italicFontMask)
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -3552,9 +3603,9 @@ private struct PlatformNativeTextView: UIViewRepresentable {
             case .syntax:
                 return NativeTextMarkdownSyntaxMarkerAttributes.uiKit(baseFont: parent.uiFont)
             case .bold:
-                return [.font: boldFont]
+                return NativeInlineMarkdownFontVariantResolver.uiKitBoldAttributes(baseFont: parent.uiFont)
             case .italic:
-                return [.font: italicFont]
+                return NativeInlineMarkdownFontVariantResolver.uiKitItalicAttributes(baseFont: parent.uiFont)
             case .strikethrough:
                 return [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
             case .highlight:
@@ -3570,20 +3621,6 @@ private struct PlatformNativeTextView: UIViewRepresentable {
                     .underlineStyle: NSUnderlineStyle.single.rawValue
                 ]
             }
-        }
-
-        private var boldFont: UIFont {
-            guard let descriptor = parent.uiFont.fontDescriptor.withSymbolicTraits(.traitBold) else {
-                return .boldSystemFont(ofSize: parent.uiFont.pointSize)
-            }
-            return UIFont(descriptor: descriptor, size: parent.uiFont.pointSize)
-        }
-
-        private var italicFont: UIFont {
-            guard let descriptor = parent.uiFont.fontDescriptor.withSymbolicTraits(.traitItalic) else {
-                return .italicSystemFont(ofSize: parent.uiFont.pointSize)
-            }
-            return UIFont(descriptor: descriptor, size: parent.uiFont.pointSize)
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {

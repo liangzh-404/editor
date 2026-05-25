@@ -16,6 +16,7 @@ struct EditorApp: App {
 #endif
 
     init() {
+        EditorBundledFontRegistry.registerBundledFontsIfNeeded()
         EditorPerformanceTrace.point("app_launch_start") {
             [
                 "target": "Editor"
