@@ -127,6 +127,95 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertTrue(guardState.shouldForwardTextChange)
     }
 
+    func testAcceptedChangeFallbackSelectionUsesAcceptedRangeWhenUITextViewSelectionFallsBehind() {
+        XCTAssertEqual(
+            NativeTextAcceptedChangeFallbackSelectionPolicy.selectionRange(
+                actualSelection: NSRange(location: 0, length: 0),
+                acceptedRange: NSRange(location: 2, length: 0),
+                replacementText: "r",
+                nextTextLength: 3
+            ),
+            NSRange(location: 3, length: 0)
+        )
+        XCTAssertEqual(
+            NativeTextAcceptedChangeFallbackSelectionPolicy.selectionRange(
+                actualSelection: NSRange(location: 4, length: 0),
+                acceptedRange: NSRange(location: 2, length: 0),
+                replacementText: "r",
+                nextTextLength: 4
+            ),
+            NSRange(location: 4, length: 0)
+        )
+        XCTAssertEqual(
+            NativeTextAcceptedChangeFallbackSelectionPolicy.selectionRange(
+                actualSelection: NSRange(location: 0, length: 1),
+                acceptedRange: NSRange(location: 0, length: 1),
+                replacementText: "r",
+                nextTextLength: 1
+            ),
+            NSRange(location: 0, length: 1)
+        )
+    }
+
+    func testAcceptedChangeFallbackTextPolicyContinuesFromMirrorWhenUITextViewTextLags() throws {
+        XCTAssertEqual(
+            try XCTUnwrap(
+                NativeTextAcceptedChangeFallbackTextPolicy.proposal(
+                    currentText: "p",
+                    mirrorText: "pe",
+                    acceptedRange: NSRange(location: 1, length: 0),
+                    replacementText: "r"
+                )
+            ),
+            NativeTextAcceptedChangeFallbackProposal(text: "per", caretLocation: 3)
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(
+                NativeTextAcceptedChangeFallbackTextPolicy.proposal(
+                    currentText: "pe",
+                    mirrorText: "per",
+                    acceptedRange: NSRange(location: 2, length: 0),
+                    replacementText: "f"
+                )
+            ),
+            NativeTextAcceptedChangeFallbackProposal(text: "perf", caretLocation: 4)
+        )
+        XCTAssertEqual(
+            NativeTextAcceptedChangeFallbackTextPolicy.resolvedText(
+                actualText: "perf",
+                proposedText: "per"
+            ),
+            "perf"
+        )
+    }
+
+    func testNativeTextDisplayTextPolicyPrefersAcceptedMirrorThenDraftThenModel() {
+        XCTAssertEqual(
+            NativeTextDisplayTextPolicy.effectiveText(
+                modelText: "",
+                draftText: "per",
+                acceptedTextInputMirror: "perf"
+            ),
+            "perf"
+        )
+        XCTAssertEqual(
+            NativeTextDisplayTextPolicy.effectiveText(
+                modelText: "",
+                draftText: "per",
+                acceptedTextInputMirror: nil
+            ),
+            "per"
+        )
+        XCTAssertEqual(
+            NativeTextDisplayTextPolicy.effectiveText(
+                modelText: "model",
+                draftText: nil,
+                acceptedTextInputMirror: nil
+            ),
+            "model"
+        )
+    }
+
     func testNativeTextCompositionPolicyDefersModelAndCommandWorkWhileIMEIsComposing() {
         XCTAssertFalse(NativeTextCompositionPolicy.shouldApplyModelText(isComposing: true))
         XCTAssertFalse(NativeTextCompositionPolicy.shouldApplyInlineMarkdownStyles(isComposing: true))
@@ -2066,6 +2155,61 @@ final class NativeTextBlockEditorTests: XCTestCase {
         XCTAssertEqual(missingDescriptor.accessibilityValue, "图片, 附件不可用")
     }
 
+    func testAttachmentRenderIndexMatchesBlocksWithoutScanningEachAttachment() {
+        let imageAttachment = AttachmentSnapshot(
+            id: "image-attachment",
+            workspaceID: "workspace",
+            originalFilename: "photo.png",
+            utiType: "public.png",
+            byteSize: 12,
+            contentHash: "hash",
+            localPath: "/tmp/photo.png",
+            thumbnailPath: "/tmp/photo-thumb.jpg",
+            kind: .image
+        )
+        let fileAttachment = AttachmentSnapshot(
+            id: "file-attachment",
+            workspaceID: "workspace",
+            originalFilename: "notes.pdf",
+            utiType: "com.adobe.pdf",
+            byteSize: 40,
+            contentHash: "file-hash",
+            localPath: "/tmp/notes.pdf",
+            thumbnailPath: nil,
+            kind: .file
+        )
+        let index = AttachmentRenderIndex(attachments: [imageAttachment, fileAttachment])
+
+        let idMatchedBlock = block(
+            id: "image-block",
+            type: .attachmentImage,
+            text: "renamed.png",
+            attachmentID: "image-attachment"
+        )
+        let fallbackMatchedBlock = block(
+            id: "file-block",
+            type: .attachmentFile,
+            text: "notes.pdf"
+        )
+        let mismatchedKindBlock = block(
+            id: "wrong-kind",
+            type: .attachmentVideo,
+            text: "notes.pdf",
+            attachmentID: "file-attachment"
+        )
+
+        XCTAssertEqual(index.attachment(for: idMatchedBlock)?.id, "image-attachment")
+        XCTAssertEqual(index.attachment(for: fallbackMatchedBlock)?.id, "file-attachment")
+        XCTAssertNil(index.attachment(for: mismatchedKindBlock))
+        XCTAssertEqual(
+            index.previewGenerationStatus(
+                for: idMatchedBlock,
+                statuses: ["image-attachment": .generating]
+            ),
+            .generating
+        )
+    }
+
     func testMarkdownInlineFormatKeyboardResolverHandlesBoldItalicStrikethroughAndCodeShortcutsOnly() {
         XCTAssertEqual(
             MarkdownInlineFormatKeyboardResolver.format(input: "b", modifiers: [.command]),
@@ -2275,6 +2419,35 @@ final class NativeTextBlockEditorTests: XCTestCase {
         )
     }
 
+    func testBlockDragPayloadIndexUsesFallbackForFlatBlocks() {
+        let blocks = [
+            BlockSnapshot(
+                id: "one",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "a",
+                type: .paragraph,
+                textPlain: "One"
+            ),
+            BlockSnapshot(
+                id: "two",
+                pageID: "page",
+                parentBlockID: nil,
+                orderKey: "b",
+                type: .paragraph,
+                textPlain: "Two"
+            )
+        ]
+
+        let index = BlockDragPayloadIndex(blocks: blocks)
+
+        XCTAssertEqual(
+            index.payloadBlockIDs(rootBlockID: "one"),
+            [],
+            "Flat pages let BlockRowView fall back to the row id instead of building a descendant payload table."
+        )
+    }
+
     func testBlockDragReorderResolverMovesBeforeDestinationBlock() {
         let visibleBlockIDs = ["a", "b", "c"]
 
@@ -2466,22 +2639,34 @@ final class NativeTextBlockEditorTests: XCTestCase {
             BlockFrameReportingPolicy.shouldReportFrame(
                 blockType: .heading2,
                 isBlockSelectionMarqueeActive: false,
-                hasOutlineItems: true
+                hasOutlineItems: true,
+                supportsInlineOutline: true
             )
         )
         XCTAssertFalse(
             BlockFrameReportingPolicy.shouldReportFrame(
                 blockType: .paragraph,
                 isBlockSelectionMarqueeActive: false,
-                hasOutlineItems: true
+                hasOutlineItems: true,
+                supportsInlineOutline: true
             ),
             "Idle long-page scrolling should not publish every paragraph frame just to keep the outline active."
+        )
+        XCTAssertFalse(
+            BlockFrameReportingPolicy.shouldReportFrame(
+                blockType: .heading2,
+                isBlockSelectionMarqueeActive: false,
+                hasOutlineItems: true,
+                supportsInlineOutline: false
+            ),
+            "iOS canvas scrolling should not keep desktop outline heading frames hot while no selection marquee is active."
         )
         XCTAssertTrue(
             BlockFrameReportingPolicy.shouldReportFrame(
                 blockType: .paragraph,
                 isBlockSelectionMarqueeActive: true,
-                hasOutlineItems: true
+                hasOutlineItems: true,
+                supportsInlineOutline: false
             )
         )
     }
@@ -2607,12 +2792,93 @@ final class NativeTextBlockEditorTests: XCTestCase {
                 isUITestProbeEnabled: false
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             EditorCanvasScrollMetricsPublicationPolicy.shouldPublish(
                 eventCount: 1,
                 reason: .visibleEvent,
                 isUITestProbeEnabled: true
             )
+        )
+    }
+
+    func testEditorCanvasScrollMetricsProbeEnablesForPerformanceTraceRuns() {
+        XCTAssertTrue(
+            EditorCanvasScrollMetricsProbePolicy.isEnabled(environment: [
+                "EDITOR_PERFORMANCE_TRACE_ENABLED": "1"
+            ])
+        )
+        XCTAssertTrue(
+            EditorCanvasScrollMetricsProbePolicy.isEnabled(environment: [
+                "EDITOR_UI_TEST_SCROLL_METRICS": "1"
+            ])
+        )
+        XCTAssertTrue(
+            EditorCanvasScrollMetricsProbePolicy.isEnabled(environment: [
+                "EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT": "760"
+            ])
+        )
+        XCTAssertFalse(EditorCanvasScrollMetricsProbePolicy.isEnabled(environment: [:]))
+    }
+
+    func testEditorCanvasAutoScrollProbeRequiresExplicitPerformanceFlag() {
+        XCTAssertTrue(
+            EditorCanvasAutoScrollProbePolicy.isEnabled(environment: [
+                "EDITOR_UI_TEST_AUTOSCROLL_ON_LAUNCH": "1",
+                "EDITOR_PERFORMANCE_TRACE_ENABLED": "1"
+            ])
+        )
+        XCTAssertFalse(
+            EditorCanvasAutoScrollProbePolicy.isEnabled(environment: [
+                "EDITOR_UI_TEST_AUTOSCROLL_ON_LAUNCH": "1"
+            ])
+        )
+        XCTAssertFalse(
+            EditorCanvasAutoScrollProbePolicy.isEnabled(environment: [
+                "EDITOR_PERFORMANCE_TRACE_ENABLED": "1"
+            ])
+        )
+    }
+
+    func testEditorCanvasAutoScrollProbeTargetsDistantLargePageBlocks() {
+        XCTAssertEqual(EditorCanvasAutoScrollProbePolicy.targetIndices(blockCount: 80), [])
+        XCTAssertEqual(
+            EditorCanvasAutoScrollProbePolicy.targetIndices(blockCount: 100),
+            [10, 20, 30, 40, 50, 60, 70, 80, 90, 99]
+        )
+        XCTAssertEqual(
+            EditorCanvasAutoScrollProbePolicy.targetIndices(blockCount: 2_417),
+            [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]
+        )
+    }
+
+    func testEditorCanvasScrollFramePacingMetadataIncludesScrollBudgetInputs() {
+        let metrics = EditorCanvasScrollMetrics(
+            pageID: "page-1",
+            blockCount: 1_000,
+            visibleBlockCount: 12,
+            peakVisibleBlockCount: 16,
+            firstVisibleBlockIndex: 40,
+            lastVisibleBlockIndex: 51,
+            peakLastVisibleBlockIndex: 79,
+            peakVisibleBlockIndexSpan: 18,
+            scrollLifetimeMilliseconds: 240,
+            blockAppearanceCount: 30,
+            blockDisappearanceCount: 22
+        )
+
+        XCTAssertEqual(
+            EditorCanvasScrollFramePacingMetadata.metadata(metrics: metrics, source: "idle"),
+            [
+                "page_id": "page-1",
+                "block_count": "1000",
+                "visible_block_count": "12",
+                "peak_visible_block_count": "16",
+                "peak_last_visible_block_index": "79",
+                "visible_block_index_span": "12",
+                "visible_block_churn_count": "52",
+                "scroll_lifetime_ms": "240.000",
+                "source": "idle"
+            ]
         )
     }
 
@@ -2640,7 +2906,8 @@ final class NativeTextBlockEditorTests: XCTestCase {
         id: String,
         type: BlockType,
         text: String,
-        taskItemIsCompleted: Bool = false
+        taskItemIsCompleted: Bool = false,
+        attachmentID: String? = nil
     ) -> BlockSnapshot {
         BlockSnapshot(
             id: id,
@@ -2649,7 +2916,8 @@ final class NativeTextBlockEditorTests: XCTestCase {
             orderKey: id,
             type: type,
             textPlain: text,
-            taskItemIsCompleted: taskItemIsCompleted
+            taskItemIsCompleted: taskItemIsCompleted,
+            attachmentID: attachmentID
         )
     }
 }

@@ -35,6 +35,7 @@ final class EditorSessionTests: XCTestCase {
         session.updateDraft(blockID: "block-1", text: "Hello")
 
         XCTAssertEqual(session.draftText(for: "block-1"), "Hello")
+        XCTAssertEqual(session.acceptedTextInputMirror(for: "block-1"), "Hello")
         XCTAssertEqual(session.dirtyBlockIDs, ["block-1"])
     }
 
@@ -61,7 +62,21 @@ final class EditorSessionTests: XCTestCase {
 
         XCTAssertEqual(committed, "Committed")
         XCTAssertNil(session.draftText(for: "block-1"))
+        XCTAssertNil(session.acceptedTextInputMirror(for: "block-1"))
         XCTAssertFalse(session.dirtyBlockIDs.contains("block-1"))
+    }
+
+    @MainActor
+    func testAcceptedTextInputMirrorSurvivesViewIdentityChangesUntilEditingEnds() {
+        let session = EditorSession()
+
+        session.updateAcceptedTextInputMirror(blockID: "block-1", text: "per")
+
+        XCTAssertEqual(session.acceptedTextInputMirror(for: "block-1"), "per")
+
+        session.endEditing(blockID: "block-1")
+
+        XCTAssertNil(session.acceptedTextInputMirror(for: "block-1"))
     }
 
     @MainActor
@@ -88,6 +103,24 @@ final class EditorSessionTests: XCTestCase {
         session.updateSelection(blockID: "block-1", location: 3, length: 2)
 
         XCTAssertEqual(publishCount, 1)
+        _ = cancellable
+    }
+
+    @MainActor
+    func testCursorMovementWithinFocusedBlockDoesNotPublishRenderingChanges() {
+        let session = EditorSession()
+        session.beginEditing(blockID: "block-1", reason: .userTap)
+        session.updateSelection(blockID: "block-1", location: 3, length: 0)
+
+        var publishCount = 0
+        let cancellable = session.objectWillChange.sink {
+            publishCount += 1
+        }
+
+        session.updateSelection(blockID: "block-1", location: 4, length: 0)
+
+        XCTAssertEqual(session.textSelection?.location, 4)
+        XCTAssertEqual(publishCount, 0)
         _ = cancellable
     }
 

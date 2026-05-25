@@ -76,6 +76,55 @@ final class PageRepositoryTests: XCTestCase {
         )
     }
 
+    func testStartupMetadataCanLimitSynchronousPageListPreviews() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        let olderPage = try repository.createPage(workspaceID: workspaceID, title: "Older preview")
+        _ = try repository.appendBlock(pageID: olderPage.id, type: .paragraph, text: "Older preview body")
+        let newestPage = try repository.createPage(workspaceID: workspaceID, title: "Newest preview")
+        _ = try repository.appendBlock(pageID: newestPage.id, type: .paragraph, text: "Newest preview body")
+
+        let limitedSnapshot = try repository.loadWorkspaceSnapshot(
+            blockPageIDs: [],
+            pageListPreviewLimit: 1
+        )
+
+        let firstPageID = try XCTUnwrap(limitedSnapshot.pages.first?.id)
+        XCTAssertEqual(limitedSnapshot.pageListPreviews.count, 1)
+        XCTAssertEqual(firstPageID, newestPage.id)
+        XCTAssertEqual(limitedSnapshot.pageListPreviews[firstPageID]?.excerpt, "Newest preview body")
+        XCTAssertNil(limitedSnapshot.pageListPreviews[olderPage.id])
+    }
+
+    func testStartupMetadataCanLimitSynchronousPageMetadata() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let workspaceID = try XCTUnwrap(snapshot.selectedWorkspaceID)
+        _ = try repository.createPage(workspaceID: workspaceID, title: "Older metadata page")
+        let newestPage = try repository.createPage(workspaceID: workspaceID, title: "Newest metadata page")
+
+        let limitedSnapshot = try repository.loadWorkspaceSnapshot(
+            blockPageIDs: [],
+            pageMetadataLimit: 1,
+            pageListPreviewLimit: 1,
+            loadsAttachments: false,
+            includesEmptyDiaryPageIDs: false
+        )
+        let fullSnapshot = try repository.loadWorkspaceSnapshot(blockPageIDs: [])
+
+        XCTAssertEqual(limitedSnapshot.pages.map(\.id), [newestPage.id])
+        XCTAssertTrue(limitedSnapshot.attachments.isEmpty)
+        XCTAssertTrue(limitedSnapshot.emptyDiaryPageIDs.isEmpty)
+        XCTAssertGreaterThan(fullSnapshot.pages.count, limitedSnapshot.pages.count)
+    }
+
     func testBootstrapIsIdempotent() throws {
         let database = try migratedDatabase()
         defer { database.close() }
@@ -1150,7 +1199,9 @@ final class PageRepositoryTests: XCTestCase {
             markdown:
                 """
                 First
+
                 Second
+
                 Third
                 """
         )
@@ -1176,8 +1227,11 @@ final class PageRepositoryTests: XCTestCase {
             markdown:
                 """
                 Parent
+
                 Child
+
                 Sibling
+
                 Tail
                 """
         )
@@ -1206,7 +1260,9 @@ final class PageRepositoryTests: XCTestCase {
             markdown:
                 """
                 First
+
                 Second
+
                 Third
                 """
         )
@@ -1237,6 +1293,7 @@ final class PageRepositoryTests: XCTestCase {
             markdown:
                 """
                 First
+
                 Second
                 """
         )
@@ -1267,8 +1324,11 @@ final class PageRepositoryTests: XCTestCase {
             markdown:
                 """
                 Root
+
                 Child
+
                 Grandchild
+
                 Moved
                 """
         )
@@ -1674,6 +1734,7 @@ final class PageRepositoryTests: XCTestCase {
             markdown:
                 """
                 First
+
                 Second
                 """
         )
@@ -2072,7 +2133,7 @@ final class PageRepositoryTests: XCTestCase {
         let pageID = try XCTUnwrap(snapshot.selectedPageID)
         let markdown = (1...750)
             .map { "Block \($0) searchable content" }
-            .joined(separator: "\n")
+            .joined(separator: "\n\n")
 
         try repository.importMarkdown(pageID: pageID, markdown: markdown)
         let loadedSnapshot = try repository.loadWorkspaceSnapshot()

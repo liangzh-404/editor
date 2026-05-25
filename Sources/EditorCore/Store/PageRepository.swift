@@ -39,7 +39,13 @@ final class PageRepository: @unchecked Sendable {
     }
 
     @discardableResult
-    func bootstrapWorkspaceIfNeeded(blockPageIDs: [String]? = nil) throws -> WorkspaceSnapshot {
+    func bootstrapWorkspaceIfNeeded(
+        blockPageIDs: [String]? = nil,
+        pageMetadataLimit: Int? = nil,
+        pageListPreviewLimit: Int? = nil,
+        loadsAttachments: Bool = true,
+        includesEmptyDiaryPageIDs: Bool = true
+    ) throws -> WorkspaceSnapshot {
         let workspaceCount = try database.queryInt("SELECT COUNT(*) FROM workspaces")
         if workspaceCount == 0 {
             try insertDefaultContent()
@@ -47,10 +53,22 @@ final class PageRepository: @unchecked Sendable {
             try localizeDefaultSeedContentIfUnmodified()
         }
 
-        return try loadWorkspaceSnapshot(blockPageIDs: blockPageIDs)
+        return try loadWorkspaceSnapshot(
+            blockPageIDs: blockPageIDs,
+            pageMetadataLimit: pageMetadataLimit,
+            pageListPreviewLimit: pageListPreviewLimit,
+            loadsAttachments: loadsAttachments,
+            includesEmptyDiaryPageIDs: includesEmptyDiaryPageIDs
+        )
     }
 
-    func loadWorkspaceSnapshot(blockPageIDs: [String]? = nil) throws -> WorkspaceSnapshot {
+    func loadWorkspaceSnapshot(
+        blockPageIDs: [String]? = nil,
+        pageMetadataLimit: Int? = nil,
+        pageListPreviewLimit: Int? = nil,
+        loadsAttachments: Bool = true,
+        includesEmptyDiaryPageIDs: Bool = true
+    ) throws -> WorkspaceSnapshot {
         let workspaces = try database.query(
             """
             SELECT id, name
@@ -90,6 +108,14 @@ final class PageRepository: @unchecked Sendable {
 
         let selectedNotebookID = sortedNotebooks.first?.id
 
+        var pageBindings = selectedWorkspaceID.map { [SQLiteValue.text($0)] } ?? [.text("")]
+        let pageLimitClause: String
+        if let pageMetadataLimit {
+            pageLimitClause = "\n            LIMIT ?"
+            pageBindings.append(.integer(max(0, pageMetadataLimit)))
+        } else {
+            pageLimitClause = ""
+        }
         let pages = try database.query(
             """
             SELECT pages.id,
@@ -107,8 +133,9 @@ final class PageRepository: @unchecked Sendable {
             WHERE pages.workspace_id = ?
               AND pages.is_archived = 0
             ORDER BY pages.is_pinned DESC, pages.updated_at DESC, pages.created_at DESC
+            \(pageLimitClause)
             """,
-            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
+            bindings: pageBindings
         ).map { row in
             PageSummary(
                 id: row["id"] ?? "",
@@ -123,6 +150,14 @@ final class PageRepository: @unchecked Sendable {
             )
         }
 
+        var archivedPageBindings = selectedWorkspaceID.map { [SQLiteValue.text($0)] } ?? [.text("")]
+        let archivedPageLimitClause: String
+        if let pageMetadataLimit {
+            archivedPageLimitClause = "\n            LIMIT ?"
+            archivedPageBindings.append(.integer(max(0, pageMetadataLimit)))
+        } else {
+            archivedPageLimitClause = ""
+        }
         let archivedPages = try database.query(
             """
             SELECT pages.id,
@@ -139,8 +174,9 @@ final class PageRepository: @unchecked Sendable {
             WHERE pages.workspace_id = ?
               AND pages.is_archived = 1
             ORDER BY pages.updated_at DESC
+            \(archivedPageLimitClause)
             """,
-            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
+            bindings: archivedPageBindings
         ).map { row in
             PageSummary(
                 id: row["id"] ?? "",
@@ -159,38 +195,15 @@ final class PageRepository: @unchecked Sendable {
 
         let blocks = try loadBlocks(pageIDs: blockPageIDs ?? pages.map(\.id))
 
-        let attachments = try database.query(
-            """
-            SELECT id,
-                   workspace_id,
-                   original_filename,
-                   uti_type,
-                   byte_size,
-                   content_hash,
-                   local_path,
-                   thumbnail_path
-            FROM attachments
-            WHERE workspace_id = ?
-            ORDER BY created_at ASC
-            """,
-            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
-        ).map { row in
-            let utiType = row["uti_type"] ?? "public.data"
-            return AttachmentSnapshot(
-                id: row["id"] ?? "",
-                workspaceID: row["workspace_id"] ?? "",
-                originalFilename: row["original_filename"] ?? "",
-                utiType: utiType,
-                byteSize: Int(row["byte_size"] ?? "") ?? 0,
-                contentHash: row["content_hash"] ?? "",
-                localPath: row["local_path"] ?? "",
-                thumbnailPath: row["thumbnail_path"] ?? nil,
-                kind: AttachmentKind(utiType: utiType)
-            )
-        }
+        let attachments = loadsAttachments
+            ? try loadAttachments(workspaceID: selectedWorkspaceID)
+            : []
         let previewPages = pages + archivedPages
-        let pageListPreviewBlocks = try loadPageListPreviewBlocks(pageIDs: previewPages.map(\.id))
-        let pageListPreviews = Dictionary(uniqueKeysWithValues: previewPages.map { page in
+        let synchronousPreviewPages = pageListPreviewLimit.map { limit in
+            Array(previewPages.prefix(max(0, limit)))
+        } ?? previewPages
+        let pageListPreviewBlocks = try loadPageListPreviewBlocks(pageIDs: synchronousPreviewPages.map(\.id))
+        let pageListPreviews = Dictionary(uniqueKeysWithValues: synchronousPreviewPages.map { page in
             (
                 page.id,
                 PageListPreviewResolver.preview(
@@ -220,35 +233,37 @@ final class PageRepository: @unchecked Sendable {
                 diaryDate: row["diary_date"] ?? ""
             )
         }
-        let emptyDiaryPageIDs = Set(try database.query(
-            """
-            SELECT diary_pages.page_id
-            FROM diary_pages
-            WHERE diary_pages.workspace_id = ?
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM blocks
-                  WHERE blocks.page_id = diary_pages.page_id
-                    AND blocks.is_deleted = 0
-                    AND (
-                        length(trim(blocks.text_plain)) > 0
-                        OR blocks.type IN (
-                            'table',
-                            'divider',
-                            'pageReference',
-                            'blockReference',
-                            'attachmentImage',
-                            'attachmentVideo',
-                            'attachmentFile',
-                            'drawing'
+        let emptyDiaryPageIDs = includesEmptyDiaryPageIDs
+            ? Set(try database.query(
+                """
+                SELECT diary_pages.page_id
+                FROM diary_pages
+                WHERE diary_pages.workspace_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM blocks
+                      WHERE blocks.page_id = diary_pages.page_id
+                        AND blocks.is_deleted = 0
+                        AND (
+                            length(trim(blocks.text_plain)) > 0
+                            OR blocks.type IN (
+                                'table',
+                                'divider',
+                                'pageReference',
+                                'blockReference',
+                                'attachmentImage',
+                                'attachmentVideo',
+                                'attachmentFile',
+                                'drawing'
+                            )
                         )
-                    )
-              )
-            """,
-            bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
-        ).compactMap { row in
-            row["page_id"] ?? nil
-        })
+                  )
+                """,
+                bindings: selectedWorkspaceID.map { [.text($0)] } ?? [.text("")]
+            ).compactMap { row in
+                row["page_id"] ?? nil
+            })
+            : []
         let pageParentLinks = try database.query(
             """
             SELECT parent_page_id, child_page_id, source_block_id, order_key
@@ -512,6 +527,38 @@ final class PageRepository: @unchecked Sendable {
             bindings: [.text(pageID)]
         )
         return Int(rows.first?["count"] ?? "0") ?? 0
+    }
+
+    private func loadAttachments(workspaceID: String?) throws -> [AttachmentSnapshot] {
+        try database.query(
+            """
+            SELECT id,
+                   workspace_id,
+                   original_filename,
+                   uti_type,
+                   byte_size,
+                   content_hash,
+                   local_path,
+                   thumbnail_path
+            FROM attachments
+            WHERE workspace_id = ?
+            ORDER BY created_at ASC
+            """,
+            bindings: workspaceID.map { [.text($0)] } ?? [.text("")]
+        ).map { row in
+            let utiType = row["uti_type"] ?? "public.data"
+            return AttachmentSnapshot(
+                id: row["id"] ?? "",
+                workspaceID: row["workspace_id"] ?? "",
+                originalFilename: row["original_filename"] ?? "",
+                utiType: utiType,
+                byteSize: Int(row["byte_size"] ?? "") ?? 0,
+                contentHash: row["content_hash"] ?? "",
+                localPath: row["local_path"] ?? "",
+                thumbnailPath: row["thumbnail_path"] ?? nil,
+                kind: AttachmentKind(utiType: utiType)
+            )
+        }
     }
 
     func updatePageEncryption(pageID: String, isEncrypted: Bool) throws {
@@ -2887,7 +2934,7 @@ final class PageRepository: @unchecked Sendable {
         ).map(blockSnapshot(from:))
     }
 
-    private func loadPageListPreviewBlocks(pageIDs: [String]) throws -> [BlockSnapshot] {
+    func loadPageListPreviewBlocks(pageIDs: [String]) throws -> [BlockSnapshot] {
         guard !pageIDs.isEmpty else {
             return []
         }
@@ -2895,50 +2942,40 @@ final class PageRepository: @unchecked Sendable {
         let placeholders = Array(repeating: "?", count: pageIDs.count).joined(separator: ", ")
         return try database.query(
             """
-            SELECT blocks.id AS id,
-                   blocks.page_id AS page_id,
-                   blocks.parent_block_id AS parent_block_id,
-                   blocks.order_key AS order_key,
-                   blocks.type AS type,
-                   blocks.payload_json AS payload_json,
-                   blocks.text_plain AS text_plain,
-                   pages.is_encrypted AS is_encrypted
-            FROM blocks
-            INNER JOIN pages ON pages.id = blocks.page_id
-            WHERE blocks.page_id IN (\(placeholders))
-              AND blocks.is_deleted = 0
-              AND pages.is_encrypted = 0
-              AND (
-                  blocks.id = (
-                      SELECT candidate.id
-                      FROM blocks AS candidate
-                      WHERE candidate.page_id = blocks.page_id
-                        AND candidate.is_deleted = 0
-                        AND candidate.type = 'paragraph'
-                        AND length(trim(candidate.text_plain)) > 0
-                      ORDER BY candidate.order_key ASC
-                      LIMIT 1
+            WITH preview_candidates AS (
+                SELECT blocks.id AS id,
+                       blocks.page_id AS page_id,
+                       blocks.parent_block_id AS parent_block_id,
+                       blocks.order_key AS order_key,
+                       blocks.type AS type,
+                       blocks.payload_json AS payload_json,
+                       blocks.text_plain AS text_plain,
+                       pages.is_encrypted AS is_encrypted,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY blocks.page_id, blocks.type
+                           ORDER BY blocks.order_key ASC
+                       ) AS preview_rank
+                FROM blocks
+                INNER JOIN pages ON pages.id = blocks.page_id
+                WHERE blocks.page_id IN (\(placeholders))
+                  AND blocks.is_deleted = 0
+                  AND pages.is_encrypted = 0
+                  AND (
+                      (blocks.type = 'paragraph' AND length(trim(blocks.text_plain)) > 0)
+                      OR blocks.type IN ('attachmentImage', 'attachmentFile')
                   )
-                  OR blocks.id = (
-                      SELECT candidate.id
-                      FROM blocks AS candidate
-                      WHERE candidate.page_id = blocks.page_id
-                        AND candidate.is_deleted = 0
-                        AND candidate.type = 'attachmentImage'
-                      ORDER BY candidate.order_key ASC
-                      LIMIT 1
-                  )
-                  OR blocks.id = (
-                      SELECT candidate.id
-                      FROM blocks AS candidate
-                      WHERE candidate.page_id = blocks.page_id
-                        AND candidate.is_deleted = 0
-                        AND candidate.type = 'attachmentFile'
-                      ORDER BY candidate.order_key ASC
-                      LIMIT 1
-                  )
-              )
-            ORDER BY blocks.page_id ASC, blocks.order_key ASC
+            )
+            SELECT id,
+                   page_id,
+                   parent_block_id,
+                   order_key,
+                   type,
+                   payload_json,
+                   text_plain,
+                   is_encrypted
+            FROM preview_candidates
+            WHERE preview_rank = 1
+            ORDER BY page_id ASC, order_key ASC
             """,
             bindings: pageIDs.map(SQLiteValue.text)
         ).map(blockSnapshot(from:))
@@ -2968,19 +3005,15 @@ final class PageRepository: @unchecked Sendable {
         let codeBlockLineWrapping = type == .codeBlock
             ? Self.codeBlockLineWrapping(payloadJSON: payloadJSON)
             : true
-        let pageReferenceTargetPageID: String?
-        let blockReferenceTargetBlockID: String?
-        switch type {
-        case .pageReference:
-            pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: payloadJSON)
-            blockReferenceTargetBlockID = nil
-        case .blockReference:
-            pageReferenceTargetPageID = Self.pageReferenceTargetPageID(payloadJSON: payloadJSON)
-            blockReferenceTargetBlockID = Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
-        default:
-            pageReferenceTargetPageID = nil
-            blockReferenceTargetBlockID = nil
-        }
+        let shouldReadPageReferenceTarget = type == .pageReference
+            || type == .blockReference
+            || (type.isTextEditable && type != .paragraph)
+        let pageReferenceTargetPageID = shouldReadPageReferenceTarget
+            ? Self.pageReferenceTargetPageID(payloadJSON: payloadJSON)
+            : nil
+        let blockReferenceTargetBlockID = type == .blockReference
+            ? Self.blockReferenceTargetBlockID(payloadJSON: payloadJSON)
+            : nil
         return BlockSnapshot(
             id: row["id"] ?? "",
             pageID: row["page_id"] ?? "",
@@ -4112,10 +4145,22 @@ final class PageVersionRepository {
             return
         }
 
+        let trace = EditorPerformanceTrace.begin("page_version_capture") {
+            [
+                "page_id": pageID
+            ]
+        }
         let captureDate = now()
         if let latest = try latestVersionMetadata(pageID: pageID),
            let latestDate = Self.date(from: latest.createdAt),
            captureDate.timeIntervalSince(latestDate) < minCaptureInterval {
+            EditorPerformanceTrace.end(trace, as: "page_version_capture_done") {
+                [
+                    "page_id": pageID,
+                    "captured": "false",
+                    "reason": "min_interval"
+                ]
+            }
             return
         }
 
@@ -4134,6 +4179,13 @@ final class PageVersionRepository {
             bindings: [.text(pageID)]
         )
         guard let pageRow = pageRows.first else {
+            EditorPerformanceTrace.end(trace, as: "page_version_capture_done") {
+                [
+                    "page_id": pageID,
+                    "captured": "false",
+                    "reason": "missing_page"
+                ]
+            }
             return
         }
 
@@ -4148,6 +4200,14 @@ final class PageVersionRepository {
         ).first
         let blockCount = Int(blockCountRow?["count"] ?? "") ?? 0
         guard blockCount <= maxSnapshotBlockCount else {
+            EditorPerformanceTrace.end(trace, as: "page_version_capture_done") {
+                [
+                    "page_id": pageID,
+                    "captured": "false",
+                    "reason": "large_page",
+                    "block_count": "\(blockCount)"
+                ]
+            }
             EditorLog.store.debug(
                 "page_version_snapshot_skipped_large_page page_id=\(pageID, privacy: .public) block_count=\(blockCount, privacy: .public)"
             )
@@ -4168,6 +4228,14 @@ final class PageVersionRepository {
         )
         let snapshotJSON = try Self.encodeSnapshot(snapshot)
         guard snapshotJSON.utf8.count <= maxSnapshotBytes else {
+            EditorPerformanceTrace.end(trace, as: "page_version_capture_done") {
+                [
+                    "page_id": pageID,
+                    "captured": "false",
+                    "reason": "large_snapshot",
+                    "byte_count": "\(snapshotJSON.utf8.count)"
+                ]
+            }
             EditorLog.store.debug(
                 "page_version_snapshot_skipped_large_snapshot page_id=\(pageID, privacy: .public) byte_count=\(snapshotJSON.utf8.count, privacy: .public)"
             )
@@ -4177,6 +4245,14 @@ final class PageVersionRepository {
         let contentHash = Self.sha256Hex(snapshotJSON)
         if let latest = try latestVersionMetadata(pageID: pageID),
            latest.contentHash == contentHash {
+            EditorPerformanceTrace.end(trace, as: "page_version_capture_done") {
+                [
+                    "page_id": pageID,
+                    "captured": "false",
+                    "reason": "unchanged",
+                    "block_count": "\(blocks.count)"
+                ]
+            }
             return
         }
 
@@ -4214,6 +4290,15 @@ final class PageVersionRepository {
             changeType: "create"
         )
         try pruneExpiredVersions(pageID: pageID, at: captureDate)
+        EditorPerformanceTrace.end(trace, as: "page_version_capture_done") {
+            [
+                "page_id": pageID,
+                "captured": "true",
+                "version_id": versionID,
+                "block_count": "\(blocks.count)",
+                "byte_count": "\(snapshotJSON.utf8.count)"
+            ]
+        }
     }
 
     func versionSummaries(pageID: String, limit: Int = 100) throws -> [PageVersionSummary] {

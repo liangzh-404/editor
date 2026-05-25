@@ -15,11 +15,24 @@ struct EditorApp: App {
     @UIApplicationDelegateAdaptor(EditorIOSAppDelegate.self) private var appDelegate
 #endif
 
+    init() {
+        EditorPerformanceTrace.point("app_launch_start") {
+            [
+                "target": "Editor"
+            ]
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             AppEnvironment.makeRootView()
                 .onAppear {
                     EditorBundledFontRegistry.registerBundledFontsIfNeeded()
+                    EditorPerformanceTrace.point("app_first_window_visible") {
+                        [
+                            "target": "Editor"
+                        ]
+                    }
                 }
         }
 #if os(macOS)

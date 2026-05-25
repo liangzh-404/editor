@@ -539,6 +539,15 @@ struct MobileNavigationTitleVisibilityState: Equatable, Sendable {
     private(set) var scrollOffsetY: CGFloat = 0
     private(set) var initialScrollOffsetY: CGFloat?
 
+    static func == (
+        lhs: MobileNavigationTitleVisibilityState,
+        rhs: MobileNavigationTitleVisibilityState
+    ) -> Bool {
+        lhs.isVisible == rhs.isVisible
+            && lhs.baselineMaxY == rhs.baselineMaxY
+            && lhs.initialScrollOffsetY == rhs.initialScrollOffsetY
+    }
+
     func updated(
         titleFrame: CGRect? = nil,
         scrollOffsetY nextScrollOffsetY: CGFloat? = nil,
@@ -849,6 +858,28 @@ enum PageActionsMenuVisibilityPolicy {
     ]
 }
 
+enum PageActionsReferencePresentation: Equatable, Sendable {
+    case inlineMenu
+    case deferredPicker
+}
+
+enum PageActionsReferencePresentationPolicy {
+    static let compactInlineTargetLimit = 80
+    static let regularInlineTargetLimit = 160
+
+    static func presentation(
+        targetCount: Int,
+        scope: PageActionsMenuScope
+    ) -> PageActionsReferencePresentation {
+        switch scope {
+        case .regular:
+            return targetCount > regularInlineTargetLimit ? .deferredPicker : .inlineMenu
+        case .compactIOS:
+            return targetCount > compactInlineTargetLimit ? .deferredPicker : .inlineMenu
+        }
+    }
+}
+
 struct EditorInsertMarkdownLinkActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
@@ -952,9 +983,30 @@ extension FocusedValues {
 
 struct ForegroundSyncActivationPolicy {
     static let foregroundPollingIntervalNanoseconds: UInt64 = 30_000_000_000
+    static let activationSyncDelayNanoseconds: UInt64 = 700_000_000
 
     func shouldSync(for phase: ScenePhase) -> Bool {
         phase == .active
+    }
+
+    func shouldSkipActivationSync(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        environment["EDITOR_DISABLE_POST_LAUNCH_MAINTENANCE"] == "1"
+    }
+}
+
+enum MobileKeyboardTraceStabilityPolicy {
+    static let minimumStableDelayNanoseconds: UInt64 = 50_000_000
+    private static let nanosecondsPerSecond = 1_000_000_000.0
+
+    static func stableDelayNanoseconds(animationDurationSeconds: Double) -> UInt64 {
+        guard animationDurationSeconds.isFinite, animationDurationSeconds > 0 else {
+            return minimumStableDelayNanoseconds
+        }
+
+        return max(
+            minimumStableDelayNanoseconds,
+            UInt64((animationDurationSeconds * nanosecondsPerSecond).rounded())
+        )
     }
 }
 
@@ -963,6 +1015,7 @@ struct EditorShellView: View {
     @ObservedObject private var homeScreenQuickActionCenter: EditorHomeScreenQuickActionCenter
     @Environment(\.scenePhase) private var scenePhase
     @State private var foregroundSyncActivationPolicy = ForegroundSyncActivationPolicy()
+    @State private var pendingActivationSyncTask: Task<Void, Never>?
 
     init(
         viewModel: WorkspaceViewModel,
@@ -978,13 +1031,41 @@ struct EditorShellView: View {
             .background(EditorDesignTokens.Colors.appBackground.color.ignoresSafeArea())
             .containerBackground(EditorDesignTokens.Colors.appBackground.color, for: .window)
 #endif
+#if os(iOS)
+            .background(MobileKeyboardPerformanceProbe().frame(width: 0, height: 0))
+#endif
             .onAppear {
-                viewModel.syncAfterActivation()
+                scheduleActivationSync()
                 handleHomeScreenQuickActionIfNeeded(homeScreenQuickActionCenter.latestRequest)
             }
             .onChange(of: scenePhase) { _, phase in
+                let activationTrace: EditorPerformanceTraceToken?
+                if phase == .active {
+                    activationTrace = EditorPerformanceTrace.begin("app_activation") {
+                        [
+                            "phase": "active"
+                        ]
+                    }
+                } else {
+                    activationTrace = nil
+                }
+                if phase != .active {
+                    pendingActivationSyncTask?.cancel()
+                    pendingActivationSyncTask = nil
+                    viewModel.flushPendingBlockTextPersistenceForUI()
+                }
                 if foregroundSyncActivationPolicy.shouldSync(for: phase) {
-                    viewModel.syncAfterActivation()
+                    scheduleActivationSync()
+                }
+                if let activationTrace {
+                    DispatchQueue.main.async {
+                        EditorPerformanceTrace.end(activationTrace, as: "app_activation_ready") {
+                            [
+                                "phase": "active",
+                                "sync_deferred": "true"
+                            ]
+                        }
+                    }
                 }
             }
             .onChange(of: homeScreenQuickActionCenter.latestRequest) { _, request in
@@ -993,6 +1074,27 @@ struct EditorShellView: View {
             .task(id: scenePhase) {
                 await runForegroundSyncPollingLoop(for: scenePhase)
             }
+    }
+
+    private func scheduleActivationSync() {
+        guard !foregroundSyncActivationPolicy.shouldSkipActivationSync() else {
+            return
+        }
+        pendingActivationSyncTask?.cancel()
+        pendingActivationSyncTask = Task { @MainActor in
+            do {
+                try await Task.sleep(
+                    nanoseconds: ForegroundSyncActivationPolicy.activationSyncDelayNanoseconds
+                )
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            viewModel.syncAfterActivation()
+            pendingActivationSyncTask = nil
+        }
     }
 
     private func handleHomeScreenQuickActionIfNeeded(_ request: EditorHomeScreenQuickActionRequest?) {
@@ -1024,6 +1126,205 @@ struct EditorShellView: View {
         }
     }
 }
+
+#if os(iOS)
+private struct MobileKeyboardPerformanceProbe: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        context.coordinator.startObserving()
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.startObserving()
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.stopObserving()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private var isObserving = false
+        private var keyboardShowTrace: EditorPerformanceTraceToken?
+        private var keyboardShowFramePacingToken: String?
+        private var keyboardShowKind = "software"
+        private var keyboardShowSequence = 0
+        private var keyboardStabilityTask: Task<Void, Never>?
+
+        func startObserving() {
+            guard !isObserving else {
+                return
+            }
+
+            isObserving = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardWillShow(_:)),
+                name: UIResponder.keyboardWillShowNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardDidShow(_:)),
+                name: UIResponder.keyboardDidShowNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardWillHide(_:)),
+                name: UIResponder.keyboardWillHideNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardDidHide(_:)),
+                name: UIResponder.keyboardDidHideNotification,
+                object: nil
+            )
+        }
+
+        func stopObserving() {
+            guard isObserving else {
+                return
+            }
+
+            NotificationCenter.default.removeObserver(self)
+            keyboardStabilityTask?.cancel()
+            keyboardStabilityTask = nil
+            isObserving = false
+        }
+
+        @MainActor
+        @objc private func keyboardWillShow(_ notification: Notification) {
+            finishKeyboardShowIfNeeded(source: "superseded_by_will_show")
+            let frame = keyboardFrame(from: notification)
+            MobileKeyboardPerformanceState.update(isVisible: true, frame: frame)
+            let metadata = keyboardMetadata(from: notification, frame: frame, visible: true)
+            keyboardShowKind = metadata["keyboard_kind"] ?? "software"
+            let eventName = keyboardShowKind == "software" ? "keyboard_show" : "keyboard_accessory_show"
+            keyboardShowTrace = EditorPerformanceTrace.begin(eventName) {
+                metadata
+            }
+            keyboardShowFramePacingToken = EditorFramePacingTrace.begin(
+                eventName,
+                metadata: metadata
+            )
+            keyboardShowSequence += 1
+            scheduleKeyboardStabilityCheck(
+                sequence: keyboardShowSequence,
+                metadata: metadata
+            )
+        }
+
+        @MainActor
+        @objc private func keyboardDidShow(_ notification: Notification) {
+            let frame = keyboardFrame(from: notification)
+            MobileKeyboardPerformanceState.update(isVisible: true, frame: frame)
+            var metadata = keyboardMetadata(from: notification, frame: frame, visible: true)
+            metadata["stability_source"] = "keyboard_did_show"
+            EditorPerformanceTrace.point("keyboard_did_show_notification", metadata: metadata)
+            finishKeyboardShowIfNeeded(source: "keyboard_did_show")
+        }
+
+        @MainActor
+        @objc private func keyboardWillHide(_ notification: Notification) {
+            finishKeyboardShowIfNeeded(source: "cancelled_by_hide")
+            let frame = keyboardFrame(from: notification)
+            EditorPerformanceTrace.point("keyboard_hide_start") {
+                keyboardMetadata(from: notification, frame: frame, visible: false)
+            }
+        }
+
+        @MainActor
+        @objc private func keyboardDidHide(_ notification: Notification) {
+            let frame = keyboardFrame(from: notification)
+            MobileKeyboardPerformanceState.update(isVisible: false, frame: frame)
+            EditorPerformanceTrace.point("keyboard_hidden") {
+                keyboardMetadata(from: notification, frame: frame, visible: false)
+            }
+        }
+
+        private func keyboardFrame(from notification: Notification) -> CGRect {
+            (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect) ?? .zero
+        }
+
+        @MainActor
+        private func keyboardMetadata(
+            from notification: Notification,
+            frame: CGRect,
+            visible: Bool
+        ) -> [String: String] {
+            let screenBounds = UIScreen.main.bounds
+            let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0
+            let keyboardKind = frame.height >= 120 ? "software" : "accessory"
+            return [
+                "view": "keyboard",
+                "keyboard_kind": keyboardKind,
+                "keyboard_visible": "\(visible)",
+                "keyboard_min_y": String(format: "%.1f", frame.minY),
+                "keyboard_height": String(format: "%.1f", frame.height),
+                "viewport_width": String(format: "%.1f", screenBounds.width),
+                "viewport_height": String(format: "%.1f", screenBounds.height),
+                "animation_duration_ms": String(format: "%.1f", duration * 1_000)
+            ]
+        }
+
+        @MainActor
+        private func scheduleKeyboardStabilityCheck(
+            sequence: Int,
+            metadata: [String: String]
+        ) {
+            keyboardStabilityTask?.cancel()
+            let animationDurationMilliseconds = Double(metadata["animation_duration_ms"] ?? "") ?? 0
+            let delayNanoseconds = MobileKeyboardTraceStabilityPolicy.stableDelayNanoseconds(
+                animationDurationSeconds: animationDurationMilliseconds / 1_000
+            )
+            keyboardStabilityTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return
+                }
+                guard let self, self.keyboardShowSequence == sequence else {
+                    return
+                }
+                self.finishKeyboardShowIfNeeded(source: "visual_stability_timer")
+            }
+        }
+
+        @MainActor
+        private func finishKeyboardShowIfNeeded(source: String) {
+            guard keyboardShowTrace != nil || keyboardShowFramePacingToken != nil else {
+                return
+            }
+
+            keyboardStabilityTask?.cancel()
+            keyboardStabilityTask = nil
+            var metadata = MobileKeyboardPerformanceState.metadata
+            metadata["stability_source"] = source
+            let keyboardKind = MobileKeyboardPerformanceState.lastKeyboardFrame.height >= 120 ? "software" : "accessory"
+            metadata["keyboard_kind"] = keyboardKind
+            let stableEventName = keyboardKind == "software" ? "keyboard_layout_stable" : "keyboard_accessory_layout_stable"
+
+            EditorPerformanceTrace.end(keyboardShowTrace, as: stableEventName) {
+                metadata
+            }
+            EditorFramePacingTrace.end(
+                keyboardShowFramePacingToken,
+                metadata: metadata
+            )
+            keyboardShowTrace = nil
+            keyboardShowFramePacingToken = nil
+        }
+    }
+}
+#endif
 
 private struct AdaptiveEditorShell: View {
     @ObservedObject var viewModel: WorkspaceViewModel
@@ -1266,6 +1567,9 @@ private struct ThreeColumnEditorShell: View {
                     },
                     onBlockTextChange: { blockID, text in
                         viewModel.editBlockText(blockID: blockID, text: text)
+                    },
+                    onBlockTextEditingEnded: { blockID in
+                        viewModel.flushPendingBlockTextPersistenceForUI(blockID: blockID)
                     },
                     onTableRowsChange: { blockID, rows in
                         viewModel.updateTableRowsForUI(blockID: blockID, rows: rows)
@@ -1644,6 +1948,9 @@ private struct ThreeColumnEditorShell: View {
                 onBlockTextChange: { blockID, text in
                     viewModel.editBlockText(blockID: blockID, text: text)
                 },
+                onBlockTextEditingEnded: { blockID in
+                    viewModel.flushPendingBlockTextPersistenceForUI(blockID: blockID)
+                },
                 onTableRowsChange: { blockID, rows in
                     viewModel.updateTableRowsForUI(blockID: blockID, rows: rows)
                 },
@@ -1841,7 +2148,7 @@ private struct CompactEditorShell: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack(path: compactPathBinding) {
             CompactHomeView(
                 viewModel: viewModel,
                 onRevealNextScreen: {
@@ -1854,7 +2161,7 @@ private struct CompactEditorShell: View {
                     CompactPageListView(
                         viewModel: viewModel,
                         onRevealMainMenu: {
-                            path = []
+                            setCompactPath([])
                         }
                     )
                 case .collection(let collection):
@@ -1899,6 +2206,14 @@ private struct CompactEditorShell: View {
         }
     }
 
+    private var compactPathBinding: Binding<[CompactRoute]> {
+        Binding {
+            path
+        } set: { nextPath in
+            setCompactPath(nextPath, source: "navigation_binding")
+        }
+    }
+
     private func pushOnAppearNavigationIfNeeded() {
         let plannedPath = CompactShellPendingNavigationPlanner.onAppearPath(
             snapshot: viewModel.snapshot,
@@ -1913,13 +2228,21 @@ private struct CompactEditorShell: View {
             return
         }
 
+        let shouldApplyPlannedPath = CompactRoutePathUpdatePolicy.shouldApply(
+            plannedPath: plannedPath,
+            currentPath: path
+        )
         if viewModel.pendingCompactCollectionNavigation != nil {
             _ = viewModel.consumePendingCompactCollectionNavigation()
             _ = viewModel.consumePendingCompactPageNavigationID()
         } else if viewModel.pendingCompactPageNavigationID != nil {
             _ = viewModel.consumePendingCompactPageNavigationID()
         }
-        path = plannedPath
+        guard shouldApplyPlannedPath else {
+            didPushInitialPage = true
+            return
+        }
+        setCompactPath(plannedPath)
         didPushInitialPage = true
     }
 
@@ -1929,7 +2252,7 @@ private struct CompactEditorShell: View {
             return false
         }
         _ = viewModel.consumePendingCompactPageNavigationID()
-        path = [CompactShellRoutePlanner.documentListRoute(selectedCollection: collection)]
+        setCompactPath([CompactShellRoutePlanner.documentListRoute(selectedCollection: collection)])
         didPushInitialPage = true
         return true
     }
@@ -1953,6 +2276,9 @@ private struct CompactEditorShell: View {
         guard viewModel.snapshot.pages.contains(where: { $0.id == pageID }) else {
             return
         }
+        guard CompactPageRouteUpdatePolicy.shouldPush(pageID: pageID, currentPath: path) else {
+            return
+        }
 
         let nextPath = CompactShellRoutePlanner.pathForPage(
             pageID,
@@ -1974,30 +2300,51 @@ private struct CompactEditorShell: View {
     private func revealPreviousScreen() {
         let previousPath = CompactShellRoutePlanner.previousScreenPath(currentPath: path)
         if previousPath.isEmpty, path.count > 1 {
-            path = [CompactShellRoutePlanner.documentListRoute(selectedCollection: viewModel.selectedCollection)]
+            setCompactPath([CompactShellRoutePlanner.documentListRoute(selectedCollection: viewModel.selectedCollection)])
         } else if previousPath.isEmpty,
                   case .page(let pageID)? = path.last {
-            path = CompactShellRoutePlanner.documentListPathForPage(
-                pageID,
-                snapshot: viewModel.snapshot,
-                selectedCollection: viewModel.selectedCollection
+            setCompactPath(
+                CompactShellRoutePlanner.documentListPathForPage(
+                    pageID,
+                    snapshot: viewModel.snapshot,
+                    selectedCollection: viewModel.selectedCollection
+                )
             )
         } else {
-            path = previousPath
+            setCompactPath(previousPath)
         }
     }
 
     private func revealNextScreen() {
-        path = CompactShellRoutePlanner.nextScreenPath(
-            currentPath: path,
-            snapshot: viewModel.snapshot,
-            selectedCollection: viewModel.selectedCollection
+        setCompactPath(
+            CompactShellRoutePlanner.nextScreenPath(
+                currentPath: path,
+                snapshot: viewModel.snapshot,
+                selectedCollection: viewModel.selectedCollection
+            )
         )
     }
 
-    private func setCompactPath(_ nextPath: [CompactRoute]) {
+    private func setCompactPath(_ nextPath: [CompactRoute], source: String = "programmatic") {
+        guard nextPath != path else {
+            return
+        }
+        let previousPath = path
+        let trace = beginCompactRouteTrace(from: previousPath, to: nextPath, source: source)
+        let scrollRestoreTrace = beginMobileScrollRestoreTraceIfNeeded(
+            from: previousPath,
+            to: nextPath,
+            source: source
+        )
         guard CompactPagePushAnimationPolicy.disablesProgrammaticPushAnimation else {
             path = nextPath
+            finishCompactRouteTrace(trace, from: previousPath, to: nextPath, source: source)
+            finishMobileScrollRestoreTraceIfNeeded(
+                scrollRestoreTrace,
+                from: previousPath,
+                to: nextPath,
+                source: source
+            )
             return
         }
 
@@ -2005,6 +2352,149 @@ private struct CompactEditorShell: View {
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             path = nextPath
+        }
+        finishCompactRouteTrace(trace, from: previousPath, to: nextPath, source: source)
+        finishMobileScrollRestoreTraceIfNeeded(
+            scrollRestoreTrace,
+            from: previousPath,
+            to: nextPath,
+            source: source
+        )
+    }
+
+    private func beginCompactRouteTrace(
+        from previousPath: [CompactRoute],
+        to nextPath: [CompactRoute],
+        source: String
+    ) -> CompactRoutePerformanceTrace {
+        let eventName = nextPath.count >= previousPath.count ? "mobile_route_push" : "mobile_route_back"
+        let metadata = compactRouteMetadata(from: previousPath, to: nextPath, source: source)
+        return CompactRoutePerformanceTrace(
+            interactionToken: EditorPerformanceTrace.begin(eventName) {
+                metadata
+            },
+            framePacingToken: EditorFramePacingTrace.begin(eventName, metadata: metadata)
+        )
+    }
+
+    private func finishCompactRouteTrace(
+        _ trace: CompactRoutePerformanceTrace,
+        from previousPath: [CompactRoute],
+        to nextPath: [CompactRoute],
+        source: String
+    ) {
+        let eventName = nextPath.count >= previousPath.count ? "mobile_route_push_painted" : "mobile_route_back_painted"
+        let metadata = compactRouteMetadata(from: previousPath, to: nextPath, source: source)
+        DispatchQueue.main.async {
+            EditorPerformanceTrace.end(trace.interactionToken, as: eventName) {
+                metadata
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(350)) {
+                EditorFramePacingTrace.end(trace.framePacingToken, metadata: metadata)
+            }
+        }
+    }
+
+    private func compactRouteMetadata(
+        from previousPath: [CompactRoute],
+        to nextPath: [CompactRoute],
+        source: String
+    ) -> [String: String] {
+        [
+            "route": compactPathDescription(nextPath),
+            "previous_route": compactPathDescription(previousPath),
+            "source": source,
+            "from_depth": "\(previousPath.count + 1)",
+            "to_depth": "\(nextPath.count + 1)",
+            "page_count": "\(viewModel.snapshot.pages.count)",
+            "block_count": "\(viewModel.visibleBlocks.count)"
+        ]
+    }
+
+    private func compactPathDescription(_ path: [CompactRoute]) -> String {
+        guard !path.isEmpty else {
+            return "library"
+        }
+        return path.map(compactRouteDescription).joined(separator: ">")
+    }
+
+    private func compactRouteDescription(_ route: CompactRoute) -> String {
+        switch route {
+        case .pages:
+            return "pages"
+        case .collection(let collection):
+            return "collection:\(String(describing: collection))"
+        case .page(let pageID):
+            return "page:\(pageID.prefix(12))"
+        }
+    }
+
+    private func beginMobileScrollRestoreTraceIfNeeded(
+        from previousPath: [CompactRoute],
+        to nextPath: [CompactRoute],
+        source: String
+    ) -> EditorPerformanceTraceToken? {
+#if os(iOS)
+        guard previousPath.count > nextPath.count,
+              nextPath.last?.isDocumentListRoute == true else {
+            return nil
+        }
+
+        return EditorPerformanceTrace.begin("mobile_scroll_restore") {
+            mobileScrollRestoreMetadata(from: previousPath, to: nextPath, source: source)
+        }
+#else
+        return nil
+#endif
+    }
+
+    private func finishMobileScrollRestoreTraceIfNeeded(
+        _ token: EditorPerformanceTraceToken?,
+        from previousPath: [CompactRoute],
+        to nextPath: [CompactRoute],
+        source: String
+    ) {
+#if os(iOS)
+        guard token != nil else {
+            return
+        }
+
+        let metadata = mobileScrollRestoreMetadata(from: previousPath, to: nextPath, source: source)
+        DispatchQueue.main.async {
+            EditorPerformanceTrace.end(token, as: "mobile_scroll_restore_done") {
+                metadata
+            }
+        }
+#endif
+    }
+
+    private func mobileScrollRestoreMetadata(
+        from previousPath: [CompactRoute],
+        to nextPath: [CompactRoute],
+        source: String
+    ) -> [String: String] {
+        [
+            "route": compactPathDescription(nextPath),
+            "previous_route": compactPathDescription(previousPath),
+            "source": source,
+            "page_count": "\(viewModel.snapshot.pages.count)",
+            "selected_page_id": viewModel.selectedPageID ?? "none"
+        ]
+    }
+}
+
+private struct CompactRoutePerformanceTrace {
+    let interactionToken: EditorPerformanceTraceToken?
+    let framePacingToken: String?
+}
+
+private extension CompactRoute {
+    var isDocumentListRoute: Bool {
+        switch self {
+        case .pages, .collection:
+            return true
+        case .page:
+            return false
         }
     }
 }
@@ -2079,7 +2569,7 @@ private struct CompactHomeView: View {
 
     private var librarySection: some View {
         VStack(spacing: CGFloat(CompactLibraryChrome.navigationRowSpacing)) {
-            ForEach(CompactLibraryNavigationModel.items(snapshot: viewModel.snapshot)) { item in
+            ForEach(viewModel.compactLibraryNavigationItems) { item in
                 compactNavigationRow(item: item)
             }
         }
@@ -2572,6 +3062,7 @@ enum MobileBlockDragActivationPolicy {
     static let usesVisibleDragHandle = false
     static let usesLongPressDraggableRow = true
     static let usesWholeRowDropTarget = true
+    static let usesDedicatedRowDropSlots = false
     static let usesNativeTextViewDragInteraction = true
 }
 
@@ -4976,6 +5467,49 @@ enum PageReferencePreviewResolver {
     }
 }
 
+struct AttachmentRenderIndex: Equatable, Sendable {
+    private let attachmentsByID: [String: AttachmentSnapshot]
+    private let fallbackAttachmentsByKey: [String: AttachmentSnapshot]
+
+    init(attachments: [AttachmentSnapshot]) {
+        attachmentsByID = Dictionary(
+            attachments.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        fallbackAttachmentsByKey = Dictionary(
+            attachments.map { (Self.fallbackKey(blockType: $0.kind.blockType, textPlain: $0.originalFilename), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    func attachment(for block: BlockSnapshot) -> AttachmentSnapshot? {
+        if let attachmentID = block.attachmentID,
+           let attachment = attachmentsByID[attachmentID],
+           attachment.kind.blockType == block.type {
+            return attachment
+        }
+
+        return fallbackAttachmentsByKey[
+            Self.fallbackKey(blockType: block.type, textPlain: block.textPlain)
+        ]
+    }
+
+    func previewGenerationStatus(
+        for block: BlockSnapshot,
+        statuses: [String: AttachmentPreviewGenerationStatus]
+    ) -> AttachmentPreviewGenerationStatus {
+        guard let attachment = attachment(for: block) else {
+            return .idle
+        }
+
+        return statuses[attachment.id] ?? .idle
+    }
+
+    private static func fallbackKey(blockType: BlockType, textPlain: String) -> String {
+        "\(blockType.rawValue)\u{1F}\(textPlain)"
+    }
+}
+
 struct EditorCanvasRenderMetrics: Equatable, Sendable {
     let pageID: String?
     let blockCount: Int
@@ -5093,17 +5627,516 @@ enum EditorCanvasScrollMetricsPublicationPolicy {
         case .reset:
             return true
         case .visibleEvent:
-            if isUITestProbeEnabled {
-                return true
-            }
             return eventCount > 0 && eventCount.isMultiple(of: runtimeEventInterval)
         }
+    }
+}
+
+enum EditorCanvasScrollMetricsProbePolicy {
+    static func isEnabled(environment: [String: String]) -> Bool {
+        environment["EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT"] != nil
+            || environment["EDITOR_UI_TEST_SCROLL_METRICS"] == "1"
+            || environment["EDITOR_PERFORMANCE_TRACE_ENABLED"] == "1"
+    }
+}
+
+enum EditorCanvasAutoScrollProbePolicy {
+    static let minimumBlockCount = 80
+    static let maximumTargetIndex = 120
+    static let targetStride = 10
+    static let initialDelayMilliseconds = 1_500
+    static let stepDelayMilliseconds = 180
+    static let animationDurationSeconds = 0.16
+    static let continuousScrollDurationMilliseconds = 12_000
+    static let continuousScrollDistancePoints: CGFloat = 7_000
+    static let continuousScrollPointsPerFrame: CGFloat = 42
+
+    static func isEnabled(environment: [String: String]) -> Bool {
+        environment["EDITOR_UI_TEST_AUTOSCROLL_ON_LAUNCH"] == "1"
+            && environment["EDITOR_PERFORMANCE_TRACE_ENABLED"] == "1"
+    }
+
+    static func targetIndices(blockCount: Int) -> [Int] {
+        guard blockCount > minimumBlockCount else {
+            return []
+        }
+
+        let lastTargetIndex = min(blockCount - 1, maximumTargetIndex)
+        var indices = Array(stride(from: targetStride, through: lastTargetIndex, by: targetStride))
+        if lastTargetIndex >= minimumBlockCount,
+           !indices.contains(minimumBlockCount) {
+            indices.append(minimumBlockCount)
+        }
+        if indices.last != lastTargetIndex {
+            indices.append(lastTargetIndex)
+        }
+        return indices.sorted()
+    }
+}
+
+#if os(iOS)
+private struct EditorCanvasAutoScrollProbeDriver: UIViewRepresentable {
+    let runID: String
+    let pageID: String
+    let blockCount: Int
+    let isEnabled: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView(frame: .zero)
+        view.onAttached = { probeView in
+            context.coordinator.attach(to: probeView)
+            context.coordinator.configure(
+                runID: runID,
+                pageID: pageID,
+                blockCount: blockCount,
+                isEnabled: isEnabled
+            )
+        }
+        return view
+    }
+
+    func updateUIView(_ view: ProbeView, context: Context) {
+        context.coordinator.attach(to: view)
+        context.coordinator.configure(
+            runID: runID,
+            pageID: pageID,
+            blockCount: blockCount,
+            isEnabled: isEnabled
+        )
+    }
+
+    final class ProbeView: UIView {
+        var onAttached: ((UIView) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.onAttached?(self)
+            }
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private weak var probeView: UIView?
+        private weak var scrollView: UIScrollView?
+        private var displayLink: CADisplayLink?
+        private var activeRunID: String?
+        private var completedRunID: String?
+        private var pageID = "none"
+        private var blockCount = 0
+        private var startOffsetY: CGFloat?
+        private var targetOffsetY: CGFloat?
+        private var startedAt: CFTimeInterval?
+
+        func attach(to view: UIView) {
+            probeView = view
+            scrollView = Self.enclosingScrollView(from: view)
+        }
+
+        func configure(runID: String, pageID: String, blockCount: Int, isEnabled: Bool) {
+            guard isEnabled,
+                  blockCount > EditorCanvasAutoScrollProbePolicy.minimumBlockCount else {
+                stop(reason: "disabled")
+                return
+            }
+            guard completedRunID != runID,
+                  activeRunID != runID else {
+                return
+            }
+            activeRunID = runID
+            self.pageID = pageID
+            self.blockCount = blockCount
+            startOffsetY = nil
+            targetOffsetY = nil
+            startedAt = nil
+
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + .milliseconds(EditorCanvasAutoScrollProbePolicy.initialDelayMilliseconds)
+            ) { [weak self] in
+                self?.start(runID: runID)
+            }
+        }
+
+        private func start(runID: String) {
+            guard activeRunID == runID else {
+                return
+            }
+            if scrollView == nil,
+               let probeView {
+                scrollView = Self.enclosingScrollView(from: probeView)
+            }
+            guard scrollView != nil else {
+                stop(reason: "missing_scroll_view")
+                return
+            }
+
+            EditorPerformanceTrace.point("editor_autoscroll_probe_start") {
+                [
+                    "page_id": pageID,
+                    "block_count": "\(blockCount)",
+                    "driver": "uiscrollview_time_based"
+                ]
+            }
+
+            let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+            startedAt = CACurrentMediaTime()
+        }
+
+        @objc private func tick(_ link: CADisplayLink) {
+            guard let scrollView,
+                  let activeRunID else {
+                stop(reason: "missing_scroll_view")
+                return
+            }
+            let maximumOffsetY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+            guard maximumOffsetY > scrollView.contentOffset.y else {
+                completedRunID = activeRunID
+                stop(reason: "already_at_end")
+                return
+            }
+
+            if startOffsetY == nil || targetOffsetY == nil {
+                startOffsetY = scrollView.contentOffset.y
+                targetOffsetY = min(
+                    maximumOffsetY,
+                    scrollView.contentOffset.y + EditorCanvasAutoScrollProbePolicy.continuousScrollDistancePoints
+                )
+            }
+
+            let startOffsetY = startOffsetY ?? scrollView.contentOffset.y
+            let targetOffsetY = targetOffsetY ?? maximumOffsetY
+            let elapsedMilliseconds = ((CACurrentMediaTime() - (startedAt ?? CACurrentMediaTime())) * 1_000)
+            let progress = min(
+                1,
+                elapsedMilliseconds / Double(EditorCanvasAutoScrollProbePolicy.continuousScrollDurationMilliseconds)
+            )
+            let nextOffsetY = min(
+                targetOffsetY,
+                startOffsetY + (targetOffsetY - startOffsetY) * CGFloat(progress)
+            )
+            scrollView.setContentOffset(
+                CGPoint(x: scrollView.contentOffset.x, y: nextOffsetY),
+                animated: false
+            )
+
+            if nextOffsetY >= targetOffsetY
+                || elapsedMilliseconds >= Double(EditorCanvasAutoScrollProbePolicy.continuousScrollDurationMilliseconds) {
+                completedRunID = activeRunID
+                stop(reason: "completed")
+            }
+        }
+
+        private func stop(reason: String) {
+            displayLink?.invalidate()
+            displayLink = nil
+            if activeRunID != nil {
+                EditorPerformanceTrace.point("editor_autoscroll_probe_done") {
+                    [
+                        "page_id": pageID,
+                        "block_count": "\(blockCount)",
+                        "driver": "uiscrollview_time_based",
+                        "reason": reason
+                    ]
+                }
+            }
+            activeRunID = nil
+            startOffsetY = nil
+            targetOffsetY = nil
+            startedAt = nil
+        }
+
+        private static func enclosingScrollView(from view: UIView) -> UIScrollView? {
+            var current = view.superview
+            while let candidate = current {
+                if let scrollView = candidate as? UIScrollView {
+                    return scrollView
+                }
+                current = candidate.superview
+            }
+            guard let window = view.window else {
+                return nil
+            }
+            return scrollViews(in: window)
+                .filter { $0.contentSize.height > $0.bounds.height }
+                .max { lhs, rhs in
+                    (lhs.contentSize.height - lhs.bounds.height) < (rhs.contentSize.height - rhs.bounds.height)
+                }
+        }
+
+        private static func scrollViews(in view: UIView) -> [UIScrollView] {
+            var result: [UIScrollView] = []
+            if let scrollView = view as? UIScrollView {
+                result.append(scrollView)
+            }
+            for subview in view.subviews {
+                result.append(contentsOf: scrollViews(in: subview))
+            }
+            return result
+        }
+    }
+}
+#elseif os(macOS)
+private struct EditorCanvasAutoScrollProbeDriver: NSViewRepresentable {
+    let runID: String
+    let pageID: String
+    let blockCount: Int
+    let isEnabled: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> ProbeView {
+        let view = ProbeView(frame: .zero)
+        view.onAttached = { probeView in
+            context.coordinator.attach(to: probeView)
+            context.coordinator.configure(
+                runID: runID,
+                pageID: pageID,
+                blockCount: blockCount,
+                isEnabled: isEnabled
+            )
+        }
+        return view
+    }
+
+    func updateNSView(_ view: ProbeView, context: Context) {
+        context.coordinator.attach(to: view)
+        context.coordinator.configure(
+            runID: runID,
+            pageID: pageID,
+            blockCount: blockCount,
+            isEnabled: isEnabled
+        )
+    }
+
+    final class ProbeView: NSView {
+        var onAttached: ((NSView) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.onAttached?(self)
+            }
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private weak var probeView: NSView?
+        private weak var scrollView: NSScrollView?
+        private var timer: Timer?
+        private var activeRunID: String?
+        private var completedRunID: String?
+        private var pageID = "none"
+        private var blockCount = 0
+        private var startOffsetY: CGFloat?
+        private var targetOffsetY: CGFloat?
+        private var startedAt: TimeInterval?
+
+        func attach(to view: NSView) {
+            probeView = view
+            scrollView = Self.enclosingScrollView(from: view)
+        }
+
+        func configure(runID: String, pageID: String, blockCount: Int, isEnabled: Bool) {
+            guard isEnabled,
+                  blockCount > EditorCanvasAutoScrollProbePolicy.minimumBlockCount else {
+                stop(reason: "disabled")
+                return
+            }
+            guard completedRunID != runID,
+                  activeRunID != runID else {
+                return
+            }
+            activeRunID = runID
+            self.pageID = pageID
+            self.blockCount = blockCount
+            startOffsetY = nil
+            targetOffsetY = nil
+            startedAt = nil
+
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + .milliseconds(EditorCanvasAutoScrollProbePolicy.initialDelayMilliseconds)
+            ) { [weak self] in
+                self?.start(runID: runID)
+            }
+        }
+
+        private func start(runID: String) {
+            guard activeRunID == runID else {
+                return
+            }
+            if scrollView == nil,
+               let probeView {
+                scrollView = Self.enclosingScrollView(from: probeView)
+            }
+            guard scrollView != nil else {
+                stop(reason: "missing_scroll_view")
+                return
+            }
+
+            EditorPerformanceTrace.point("editor_autoscroll_probe_start") {
+                [
+                    "page_id": pageID,
+                    "block_count": "\(blockCount)",
+                    "driver": "nsscrollview_time_based"
+                ]
+            }
+
+            let timer = Timer(
+                timeInterval: 1.0 / 60.0,
+                target: self,
+                selector: #selector(tick(_:)),
+                userInfo: nil,
+                repeats: true
+            )
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+            startedAt = ProcessInfo.processInfo.systemUptime
+        }
+
+        @objc private func tick(_ timer: Timer) {
+            guard let scrollView,
+                  let activeRunID else {
+                stop(reason: "missing_scroll_view")
+                return
+            }
+            let clipView = scrollView.contentView
+            let documentHeight = scrollView.documentView?.bounds.height ?? scrollView.documentView?.frame.height ?? 0
+            let maximumOffsetY = max(0, documentHeight - clipView.bounds.height)
+            let currentOffsetY = clipView.bounds.origin.y
+            guard maximumOffsetY > currentOffsetY else {
+                completedRunID = activeRunID
+                stop(reason: "already_at_end")
+                return
+            }
+
+            if startOffsetY == nil || targetOffsetY == nil {
+                startOffsetY = currentOffsetY
+                targetOffsetY = min(
+                    maximumOffsetY,
+                    currentOffsetY + EditorCanvasAutoScrollProbePolicy.continuousScrollDistancePoints
+                )
+            }
+
+            let startOffsetY = startOffsetY ?? currentOffsetY
+            let targetOffsetY = targetOffsetY ?? maximumOffsetY
+            let elapsedMilliseconds = ((ProcessInfo.processInfo.systemUptime - (startedAt ?? ProcessInfo.processInfo.systemUptime)) * 1_000)
+            let progress = min(
+                1,
+                elapsedMilliseconds / Double(EditorCanvasAutoScrollProbePolicy.continuousScrollDurationMilliseconds)
+            )
+            let nextOffsetY = min(
+                targetOffsetY,
+                startOffsetY + (targetOffsetY - startOffsetY) * CGFloat(progress)
+            )
+            clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: nextOffsetY))
+            scrollView.reflectScrolledClipView(clipView)
+
+            if nextOffsetY >= targetOffsetY
+                || elapsedMilliseconds >= Double(EditorCanvasAutoScrollProbePolicy.continuousScrollDurationMilliseconds) {
+                completedRunID = activeRunID
+                stop(reason: "completed")
+            }
+        }
+
+        private func stop(reason: String) {
+            timer?.invalidate()
+            timer = nil
+            if activeRunID != nil {
+                EditorPerformanceTrace.point("editor_autoscroll_probe_done") {
+                    [
+                        "page_id": pageID,
+                        "block_count": "\(blockCount)",
+                        "driver": "nsscrollview_time_based",
+                        "reason": reason
+                    ]
+                }
+            }
+            activeRunID = nil
+            startOffsetY = nil
+            targetOffsetY = nil
+            startedAt = nil
+        }
+
+        private static func enclosingScrollView(from view: NSView) -> NSScrollView? {
+            var current = view.superview
+            while let candidate = current {
+                if let scrollView = candidate as? NSScrollView {
+                    return scrollView
+                }
+                current = candidate.superview
+            }
+            guard let window = view.window else {
+                return nil
+            }
+            return scrollViews(in: window.contentView)
+                .filter { scrollView in
+                    let documentHeight = scrollView.documentView?.bounds.height ?? scrollView.documentView?.frame.height ?? 0
+                    return documentHeight > scrollView.contentView.bounds.height
+                }
+                .max { lhs, rhs in
+                    let lhsHeight = lhs.documentView?.bounds.height ?? lhs.documentView?.frame.height ?? 0
+                    let rhsHeight = rhs.documentView?.bounds.height ?? rhs.documentView?.frame.height ?? 0
+                    return (lhsHeight - lhs.contentView.bounds.height) < (rhsHeight - rhs.contentView.bounds.height)
+                }
+        }
+
+        private static func scrollViews(in view: NSView?) -> [NSScrollView] {
+            guard let view else {
+                return []
+            }
+            var result: [NSScrollView] = []
+            if let scrollView = view as? NSScrollView {
+                result.append(scrollView)
+            }
+            for subview in view.subviews {
+                result.append(contentsOf: scrollViews(in: subview))
+            }
+            return result
+        }
+    }
+}
+#endif
+
+enum EditorCanvasScrollFramePacingMetadata {
+    static func metadata(metrics: EditorCanvasScrollMetrics, source: String) -> [String: String] {
+        [
+            "page_id": metrics.pageID ?? "none",
+            "block_count": "\(metrics.blockCount)",
+            "visible_block_count": "\(metrics.visibleBlockCount)",
+            "peak_visible_block_count": "\(metrics.peakVisibleBlockCount)",
+            "peak_last_visible_block_index": metrics.peakLastVisibleBlockIndex.map(String.init) ?? "none",
+            "visible_block_index_span": "\(metrics.visibleBlockIndexSpan)",
+            "visible_block_churn_count": "\(metrics.visibleBlockChurnCount)",
+            "scroll_lifetime_ms": String(format: "%.3f", metrics.scrollLifetimeMilliseconds),
+            "source": source
+        ]
     }
 }
 
 struct EditorCanvasScrollMetricsRecorderEvent: Equatable, Sendable {
     let metrics: EditorCanvasScrollMetrics
     let eventCount: Int
+}
+
+final class EditorCanvasScrollFramePacingState {
+    var token: String?
+    var generation = 0
 }
 
 final class EditorCanvasScrollMetricsRecorder {
@@ -5286,6 +6319,18 @@ struct CompactLibraryNavigationItem: Identifiable, Equatable, Sendable {
 enum CompactLibraryNavigationModel {
     static func items(snapshot: WorkspaceSnapshot) -> [CompactLibraryNavigationItem] {
         let diaryPageIDs = snapshot.diaryPageIDs
+        return items(
+            snapshot: snapshot,
+            diaryPageIDs: diaryPageIDs,
+            visibleDiaryPageIDs: snapshot.visibleDiaryPageIDs
+        )
+    }
+
+    static func items(
+        snapshot: WorkspaceSnapshot,
+        diaryPageIDs: Set<String>,
+        visibleDiaryPageIDs: Set<String>
+    ) -> [CompactLibraryNavigationItem] {
         let allDocumentCount = snapshot.pages.filter { !diaryPageIDs.contains($0.id) }.count
         let encryptedCount = snapshot.pages.filter { $0.isEncrypted && !snapshot.isEmptyDiaryPage($0.id) }.count
 
@@ -5304,7 +6349,7 @@ enum CompactLibraryNavigationModel {
                 id: "diary",
                 title: "日记",
                 systemImage: "square.and.pencil",
-                count: snapshot.visibleDiaryPageIDs.count,
+                count: visibleDiaryPageIDs.count,
                 showsCount: true,
                 collection: .diary,
                 route: .collection(.diary),
@@ -5351,6 +6396,95 @@ struct CompactCollectionPageListItem: Identifiable, Equatable, Sendable {
     let preview: PageListPreview
 }
 
+private struct PageListPreviewAccumulator: Equatable, Sendable {
+    var excerpt: String?
+    var imageAttachment: AttachmentSnapshot?
+    var fileAttachment: AttachmentSnapshot?
+
+    var preview: PageListPreview {
+        PageListPreview(
+            excerpt: excerpt,
+            imageAttachment: imageAttachment,
+            fileAttachment: imageAttachment == nil ? fileAttachment : nil
+        )
+    }
+}
+
+struct PageListRenderIndex: Equatable, Sendable {
+    private let loadedPageIDs: Set<String>
+    private let computedPreviewsByPageID: [String: PageListPreview]
+    private let storedPreviewsByPageID: [String: PageListPreview]
+    private let tagNamesByPageID: [String: [String]]
+
+    init(snapshot: WorkspaceSnapshot) {
+        let attachmentIndex = AttachmentRenderIndex(attachments: snapshot.attachments)
+        var loadedPageIDs: Set<String> = []
+        var previewAccumulators: [String: PageListPreviewAccumulator] = [:]
+
+        for block in snapshot.blocks {
+            loadedPageIDs.insert(block.pageID)
+            switch block.type {
+            case .paragraph:
+                let excerpt = block.textPlain.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !excerpt.isEmpty,
+                   previewAccumulators[block.pageID, default: PageListPreviewAccumulator()].excerpt == nil {
+                    previewAccumulators[block.pageID, default: PageListPreviewAccumulator()].excerpt = excerpt
+                }
+            case .attachmentImage:
+                if previewAccumulators[block.pageID, default: PageListPreviewAccumulator()].imageAttachment == nil {
+                    previewAccumulators[block.pageID, default: PageListPreviewAccumulator()].imageAttachment =
+                        attachmentIndex.attachment(for: block)
+                }
+            case .attachmentFile:
+                if previewAccumulators[block.pageID, default: PageListPreviewAccumulator()].fileAttachment == nil {
+                    previewAccumulators[block.pageID, default: PageListPreviewAccumulator()].fileAttachment =
+                        attachmentIndex.attachment(for: block)
+                }
+            default:
+                break
+            }
+        }
+
+        var tagIDsByPageID: [String: Set<String>] = [:]
+        for pageTag in snapshot.pageTags {
+            tagIDsByPageID[pageTag.pageID, default: []].insert(pageTag.tagID)
+        }
+
+        self.loadedPageIDs = loadedPageIDs
+        self.computedPreviewsByPageID = previewAccumulators.mapValues(\.preview)
+        self.storedPreviewsByPageID = snapshot.pageListPreviews
+        self.tagNamesByPageID = tagIDsByPageID.mapValues { tagIDs in
+            snapshot.tags.compactMap { tagIDs.contains($0.id) ? $0.path : nil }
+        }
+    }
+
+    func preview(for page: PageSummary) -> PageListPreview {
+        guard loadedPageIDs.contains(page.id) else {
+            return storedPreviewsByPageID[page.id] ?? PageListPreview(
+                excerpt: nil,
+                imageAttachment: nil,
+                fileAttachment: nil
+            )
+        }
+        guard !page.isEncrypted else {
+            return PageListPreview(
+                excerpt: nil,
+                imageAttachment: nil,
+                fileAttachment: nil
+            )
+        }
+        return computedPreviewsByPageID[page.id] ?? PageListPreview(
+            excerpt: nil,
+            imageAttachment: nil,
+            fileAttachment: nil
+        )
+    }
+
+    func tagNames(for page: PageSummary) -> [String] {
+        tagNamesByPageID[page.id] ?? []
+    }
+}
+
 enum CompactCollectionPageListModel {
     static func pages(snapshot: WorkspaceSnapshot, collection: WorkspaceCollection) -> [PageSummary] {
         let diaryPageIDs = snapshot.diaryPageIDs
@@ -5390,26 +6524,15 @@ enum CompactCollectionPageListModel {
     }
 
     static func items(snapshot: WorkspaceSnapshot, collection: WorkspaceCollection) -> [CompactCollectionPageListItem] {
-        pages(snapshot: snapshot, collection: collection).map { page in
+        let renderIndex = PageListRenderIndex(snapshot: snapshot)
+        return pages(snapshot: snapshot, collection: collection).map { page in
             CompactCollectionPageListItem(
                 id: page.id,
                 page: page,
-                tagNames: tagNames(for: page, snapshot: snapshot),
-                preview: PageListPreviewResolver.preview(page: page, snapshot: snapshot)
+                tagNames: renderIndex.tagNames(for: page),
+                preview: renderIndex.preview(for: page)
             )
         }
-    }
-
-    private static func tagNames(for page: PageSummary, snapshot: WorkspaceSnapshot) -> [String] {
-        let tagIDs = Set(
-            snapshot.pageTags
-                .filter { $0.pageID == page.id }
-                .map(\.tagID)
-        )
-
-        return snapshot.tags
-            .filter { tagIDs.contains($0.id) }
-            .map(\.path)
     }
 }
 
@@ -5437,6 +6560,28 @@ enum CompactEditorInitialFocusPolicy {
 
         return onlyBlock.type.isTextEditable &&
             onlyBlock.textPlain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+enum CompactPageRouteUpdatePolicy {
+    static func shouldPush(pageID: String, currentPath: [CompactRoute]) -> Bool {
+        guard case .page(pageID)? = currentPath.last else {
+            return true
+        }
+        return false
+    }
+}
+
+enum CompactRoutePathUpdatePolicy {
+    static func shouldApply(plannedPath: [CompactRoute], currentPath: [CompactRoute]) -> Bool {
+        guard plannedPath != currentPath else {
+            return false
+        }
+        guard case .page(let plannedPageID)? = plannedPath.last,
+              case .page(let currentPageID)? = currentPath.last else {
+            return true
+        }
+        return plannedPageID != currentPageID
     }
 }
 
@@ -5819,6 +6964,9 @@ private struct CompactPageDestination: View {
                 onBlockTextChange: { blockID, text in
                     viewModel.editBlockText(blockID: blockID, text: text)
                 },
+                onBlockTextEditingEnded: { blockID in
+                    viewModel.flushPendingBlockTextPersistenceForUI(blockID: blockID)
+                },
                 onTableRowsChange: { blockID, rows in
                     viewModel.updateTableRowsForUI(blockID: blockID, rows: rows)
                 },
@@ -5958,12 +7106,38 @@ struct SidebarNavigationItem: Identifiable, Equatable, Sendable {
         self.parentTagID = parentTagID
         self.hasChildren = hasChildren
     }
+
+    func selecting(_ selectedCollection: WorkspaceCollection) -> SidebarNavigationItem {
+        SidebarNavigationItem(
+            id: id,
+            title: title,
+            systemImage: systemImage,
+            count: count,
+            showsCount: showsCount,
+            collection: collection,
+            identifier: identifier,
+            isSelected: collection == selectedCollection,
+            nestingLevel: nestingLevel,
+            parentTagID: parentTagID,
+            hasChildren: hasChildren
+        )
+    }
 }
 
 struct SidebarNavigationModel: Equatable, Sendable {
     let primaryItems: [SidebarNavigationItem]
     let tagItems: [SidebarNavigationItem]
     let utilityItems: [SidebarNavigationItem]
+
+    private init(
+        primaryItems: [SidebarNavigationItem],
+        tagItems: [SidebarNavigationItem],
+        utilityItems: [SidebarNavigationItem]
+    ) {
+        self.primaryItems = primaryItems
+        self.tagItems = tagItems
+        self.utilityItems = utilityItems
+    }
 
     init(snapshot: WorkspaceSnapshot, selectedCollection: WorkspaceCollection) {
         let diaryPageIDs = snapshot.diaryPageIDs
@@ -6044,6 +7218,14 @@ struct SidebarNavigationModel: Equatable, Sendable {
                 isSelected: selectedCollection == .archive
             )
         ]
+    }
+
+    func selecting(_ selectedCollection: WorkspaceCollection) -> SidebarNavigationModel {
+        SidebarNavigationModel(
+            primaryItems: primaryItems.map { $0.selecting(selectedCollection) },
+            tagItems: tagItems.map { $0.selecting(selectedCollection) },
+            utilityItems: utilityItems.map { $0.selecting(selectedCollection) }
+        )
     }
 
     private static func hierarchicalTags(_ tags: [TagSummary]) -> [(TagSummary, Int)] {
@@ -6218,6 +7400,9 @@ private struct WorkspaceSidebar: View {
     @Binding var activePageDragIDs: Set<String>
     @AppStorage(SidebarTagSectionExpansionPolicy.appStorageKey) private var isTagsExpanded = SidebarTagSectionExpansionPolicy.defaultIsExpanded
     @State private var expandedTagIDs: Set<String> = []
+    @State private var optimisticSelectedCollection: WorkspaceCollection?
+    @State private var pendingCollectionSelectionTask: Task<Void, Never>?
+    @State private var cachedSidebarModel: SidebarNavigationModel?
 
     var body: some View {
         let model = sidebarModel
@@ -6252,16 +7437,44 @@ private struct WorkspaceSidebar: View {
 #endif
         .navigationSplitViewColumnWidth(CGFloat(EditorDesignTokens.Layout.sidebarIdealWidth))
         .onAppear {
+            refreshSidebarModelCache(snapshot: viewModel.snapshot)
             expandTagsForSelectedPageIfNeeded(selectedPageTagIDs: viewModel.selectedPageTagIDs)
+        }
+        .onReceive(viewModel.$snapshot) { snapshot in
+            refreshSidebarModelCache(snapshot: snapshot)
         }
         .onChange(of: viewModel.selectedPageTagIDs) { _, selectedPageTagIDs in
             expandTagsForSelectedPageIfNeeded(selectedPageTagIDs: selectedPageTagIDs)
         }
+        .onChange(of: viewModel.selectedCollection) { _, selectedCollection in
+            if optimisticSelectedCollection == selectedCollection {
+                optimisticSelectedCollection = nil
+            }
+        }
+        .onDisappear {
+            pendingCollectionSelectionTask?.cancel()
+            pendingCollectionSelectionTask = nil
+        }
     }
 
     private var sidebarModel: SidebarNavigationModel {
-        SidebarNavigationModel(
+        if let cachedSidebarModel {
+            return cachedSidebarModel.selecting(effectiveSelectedCollection)
+        }
+
+        return SidebarNavigationModel(
             snapshot: viewModel.snapshot,
+            selectedCollection: effectiveSelectedCollection
+        )
+    }
+
+    private var effectiveSelectedCollection: WorkspaceCollection {
+        optimisticSelectedCollection ?? viewModel.selectedCollection
+    }
+
+    private func refreshSidebarModelCache(snapshot: WorkspaceSnapshot) {
+        cachedSidebarModel = SidebarNavigationModel(
+            snapshot: snapshot,
             selectedCollection: viewModel.selectedCollection
         )
     }
@@ -6302,7 +7515,7 @@ private struct WorkspaceSidebar: View {
                         { pageIDs in handler(item, pageIDs) }
                     }
                 ) {
-                    viewModel.selectCollection(item.collection)
+                    selectSidebarCollection(item.collection)
                 }
             }
         }
@@ -6353,7 +7566,7 @@ private struct WorkspaceSidebar: View {
                                 return viewModel.assignTagToPagesForUI(pageIDs: pageIDs, tagID: tagID)
                             }
                         ) {
-                            viewModel.selectCollection(item.collection)
+                            selectSidebarCollection(item.collection)
                         }
                         .contextMenu {
                             if case .tag(let tagID) = item.collection {
@@ -6404,6 +7617,38 @@ private struct WorkspaceSidebar: View {
             expandedTagIDs.remove(tagID)
         } else {
             expandedTagIDs.insert(tagID)
+        }
+    }
+
+    private func selectSidebarCollection(_ collection: WorkspaceCollection) {
+        EditorPerformanceTrace.point("sidebar_collection_click_start") {
+            [
+                "collection": String(describing: collection),
+                "page_count": "\(viewModel.snapshot.pages.count)"
+            ]
+        }
+        EditorPerformanceTrace.point("page_list_request_start") {
+            [
+                "collection": String(describing: collection),
+                "page_count": "\(viewModel.snapshot.pages.count)"
+            ]
+        }
+        optimisticSelectedCollection = collection
+        EditorPerformanceTrace.nextRunLoopPoint("sidebar_selected_painted") {
+            [
+                "collection": String(describing: collection),
+                "source": "sidebar_optimistic"
+            ]
+        }
+        pendingCollectionSelectionTask?.cancel()
+        pendingCollectionSelectionTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else {
+                return
+            }
+            viewModel.selectCollection(collection, traceStart: false)
+            optimisticSelectedCollection = nil
+            pendingCollectionSelectionTask = nil
         }
     }
 }
@@ -6643,6 +7888,17 @@ private struct CollectionRailButton: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier(item.identifier)
         .accessibilityValue(accessibilityValue)
+        .onChange(of: item.isSelected) { _, isSelected in
+            guard isSelected else {
+                return
+            }
+            EditorPerformanceTrace.point("sidebar_selected_painted") {
+                [
+                    "collection": String(describing: item.collection),
+                    "source": "collection_button_on_change"
+                ]
+            }
+        }
         .dropDestination(for: String.self) { payloads, _ in
             guard let onDropPageIDs else {
                 return false
@@ -6897,6 +8153,10 @@ private struct PageListView: View {
     @Binding var activePageDragIDs: Set<String>
     @State private var selectedPageIDs: Set<String> = []
     @State private var selectionAnchorPageID: String?
+    @State private var optimisticSelectedPageID: String?
+    @State private var pageRenderLimit = PageListRenderWindowPolicy.initialLimit
+    @State private var pageRenderExpansionTask: Task<Void, Never>?
+    @State private var pendingPageOpenTask: Task<Void, Never>?
     @State private var pageRowFrames: [String: CGRect] = [:]
     @State private var pageSelectionMarqueeStart: CGPoint?
     @State private var pageSelectionMarqueeCurrent: CGPoint?
@@ -7003,14 +8263,23 @@ private struct PageListView: View {
 
     private var pageListScroll: some View {
         let visiblePages = viewModel.visibleDocumentPages
+        let renderedPages = PageListRenderWindowPolicy.renderedPages(
+            visiblePages,
+            selectedPageID: viewModel.selectedPageID,
+            limit: pageRenderLimit
+        )
         let visiblePageIDs = visiblePages.map(\.id)
-        let tagNamesByPageID = Self.tagNamesByPageID(snapshot: viewModel.snapshot)
+        let renderedPageIDs = Set(renderedPages.map(\.id))
+        let tagNamesByPageID = Self.tagNamesByPageID(
+            snapshot: viewModel.snapshot,
+            pageIDs: renderedPageIDs
+        )
 
         return ScrollView(.vertical, showsIndicators: EditorScrollIndicatorPolicy.showsPageListIndicators) {
             LazyVStack(alignment: .leading, spacing: 14) {
                 switch viewModel.selectedCollection {
                 case .recent:
-                    ForEach(PageListDateSectionModel.sections(pages: visiblePages)) { section in
+                    ForEach(PageListDateSectionModel.sections(pages: renderedPages)) { section in
                         pageRowsSection(
                             title: section.title,
                             pages: section.pages,
@@ -7021,35 +8290,35 @@ private struct PageListView: View {
                 case .diary:
                     pageRowsSection(
                         title: "日记",
-                        pages: visiblePages,
+                        pages: renderedPages,
                         visiblePageIDs: visiblePageIDs,
                         tagNamesByPageID: tagNamesByPageID
                     )
                 case .allDocuments:
                     pageRowsSection(
                         title: "全部文档",
-                        pages: visiblePages,
+                        pages: renderedPages,
                         visiblePageIDs: visiblePageIDs,
                         tagNamesByPageID: tagNamesByPageID
                     )
                 case .favorites:
                     pageRowsSection(
                         title: "收藏",
-                        pages: visiblePages,
+                        pages: renderedPages,
                         visiblePageIDs: visiblePageIDs,
                         tagNamesByPageID: tagNamesByPageID
                     )
                 case .encrypted:
                     pageRowsSection(
                         title: "加密",
-                        pages: visiblePages,
+                        pages: renderedPages,
                         visiblePageIDs: visiblePageIDs,
                         tagNamesByPageID: tagNamesByPageID
                     )
                 case .tag(let tagID):
                     tagSection(
                         tagID: tagID,
-                        visiblePages: visiblePages,
+                        visiblePages: renderedPages,
                         visiblePageIDs: visiblePageIDs,
                         tagNamesByPageID: tagNamesByPageID
                     )
@@ -7063,6 +8332,14 @@ private struct PageListView: View {
                     archiveSection
                 }
 
+                if PageListRenderWindowPolicy.canExpand(
+                    renderedCount: renderedPages.count,
+                    visibleCount: visiblePages.count
+                ) {
+                    PageListLoadMoreSentinel {
+                        expandPageRenderLimit(visibleCount: visiblePages.count)
+                    }
+                }
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 22)
@@ -7101,12 +8378,30 @@ private struct PageListView: View {
             EmptyView()
 #endif
         }
-        .onChange(of: viewModel.visibleDocumentPages.map(\.id)) { _, visiblePageIDs in
+        .onChange(of: visiblePageIDs) { _, visiblePageIDs in
             pruneSelectedPageIDs(visiblePageIDs: visiblePageIDs)
+            resetPageRenderLimit(visibleCount: visiblePageIDs.count)
         }
         .onChange(of: viewModel.selectedCollection) { _, _ in
             clearPageBatchSelection()
             activatePageListKeyboardShortcuts()
+            resetPageRenderLimit(visibleCount: visiblePageIDs.count)
+            EditorPerformanceTrace.point("page_list_first_screen_painted") {
+                [
+                    "collection": String(describing: viewModel.selectedCollection),
+                    "visible_page_count": "\(visiblePageIDs.count)",
+                    "source": "page_list_on_change"
+                ]
+            }
+        }
+        .onAppear {
+            schedulePageRenderExpansionIfNeeded(visibleCount: visiblePages.count)
+        }
+        .onDisappear {
+            pageRenderExpansionTask?.cancel()
+            pageRenderExpansionTask = nil
+            pendingPageOpenTask?.cancel()
+            pendingPageOpenTask = nil
         }
         .overlay(alignment: .bottom) {
             if ArchiveUndoVisibilityPolicy.isVisible(
@@ -7118,6 +8413,43 @@ private struct PageListView: View {
                     .padding(.bottom, 18)
             }
         }
+    }
+
+    private func resetPageRenderLimit(visibleCount: Int) {
+        pageRenderExpansionTask?.cancel()
+        pageRenderLimit = PageListRenderWindowPolicy.initialLimit
+        schedulePageRenderExpansionIfNeeded(visibleCount: visibleCount)
+    }
+
+    private func schedulePageRenderExpansionIfNeeded(visibleCount: Int) {
+        guard visibleCount > pageRenderLimit else {
+            return
+        }
+        pageRenderExpansionTask?.cancel()
+        pageRenderExpansionTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: PageListRenderWindowPolicy.warmupDelayNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            pageRenderLimit = PageListRenderWindowPolicy.warmedLimit(
+                currentLimit: pageRenderLimit,
+                visibleCount: visibleCount
+            )
+            pageRenderExpansionTask = nil
+        }
+    }
+
+    private func expandPageRenderLimit(visibleCount: Int) {
+        pageRenderExpansionTask?.cancel()
+        pageRenderExpansionTask = nil
+        pageRenderLimit = PageListRenderWindowPolicy.expandedLimit(
+            currentLimit: pageRenderLimit,
+            visibleCount: visibleCount
+        )
     }
 
     @ViewBuilder
@@ -7276,7 +8608,7 @@ private struct PageListView: View {
     private func pageRow(_ page: PageSummary, visiblePageIDs: [String], tagNames: [String]) -> some View {
         PageRow(
             page: page,
-            isSelected: viewModel.selectedPageID == page.id,
+            isSelected: isPageSelected(page.id),
             isMarkedForBatch: selectedPageIDs.contains(page.id),
             tagNames: tagNames,
             preview: PageListPreviewResolver.preview(page: page, snapshot: viewModel.snapshot),
@@ -7295,7 +8627,7 @@ private struct PageListView: View {
         .contentShape(Rectangle())
         .background(pageRowFrameReporter(page.id))
         .onTapGesture {
-            handlePageTap(page.id)
+            handlePageTap(page.id, visiblePageCount: visiblePageIDs.count)
         }
         .onDrag {
             let pageIDs = dragPageIDs(for: page.id, visiblePageIDs: visiblePageIDs)
@@ -7431,7 +8763,14 @@ private struct PageListView: View {
         activePageDragIDs.contains(pageID)
     }
 
-    private func handlePageTap(_ pageID: String) {
+    private func handlePageTap(_ pageID: String, visiblePageCount: Int) {
+        EditorPerformanceTrace.point("page_row_click_start") {
+            [
+                "page_id": pageID,
+                "collection": String(describing: viewModel.selectedCollection),
+                "visible_page_count": "\(visiblePageCount)"
+            ]
+        }
         activePageDragIDs = []
 
 #if os(macOS)
@@ -7448,10 +8787,34 @@ private struct PageListView: View {
 
         selectedPageIDs = []
         selectionAnchorPageID = pageID
-        activatePageListKeyboardShortcuts()
-        Task {
-            await viewModel.selectPageForUI(id: pageID)
+        optimisticSelectedPageID = pageID
+        EditorPerformanceTrace.nextRunLoopPoint("page_row_selected_painted") {
+            [
+                "page_id": pageID,
+                "collection": String(describing: viewModel.selectedCollection),
+                "visible_page_count": "\(visiblePageCount)",
+                "optimistic": "true"
+            ]
         }
+        activatePageListKeyboardShortcuts()
+        pendingPageOpenTask?.cancel()
+        pendingPageOpenTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            await viewModel.selectPageForUI(id: pageID)
+            optimisticSelectedPageID = nil
+            pendingPageOpenTask = nil
+        }
+    }
+
+    private func isPageSelected(_ pageID: String) -> Bool {
+        viewModel.selectedPageID == pageID || optimisticSelectedPageID == pageID
     }
 
     private func selectPageRange(to pageID: String) {
@@ -7649,11 +9012,14 @@ private struct PageListView: View {
         viewModel.snapshot.tags.first { $0.id == tagID }?.path ?? "标签"
     }
 
-    private static func tagNamesByPageID(snapshot: WorkspaceSnapshot) -> [String: [String]] {
+    private static func tagNamesByPageID(snapshot: WorkspaceSnapshot, pageIDs: Set<String>) -> [String: [String]] {
         let tagPathByID = Dictionary(uniqueKeysWithValues: snapshot.tags.map { ($0.id, $0.path) })
         let tagOrderByID = Dictionary(uniqueKeysWithValues: snapshot.tags.enumerated().map { ($0.element.id, $0.offset) })
         var tagIDsByPageID: [String: [String]] = [:]
         for assignment in snapshot.pageTags {
+            guard pageIDs.contains(assignment.pageID) else {
+                continue
+            }
             tagIDsByPageID[assignment.pageID, default: []].append(assignment.tagID)
         }
         return tagIDsByPageID.mapValues { tagIDs in
@@ -7675,6 +9041,54 @@ private struct PageListView: View {
                 await viewModel.selectPageForUI(id: newValue)
             }
         }
+    }
+}
+
+private struct PageListLoadMoreSentinel: View {
+    let onAppear: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(height: 1)
+            .onAppear(perform: onAppear)
+            .accessibilityHidden(true)
+    }
+}
+
+enum PageListRenderWindowPolicy {
+    static let initialLimit = 24
+    static let warmupLimit = 96
+    static let expansionBatchSize = 96
+    static let warmupDelayNanoseconds: UInt64 = 200_000_000
+
+    static func renderedPages(
+        _ pages: [PageSummary],
+        selectedPageID: String?,
+        limit: Int
+    ) -> [PageSummary] {
+        guard pages.count > limit else {
+            return pages
+        }
+
+        var rendered = Array(pages.prefix(limit))
+        if let selectedPageID,
+           !rendered.contains(where: { $0.id == selectedPageID }),
+           let selectedPage = pages.first(where: { $0.id == selectedPageID }) {
+            rendered.append(selectedPage)
+        }
+        return rendered
+    }
+
+    static func warmedLimit(currentLimit: Int, visibleCount: Int) -> Int {
+        min(max(currentLimit, warmupLimit), visibleCount)
+    }
+
+    static func expandedLimit(currentLimit: Int, visibleCount: Int) -> Int {
+        min(max(currentLimit, initialLimit) + expansionBatchSize, visibleCount)
+    }
+
+    static func canExpand(renderedCount: Int, visibleCount: Int) -> Bool {
+        renderedCount < visibleCount
     }
 }
 
@@ -7952,6 +9366,7 @@ private struct CompactCollectionPageListView: View {
     let onRevealNextScreen: () -> Void
     @State private var activeSwipeActionPageID: String?
     @State private var listGestureStartedWithOpenSwipeActions = false
+    @State private var hasAppearedBefore = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -7971,6 +9386,9 @@ private struct CompactCollectionPageListView: View {
         .navigationTitle(navigationTitle)
         .background(CompactChrome.backgroundColor)
         .accessibilityIdentifier("editor.compact-document-list")
+        .onAppear {
+            traceMobileScrollRestoreIfNeeded()
+        }
         .overlay(alignment: .bottomTrailing) {
             quickCreateButton
                 .padding(.trailing, 18)
@@ -8235,6 +9653,34 @@ private struct CompactCollectionPageListView: View {
                 _ = viewModel.createDailyDiaryForCompactUI()
             }
         )
+    }
+
+    private func traceMobileScrollRestoreIfNeeded() {
+#if os(iOS)
+        guard hasAppearedBefore else {
+            hasAppearedBefore = true
+            return
+        }
+
+        let trace = EditorPerformanceTrace.begin("mobile_scroll_restore") {
+            mobileScrollRestoreMetadata()
+        }
+        let metadata = mobileScrollRestoreMetadata()
+        DispatchQueue.main.async {
+            EditorPerformanceTrace.end(trace, as: "mobile_scroll_restore_done") {
+                metadata
+            }
+        }
+#endif
+    }
+
+    private func mobileScrollRestoreMetadata() -> [String: String] {
+        [
+            "collection": String(describing: collection),
+            "item_count": "\(items.count)",
+            "page_count": "\(viewModel.snapshot.pages.count)",
+            "selected_page_id": viewModel.selectedPageID ?? "none"
+        ]
     }
 }
 
@@ -8849,6 +10295,17 @@ private struct PageRow: View {
             y: CGFloat(PageRowDragVisualPolicy.shadowYOffset(isBeingDragged: isBeingDragged))
         )
         .animation(.easeOut(duration: 0.12), value: isBeingDragged)
+        .onChange(of: isSelected) { _, isSelected in
+            guard isSelected else {
+                return
+            }
+            EditorPerformanceTrace.point("page_row_selected_painted") {
+                [
+                    "page_id": page.id,
+                    "source": "page_row_on_change"
+                ]
+            }
+        }
     }
 
     private var compactBody: some View {
@@ -10156,6 +11613,7 @@ private struct EditorCanvasView: View {
     let onExportMarkdown: () -> String
     let onExportMarkdownPackage: (URL) -> Void
     let onBlockTextChange: (String, String) -> Void
+    let onBlockTextEditingEnded: (String) -> Void
     let onTableRowsChange: (String, [[String]]) -> Void
     let onBlockTypeChange: (String, BlockType) -> Void
     let onConvertBlockToPage: (String) -> Void
@@ -10183,6 +11641,8 @@ private struct EditorCanvasView: View {
     @State private var isObsidianVaultImporterPresented = false
     @State private var isMarkdownExporterPresented = false
     @State private var isInlineLinkPopoverPresented = false
+    @State private var isPageReferencePickerPresented = false
+    @State private var isBlockReferencePickerPresented = false
     @State private var activeInlineLinkTarget: (blockID: String, selection: EditorTextSelection?)?
     @State private var isInlineInternalLinkChooserPresented = false
     @State private var activeInlineInternalLinkTarget: (blockID: String, selection: EditorTextSelection)?
@@ -10197,14 +11657,16 @@ private struct EditorCanvasView: View {
     @StateObject private var editorSession = EditorSession()
     @State private var pendingFocusRequest: BlockFocusRequest?
     @State private var activeBlockDropTarget: BlockDropTarget?
+    @State private var activeDeferredTableEditorBlockID: String?
     @State private var transientSelectionResetRequest = TransientSelectionResetRequest.none
     @State private var scrollMetricsRecorder = EditorCanvasScrollMetricsRecorder(pageID: nil, blockCount: 0)
-#if DEBUG
+    @State private var scrollFramePacingState = EditorCanvasScrollFramePacingState()
+    @State private var autoScrollProbeRunID: String?
+    @State private var autoScrollProbeGeneration = 0
     @State private var scrollMetricsDebugSummary = EditorCanvasScrollMetricsRecorder(
         pageID: nil,
         blockCount: 0
     ).metrics.runtimeSummary
-#endif
     @State private var isAuxiliaryRailCollapsed = false
     @State private var isMobileOutlinePresented = false
     @State private var blockRowFrames: [String: CGRect] = [:]
@@ -10253,6 +11715,32 @@ private struct EditorCanvasView: View {
 #if os(macOS)
             .frame(minWidth: 760, minHeight: 520)
 #endif
+        }
+        .sheet(isPresented: $isPageReferencePickerPresented) {
+            PageReferenceTargetPicker(
+                currentPageID: page?.id,
+                pages: pages,
+                onSelect: { targetPageID in
+                    isPageReferencePickerPresented = false
+                    onAddPageReference(targetPageID)
+                },
+                onCancel: {
+                    isPageReferencePickerPresented = false
+                }
+            )
+        }
+        .sheet(isPresented: $isBlockReferencePickerPresented) {
+            BlockReferenceTargetPicker(
+                pages: pages,
+                blocks: allBlocks,
+                onSelect: { targetBlockID in
+                    isBlockReferencePickerPresented = false
+                    onAddBlockReference(targetBlockID)
+                },
+                onCancel: {
+                    isBlockReferencePickerPresented = false
+                }
+            )
         }
     }
 
@@ -10371,12 +11859,25 @@ private struct EditorCanvasView: View {
 
                 let blockDragPayloadIndex = BlockDragPayloadIndex(blocks: blocks)
                 let blockLayoutIndex = BlockRenderLayoutIndex(blocks: blocks)
+                let attachmentRenderIndex = AttachmentRenderIndex(attachments: attachments)
                 ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
-                    let dragPayloadBlockIDs = blockDragPayloadIndex.payloadBlockIDs(rootBlockID: block.id)
                     let searchHighlight = pendingSearchHighlight?.blockID == block.id ? pendingSearchHighlight : nil
                     let blockNestingLevel = blockLayoutIndex.nestingLevel(for: block.id)
+                    let blockFocusRequestID = pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil
+                    let isBlockSelected = editorSession.selectedBlockIDs.contains(block.id)
+                    let usesLightweightTextRow = usesMobileLargePageTextPreviewRow(
+                        block: block,
+                        searchHighlight: searchHighlight,
+                        focusRequestID: blockFocusRequestID,
+                        isBlockSelected: isBlockSelected
+                    )
+                    let usesLightweightTableRow = usesMobileLargePageTablePreviewRow(
+                        block: block,
+                        searchHighlight: searchHighlight,
+                        isBlockSelected: isBlockSelected
+                    )
 
-                    if index == 0 {
+                    if shouldShowLeadingDropSlot(at: index) {
                         BlockDropSlot(
                             destinationBlockID: block.id,
                             slotKind: .before,
@@ -10386,10 +11887,57 @@ private struct EditorCanvasView: View {
                         )
                     }
 
-                    BlockRowView(
+                    if usesLightweightTextRow {
+                        MobileLargePageTextPreviewRow(
+                            block: block,
+                            contentFont: contentFont,
+                            nestingLevel: blockNestingLevel,
+                            listOrdinal: blockLayoutIndex.listOrdinal(for: block.id),
+                            isBlockSelected: isBlockSelected,
+                            onActivate: {
+                                activateMobileLargePageTextPreview(block)
+                            }
+                        )
+                        .id(block.id)
+                        .background(blockSelectionFrameReporter(
+                            block.id,
+                            isEnabled: shouldReportBlockFrame(for: block)
+                        ))
+                        .onAppear {
+                            scheduleVisibleBlockAppeared(block.id, index: index)
+                        }
+                        .onDisappear {
+                            scheduleVisibleBlockDisappeared(block.id)
+                        }
+                    } else if usesLightweightTableRow {
+                        MobileLargePageTablePreviewRow(
+                            block: block,
+                            nestingLevel: blockNestingLevel,
+                            isBlockSelected: isBlockSelected,
+                            onActivate: {
+                                activeDeferredTableEditorBlockID = block.id
+                            }
+                        )
+                        .id(block.id)
+                        .background(blockSelectionFrameReporter(
+                            block.id,
+                            isEnabled: shouldReportBlockFrame(for: block)
+                        ))
+                        .onAppear {
+                            scheduleVisibleBlockAppeared(block.id, index: index)
+                        }
+                        .onDisappear {
+                            scheduleVisibleBlockDisappeared(block.id)
+                        }
+                    } else {
+                        let dragPayloadBlockIDs = blockDragPayloadIndex.payloadBlockIDs(rootBlockID: block.id)
+                        BlockRowView(
                         block: block,
-                        attachment: attachment(for: block),
-                        attachmentPreviewGenerationStatus: attachmentPreviewGenerationStatus(for: block),
+                        attachment: attachmentRenderIndex.attachment(for: block),
+                        attachmentPreviewGenerationStatus: attachmentRenderIndex.previewGenerationStatus(
+                            for: block,
+                            statuses: attachmentPreviewGenerationStatuses
+                        ),
                         searchHighlight: searchHighlight,
                         pageReferencePreviewText: PageReferencePreviewResolver.previewText(
                             targetPageID: block.pageReferenceTargetPageID,
@@ -10399,6 +11947,8 @@ private struct EditorCanvasView: View {
                         editorSession: editorSession,
                         nestingLevel: blockNestingLevel,
                         listOrdinal: blockLayoutIndex.listOrdinal(for: block.id),
+                        isLargePage: blocks.count >= EditorCanvasRenderPolicy.largePageBlockThreshold,
+                        forceTableEditorActive: activeDeferredTableEditorBlockID == block.id,
                         dragPayloadBlockIDs: dragPayloadBlockIDs,
                         canMoveUp: index > 0,
                         canMoveDown: index < blocks.count - 1,
@@ -10556,7 +12106,7 @@ private struct EditorCanvasView: View {
                         onDrawingDataChange: { data in
                             onDrawingBlockDataChange(block.id, data)
                         },
-                        isToggleBlockExpanded: isToggleBlockExpanded(block.id),
+                        isToggleBlockExpanded: block.type == .toggle && block.toggleIsExpanded,
                         isMobileOutlinePresented: isMobileOutlinePresented,
                         onRevealPageList: {
 #if os(iOS)
@@ -10574,10 +12124,10 @@ private struct EditorCanvasView: View {
 #endif
                         },
                         isMobileSelectionModeActive: !editorSession.selectedBlockIDs.isEmpty,
-                        isBlockSelected: editorSession.selectedBlockIDs.contains(block.id),
+                        isBlockSelected: isBlockSelected,
                         selectionResetRequest: transientSelectionResetRequest,
                         dropPlacement: activeBlockDropTarget?.blockID == block.id ? activeBlockDropTarget?.placement : nil,
-                        focusRequestID: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.id : nil,
+                        focusRequestID: blockFocusRequestID,
                         focusSelection: pendingFocusRequest?.blockID == block.id ? pendingFocusRequest?.selection : nil,
                         onFocusRequestHandled: {
                             let didHandlePendingRequest = pendingFocusRequest?.blockID == block.id
@@ -10619,6 +12169,9 @@ private struct EditorCanvasView: View {
                         },
                         onTableRowsChange: { rows in
                             onTableRowsChange(block.id, rows)
+                        },
+                        onTextEditingEnded: {
+                            onBlockTextEditingEnded(block.id)
                         }
                     ) { text in
                         onBlockTextChange(block.id, text)
@@ -10645,14 +12198,17 @@ private struct EditorCanvasView: View {
                         )
                     )
 #endif
+                    }
 
-                    BlockDropSlot(
-                        destinationBlockID: block.id,
-                        slotKind: .after,
-                        activeDropTarget: $activeBlockDropTarget,
-                        destinationLevel: blockNestingLevel,
-                        moveDroppedBlocks: moveDroppedBlocks
-                    )
+                    if shouldShowRowDropSlots {
+                        BlockDropSlot(
+                            destinationBlockID: block.id,
+                            slotKind: .after,
+                            activeDropTarget: $activeBlockDropTarget,
+                            destinationLevel: blockNestingLevel,
+                            moveDroppedBlocks: moveDroppedBlocks
+                        )
+                    }
                 }
 
                 if !blocks.isEmpty {
@@ -10703,6 +12259,17 @@ private struct EditorCanvasView: View {
             .coordinateSpace(name: EditorCanvasCoordinateSpace.blockSelection)
             .onPreferenceChange(BlockRowFramePreferenceKey.self) { frames in
 #if os(macOS)
+                let nextActiveBlockID = desktopOutlineActiveBlockID(for: frames)
+                guard BlockRowFrameUpdatePolicy.shouldUpdate(
+                    currentFrames: blockRowFrames,
+                    nextFrames: frames,
+                    currentActiveBlockID: desktopOutlineActiveBlockID,
+                    nextActiveBlockID: nextActiveBlockID,
+                    isBlockSelectionMarqueeActive: blockSelectionMarqueeStart != nil,
+                    hasPinnedOutlineSelection: desktopOutlineSelectedBlockID != nil
+                ) else {
+                    return
+                }
                 if blockRowFrames != frames {
                     desktopOutlineSelectedBlockID = nil
                 }
@@ -10748,9 +12315,23 @@ private struct EditorCanvasView: View {
                 activeBlockDropTarget = BlockDropTargetLifecycleReducer
                     .targetAfterEditorInteraction(current: activeBlockDropTarget)
             }
-#if DEBUG
             .overlay(alignment: .topLeading) {
-                scrollMetricsDebugProbe
+                if isScrollMetricsUITestProbeEnabled {
+                    scrollMetricsDebugProbe
+                }
+            }
+#if os(iOS) || os(macOS)
+            .overlay {
+                if isAutoScrollProbeEnabled {
+                    EditorCanvasAutoScrollProbeDriver(
+                        runID: autoScrollProbeRunIDDescription,
+                        pageID: page?.id ?? "none",
+                        blockCount: blocks.count,
+                        isEnabled: isAutoScrollProbeEnabled
+                    )
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+                }
             }
 #endif
 #if os(macOS)
@@ -10762,15 +12343,20 @@ private struct EditorCanvasView: View {
 #endif
             .onAppear {
                 scrollToPendingFocusBlockIfNeeded(pendingFocusBlockID, proxy: scrollProxy)
+                scheduleAutoScrollProbeIfNeeded(proxy: scrollProxy)
             }
             .onChange(of: page?.id) { _, _ in
                 scrollToPendingFocusBlockIfNeeded(pendingFocusBlockID, proxy: scrollProxy)
+                scheduleAutoScrollProbeIfNeeded(proxy: scrollProxy)
             }
             .onChange(of: pendingFocusBlockID) { _, blockID in
                 scrollToPendingFocusBlockIfNeeded(blockID, proxy: scrollProxy)
             }
             .onChange(of: pendingFocusRequestID) { _, _ in
                 scrollToPendingFocusBlockIfNeeded(pendingFocusBlockID, proxy: scrollProxy)
+            }
+            .onChange(of: renderMetrics) { _, _ in
+                scheduleAutoScrollProbeIfNeeded(proxy: scrollProxy)
             }
                 }
             }
@@ -11382,9 +12968,13 @@ private struct EditorCanvasView: View {
     }
 
     private var desktopOutlineActiveBlockID: String? {
+        desktopOutlineActiveBlockID(for: blockRowFrames)
+    }
+
+    private func desktopOutlineActiveBlockID(for visibleBlockFrames: [String: CGRect]) -> String? {
         DesktopInlineOutlineActiveHeadingResolver.activeBlockID(
             outlineItems: outlineItems,
-            visibleBlockFrames: blockRowFrames,
+            visibleBlockFrames: visibleBlockFrames,
             blockIDsInDocumentOrder: blocks.map(\.id),
             selectedBlockID: desktopOutlineSelectedBlockID,
             focusedBlockID: pendingFocusRequest?.blockID ?? pendingFocusBlockID ?? editorSession.focusedBlockID
@@ -11550,33 +13140,11 @@ private struct EditorCanvasView: View {
                 }
 
                 if showsPageAction(.pageReference) {
-                    Menu {
-                        ForEach(pageReferenceTargets) { targetPage in
-                            Button {
-                                onAddPageReference(targetPage.id)
-                            } label: {
-                                Label(targetPage.title, systemImage: "doc.text")
-                            }
-                        }
-                    } label: {
-                        Label("页面引用", systemImage: "doc.badge.plus")
-                    }
-                    .disabled(pageReferenceTargets.isEmpty)
+                    pageReferenceAction
                 }
 
                 if showsPageAction(.blockReference) {
-                    Menu {
-                        ForEach(blockReferenceTargets) { targetBlock in
-                            Button {
-                                onAddBlockReference(targetBlock.id)
-                            } label: {
-                                Label(blockReferenceTitle(for: targetBlock), systemImage: "text.quote")
-                            }
-                        }
-                    } label: {
-                        Label("块引用", systemImage: "text.badge.plus")
-                    }
-                    .disabled(blockReferenceTargets.isEmpty)
+                    blockReferenceAction
                 }
 
                 if showsPageAction(.attachment) {
@@ -11722,6 +13290,66 @@ private struct EditorCanvasView: View {
         .foregroundStyle(EditorDesignTokens.Colors.primaryText.color.opacity(0.82))
         .help("更多")
         .accessibilityIdentifier("editor.page-actions")
+    }
+
+    @ViewBuilder
+    private var pageReferenceAction: some View {
+        switch PageActionsReferencePresentationPolicy.presentation(
+            targetCount: max(0, pages.count - (page == nil ? 0 : 1)),
+            scope: pageActionsMenuScope
+        ) {
+        case .inlineMenu:
+            Menu {
+                ForEach(pageReferenceTargets) { targetPage in
+                    Button {
+                        onAddPageReference(targetPage.id)
+                    } label: {
+                        Label(targetPage.title, systemImage: "doc.text")
+                    }
+                }
+            } label: {
+                Label("页面引用", systemImage: "doc.badge.plus")
+            }
+            .disabled(pages.count <= (page == nil ? 0 : 1))
+        case .deferredPicker:
+            Button {
+                isPageReferencePickerPresented = true
+            } label: {
+                Label("页面引用", systemImage: "doc.badge.plus")
+            }
+            .disabled(pages.count <= (page == nil ? 0 : 1))
+            .accessibilityIdentifier("editor.page-reference.deferred-picker")
+        }
+    }
+
+    @ViewBuilder
+    private var blockReferenceAction: some View {
+        switch PageActionsReferencePresentationPolicy.presentation(
+            targetCount: allBlocks.count,
+            scope: pageActionsMenuScope
+        ) {
+        case .inlineMenu:
+            Menu {
+                ForEach(blockReferenceTargets) { targetBlock in
+                    Button {
+                        onAddBlockReference(targetBlock.id)
+                    } label: {
+                        Label(blockReferenceTitle(for: targetBlock), systemImage: "text.quote")
+                    }
+                }
+            } label: {
+                Label("块引用", systemImage: "text.badge.plus")
+            }
+            .disabled(allBlocks.isEmpty)
+        case .deferredPicker:
+            Button {
+                isBlockReferencePickerPresented = true
+            } label: {
+                Label("块引用", systemImage: "text.badge.plus")
+            }
+            .disabled(allBlocks.isEmpty)
+            .accessibilityIdentifier("editor.block-reference.deferred-picker")
+        }
     }
 
     @ViewBuilder
@@ -12654,10 +14282,16 @@ private struct EditorCanvasView: View {
     }
 
     private func shouldReportBlockFrame(for block: BlockSnapshot) -> Bool {
-        BlockFrameReportingPolicy.shouldReportFrame(
+#if os(macOS)
+        let supportsInlineOutline = true
+#else
+        let supportsInlineOutline = false
+#endif
+        return BlockFrameReportingPolicy.shouldReportFrame(
             blockType: block.type,
             isBlockSelectionMarqueeActive: blockSelectionMarqueeStart != nil,
-            hasOutlineItems: !outlineItems.isEmpty
+            hasOutlineItems: !outlineItems.isEmpty,
+            supportsInlineOutline: supportsInlineOutline
         )
     }
 
@@ -12847,18 +14481,6 @@ private struct EditorCanvasView: View {
         return blocks.map(\.id).filter { draggedBlockIDSet.contains($0) }
     }
 
-    private func attachment(for block: BlockSnapshot) -> AttachmentSnapshot? {
-        attachments.first { $0.matches(block: block) }
-    }
-
-    private func attachmentPreviewGenerationStatus(for block: BlockSnapshot) -> AttachmentPreviewGenerationStatus {
-        guard let attachment = attachment(for: block) else {
-            return .idle
-        }
-
-        return attachmentPreviewGenerationStatuses[attachment.id] ?? .idle
-    }
-
     private var renderMetrics: EditorCanvasRenderMetrics {
         EditorCanvasRenderMetrics(
             pageID: page?.id,
@@ -12866,6 +14488,62 @@ private struct EditorCanvasView: View {
             attachmentCount: attachments.count,
             backlinkCount: backlinks.count,
             conflictCount: conflicts.count
+        )
+    }
+
+    private var shouldShowRowDropSlots: Bool {
+#if os(iOS)
+        MobileBlockDragActivationPolicy.usesDedicatedRowDropSlots
+#else
+        true
+#endif
+    }
+
+    private func shouldShowLeadingDropSlot(at index: Int) -> Bool {
+        shouldShowRowDropSlots && index == 0
+    }
+
+    private func usesMobileLargePageTextPreviewRow(
+        block: BlockSnapshot,
+        searchHighlight: SearchTransientHighlight?,
+        focusRequestID: UUID?,
+        isBlockSelected: Bool
+    ) -> Bool {
+        MobileLargePageTextPreviewRowPolicy.usesPreview(
+            blockType: block.type,
+            isLargePage: blocks.count >= EditorCanvasRenderPolicy.largePageBlockThreshold,
+            isFocused: editorSession.focusedBlockID == block.id,
+            hasFocusRequest: focusRequestID != nil,
+            hasSearchHighlight: searchHighlight != nil,
+            isSelectionModeActive: !editorSession.selectedBlockIDs.isEmpty,
+            isBlockSelected: isBlockSelected,
+            hasDraftText: editorSession.draftText(for: block.id) != nil
+        )
+    }
+
+    private func usesMobileLargePageTablePreviewRow(
+        block: BlockSnapshot,
+        searchHighlight: SearchTransientHighlight?,
+        isBlockSelected: Bool
+    ) -> Bool {
+        MobileLargePageTablePreviewRowPolicy.usesPreview(
+            blockType: block.type,
+            isLargePage: blocks.count >= EditorCanvasRenderPolicy.largePageBlockThreshold,
+            hasSearchHighlight: searchHighlight != nil,
+            isSelectionModeActive: !editorSession.selectedBlockIDs.isEmpty,
+            isBlockSelected: isBlockSelected,
+            isEditorActive: activeDeferredTableEditorBlockID == block.id
+        )
+    }
+
+    private func activateMobileLargePageTextPreview(_ block: BlockSnapshot) {
+        activeBlockDropTarget = BlockDropTargetLifecycleReducer
+            .targetAfterEditorInteraction(current: activeBlockDropTarget)
+        clearTransientSelections()
+        editorSession.beginEditing(blockID: block.id, reason: .programmatic)
+        pendingFocusRequest = BlockFocusRequest(blockID: block.id, selection: endSelection(for: block))
+        EditorLog.focus.debug(
+            "editor_focus_request_scheduled block_id=\(block.id, privacy: .public) source=large_page_text_preview"
         )
     }
 
@@ -12877,6 +14555,13 @@ private struct EditorCanvasView: View {
     }
 
     private func resetScrollMetrics() {
+        EditorPerformanceTrace.point("editor_scroll_start") {
+            [
+                "page_id": page?.id ?? "none",
+                "block_count": "\(blocks.count)"
+            ]
+        }
+        cancelScrollFramePacingIfNeeded()
         let event = scrollMetricsRecorder.reset(pageID: page?.id, blockCount: blocks.count)
         publishScrollMetrics(event, reason: .reset)
     }
@@ -12907,6 +14592,17 @@ private struct EditorCanvasView: View {
         guard let event = scrollMetricsRecorder.blockAppeared(blockID, index: index) else {
             return
         }
+        recordScrollFramePacingActivity(metrics: event.metrics, source: "appear")
+        if shouldPublishScrollMetrics(event, reason: .visibleEvent) {
+            EditorPerformanceTrace.point("block_row_appear") {
+                [
+                    "page_id": page?.id ?? "none",
+                    "block_id": blockID,
+                    "block_index": "\(index)",
+                    "block_count": "\(blocks.count)"
+                ]
+            }
+        }
         publishScrollMetrics(event, reason: .visibleEvent)
     }
 
@@ -12914,18 +14610,35 @@ private struct EditorCanvasView: View {
         guard let event = scrollMetricsRecorder.blockDisappeared(blockID) else {
             return
         }
+        recordScrollFramePacingActivity(metrics: event.metrics, source: "disappear")
+        if shouldPublishScrollMetrics(event, reason: .visibleEvent) {
+            EditorPerformanceTrace.point("block_row_disappear") {
+                [
+                    "page_id": page?.id ?? "none",
+                    "block_id": blockID,
+                    "block_count": "\(blocks.count)"
+                ]
+            }
+        }
         publishScrollMetrics(event, reason: .visibleEvent)
+    }
+
+    private func shouldPublishScrollMetrics(
+        _ event: EditorCanvasScrollMetricsRecorderEvent,
+        reason: EditorCanvasScrollMetricsPublicationReason
+    ) -> Bool {
+        EditorCanvasScrollMetricsPublicationPolicy.shouldPublish(
+            eventCount: event.eventCount,
+            reason: reason,
+            isUITestProbeEnabled: isScrollMetricsUITestProbeEnabled
+        )
     }
 
     private func publishScrollMetrics(
         _ event: EditorCanvasScrollMetricsRecorderEvent,
         reason: EditorCanvasScrollMetricsPublicationReason
     ) {
-        guard EditorCanvasScrollMetricsPublicationPolicy.shouldPublish(
-            eventCount: event.eventCount,
-            reason: reason,
-            isUITestProbeEnabled: isScrollMetricsUITestProbeEnabled
-        ) else {
+        guard shouldPublishScrollMetrics(event, reason: reason) else {
             return
         }
         let reasonDescription: String
@@ -12936,22 +14649,185 @@ private struct EditorCanvasView: View {
             reasonDescription = "visible_event"
         }
         logScrollMetrics(reason: reasonDescription, metrics: event.metrics)
-#if DEBUG
-        scrollMetricsDebugSummary = event.metrics.runtimeSummary
-#endif
+        EditorPerformanceTrace.nextRunLoopPoint("editor_scroll_end") {
+            [
+                "page_id": event.metrics.pageID ?? "none",
+                "visible_block_count": "\(event.metrics.visibleBlockCount)",
+                "block_count": "\(event.metrics.blockCount)"
+            ]
+        }
+        if !isAutoScrollProbeEnabled {
+            scrollMetricsDebugSummary = event.metrics.runtimeSummary
+        }
+    }
+
+    private func recordScrollFramePacingActivity(
+        metrics: EditorCanvasScrollMetrics,
+        source: String
+    ) {
+        guard EditorPerformanceTrace.isEnabled else {
+            return
+        }
+
+        if scrollFramePacingState.token == nil {
+            scrollFramePacingState.token = EditorFramePacingTrace.begin(
+                "editor_scroll",
+                metadata: EditorCanvasScrollFramePacingMetadata.metadata(
+                    metrics: metrics,
+                    source: "start_\(source)"
+                )
+            )
+        }
+        guard scrollFramePacingState.token != nil else {
+            return
+        }
+
+        scrollFramePacingState.generation += 1
+        let generation = scrollFramePacingState.generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(350)) {
+            guard scrollFramePacingState.generation == generation else {
+                return
+            }
+            finishScrollFramePacingIfNeeded(metrics: scrollMetricsRecorder.metrics, source: "idle")
+        }
+    }
+
+    private func finishScrollFramePacingIfNeeded(
+        metrics: EditorCanvasScrollMetrics,
+        source: String
+    ) {
+        guard let token = scrollFramePacingState.token else {
+            return
+        }
+
+        scrollFramePacingState.generation += 1
+        EditorFramePacingTrace.end(
+            token,
+            metadata: EditorCanvasScrollFramePacingMetadata.metadata(metrics: metrics, source: source)
+        )
+        scrollFramePacingState.token = nil
+    }
+
+    private func cancelScrollFramePacingIfNeeded() {
+        guard let token = scrollFramePacingState.token else {
+            return
+        }
+
+        scrollFramePacingState.generation += 1
+        EditorFramePacingTrace.cancel(token)
+        scrollFramePacingState.token = nil
     }
 
     private var isScrollMetricsUITestProbeEnabled: Bool {
-        ProcessInfo.processInfo.environment["EDITOR_UI_TEST_LARGE_PAGE_BLOCK_COUNT"] != nil
+        EditorCanvasScrollMetricsProbePolicy.isEnabled(environment: ProcessInfo.processInfo.environment)
+    }
+
+    private var isAutoScrollProbeEnabled: Bool {
+        EditorCanvasAutoScrollProbePolicy.isEnabled(environment: ProcessInfo.processInfo.environment)
+            && blocks.count > EditorCanvasAutoScrollProbePolicy.minimumBlockCount
+            && page != nil
+    }
+
+    private var autoScrollProbeRunIDDescription: String {
+        "\(page?.id ?? "none"):\(blocks.count)"
+    }
+
+    private func scheduleAutoScrollProbeIfNeeded(proxy: ScrollViewProxy) {
+#if os(iOS) || os(macOS)
+        return
+#else
+        let environment = ProcessInfo.processInfo.environment
+        guard EditorCanvasAutoScrollProbePolicy.isEnabled(environment: environment),
+              let pageID = page?.id else {
+            return
+        }
+        let targetIndices = EditorCanvasAutoScrollProbePolicy.targetIndices(blockCount: blocks.count)
+        let targets = targetIndices.compactMap { index -> (index: Int, blockID: String)? in
+            guard blocks.indices.contains(index) else {
+                return nil
+            }
+            return (index, blocks[index].id)
+        }
+        guard !targets.isEmpty else {
+            return
+        }
+
+        let runID = "\(pageID):\(blocks.count):\(targets.last?.blockID ?? "none")"
+        guard autoScrollProbeRunID != runID else {
+            return
+        }
+        autoScrollProbeRunID = runID
+        autoScrollProbeGeneration += 1
+        let generation = autoScrollProbeGeneration
+
+        EditorPerformanceTrace.point("editor_autoscroll_probe_start") {
+            [
+                "page_id": pageID,
+                "block_count": "\(blocks.count)",
+                "target_count": "\(targets.count)"
+            ]
+        }
+
+        for (step, target) in targets.enumerated() {
+            let delay = EditorCanvasAutoScrollProbePolicy.initialDelayMilliseconds
+                + (step * EditorCanvasAutoScrollProbePolicy.stepDelayMilliseconds)
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) {
+                guard autoScrollProbeGeneration == generation,
+                      page?.id == pageID else {
+                    return
+                }
+                EditorPerformanceTrace.point("editor_autoscroll_probe_step") {
+                    [
+                        "page_id": pageID,
+                        "block_count": "\(blocks.count)",
+                        "target_index": "\(target.index)",
+                        "step": "\(step + 1)"
+                    ]
+                }
+                withAnimation(.linear(duration: EditorCanvasAutoScrollProbePolicy.animationDurationSeconds)) {
+                    proxy.scrollTo(target.blockID, anchor: .top)
+                }
+            }
+        }
+
+        let completionDelay = EditorCanvasAutoScrollProbePolicy.initialDelayMilliseconds
+            + (targets.count * EditorCanvasAutoScrollProbePolicy.stepDelayMilliseconds)
+            + 700
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(completionDelay)) {
+            guard autoScrollProbeGeneration == generation,
+                  page?.id == pageID else {
+                return
+            }
+            finishScrollFramePacingIfNeeded(metrics: scrollMetricsRecorder.metrics, source: "autoscroll_probe_done")
+            EditorPerformanceTrace.point("editor_autoscroll_probe_done") {
+                [
+                    "page_id": pageID,
+                    "block_count": "\(blocks.count)",
+                    "target_count": "\(targets.count)"
+                ]
+            }
+        }
+#endif
     }
 
     private func logScrollMetrics(reason: String, metrics: EditorCanvasScrollMetrics) {
+        EditorPerformanceTrace.point("editor_scroll_visible_window") {
+            [
+                "page_id": metrics.pageID ?? "none",
+                "reason": reason,
+                "block_count": "\(metrics.blockCount)",
+                "visible_block_count": "\(metrics.visibleBlockCount)",
+                "peak_visible_block_count": "\(metrics.peakVisibleBlockCount)",
+                "first_visible_block_index": metrics.firstVisibleBlockIndex.map(String.init) ?? "none",
+                "last_visible_block_index": metrics.lastVisibleBlockIndex.map(String.init) ?? "none",
+                "visible_block_index_span": "\(metrics.visibleBlockIndexSpan)"
+            ]
+        }
         EditorLog.scroll.debug(
             "editor_canvas_scroll_visible reason=\(reason, privacy: .public) \(metrics.runtimeSummary, privacy: .public)"
         )
     }
 
-#if DEBUG
     private var scrollMetricsDebugProbe: some View {
         let summary = scrollMetricsDebugSummary
         return Text(summary)
@@ -12964,7 +14840,6 @@ private struct EditorCanvasView: View {
             .accessibilityLabel(summary)
             .accessibilityValue(summary)
     }
-#endif
 
     private func nestingLevel(for block: BlockSnapshot) -> Int {
         var level = 0
@@ -14647,28 +16522,42 @@ struct BlockRenderLayoutIndex: Equatable, Sendable {
     private let orderedListOrdinalsByBlockID: [String: Int]
 
     init(blocks: [BlockSnapshot]) {
-        let blocksByID = Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0) })
-        var nestingCache: [String: Int] = [:]
-        var nestingLevels: [String: Int] = [:]
-        for block in blocks {
-            nestingLevels[block.id] = Self.nestingLevel(
-                for: block,
-                blocksByID: blocksByID,
-                cache: &nestingCache,
-                visitingBlockIDs: []
-            )
+        let hasNestedBlocks = blocks.contains { $0.parentBlockID != nil }
+        let nestingLevels: [String: Int]
+        if hasNestedBlocks {
+            let blocksByID = Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0) })
+            var nestingCache: [String: Int] = [:]
+            var resolvedNestingLevels: [String: Int] = [:]
+            for block in blocks {
+                resolvedNestingLevels[block.id] = Self.nestingLevel(
+                    for: block,
+                    blocksByID: blocksByID,
+                    cache: &nestingCache,
+                    visitingBlockIDs: []
+                )
+            }
+            nestingLevels = resolvedNestingLevels
+        } else {
+            nestingLevels = [:]
         }
 
-        var orderedRunsByParentID: [String?: Int] = [:]
-        var orderedOrdinals: [String: Int] = [:]
-        for block in blocks {
-            if block.type == .orderedListItem {
-                let ordinal = (orderedRunsByParentID[block.parentBlockID] ?? 0) + 1
-                orderedRunsByParentID[block.parentBlockID] = ordinal
-                orderedOrdinals[block.id] = ordinal
-            } else {
-                orderedRunsByParentID[block.parentBlockID] = 0
+        let hasOrderedListItems = blocks.contains { $0.type == .orderedListItem }
+        let orderedOrdinals: [String: Int]
+        if hasOrderedListItems {
+            var orderedRunsByParentID: [String?: Int] = [:]
+            var resolvedOrdinals: [String: Int] = [:]
+            for block in blocks {
+                if block.type == .orderedListItem {
+                    let ordinal = (orderedRunsByParentID[block.parentBlockID] ?? 0) + 1
+                    orderedRunsByParentID[block.parentBlockID] = ordinal
+                    resolvedOrdinals[block.id] = ordinal
+                } else {
+                    orderedRunsByParentID[block.parentBlockID] = 0
+                }
             }
+            orderedOrdinals = resolvedOrdinals
+        } else {
+            orderedOrdinals = [:]
         }
 
         self.nestingLevelsByBlockID = nestingLevels
@@ -14722,12 +16611,57 @@ enum BlockFrameReportingPolicy {
     static func shouldReportFrame(
         blockType: BlockType,
         isBlockSelectionMarqueeActive: Bool,
-        hasOutlineItems: Bool
+        hasOutlineItems: Bool,
+        supportsInlineOutline: Bool
     ) -> Bool {
         if isBlockSelectionMarqueeActive {
             return true
         }
-        return hasOutlineItems && blockType.isHeading
+        return supportsInlineOutline && hasOutlineItems && blockType.isHeading
+    }
+}
+
+enum BlockRowFrameUpdatePolicy {
+    static func shouldUpdate(
+        currentFrames: [String: CGRect],
+        nextFrames: [String: CGRect],
+        currentActiveBlockID: String?,
+        nextActiveBlockID: String?,
+        isBlockSelectionMarqueeActive: Bool,
+        hasPinnedOutlineSelection: Bool
+    ) -> Bool {
+        guard currentFrames != nextFrames else {
+            return false
+        }
+        if currentFrames.isEmpty || nextFrames.isEmpty {
+            return true
+        }
+        if isBlockSelectionMarqueeActive || hasPinnedOutlineSelection {
+            return true
+        }
+        return currentActiveBlockID != nextActiveBlockID
+    }
+}
+
+enum BlockAccessibilityTextPolicy {
+    static let largePageTextLimit = 160
+
+    static func summarizedText(_ text: String, isLargePage: Bool) -> String {
+        let content = text.isEmpty ? "空" : text
+        guard isLargePage else {
+            return content
+        }
+
+        let limitedContent = content.prefix(largePageTextLimit + 1)
+        guard limitedContent.count > largePageTextLimit else {
+            return content
+        }
+        return "\(limitedContent.prefix(largePageTextLimit))..."
+    }
+
+    static func rowValue(blockText: String, isSelected: Bool, isLargePage: Bool) -> String {
+        let selectionState = isSelected ? "当前块已选中" : "当前块未选中"
+        return "\(summarizedText(blockText, isLargePage: isLargePage)), \(selectionState)"
     }
 }
 
@@ -15078,6 +17012,1684 @@ enum SearchHighlightOverlayPolicy {
     }
 }
 
+enum DeferredTableBlockEditorPolicy {
+    static func usesPreview(blockType: BlockType, isLargePage: Bool, isEditing: Bool) -> Bool {
+        blockType == .table && isLargePage && !isEditing
+    }
+}
+
+enum DeferredTextBlockEditorPolicy {
+    static func usesPreview(
+        blockType: BlockType,
+        isLargePage: Bool,
+        isFocused: Bool,
+        hasFocusRequest: Bool,
+        hasSearchHighlight: Bool,
+        isEditing: Bool
+    ) -> Bool {
+        blockType.isTextEditable
+            && blockType != .table
+            && isLargePage
+            && !isFocused
+            && !hasFocusRequest
+            && !hasSearchHighlight
+            && !isEditing
+    }
+}
+
+enum DeferredTextBlockPreviewFontPolicy {
+    static func font(contentFont: EditorContentFont, blockType: BlockType) -> Font {
+        if let postScriptName = contentFont.postScriptName(for: blockType) {
+            return .custom(postScriptName, size: size(for: blockType))
+        }
+
+        switch blockType {
+        case .heading1:
+#if os(macOS)
+            return .system(size: 18, weight: .semibold)
+#else
+            return .system(size: 28, weight: .semibold)
+#endif
+        case .heading2:
+#if os(macOS)
+            return .system(size: 16, weight: .semibold)
+#else
+            return .system(size: 24, weight: .semibold)
+#endif
+        case .heading3:
+#if os(macOS)
+            return .system(size: 14, weight: .semibold)
+#else
+            return .system(size: 20, weight: .semibold)
+#endif
+        case .heading4:
+#if os(macOS)
+            return .system(size: 13, weight: .semibold)
+#else
+            return .system(size: 18, weight: .semibold)
+#endif
+        case .heading5, .heading6:
+#if os(macOS)
+            return .system(size: 12, weight: .semibold)
+#else
+            return .system(size: 17, weight: .semibold)
+#endif
+        case .codeBlock:
+#if os(macOS)
+            return .system(size: 13, design: .monospaced)
+#else
+            return .system(size: 16, design: .monospaced)
+#endif
+        default:
+#if os(macOS)
+            return .system(size: EditorDesignTokens.Typography.bodySize, weight: .regular)
+#else
+            return .system(size: 18, weight: .regular)
+#endif
+        }
+    }
+
+    static func size(for blockType: BlockType) -> CGFloat {
+#if os(macOS)
+        switch blockType {
+        case .heading1:
+            return 18
+        case .heading2:
+            return 16
+        case .heading3:
+            return 14
+        case .heading4:
+            return 13
+        case .heading5, .heading6:
+            return 12
+        case .codeBlock:
+            return 13
+        default:
+            return EditorDesignTokens.Typography.bodySize
+        }
+#else
+        switch blockType {
+        case .heading1:
+            return 28
+        case .heading2:
+            return 24
+        case .heading3:
+            return 20
+        case .heading4:
+            return 18
+        case .heading5, .heading6:
+            return 17
+        case .codeBlock:
+            return 16
+        default:
+            return 18
+        }
+#endif
+    }
+}
+
+enum MobileLargePageTextPreviewRowPolicy {
+    static func usesPreview(
+        blockType: BlockType,
+        isLargePage: Bool,
+        isFocused: Bool,
+        hasFocusRequest: Bool,
+        hasSearchHighlight: Bool,
+        isSelectionModeActive: Bool,
+        isBlockSelected: Bool,
+        hasDraftText: Bool
+    ) -> Bool {
+        guard isLargePage,
+              !isFocused,
+              !hasFocusRequest,
+              !hasSearchHighlight,
+              !isSelectionModeActive,
+              !isBlockSelected,
+              !hasDraftText else {
+            return false
+        }
+
+        switch blockType {
+        case .paragraph,
+             .heading1,
+             .heading2,
+             .heading3,
+             .heading4,
+             .heading5,
+             .heading6,
+             .unorderedListItem,
+             .orderedListItem,
+             .codeBlock,
+             .quote,
+             .callout:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+enum MobileLargePageTablePreviewRowPolicy {
+    static func usesPreview(
+        blockType: BlockType,
+        isLargePage: Bool,
+        hasSearchHighlight: Bool,
+        isSelectionModeActive: Bool,
+        isBlockSelected: Bool,
+        isEditorActive: Bool
+    ) -> Bool {
+        blockType == .table
+            && isLargePage
+            && !hasSearchHighlight
+            && !isSelectionModeActive
+            && !isBlockSelected
+            && !isEditorActive
+    }
+}
+
+private struct MobileLargePageTextPreviewRow: View {
+    let block: BlockSnapshot
+    let contentFont: EditorContentFont
+    let nestingLevel: Int
+    let listOrdinal: Int?
+    let isBlockSelected: Bool
+    let onActivate: () -> Void
+
+    var body: some View {
+#if os(iOS)
+        MobileLargePageTextPreviewUIKitRow(
+            block: block,
+            contentFont: contentFont,
+            nestingLevel: nestingLevel,
+            listOrdinal: listOrdinal,
+            isBlockSelected: isBlockSelected
+        )
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor.block.\(block.id)")
+        .accessibilityLabel(rowAccessibilityValue)
+        .accessibilityValue(rowAccessibilityValue)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                onActivate()
+            }
+        )
+#elseif os(macOS)
+        MobileLargePageTextPreviewAppKitRow(
+            block: block,
+            contentFont: contentFont,
+            nestingLevel: nestingLevel,
+            listOrdinal: listOrdinal,
+            isBlockSelected: isBlockSelected
+        )
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor.block.\(block.id)")
+        .accessibilityLabel(rowAccessibilityValue)
+        .accessibilityValue(rowAccessibilityValue)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                onActivate()
+            }
+        )
+#else
+        swiftUIRowBody
+#endif
+    }
+
+    private var swiftUIRowBody: some View {
+        HStack(alignment: .top, spacing: CGFloat(EditorBlockChrome.actionColumnSpacing)) {
+            Color.clear
+                .frame(width: CGFloat(EditorBlockChrome.dragHandleWidth), height: 20)
+                .accessibilityHidden(true)
+
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, CGFloat(EditorBlockChrome.rowVerticalPadding))
+        .padding(.leading, CGFloat(BlockRowNestingIndentResolver.leadingPadding(
+            nestingLevel: nestingLevel,
+            blockType: block.type
+        )))
+        .padding(.horizontal, 4)
+        .padding(.leading, -CGFloat(EditorCanvasChromeLayout.blockRowTitleAlignmentCompensation))
+        .background(rowBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor.block.\(block.id)")
+        .accessibilityLabel(rowAccessibilityValue)
+        .accessibilityValue(rowAccessibilityValue)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                onActivate()
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if block.type.isHeading {
+            let descriptor = HeadingBlockChromeDescriptor(block: block)
+            previewText
+                .padding(.leading, CGFloat(descriptor.textLeadingPadding))
+                .padding(.trailing, CGFloat(descriptor.horizontalPadding))
+                .padding(.vertical, CGFloat(descriptor.verticalPadding))
+                .background(
+                    RoundedRectangle(cornerRadius: CGFloat(descriptor.cornerRadius), style: .continuous)
+                        .fill(headingAccentColor(level: descriptor.level).opacity(descriptor.backgroundOpacity))
+                )
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: CGFloat(descriptor.accentWidth / 2), style: .continuous)
+                        .fill(headingAccentColor(level: descriptor.level))
+                        .frame(width: CGFloat(descriptor.accentWidth))
+                        .padding(.vertical, CGFloat(descriptor.accentVerticalInset))
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(descriptor.accessibilityLabel)
+                .accessibilityValue(descriptor.accessibilityValue)
+                .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+                .accessibilityAddTraits(.isHeader)
+        } else if block.type == .unorderedListItem || block.type == .orderedListItem {
+            let descriptor = ListBlockChromeDescriptor(block: block, ordinal: listOrdinal)
+            let controlFrame = InlineLeadingControlFrameDescriptor()
+            HStack(alignment: .top, spacing: CGFloat(controlFrame.textSpacing)) {
+                ListMarkerGlyph(descriptor: descriptor, nestingLevel: nestingLevel)
+                    .padding(.top, CGFloat(controlFrame.topPadding))
+
+                previewText
+                    .offset(y: CGFloat(controlFrame.textVerticalOffset))
+            }
+            .padding(.vertical, CGFloat(EditorBlockChrome.listVerticalPadding))
+            .padding(.horizontal, CGFloat(EditorBlockChrome.listHorizontalPadding))
+            .background(Color.secondary.opacity(EditorBlockChrome.listBackgroundOpacity))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(descriptor.accessibilityLabel)
+            .accessibilityValue(descriptor.accessibilityValue)
+            .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+        } else if block.type == .codeBlock {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: block.type.editorMenuSystemImage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: "text.alignleft")
+                        .foregroundStyle(block.codeBlockLineWrapping ? .primary : .secondary)
+                        .accessibilityHidden(true)
+                }
+
+                previewText
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(SpecialBlockSurfaceChrome.codeBackgroundToken.color)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(EditorDesignTokens.Colors.border.color, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(block.codeBlockLineWrapping ? "代码块，已开启自动换行" : "代码块，已关闭自动换行")
+            .accessibilityValue(block.codeBlockLineWrapping ? "已开启自动换行" : "已关闭自动换行")
+            .accessibilityIdentifier("editor.code.\(block.id)")
+        } else if block.type == .callout {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "text.bubble")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+                    .accessibilityHidden(true)
+
+                previewText
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(SpecialBlockSurfaceChrome.calloutBackgroundToken.color)
+            .overlay(
+                RoundedRectangle(cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius))
+                    .stroke(EditorDesignTokens.Colors.border.color.opacity(0.75), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius)))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Callout block")
+            .accessibilityValue(block.textPlain.isEmpty ? "空" : block.textPlain)
+            .accessibilityIdentifier("editor.callout.\(block.id)")
+        } else if block.type == .quote {
+            let descriptor = QuoteBlockChromeDescriptor(block: block)
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "quote.opening")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color.opacity(0.62))
+                    .accessibilityHidden(true)
+
+                previewText
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+            .background(SpecialBlockSurfaceChrome.quoteBackgroundToken.color)
+            .clipShape(RoundedRectangle(cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius), style: .continuous))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(descriptor.accessibilityLabel)
+            .accessibilityValue(descriptor.accessibilityValue)
+            .accessibilityIdentifier(descriptor.accessibilityIdentifier)
+        } else {
+            HStack(alignment: .top, spacing: 8) {
+                previewText
+            }
+        }
+    }
+
+    private var previewText: some View {
+        Text(verbatim: block.textPlain.isEmpty ? " " : block.textPlain)
+            .font(DeferredTextBlockPreviewFontPolicy.font(contentFont: contentFont, blockType: block.type))
+            .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+            .lineSpacing(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(BlockAccessibilityTextPolicy.summarizedText(block.textPlain, isLargePage: true))
+            .accessibilityIdentifier("editor.text-preview.\(block.id)")
+    }
+
+    private var rowBackground: some View {
+        let borderOpacity = BlockRowSelectionBorderPolicy.opacity(
+            blockType: block.type,
+            isSelected: isBlockSelected,
+            suppressesSelectionChrome: false
+        )
+        return RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
+            .fill(rowBackgroundColor)
+            .overlay(
+                RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
+                    .stroke(EditorDesignTokens.Colors.accent.color.opacity(borderOpacity), lineWidth: 1)
+            )
+    }
+
+    private var rowBackgroundColor: Color {
+        let opacity = BlockRowBackgroundPolicy.opacity(
+            blockType: block.type,
+            isSelected: isBlockSelected,
+            isFocused: false,
+            isSlashCommandMenuVisible: false,
+            suppressesSelectionChrome: false
+        )
+        guard opacity > 0 else {
+            return Color.clear
+        }
+        if isBlockSelected {
+            return EditorDesignTokens.Colors.accent.color.opacity(opacity)
+        }
+        return EditorDesignTokens.Colors.border.color.opacity(opacity)
+    }
+
+    private var rowAccessibilityValue: String {
+        BlockAccessibilityTextPolicy.rowValue(
+            blockText: block.textPlain,
+            isSelected: isBlockSelected,
+            isLargePage: true
+        )
+    }
+
+    private func headingAccentColor(level: Int) -> Color {
+        switch level {
+        case 1:
+            return Color(red: 0.68, green: 0.29, blue: 0.41)
+        case 2:
+            return EditorDesignTokens.Colors.accent.color
+        case 3:
+            return EditorDesignTokens.Colors.warningText.color
+        default:
+            return EditorDesignTokens.Colors.secondaryText.color
+        }
+    }
+}
+
+#if os(iOS)
+@MainActor
+private enum MobileLargePageTextPreviewMeasurementCache {
+    private static let cache: NSCache<NSString, NSNumber> = {
+        let cache = NSCache<NSString, NSNumber>()
+        cache.countLimit = 8_000
+        return cache
+    }()
+
+    static func contentHeight(
+        block: BlockSnapshot,
+        contentFont: EditorContentFont,
+        nestingLevel: Int,
+        listOrdinal: Int?,
+        width: CGFloat,
+        compute: () -> CGFloat
+    ) -> CGFloat {
+        let widthKey = Int((width * UIScreen.main.scale).rounded())
+        let listOrdinalKey = listOrdinal.map(String.init) ?? "none"
+        let key = [
+            block.id,
+            block.type.rawValue,
+            contentFont.rawValue,
+            "\(nestingLevel)",
+            listOrdinalKey,
+            "\(widthKey)",
+            block.textPlain
+        ].joined(separator: "\u{1F}")
+        let cacheKey = key as NSString
+
+        if let cached = cache.object(forKey: cacheKey) {
+            return CGFloat(cached.doubleValue)
+        }
+
+        let measuredHeight = compute()
+        cache.setObject(NSNumber(value: Double(measuredHeight)), forKey: cacheKey)
+        return measuredHeight
+    }
+}
+
+private struct MobileLargePageTextPreviewUIKitRow: UIViewRepresentable {
+    let block: BlockSnapshot
+    let contentFont: EditorContentFont
+    let nestingLevel: Int
+    let listOrdinal: Int?
+    let isBlockSelected: Bool
+
+    func makeUIView(context: Context) -> MobileLargePageTextPreviewUIKitRowView {
+        let view = MobileLargePageTextPreviewUIKitRowView()
+        view.isAccessibilityElement = false
+        return view
+    }
+
+    func updateUIView(_ uiView: MobileLargePageTextPreviewUIKitRowView, context: Context) {
+        uiView.configure(
+            block: block,
+            contentFont: contentFont,
+            nestingLevel: nestingLevel,
+            listOrdinal: listOrdinal,
+            isBlockSelected: isBlockSelected
+        )
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiView: MobileLargePageTextPreviewUIKitRowView,
+        context: Context
+    ) -> CGSize? {
+        let width = proposal.width ?? UIScreen.main.bounds.width
+        return CGSize(width: width, height: uiView.height(fittingWidth: width))
+    }
+}
+
+private final class MobileLargePageTextPreviewUIKitRowView: UIView {
+    private var block: BlockSnapshot?
+    private var contentFont = EditorContentFont.defaultFont
+    private var nestingLevel = 0
+    private var listOrdinal: Int?
+    private var isBlockSelected = false
+
+    func configure(
+        block: BlockSnapshot,
+        contentFont: EditorContentFont,
+        nestingLevel: Int,
+        listOrdinal: Int?,
+        isBlockSelected: Bool
+    ) {
+        guard self.block != block ||
+              self.contentFont != contentFont ||
+              self.nestingLevel != nestingLevel ||
+              self.listOrdinal != listOrdinal ||
+              self.isBlockSelected != isBlockSelected else {
+            return
+        }
+        self.block = block
+        self.contentFont = contentFont
+        self.nestingLevel = nestingLevel
+        self.listOrdinal = listOrdinal
+        self.isBlockSelected = isBlockSelected
+        setNeedsDisplay()
+        invalidateIntrinsicContentSize()
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        CGSize(width: size.width, height: height(fittingWidth: size.width))
+    }
+
+    func height(fittingWidth width: CGFloat) -> CGFloat {
+        guard let block else {
+            return 1
+        }
+        let contentWidth = max(1, width - contentLeadingX(for: block) - outerTrailingPadding)
+        return rowVerticalPadding * 2 + contentHeight(for: block, width: contentWidth)
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let block else {
+            return
+        }
+        let rowRect = CGRect(origin: .zero, size: bounds.size)
+        drawRowBackground(rowRect, block: block)
+
+        let contentX = contentLeadingX(for: block)
+        let contentWidth = max(1, bounds.width - contentX - outerTrailingPadding)
+        let contentY = rowVerticalPadding
+        let contentRect = CGRect(
+            x: contentX,
+            y: contentY,
+            width: contentWidth,
+            height: contentHeight(for: block, width: contentWidth)
+        )
+        drawContent(block, in: contentRect)
+    }
+
+    private func drawContent(_ block: BlockSnapshot, in rect: CGRect) {
+        switch block.type {
+        case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
+            drawHeading(block, in: rect)
+        case .unorderedListItem, .orderedListItem:
+            drawListItem(block, in: rect)
+        case .codeBlock:
+            drawCodeBlock(block, in: rect)
+        case .quote:
+            drawQuote(block, in: rect)
+        case .callout:
+            drawCallout(block, in: rect)
+        default:
+            drawText(block.textPlain, blockType: block.type, in: rect)
+        }
+    }
+
+    private func drawHeading(_ block: BlockSnapshot, in rect: CGRect) {
+        let descriptor = HeadingBlockChromeDescriptor(block: block)
+        let backgroundPath = UIBezierPath(
+            roundedRect: rect,
+            cornerRadius: CGFloat(descriptor.cornerRadius)
+        )
+        headingAccentUIColor(level: descriptor.level)
+            .withAlphaComponent(descriptor.backgroundOpacity)
+            .setFill()
+        backgroundPath.fill()
+
+        let accentRect = CGRect(
+            x: rect.minX,
+            y: rect.minY + CGFloat(descriptor.accentVerticalInset),
+            width: CGFloat(descriptor.accentWidth),
+            height: max(0, rect.height - CGFloat(descriptor.accentVerticalInset * 2))
+        )
+        headingAccentUIColor(level: descriptor.level).setFill()
+        UIBezierPath(
+            roundedRect: accentRect,
+            cornerRadius: CGFloat(descriptor.accentWidth / 2)
+        ).fill()
+
+        let textRect = rect.insetBy(
+            dx: CGFloat(descriptor.horizontalPadding),
+            dy: CGFloat(descriptor.verticalPadding)
+        ).offsetBy(dx: CGFloat(descriptor.textLeadingPadding - descriptor.horizontalPadding), dy: 0)
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawListItem(_ block: BlockSnapshot, in rect: CGRect) {
+        EditorDesignTokens.Colors.border.uiColor
+            .withAlphaComponent(EditorBlockChrome.listBackgroundOpacity)
+            .setFill()
+        UIRectFill(rect)
+
+        let controlFrame = InlineLeadingControlFrameDescriptor()
+        let markerRect = CGRect(
+            x: rect.minX,
+            y: rect.minY + CGFloat(controlFrame.topPadding),
+            width: CGFloat(controlFrame.width),
+            height: CGFloat(controlFrame.height)
+        )
+        let markerText: String
+        if block.type == .orderedListItem {
+            markerText = "\(listOrdinal ?? 1)."
+        } else {
+            markerText = ListMarkerBulletStyleResolver.isHollow(nestingLevel: nestingLevel) ? "◦" : "•"
+        }
+        let markerAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 15, weight: .regular),
+            .foregroundColor: EditorDesignTokens.Colors.secondaryText.uiColor
+        ]
+        (markerText as NSString).draw(in: markerRect, withAttributes: markerAttributes)
+
+        let textRect = CGRect(
+            x: markerRect.maxX + CGFloat(controlFrame.textSpacing),
+            y: rect.minY + CGFloat(controlFrame.textVerticalOffset),
+            width: max(1, rect.width - CGFloat(controlFrame.width) - CGFloat(controlFrame.textSpacing)),
+            height: rect.height - CGFloat(controlFrame.textVerticalOffset)
+        )
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawCodeBlock(_ block: BlockSnapshot, in rect: CGRect) {
+        SpecialBlockSurfaceChrome.codeBackgroundToken.uiColor.setFill()
+        let path = UIBezierPath(roundedRect: rect, cornerRadius: 6)
+        path.fill()
+        EditorDesignTokens.Colors.border.uiColor.setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        let iconAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 13),
+            .foregroundColor: EditorDesignTokens.Colors.secondaryText.uiColor
+        ]
+        ("{}" as NSString).draw(
+            in: CGRect(x: rect.minX + 8, y: rect.minY + 6, width: 40, height: 18),
+            withAttributes: iconAttributes
+        )
+
+        let textRect = rect.insetBy(dx: 8, dy: 6).offsetBy(dx: 0, dy: codeHeaderHeight)
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawQuote(_ block: BlockSnapshot, in rect: CGRect) {
+        SpecialBlockSurfaceChrome.quoteBackgroundToken.uiColor.setFill()
+        UIBezierPath(
+            roundedRect: rect,
+            cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius)
+        ).fill()
+        let textRect = rect.insetBy(dx: 16, dy: 8).offsetBy(dx: 24, dy: 0)
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawCallout(_ block: BlockSnapshot, in rect: CGRect) {
+        SpecialBlockSurfaceChrome.calloutBackgroundToken.uiColor.setFill()
+        let path = UIBezierPath(
+            roundedRect: rect,
+            cornerRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius)
+        )
+        path.fill()
+        EditorDesignTokens.Colors.border.uiColor.withAlphaComponent(0.75).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+        let textRect = rect.insetBy(dx: 8, dy: 6).offsetBy(dx: 24, dy: 0)
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawText(_ text: String, blockType: BlockType, in rect: CGRect) {
+        let displayText = text.isEmpty ? " " : text
+        let attributes = textAttributes(blockType: blockType)
+        (displayText as NSString).draw(
+            with: rect,
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes,
+            context: nil
+        )
+    }
+
+    private func drawRowBackground(_ rect: CGRect, block: BlockSnapshot) {
+        let fillColor = rowBackgroundUIColor(blockType: block.type)
+        fillColor.setFill()
+        let path = UIBezierPath(
+            roundedRect: rect,
+            cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius)
+        )
+        path.fill()
+
+        let borderOpacity = BlockRowSelectionBorderPolicy.opacity(
+            blockType: block.type,
+            isSelected: isBlockSelected,
+            suppressesSelectionChrome: false
+        )
+        guard borderOpacity > 0 else {
+            return
+        }
+        EditorDesignTokens.Colors.accent.uiColor.withAlphaComponent(borderOpacity).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    private func contentHeight(for block: BlockSnapshot, width: CGFloat) -> CGFloat {
+        MobileLargePageTextPreviewMeasurementCache.contentHeight(
+            block: block,
+            contentFont: contentFont,
+            nestingLevel: nestingLevel,
+            listOrdinal: listOrdinal,
+            width: width
+        ) {
+            uncachedContentHeight(for: block, width: width)
+        }
+    }
+
+    private func uncachedContentHeight(for block: BlockSnapshot, width: CGFloat) -> CGFloat {
+        switch block.type {
+        case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
+            let descriptor = HeadingBlockChromeDescriptor(block: block)
+            let textWidth = max(1, width - CGFloat(descriptor.textLeadingPadding + descriptor.horizontalPadding))
+            return textHeight(block.textPlain, blockType: block.type, width: textWidth)
+                + CGFloat(descriptor.verticalPadding * 2)
+        case .unorderedListItem, .orderedListItem:
+            let controlFrame = InlineLeadingControlFrameDescriptor()
+            let textWidth = max(1, width - CGFloat(controlFrame.width + controlFrame.textSpacing))
+            return max(
+                CGFloat(controlFrame.height + controlFrame.topPadding),
+                textHeight(block.textPlain, blockType: block.type, width: textWidth)
+                    + abs(CGFloat(controlFrame.textVerticalOffset))
+            )
+        case .codeBlock:
+            return textHeight(block.textPlain, blockType: block.type, width: max(1, width - 16))
+                + codeHeaderHeight
+                + 18
+        case .quote:
+            return max(54, textHeight(block.textPlain, blockType: block.type, width: max(1, width - 56)) + 16)
+        case .callout:
+            return textHeight(block.textPlain, blockType: block.type, width: max(1, width - 40)) + 12
+        default:
+            return textHeight(block.textPlain, blockType: block.type, width: width)
+        }
+    }
+
+    private func textHeight(_ text: String, blockType: BlockType, width: CGFloat) -> CGFloat {
+        let displayText = text.isEmpty ? " " : text
+        let rect = (displayText as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: textAttributes(blockType: blockType),
+            context: nil
+        )
+        return ceil(rect.height)
+    }
+
+    private func textAttributes(blockType: BlockType) -> [NSAttributedString.Key: Any] {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 2
+        return [
+            .font: uiFont(blockType: blockType),
+            .foregroundColor: EditorDesignTokens.Colors.primaryText.uiColor,
+            .paragraphStyle: paragraphStyle
+        ]
+    }
+
+    private func uiFont(blockType: BlockType) -> UIFont {
+        let size = DeferredTextBlockPreviewFontPolicy.size(for: blockType)
+        if let postScriptName = contentFont.postScriptName(for: blockType),
+           let font = UIFont(name: postScriptName, size: size) {
+            return font
+        }
+        switch blockType {
+        case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
+            return UIFont.systemFont(ofSize: size, weight: .semibold)
+        case .codeBlock:
+            return UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        default:
+            return UIFont.systemFont(ofSize: size, weight: .regular)
+        }
+    }
+
+    private func contentLeadingX(for block: BlockSnapshot) -> CGFloat {
+        let nesting = CGFloat(BlockRowNestingIndentResolver.leadingPadding(
+            nestingLevel: nestingLevel,
+            blockType: block.type
+        ))
+        return nesting
+            + outerHorizontalPadding
+            - CGFloat(EditorCanvasChromeLayout.blockRowTitleAlignmentCompensation)
+            + CGFloat(EditorBlockChrome.dragHandleWidth)
+            + CGFloat(EditorBlockChrome.actionColumnSpacing)
+    }
+
+    private func rowBackgroundUIColor(blockType: BlockType) -> UIColor {
+        let opacity = BlockRowBackgroundPolicy.opacity(
+            blockType: blockType,
+            isSelected: isBlockSelected,
+            isFocused: false,
+            isSlashCommandMenuVisible: false,
+            suppressesSelectionChrome: false
+        )
+        guard opacity > 0 else {
+            return .clear
+        }
+        if isBlockSelected {
+            return EditorDesignTokens.Colors.accent.uiColor.withAlphaComponent(opacity)
+        }
+        return EditorDesignTokens.Colors.border.uiColor.withAlphaComponent(opacity)
+    }
+
+    private func headingAccentUIColor(level: Int) -> UIColor {
+        switch level {
+        case 1:
+            return UIColor(red: 0.68, green: 0.29, blue: 0.41, alpha: 1)
+        case 2:
+            return EditorDesignTokens.Colors.accent.uiColor
+        case 3:
+            return EditorDesignTokens.Colors.warningText.uiColor
+        default:
+            return EditorDesignTokens.Colors.secondaryText.uiColor
+        }
+    }
+
+    private var rowVerticalPadding: CGFloat {
+        CGFloat(EditorBlockChrome.rowVerticalPadding)
+    }
+
+    private var outerHorizontalPadding: CGFloat {
+        4
+    }
+
+    private var outerTrailingPadding: CGFloat {
+        4
+    }
+
+    private var codeHeaderHeight: CGFloat {
+        24
+    }
+}
+#elseif os(macOS)
+@MainActor
+private enum MobileLargePageTextPreviewAppKitMeasurementCache {
+    private static let cache: NSCache<NSString, NSNumber> = {
+        let cache = NSCache<NSString, NSNumber>()
+        cache.countLimit = 8_000
+        return cache
+    }()
+
+    static func contentHeight(
+        block: BlockSnapshot,
+        contentFont: EditorContentFont,
+        nestingLevel: Int,
+        listOrdinal: Int?,
+        width: CGFloat,
+        compute: () -> CGFloat
+    ) -> CGFloat {
+        let scale = NSScreen.main?.backingScaleFactor ?? 1
+        let widthKey = Int((width * scale).rounded())
+        let listOrdinalKey = listOrdinal.map(String.init) ?? "none"
+        let key = [
+            block.id,
+            block.type.rawValue,
+            contentFont.rawValue,
+            "\(nestingLevel)",
+            listOrdinalKey,
+            "\(widthKey)",
+            block.textPlain
+        ].joined(separator: "\u{1F}")
+        let cacheKey = key as NSString
+
+        if let cached = cache.object(forKey: cacheKey) {
+            return CGFloat(cached.doubleValue)
+        }
+
+        let measuredHeight = compute()
+        cache.setObject(NSNumber(value: Double(measuredHeight)), forKey: cacheKey)
+        return measuredHeight
+    }
+}
+
+private struct MobileLargePageTextPreviewAppKitRow: NSViewRepresentable {
+    let block: BlockSnapshot
+    let contentFont: EditorContentFont
+    let nestingLevel: Int
+    let listOrdinal: Int?
+    let isBlockSelected: Bool
+
+    func makeNSView(context: Context) -> MobileLargePageTextPreviewAppKitRowView {
+        let view = MobileLargePageTextPreviewAppKitRowView()
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return view
+    }
+
+    func updateNSView(_ nsView: MobileLargePageTextPreviewAppKitRowView, context: Context) {
+        nsView.configure(
+            block: block,
+            contentFont: contentFont,
+            nestingLevel: nestingLevel,
+            listOrdinal: listOrdinal,
+            isBlockSelected: isBlockSelected
+        )
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: MobileLargePageTextPreviewAppKitRowView,
+        context: Context
+    ) -> CGSize? {
+        let width = proposal.width ?? 720
+        return CGSize(width: width, height: nsView.height(fittingWidth: width))
+    }
+}
+
+private final class MobileLargePageTextPreviewAppKitRowView: NSView {
+    private var block: BlockSnapshot?
+    private var contentFont = EditorContentFont.defaultFont
+    private var nestingLevel = 0
+    private var listOrdinal: Int?
+    private var isBlockSelected = false
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    override var isOpaque: Bool {
+        false
+    }
+
+    func configure(
+        block: BlockSnapshot,
+        contentFont: EditorContentFont,
+        nestingLevel: Int,
+        listOrdinal: Int?,
+        isBlockSelected: Bool
+    ) {
+        guard self.block != block ||
+              self.contentFont != contentFont ||
+              self.nestingLevel != nestingLevel ||
+              self.listOrdinal != listOrdinal ||
+              self.isBlockSelected != isBlockSelected else {
+            return
+        }
+        self.block = block
+        self.contentFont = contentFont
+        self.nestingLevel = nestingLevel
+        self.listOrdinal = listOrdinal
+        self.isBlockSelected = isBlockSelected
+        needsDisplay = true
+        invalidateIntrinsicContentSize()
+    }
+
+    func height(fittingWidth width: CGFloat) -> CGFloat {
+        guard let block else {
+            return 1
+        }
+        let contentWidth = max(1, width - contentLeadingX(for: block) - outerTrailingPadding)
+        return rowVerticalPadding * 2 + contentHeight(for: block, width: contentWidth)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let block else {
+            return
+        }
+        let rowRect = CGRect(origin: .zero, size: bounds.size)
+        drawRowBackground(rowRect, block: block)
+
+        let contentX = contentLeadingX(for: block)
+        let contentWidth = max(1, bounds.width - contentX - outerTrailingPadding)
+        let contentY = rowVerticalPadding
+        let contentRect = CGRect(
+            x: contentX,
+            y: contentY,
+            width: contentWidth,
+            height: contentHeight(for: block, width: contentWidth)
+        )
+        drawContent(block, in: contentRect)
+    }
+
+    private func drawContent(_ block: BlockSnapshot, in rect: CGRect) {
+        switch block.type {
+        case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
+            drawHeading(block, in: rect)
+        case .unorderedListItem, .orderedListItem:
+            drawListItem(block, in: rect)
+        case .codeBlock:
+            drawCodeBlock(block, in: rect)
+        case .quote:
+            drawQuote(block, in: rect)
+        case .callout:
+            drawCallout(block, in: rect)
+        default:
+            drawText(block.textPlain, blockType: block.type, in: rect)
+        }
+    }
+
+    private func drawHeading(_ block: BlockSnapshot, in rect: CGRect) {
+        let descriptor = HeadingBlockChromeDescriptor(block: block)
+        let backgroundPath = NSBezierPath(
+            roundedRect: rect,
+            xRadius: CGFloat(descriptor.cornerRadius),
+            yRadius: CGFloat(descriptor.cornerRadius)
+        )
+        headingAccentNSColor(level: descriptor.level)
+            .withAlphaComponent(descriptor.backgroundOpacity)
+            .setFill()
+        backgroundPath.fill()
+
+        let accentRect = CGRect(
+            x: rect.minX,
+            y: rect.minY + CGFloat(descriptor.accentVerticalInset),
+            width: CGFloat(descriptor.accentWidth),
+            height: max(0, rect.height - CGFloat(descriptor.accentVerticalInset * 2))
+        )
+        headingAccentNSColor(level: descriptor.level).setFill()
+        NSBezierPath(
+            roundedRect: accentRect,
+            xRadius: CGFloat(descriptor.accentWidth / 2),
+            yRadius: CGFloat(descriptor.accentWidth / 2)
+        ).fill()
+
+        let textRect = rect.insetBy(
+            dx: CGFloat(descriptor.horizontalPadding),
+            dy: CGFloat(descriptor.verticalPadding)
+        ).offsetBy(dx: CGFloat(descriptor.textLeadingPadding - descriptor.horizontalPadding), dy: 0)
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawListItem(_ block: BlockSnapshot, in rect: CGRect) {
+        EditorDesignTokens.Colors.border.nsColor
+            .withAlphaComponent(EditorBlockChrome.listBackgroundOpacity)
+            .setFill()
+        NSBezierPath(rect: rect).fill()
+
+        let controlFrame = InlineLeadingControlFrameDescriptor()
+        let markerRect = CGRect(
+            x: rect.minX,
+            y: rect.minY + CGFloat(controlFrame.topPadding),
+            width: CGFloat(controlFrame.width),
+            height: CGFloat(controlFrame.height)
+        )
+        let markerText: String
+        if block.type == .orderedListItem {
+            markerText = "\(listOrdinal ?? 1)."
+        } else {
+            markerText = ListMarkerBulletStyleResolver.isHollow(nestingLevel: nestingLevel) ? "◦" : "•"
+        }
+        let markerAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 15, weight: .regular),
+            .foregroundColor: EditorDesignTokens.Colors.secondaryText.nsColor
+        ]
+        (markerText as NSString).draw(in: markerRect, withAttributes: markerAttributes)
+
+        let textRect = CGRect(
+            x: markerRect.maxX + CGFloat(controlFrame.textSpacing),
+            y: rect.minY + CGFloat(controlFrame.textVerticalOffset),
+            width: max(1, rect.width - CGFloat(controlFrame.width) - CGFloat(controlFrame.textSpacing)),
+            height: rect.height - CGFloat(controlFrame.textVerticalOffset)
+        )
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawCodeBlock(_ block: BlockSnapshot, in rect: CGRect) {
+        SpecialBlockSurfaceChrome.codeBackgroundToken.nsColor.setFill()
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        path.fill()
+        EditorDesignTokens.Colors.border.nsColor.setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        let iconAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: EditorDesignTokens.Colors.secondaryText.nsColor
+        ]
+        ("{}" as NSString).draw(
+            in: CGRect(x: rect.minX + 8, y: rect.minY + 6, width: 40, height: 18),
+            withAttributes: iconAttributes
+        )
+
+        let textRect = rect.insetBy(dx: 8, dy: 6).offsetBy(dx: 0, dy: codeHeaderHeight)
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawQuote(_ block: BlockSnapshot, in rect: CGRect) {
+        SpecialBlockSurfaceChrome.quoteBackgroundToken.nsColor.setFill()
+        NSBezierPath(
+            roundedRect: rect,
+            xRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius),
+            yRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius)
+        ).fill()
+        let textRect = rect.insetBy(dx: 16, dy: 8).offsetBy(dx: 24, dy: 0)
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawCallout(_ block: BlockSnapshot, in rect: CGRect) {
+        SpecialBlockSurfaceChrome.calloutBackgroundToken.nsColor.setFill()
+        let path = NSBezierPath(
+            roundedRect: rect,
+            xRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius),
+            yRadius: CGFloat(EditorBlockChrome.specialBlockCornerRadius)
+        )
+        path.fill()
+        EditorDesignTokens.Colors.border.nsColor.withAlphaComponent(0.75).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+        let textRect = rect.insetBy(dx: 8, dy: 6).offsetBy(dx: 24, dy: 0)
+        drawText(block.textPlain, blockType: block.type, in: textRect)
+    }
+
+    private func drawText(_ text: String, blockType: BlockType, in rect: CGRect) {
+        let displayText = text.isEmpty ? " " : text
+        let attributes = textAttributes(blockType: blockType)
+        (displayText as NSString).draw(
+            with: rect,
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes,
+            context: nil
+        )
+    }
+
+    private func drawRowBackground(_ rect: CGRect, block: BlockSnapshot) {
+        let fillColor = rowBackgroundNSColor(blockType: block.type)
+        fillColor.setFill()
+        let path = NSBezierPath(
+            roundedRect: rect,
+            xRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius),
+            yRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius)
+        )
+        path.fill()
+
+        let borderOpacity = BlockRowSelectionBorderPolicy.opacity(
+            blockType: block.type,
+            isSelected: isBlockSelected,
+            suppressesSelectionChrome: false
+        )
+        guard borderOpacity > 0 else {
+            return
+        }
+        EditorDesignTokens.Colors.accent.nsColor.withAlphaComponent(borderOpacity).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    private func contentHeight(for block: BlockSnapshot, width: CGFloat) -> CGFloat {
+        MobileLargePageTextPreviewAppKitMeasurementCache.contentHeight(
+            block: block,
+            contentFont: contentFont,
+            nestingLevel: nestingLevel,
+            listOrdinal: listOrdinal,
+            width: width
+        ) {
+            uncachedContentHeight(for: block, width: width)
+        }
+    }
+
+    private func uncachedContentHeight(for block: BlockSnapshot, width: CGFloat) -> CGFloat {
+        switch block.type {
+        case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
+            let descriptor = HeadingBlockChromeDescriptor(block: block)
+            let textWidth = max(1, width - CGFloat(descriptor.textLeadingPadding + descriptor.horizontalPadding))
+            return textHeight(block.textPlain, blockType: block.type, width: textWidth)
+                + CGFloat(descriptor.verticalPadding * 2)
+        case .unorderedListItem, .orderedListItem:
+            let controlFrame = InlineLeadingControlFrameDescriptor()
+            let textWidth = max(1, width - CGFloat(controlFrame.width + controlFrame.textSpacing))
+            return max(
+                CGFloat(controlFrame.height + controlFrame.topPadding),
+                textHeight(block.textPlain, blockType: block.type, width: textWidth)
+                    + abs(CGFloat(controlFrame.textVerticalOffset))
+            )
+        case .codeBlock:
+            return textHeight(block.textPlain, blockType: block.type, width: max(1, width - 16))
+                + codeHeaderHeight
+                + 18
+        case .quote:
+            return max(54, textHeight(block.textPlain, blockType: block.type, width: max(1, width - 56)) + 16)
+        case .callout:
+            return textHeight(block.textPlain, blockType: block.type, width: max(1, width - 40)) + 12
+        default:
+            return textHeight(block.textPlain, blockType: block.type, width: width)
+        }
+    }
+
+    private func textHeight(_ text: String, blockType: BlockType, width: CGFloat) -> CGFloat {
+        let displayText = text.isEmpty ? " " : text
+        let rect = (displayText as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: textAttributes(blockType: blockType),
+            context: nil
+        )
+        return ceil(rect.height)
+    }
+
+    private func textAttributes(blockType: BlockType) -> [NSAttributedString.Key: Any] {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 2
+        return [
+            .font: nsFont(blockType: blockType),
+            .foregroundColor: EditorDesignTokens.Colors.primaryText.nsColor,
+            .paragraphStyle: paragraphStyle
+        ]
+    }
+
+    private func nsFont(blockType: BlockType) -> NSFont {
+        let size = DeferredTextBlockPreviewFontPolicy.size(for: blockType)
+        if let postScriptName = contentFont.postScriptName(for: blockType),
+           let font = NSFont(name: postScriptName, size: size) {
+            return font
+        }
+        switch blockType {
+        case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
+            return NSFont.systemFont(ofSize: size, weight: .semibold)
+        case .codeBlock:
+            return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        default:
+            return NSFont.systemFont(ofSize: size, weight: .regular)
+        }
+    }
+
+    private func contentLeadingX(for block: BlockSnapshot) -> CGFloat {
+        let nesting = CGFloat(BlockRowNestingIndentResolver.leadingPadding(
+            nestingLevel: nestingLevel,
+            blockType: block.type
+        ))
+        return nesting
+            + outerHorizontalPadding
+            - CGFloat(EditorCanvasChromeLayout.blockRowTitleAlignmentCompensation)
+            + CGFloat(EditorBlockChrome.dragHandleWidth)
+            + CGFloat(EditorBlockChrome.actionColumnSpacing)
+    }
+
+    private func rowBackgroundNSColor(blockType: BlockType) -> NSColor {
+        let opacity = BlockRowBackgroundPolicy.opacity(
+            blockType: blockType,
+            isSelected: isBlockSelected,
+            isFocused: false,
+            isSlashCommandMenuVisible: false,
+            suppressesSelectionChrome: false
+        )
+        guard opacity > 0 else {
+            return .clear
+        }
+        if isBlockSelected {
+            return EditorDesignTokens.Colors.accent.nsColor.withAlphaComponent(opacity)
+        }
+        return EditorDesignTokens.Colors.border.nsColor.withAlphaComponent(opacity)
+    }
+
+    private func headingAccentNSColor(level: Int) -> NSColor {
+        switch level {
+        case 1:
+            return NSColor(red: 0.68, green: 0.29, blue: 0.41, alpha: 1)
+        case 2:
+            return EditorDesignTokens.Colors.accent.nsColor
+        case 3:
+            return EditorDesignTokens.Colors.warningText.nsColor
+        default:
+            return EditorDesignTokens.Colors.secondaryText.nsColor
+        }
+    }
+
+    private var rowVerticalPadding: CGFloat {
+        CGFloat(EditorBlockChrome.rowVerticalPadding)
+    }
+
+    private var outerHorizontalPadding: CGFloat {
+        4
+    }
+
+    private var outerTrailingPadding: CGFloat {
+        4
+    }
+
+    private var codeHeaderHeight: CGFloat {
+        24
+    }
+}
+#endif
+
+private struct MobileLargePageTablePreviewRow: View {
+    let block: BlockSnapshot
+    let nestingLevel: Int
+    let isBlockSelected: Bool
+    let onActivate: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: CGFloat(EditorBlockChrome.actionColumnSpacing)) {
+            Color.clear
+                .frame(width: CGFloat(EditorBlockChrome.dragHandleWidth), height: 20)
+                .accessibilityHidden(true)
+
+#if os(iOS)
+            MobileLargePageTablePreviewUIKitRow(
+                text: block.textPlain,
+                rows: block.tableRows
+            )
+            .onTapGesture(perform: onActivate)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("表格块")
+            .accessibilityHint("轻点编辑表格")
+            .accessibilityIdentifier("editor.table.\(block.id).preview")
+#else
+            StructuredTableBlockPreview(
+                blockID: block.id,
+                text: block.textPlain,
+                rows: block.tableRows,
+                onActivate: onActivate
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+#endif
+        }
+        .padding(.vertical, CGFloat(EditorBlockChrome.rowVerticalPadding))
+        .padding(.leading, CGFloat(BlockRowNestingIndentResolver.leadingPadding(
+            nestingLevel: nestingLevel,
+            blockType: block.type
+        )))
+        .padding(.horizontal, 4)
+        .padding(.leading, -CGFloat(EditorCanvasChromeLayout.blockRowTitleAlignmentCompensation))
+        .background(rowBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor.block.\(block.id)")
+        .accessibilityLabel(rowAccessibilityValue)
+        .accessibilityValue(rowAccessibilityValue)
+    }
+
+    private var rowBackground: some View {
+        let borderOpacity = BlockRowSelectionBorderPolicy.opacity(
+            blockType: block.type,
+            isSelected: isBlockSelected,
+            suppressesSelectionChrome: false
+        )
+        return RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
+            .fill(rowBackgroundColor)
+            .overlay(
+                RoundedRectangle(cornerRadius: CGFloat(EditorDesignTokens.Layout.rowCornerRadius), style: .continuous)
+                    .stroke(EditorDesignTokens.Colors.accent.color.opacity(borderOpacity), lineWidth: 1)
+            )
+    }
+
+    private var rowBackgroundColor: Color {
+        let opacity = BlockRowBackgroundPolicy.opacity(
+            blockType: block.type,
+            isSelected: isBlockSelected,
+            isFocused: false,
+            isSlashCommandMenuVisible: false,
+            suppressesSelectionChrome: false
+        )
+        guard opacity > 0 else {
+            return Color.clear
+        }
+        if isBlockSelected {
+            return EditorDesignTokens.Colors.accent.color.opacity(opacity)
+        }
+        return EditorDesignTokens.Colors.border.color.opacity(opacity)
+    }
+
+    private var rowAccessibilityValue: String {
+        BlockAccessibilityTextPolicy.rowValue(
+            blockText: block.textPlain,
+            isSelected: isBlockSelected,
+            isLargePage: true
+        )
+    }
+}
+
+#if os(iOS)
+private struct MobileLargePageTablePreviewUIKitRow: UIViewRepresentable {
+    let text: String
+    let rows: [[String]]
+
+    func makeUIView(context: Context) -> MobileLargePageTablePreviewUIKitRowView {
+        let view = MobileLargePageTablePreviewUIKitRowView()
+        view.isAccessibilityElement = false
+        return view
+    }
+
+    func updateUIView(_ uiView: MobileLargePageTablePreviewUIKitRowView, context: Context) {
+        let editableRows = TableBlockDefaultGridResolver.editableRows(text: text, rows: rows)
+        uiView.configure(rows: editableRows, descriptor: StructuredTableBlockPreviewDescriptor(rows: editableRows))
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiView: MobileLargePageTablePreviewUIKitRowView,
+        context: Context
+    ) -> CGSize? {
+        let width = proposal.width ?? UIScreen.main.bounds.width
+        return CGSize(width: width, height: uiView.height)
+    }
+}
+
+private final class MobileLargePageTablePreviewUIKitRowView: UIView {
+    private var rows: [[String]] = []
+    private var descriptor = StructuredTableBlockPreviewDescriptor(rows: [])
+    private let paragraphStyle: NSMutableParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        style.alignment = .left
+        return style
+    }()
+
+    var height: CGFloat {
+        descriptor.contentHeight
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = true
+        contentMode = .redraw
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(rows: [[String]], descriptor: StructuredTableBlockPreviewDescriptor) {
+        guard self.rows != rows || self.descriptor != descriptor else {
+            return
+        }
+        self.rows = rows
+        self.descriptor = descriptor
+        setNeedsDisplay()
+        invalidateIntrinsicContentSize()
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        CGSize(width: size.width, height: height)
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else {
+            return
+        }
+
+        let bounds = CGRect(x: 0, y: 0, width: self.bounds.width, height: height)
+        let clipPath = UIBezierPath(
+            roundedRect: bounds,
+            cornerRadius: CGFloat(TableBlockChrome.cornerRadius)
+        )
+        clipPath.addClip()
+
+        EditorDesignTokens.Colors.editorBackground.uiColor.setFill()
+        context.fill(rect.intersection(bounds))
+
+        let rowCount = descriptor.rowCount
+        let columnCount = descriptor.columnCount
+        let cellWidth = CGFloat(TableBlockChrome.cellWidth)
+        let cellHeight = CGFloat(TableBlockChrome.cellHeight)
+        let visibleColumnCount = min(columnCount, Int(ceil(max(bounds.width, 1) / cellWidth)) + 1)
+        let visibleRows = visibleRowRange(rowCount: rowCount, cellHeight: cellHeight, rect: rect)
+
+        if rowCount > 0,
+           rect.intersects(CGRect(x: 0, y: 0, width: bounds.width, height: cellHeight)) {
+            TableBlockChrome.headerBackgroundToken.uiColor.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: bounds.width, height: cellHeight))
+        }
+
+        let gridLineColor = UIColor.secondaryLabel.withAlphaComponent(TableBlockChrome.gridLineOpacity)
+        gridLineColor.setFill()
+        if visibleColumnCount > 1 {
+            let visibleYRange = visibleYRange(rect: rect, bounds: bounds)
+            for columnIndex in 1..<visibleColumnCount {
+                context.fill(CGRect(
+                    x: CGFloat(columnIndex) * cellWidth,
+                    y: visibleYRange.minY,
+                    width: 1 / max(window?.screen.scale ?? UIScreen.main.scale, 1),
+                    height: visibleYRange.height
+                ))
+            }
+        }
+        if rowCount > 1,
+           let visibleRows {
+            let firstGridLine = max(1, visibleRows.lowerBound)
+            let lastGridLine = min(rowCount - 1, visibleRows.upperBound)
+            if firstGridLine <= lastGridLine {
+                for rowIndex in firstGridLine...lastGridLine {
+                    context.fill(CGRect(
+                        x: 0,
+                        y: CGFloat(rowIndex) * cellHeight,
+                        width: bounds.width,
+                        height: 1 / max(window?.screen.scale ?? UIScreen.main.scale, 1)
+                    ))
+                }
+            }
+        }
+
+        let textColor = EditorDesignTokens.Colors.primaryText.uiColor
+        if let visibleRows {
+            for rowIndex in visibleRows {
+                for columnIndex in 0..<visibleColumnCount {
+                    let text = cellText(row: rowIndex, column: columnIndex)
+                    guard !text.isEmpty else {
+                        continue
+                    }
+                    let font = UIFont.systemFont(
+                        ofSize: 15,
+                        weight: rowIndex == 0 ? .semibold : .regular
+                    )
+                    let textRect = CGRect(
+                        x: CGFloat(columnIndex) * cellWidth + 18,
+                        y: CGFloat(rowIndex) * cellHeight + 10,
+                        width: max(0, cellWidth - 36),
+                        height: max(0, cellHeight - 20)
+                    )
+                    (text as NSString).draw(
+                        with: textRect,
+                        options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                        attributes: [
+                            .font: font,
+                            .foregroundColor: textColor,
+                            .paragraphStyle: paragraphStyle
+                        ],
+                        context: nil
+                    )
+                }
+            }
+        }
+
+        EditorDesignTokens.Colors.secondaryText.uiColor
+            .withAlphaComponent(TableBlockChrome.outerBorderOpacity)
+            .setStroke()
+        clipPath.lineWidth = 1
+        clipPath.stroke()
+    }
+
+    private func visibleRowRange(
+        rowCount: Int,
+        cellHeight: CGFloat,
+        rect: CGRect
+    ) -> Range<Int>? {
+        guard rowCount > 0,
+              cellHeight > 0 else {
+            return nil
+        }
+        let firstRow = max(0, Int(floor(max(rect.minY, 0) / cellHeight)))
+        let lastRow = min(rowCount - 1, Int(floor(max(rect.maxY - 0.5, 0) / cellHeight)))
+        guard firstRow <= lastRow else {
+            return nil
+        }
+        return firstRow..<(lastRow + 1)
+    }
+
+    private func visibleYRange(rect: CGRect, bounds: CGRect) -> CGRect {
+        let minY = max(0, rect.minY)
+        let maxY = min(bounds.height, rect.maxY)
+        return CGRect(
+            x: 0,
+            y: minY,
+            width: bounds.width,
+            height: max(0, maxY - minY)
+        )
+    }
+
+    private func cellText(row rowIndex: Int, column columnIndex: Int) -> String {
+        guard rows.indices.contains(rowIndex),
+              rows[rowIndex].indices.contains(columnIndex) else {
+            return ""
+        }
+        return rows[rowIndex][columnIndex]
+    }
+}
+#endif
+
+private struct PageReferenceTargetPicker: View {
+    let currentPageID: String?
+    let pages: [PageSummary]
+    let onSelect: (String) -> Void
+    let onCancel: () -> Void
+    @State private var query = ""
+
+    private var targets: [PageSummary] {
+        pages.filter { page in
+            page.id != currentPageID
+                && (query.isEmpty || page.title.localizedCaseInsensitiveContains(query))
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(targets) { page in
+                Button {
+                    onSelect(page.id)
+                } label: {
+                    Label(page.title, systemImage: "doc.text")
+                        .lineLimit(1)
+                }
+            }
+            .searchable(text: $query, prompt: "搜索页面")
+            .navigationTitle("页面引用")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消", action: onCancel)
+                }
+            }
+        }
+    }
+}
+
+private struct BlockReferenceTargetPicker: View {
+    let pages: [PageSummary]
+    let blocks: [BlockSnapshot]
+    let onSelect: (String) -> Void
+    let onCancel: () -> Void
+    @State private var query = ""
+
+    private var pageTitlesByID: [String: String] {
+        Dictionary(uniqueKeysWithValues: pages.map { ($0.id, $0.title) })
+    }
+
+    private var targets: [BlockSnapshot] {
+        blocks.filter { block in
+            guard block.type.isTextEditable, !block.textPlain.isEmpty else {
+                return false
+            }
+            guard !query.isEmpty else {
+                return true
+            }
+            let pageTitle = pageTitlesByID[block.pageID] ?? ""
+            return block.textPlain.localizedCaseInsensitiveContains(query)
+                || pageTitle.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(targets) { block in
+                Button {
+                    onSelect(block.id)
+                } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(block.textPlain)
+                            .lineLimit(1)
+                        Text(pageTitlesByID[block.pageID] ?? "页面")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .searchable(text: $query, prompt: "搜索块")
+            .navigationTitle("块引用")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消", action: onCancel)
+                }
+            }
+        }
+    }
+}
+
 private struct BlockRowView: View {
     let block: BlockSnapshot
     let attachment: AttachmentSnapshot?
@@ -15088,6 +18700,8 @@ private struct BlockRowView: View {
     let editorSession: EditorSession
     let nestingLevel: Int
     let listOrdinal: Int?
+    let isLargePage: Bool
+    let forceTableEditorActive: Bool
     let dragPayloadBlockIDs: [String]
     let canMoveUp: Bool
     let canMoveDown: Bool
@@ -15143,6 +18757,7 @@ private struct BlockRowView: View {
     let onClearDropTarget: () -> Void
     let onClearTransientSelections: (String?) -> Void
     let onTableRowsChange: ([[String]]) -> Void
+    let onTextEditingEnded: () -> Void
     let onTextChange: (String) -> Void
     @State private var isRowHovered = false
     @State private var rowFocusRequest: BlockFocusRequest?
@@ -15151,6 +18766,8 @@ private struct BlockRowView: View {
     @State private var isAttachmentRenameAlertPresented = false
     @State private var attachmentRenameText = ""
     @State private var isAttachmentResizeActive = false
+    @State private var isDeferredTableEditorActive = false
+    @State private var isDeferredTextEditorActive = false
 #if os(iOS)
     @State private var mobileFormatPaletteTab: MobileFormatPaletteTab = .more
     @State private var isMobileFormatPanelPresented = false
@@ -15166,6 +18783,8 @@ private struct BlockRowView: View {
         editorSession: EditorSession,
         nestingLevel: Int = 0,
         listOrdinal: Int? = nil,
+        isLargePage: Bool = false,
+        forceTableEditorActive: Bool = false,
         dragPayloadBlockIDs: [String] = [],
         canMoveUp: Bool = false,
         canMoveDown: Bool = false,
@@ -15221,6 +18840,7 @@ private struct BlockRowView: View {
         onClearDropTarget: @escaping () -> Void = {},
         onClearTransientSelections: @escaping (String?) -> Void = { _ in },
         onTableRowsChange: @escaping ([[String]]) -> Void = { _ in },
+        onTextEditingEnded: @escaping () -> Void = {},
         onTextChange: @escaping (String) -> Void
     ) {
         self.block = block
@@ -15232,6 +18852,8 @@ private struct BlockRowView: View {
         self.editorSession = editorSession
         self.nestingLevel = nestingLevel
         self.listOrdinal = listOrdinal
+        self.isLargePage = isLargePage
+        self.forceTableEditorActive = forceTableEditorActive
         self.dragPayloadBlockIDs = dragPayloadBlockIDs
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
@@ -15287,6 +18909,7 @@ private struct BlockRowView: View {
         self.onClearDropTarget = onClearDropTarget
         self.onClearTransientSelections = onClearTransientSelections
         self.onTableRowsChange = onTableRowsChange
+        self.onTextEditingEnded = onTextEditingEnded
         self.onTextChange = onTextChange
     }
 
@@ -15363,15 +18986,23 @@ private struct BlockRowView: View {
                 }
             )
         )
+#endif
         .onChange(of: editorSession.focusedBlockID) { _, focusedBlockID in
             if let focusedBlockID, focusedBlockID != block.id {
+#if os(iOS)
                 resetMobileFormatPanelForInactiveRow()
+#endif
+                isDeferredTextEditorActive = false
+                isDeferredTableEditorActive = false
             }
         }
         .onDisappear {
+#if os(iOS)
             resetMobileFormatPanelForInactiveRow()
-        }
 #endif
+            isDeferredTextEditorActive = false
+            isDeferredTableEditorActive = false
+        }
 #if os(macOS)
         .onHover { hovering in
             isRowHovered = hovering
@@ -15404,20 +19035,35 @@ private struct BlockRowView: View {
     @ViewBuilder
     private var blockContent: some View {
         if block.type == .table {
-            StructuredTableBlockEditor(
-                blockID: block.id,
-                text: block.textPlain,
-                rows: block.tableRows,
-                focusedBlockID: editorSession.focusedBlockID,
-                selectionResetRequest: selectionResetRequest,
-                onClearExternalSelections: {
-                    onClearTransientSelections(block.id)
-                },
-                onRowsChange: onTableRowsChange,
-                onMoveFocusByKeyboard: onMoveFocusByKeyboard
-            )
-            .onTapGesture {
-                onClearDropTarget()
+            if DeferredTableBlockEditorPolicy.usesPreview(
+                blockType: block.type,
+                isLargePage: isLargePage,
+                isEditing: isDeferredTableEditorActive || forceTableEditorActive
+            ) {
+                StructuredTableBlockPreview(
+                    blockID: block.id,
+                    text: block.textPlain,
+                    rows: block.tableRows
+                ) {
+                    onClearDropTarget()
+                    isDeferredTableEditorActive = true
+                }
+            } else {
+                StructuredTableBlockEditor(
+                    blockID: block.id,
+                    text: block.textPlain,
+                    rows: block.tableRows,
+                    focusedBlockID: editorSession.focusedBlockID,
+                    selectionResetRequest: selectionResetRequest,
+                    onClearExternalSelections: {
+                        onClearTransientSelections(block.id)
+                    },
+                    onRowsChange: onTableRowsChange,
+                    onMoveFocusByKeyboard: onMoveFocusByKeyboard
+                )
+                .onTapGesture {
+                    onClearDropTarget()
+                }
             }
         } else if block.type.isTextEditable {
             VStack(alignment: .leading, spacing: 4) {
@@ -15578,8 +19224,12 @@ private struct BlockRowView: View {
             .accessibilityLabel(isBlockSelected ? "取消选择块" : "选择块")
             .accessibilityValue(block.type.editorMenuTitle)
             .accessibilityIdentifier("editor.block.\(block.id).selection-toggle")
-        } else {
+        } else if MobileBlockDragActivationPolicy.usesVisibleDragHandle {
             dragHandleColumn
+        } else {
+            Color.clear
+                .frame(width: CGFloat(EditorBlockChrome.dragHandleWidth), height: 20)
+                .accessibilityHidden(true)
         }
 #else
         dragHandleColumn
@@ -15772,16 +19422,18 @@ private struct BlockRowView: View {
     }
 
     private var rowAccessibilityValue: String {
-        let selectionState = isBlockSelected ? "当前块已选中" : "当前块未选中"
-        let content = block.textPlain.isEmpty ? "空" : block.textPlain
-        return "\(content), \(selectionState)"
+        BlockAccessibilityTextPolicy.rowValue(
+            blockText: block.textPlain,
+            isSelected: isBlockSelected,
+            isLargePage: isLargePage
+        )
     }
 
     @ViewBuilder
     private var textEditableBlockContent: some View {
         if block.type.isHeading {
             let descriptor = HeadingBlockChromeDescriptor(block: block)
-            nativeTextBlockEditor
+            textEditorSurface
                 .padding(.leading, CGFloat(descriptor.textLeadingPadding))
                 .padding(.trailing, CGFloat(descriptor.horizontalPadding))
                 .padding(.vertical, CGFloat(descriptor.verticalPadding))
@@ -15845,7 +19497,7 @@ private struct BlockRowView: View {
                     codeBlockWrapButton
                 }
 
-                nativeTextBlockEditor
+                textEditorSurface
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
@@ -15883,7 +19535,7 @@ private struct BlockRowView: View {
                     .padding(.top, 2)
                     .accessibilityHidden(true)
 
-                nativeTextBlockEditor
+                textEditorSurface
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
@@ -15905,7 +19557,7 @@ private struct BlockRowView: View {
                     .foregroundStyle(EditorDesignTokens.Colors.tertiaryText.color.opacity(0.62))
                     .accessibilityHidden(true)
 
-                nativeTextBlockEditor
+                textEditorSurface
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 16)
@@ -15919,7 +19571,7 @@ private struct BlockRowView: View {
         } else {
             HStack(alignment: .top, spacing: 8) {
                 textBlockLeadingControls
-                nativeTextBlockEditor
+                textEditorSurface
             }
         }
     }
@@ -15953,7 +19605,7 @@ private struct BlockRowView: View {
     }
 
     private func inlineBodyTextEditor(descriptor: InlineLeadingControlFrameDescriptor) -> some View {
-        nativeTextBlockEditor
+        textEditorSurface
             .offset(y: CGFloat(descriptor.textVerticalOffset))
     }
 
@@ -16028,10 +19680,50 @@ private struct BlockRowView: View {
         block.taskItemIsCompleted ? "任务块，已完成" : "任务块，未完成"
     }
 
+    @ViewBuilder
+    private var textEditorSurface: some View {
+        if usesDeferredTextPreview {
+            deferredTextPreview
+        } else {
+            nativeTextBlockEditor
+        }
+    }
+
+    private var usesDeferredTextPreview: Bool {
+        DeferredTextBlockEditorPolicy.usesPreview(
+            blockType: block.type,
+            isLargePage: isLargePage,
+            isFocused: editorSession.focusedBlockID == block.id,
+            hasFocusRequest: effectiveFocusRequestID != nil,
+            hasSearchHighlight: searchHighlight != nil,
+            isEditing: isDeferredTextEditorActive
+        )
+    }
+
+    private var deferredTextPreview: some View {
+        Text(verbatim: block.textPlain.isEmpty ? " " : block.textPlain)
+            .font(DeferredTextBlockPreviewFontPolicy.font(contentFont: contentFont, blockType: block.type))
+            .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+            .lineSpacing(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .accessibilityLabel(BlockAccessibilityTextPolicy.summarizedText(block.textPlain, isLargePage: isLargePage))
+            .accessibilityIdentifier("editor.text-preview.\(block.id)")
+            .onTapGesture {
+                activateDeferredTextEditor()
+            }
+    }
+
+    private func activateDeferredTextEditor() {
+        onClearDropTarget()
+        isDeferredTextEditorActive = true
+        rowFocusRequest = BlockFocusRequest(blockID: block.id, selection: blockEndSelection)
+    }
+
     private var nativeTextBlockEditor: some View {
         NativeTextBlockEditor(
             blockID: block.id,
-            text: block.textPlain,
+            text: editorSession.draftText(for: block.id) ?? block.textPlain,
             blockType: block.type,
             contentFont: contentFont,
             session: editorSession,
@@ -16079,6 +19771,10 @@ private struct BlockRowView: View {
             onTextChange: { text in
                 onClearDropTarget()
                 onTextChange(text)
+            },
+            onEditingEnded: {
+                onTextEditingEnded()
+                isDeferredTextEditorActive = false
             }
         )
         .accessibilityIdentifier("editor.text.\(block.id)")
@@ -17414,6 +21110,401 @@ private struct StructuredTableBlockEditor: View {
         table
     }
 }
+
+private struct StructuredTableBlockPreview: View {
+    let blockID: String
+    let text: String
+    let rows: [[String]]
+    let onActivate: () -> Void
+
+    private var editableRows: [[String]] {
+        TableBlockDefaultGridResolver.editableRows(text: text, rows: rows)
+    }
+
+    var body: some View {
+        let rows = editableRows
+        let descriptor = StructuredTableBlockPreviewDescriptor(rows: rows)
+
+        ScrollView(.horizontal, showsIndicators: false) {
+            previewSurface(rows: rows, descriptor: descriptor)
+                .frame(width: descriptor.contentWidth, height: descriptor.contentHeight, alignment: .topLeading)
+        }
+        .frame(height: descriptor.contentHeight)
+        .background(EditorDesignTokens.Colors.editorBackground.color)
+        .overlay(
+            RoundedRectangle(cornerRadius: CGFloat(TableBlockChrome.cornerRadius), style: .continuous)
+                .stroke(Color.secondary.opacity(TableBlockChrome.outerBorderOpacity), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CGFloat(TableBlockChrome.cornerRadius), style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onActivate)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("表格块")
+        .accessibilityValue(descriptor.accessibilityValue)
+        .accessibilityHint("轻点编辑表格")
+        .accessibilityIdentifier("editor.table.\(blockID).preview")
+    }
+
+    @ViewBuilder
+    private func previewSurface(
+        rows: [[String]],
+        descriptor: StructuredTableBlockPreviewDescriptor
+    ) -> some View {
+#if os(iOS) || os(macOS)
+        LightweightStructuredTableBlockPreview(rows: rows, descriptor: descriptor)
+#else
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            ForEach(rows.indices, id: \.self) { rowIndex in
+                GridRow(alignment: .top) {
+                    ForEach(0..<descriptor.columnCount, id: \.self) { columnIndex in
+                        previewCell(
+                            rows: rows,
+                            row: rowIndex,
+                            column: columnIndex,
+                            rowCount: descriptor.rowCount,
+                            columnCount: descriptor.columnCount
+                        )
+                    }
+                }
+            }
+        }
+#endif
+    }
+
+    private func previewCell(
+        rows: [[String]],
+        row rowIndex: Int,
+        column columnIndex: Int,
+        rowCount: Int,
+        columnCount: Int
+    ) -> some View {
+        Text(verbatim: cellText(rows: rows, row: rowIndex, column: columnIndex))
+            .font(.system(size: 15, weight: rowIndex == 0 ? .semibold : .regular))
+            .foregroundStyle(EditorDesignTokens.Colors.primaryText.color)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .frame(
+                width: CGFloat(TableBlockChrome.cellWidth),
+                height: CGFloat(TableBlockChrome.cellHeight),
+                alignment: .leading
+            )
+            .background(
+                rowIndex == 0
+                    ? TableBlockChrome.headerBackgroundToken.color
+                    : EditorDesignTokens.Colors.editorBackground.color
+            )
+            .overlay(alignment: .trailing) {
+                if columnIndex < columnCount - 1 {
+                    Rectangle()
+                        .fill(Color.secondary.opacity(TableBlockChrome.gridLineOpacity))
+                        .frame(width: 1)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if rowIndex < rowCount - 1 {
+                    Rectangle()
+                        .fill(Color.secondary.opacity(TableBlockChrome.gridLineOpacity))
+                        .frame(height: 1)
+                }
+            }
+    }
+
+    private func cellText(rows: [[String]], row rowIndex: Int, column columnIndex: Int) -> String {
+        guard rows.indices.contains(rowIndex),
+              rows[rowIndex].indices.contains(columnIndex) else {
+            return ""
+        }
+        return rows[rowIndex][columnIndex]
+    }
+}
+
+struct StructuredTableBlockPreviewDescriptor: Equatable, Sendable {
+    let rowCount: Int
+    let columnCount: Int
+    let contentWidth: CGFloat
+    let contentHeight: CGFloat
+    let accessibilityValue: String
+
+    init(rows: [[String]]) {
+        rowCount = max(rows.count, 1)
+        columnCount = max(rows.map(\.count).max() ?? 1, 1)
+        contentWidth = CGFloat(columnCount) * CGFloat(TableBlockChrome.cellWidth)
+        contentHeight = CGFloat(rowCount) * CGFloat(TableBlockChrome.cellHeight)
+        accessibilityValue = "\(rowCount) 行，\(columnCount) 列"
+    }
+}
+
+#if os(iOS)
+private struct LightweightStructuredTableBlockPreview: UIViewRepresentable {
+    let rows: [[String]]
+    let descriptor: StructuredTableBlockPreviewDescriptor
+
+    func makeUIView(context: Context) -> LightweightStructuredTableBlockPreviewView {
+        LightweightStructuredTableBlockPreviewView()
+    }
+
+    func updateUIView(_ uiView: LightweightStructuredTableBlockPreviewView, context: Context) {
+        uiView.configure(rows: rows, descriptor: descriptor)
+    }
+}
+
+private final class LightweightStructuredTableBlockPreviewView: UIView {
+    private var rows: [[String]] = []
+    private var descriptor = StructuredTableBlockPreviewDescriptor(rows: [])
+    private let paragraphStyle: NSMutableParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        style.alignment = .left
+        return style
+    }()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = true
+        contentMode = .redraw
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(rows: [[String]], descriptor: StructuredTableBlockPreviewDescriptor) {
+        guard self.rows != rows || self.descriptor != descriptor else {
+            return
+        }
+        self.rows = rows
+        self.descriptor = descriptor
+        setNeedsDisplay()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        setNeedsDisplay()
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else {
+            return
+        }
+
+        let backgroundColor = EditorDesignTokens.Colors.editorBackground.uiColor
+        let headerColor = TableBlockChrome.headerBackgroundToken.uiColor
+        backgroundColor.setFill()
+        context.fill(bounds)
+
+        let rowCount = descriptor.rowCount
+        let columnCount = descriptor.columnCount
+        let cellWidth = CGFloat(TableBlockChrome.cellWidth)
+        let cellHeight = CGFloat(TableBlockChrome.cellHeight)
+
+        if rowCount > 0 {
+            headerColor.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: bounds.width, height: cellHeight))
+        }
+
+        let gridLineColor = UIColor.secondaryLabel.withAlphaComponent(TableBlockChrome.gridLineOpacity)
+        gridLineColor.setFill()
+        if columnCount > 1 {
+            for columnIndex in 1..<columnCount {
+                context.fill(CGRect(
+                    x: CGFloat(columnIndex) * cellWidth,
+                    y: 0,
+                    width: 1 / max(window?.screen.scale ?? UIScreen.main.scale, 1),
+                    height: bounds.height
+                ))
+            }
+        }
+        if rowCount > 1 {
+            for rowIndex in 1..<rowCount {
+                context.fill(CGRect(
+                    x: 0,
+                    y: CGFloat(rowIndex) * cellHeight,
+                    width: bounds.width,
+                    height: 1 / max(window?.screen.scale ?? UIScreen.main.scale, 1)
+                ))
+            }
+        }
+
+        let textColor = EditorDesignTokens.Colors.primaryText.uiColor
+        for rowIndex in 0..<rowCount {
+            for columnIndex in 0..<columnCount {
+                let text = cellText(row: rowIndex, column: columnIndex)
+                guard !text.isEmpty else {
+                    continue
+                }
+                let font = UIFont.systemFont(
+                    ofSize: 15,
+                    weight: rowIndex == 0 ? .semibold : .regular
+                )
+                let textRect = CGRect(
+                    x: CGFloat(columnIndex) * cellWidth + 18,
+                    y: CGFloat(rowIndex) * cellHeight + 10,
+                    width: max(0, cellWidth - 36),
+                    height: max(0, cellHeight - 20)
+                )
+                (text as NSString).draw(
+                    with: textRect,
+                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                    attributes: [
+                        .font: font,
+                        .foregroundColor: textColor,
+                        .paragraphStyle: paragraphStyle
+                    ],
+                    context: nil
+                )
+            }
+        }
+    }
+
+    private func cellText(row rowIndex: Int, column columnIndex: Int) -> String {
+        guard rows.indices.contains(rowIndex),
+              rows[rowIndex].indices.contains(columnIndex) else {
+            return ""
+        }
+        return rows[rowIndex][columnIndex]
+    }
+}
+#elseif os(macOS)
+private struct LightweightStructuredTableBlockPreview: NSViewRepresentable {
+    let rows: [[String]]
+    let descriptor: StructuredTableBlockPreviewDescriptor
+
+    func makeNSView(context: Context) -> LightweightStructuredTableBlockPreviewView {
+        LightweightStructuredTableBlockPreviewView()
+    }
+
+    func updateNSView(_ nsView: LightweightStructuredTableBlockPreviewView, context: Context) {
+        nsView.configure(rows: rows, descriptor: descriptor)
+    }
+}
+
+private final class LightweightStructuredTableBlockPreviewView: NSView {
+    private var rows: [[String]] = []
+    private var descriptor = StructuredTableBlockPreviewDescriptor(rows: [])
+    private let paragraphStyle: NSMutableParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        style.alignment = .left
+        return style
+    }()
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    override var isOpaque: Bool {
+        true
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(rows: [[String]], descriptor: StructuredTableBlockPreviewDescriptor) {
+        guard self.rows != rows || self.descriptor != descriptor else {
+            return
+        }
+        self.rows = rows
+        self.descriptor = descriptor
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else {
+            return
+        }
+
+        let backgroundColor = EditorDesignTokens.Colors.editorBackground.nsColor
+        let headerColor = TableBlockChrome.headerBackgroundToken.nsColor
+        backgroundColor.setFill()
+        context.fill(bounds)
+
+        let rowCount = descriptor.rowCount
+        let columnCount = descriptor.columnCount
+        let cellWidth = CGFloat(TableBlockChrome.cellWidth)
+        let cellHeight = CGFloat(TableBlockChrome.cellHeight)
+
+        if rowCount > 0 {
+            headerColor.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: bounds.width, height: cellHeight))
+        }
+
+        let scale = max(window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1, 1)
+        let lineWidth = 1 / scale
+        let gridLineColor = NSColor.secondaryLabelColor.withAlphaComponent(TableBlockChrome.gridLineOpacity)
+        gridLineColor.setFill()
+        if columnCount > 1 {
+            for columnIndex in 1..<columnCount {
+                context.fill(CGRect(
+                    x: CGFloat(columnIndex) * cellWidth,
+                    y: 0,
+                    width: lineWidth,
+                    height: bounds.height
+                ))
+            }
+        }
+        if rowCount > 1 {
+            for rowIndex in 1..<rowCount {
+                context.fill(CGRect(
+                    x: 0,
+                    y: CGFloat(rowIndex) * cellHeight,
+                    width: bounds.width,
+                    height: lineWidth
+                ))
+            }
+        }
+
+        let textColor = EditorDesignTokens.Colors.primaryText.nsColor
+        for rowIndex in 0..<rowCount {
+            let font = NSFont.systemFont(
+                ofSize: 15,
+                weight: rowIndex == 0 ? .semibold : .regular
+            )
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: textColor,
+                .paragraphStyle: paragraphStyle
+            ]
+            for columnIndex in 0..<columnCount {
+                let text = cellText(row: rowIndex, column: columnIndex)
+                guard !text.isEmpty else {
+                    continue
+                }
+                let textRect = CGRect(
+                    x: CGFloat(columnIndex) * cellWidth + 18,
+                    y: CGFloat(rowIndex) * cellHeight + 10,
+                    width: max(0, cellWidth - 36),
+                    height: max(0, cellHeight - 20)
+                )
+                (text as NSString).draw(
+                    with: textRect,
+                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                    attributes: attributes,
+                    context: nil
+                )
+            }
+        }
+    }
+
+    private func cellText(row rowIndex: Int, column columnIndex: Int) -> String {
+        guard rows.indices.contains(rowIndex),
+              rows[rowIndex].indices.contains(columnIndex) else {
+            return ""
+        }
+        return rows[rowIndex][columnIndex]
+    }
+}
+#endif
 
 private struct TableInsertControl: View {
     let systemImage: String

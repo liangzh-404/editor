@@ -26,6 +26,20 @@ private enum PageHydrationMode: Equatable, Sendable {
     case deferLargePages
 }
 
+enum PageReselectionPolicy {
+    static func shouldSkip(
+        currentPageID: String?,
+        currentCollection: WorkspaceCollection,
+        nextPageID: String,
+        nextCollection: WorkspaceCollection,
+        deferredFocusBlockID: String?
+    ) -> Bool {
+        currentPageID == nextPageID
+            && currentCollection == nextCollection
+            && deferredFocusBlockID == nil
+    }
+}
+
 enum AttachmentPreviewGenerationStatus: Equatable, Sendable {
     case idle
     case generating
@@ -286,16 +300,21 @@ final class WorkspaceViewModel: ObservableObject {
     private var hasLoadedSnapshot = false
     private var didRequestInitialEditorFocus = false
     private var didRequestInitialCompactPageNavigation = false
+    private static let blockTextPersistenceDebounceNanoseconds: UInt64 = 250_000_000
     private let pageEditUndoHistoryLimit = 100
     private var pageEditUndoStack: [PageEditHistorySnapshot] = []
     private var pageEditRedoStack: [PageEditHistorySnapshot] = []
     private var pageArchiveUndoStack: [PageArchiveUndoSnapshot] = []
+    private var pendingBlockTextPersistenceByID: [String: PendingBlockTextPersistence] = [:]
+    private var pendingBlockTextPersistenceTasks: [String: Task<Void, Never>] = [:]
     private var pageNavigationBackStack: [PageNavigationHistoryEntry] = []
     private var pageNavigationForwardStack: [PageNavigationHistoryEntry] = []
     private var currentAnchoredNavigationEntry: PageNavigationHistoryEntry?
     private var searchRestorationCollection: WorkspaceCollection?
     private var searchRefreshTask: Task<Void, Never>?
     private var searchHighlightClearTask: Task<Void, Never>?
+    private var workspaceMetadataHydrationTask: Task<Void, Never>?
+    private var pageListPreviewHydrationTask: Task<Void, Never>?
     private var pendingTextRecognitionAttachmentIDs: Set<String> = []
     private var isLoadingPendingTextRecognitionAttachmentIDs = false
     private var isForegroundSyncRunning = false
@@ -310,10 +329,14 @@ final class WorkspaceViewModel: ObservableObject {
     private var encryptedPageAutoLockTask: Task<Void, Never>?
     private var pageArchiveUndoExpirationTask: Task<Void, Never>?
     private var cachedDiaryPageIDs: Set<String> = []
+    private var cachedDiaryDateByPageID: [String: String] = [:]
+    private var cachedVisibleDiaryPageIDs: Set<String> = []
     private var cachedTagIDSet: Set<String> = []
     private var cachedTagChildIDsByParentID: [String: [String]] = [:]
     private var cachedPageIDsByTagID: [String: Set<String>] = [:]
     private var deferredHydrationFocusBlockIDsByPageID: [String: String] = [:]
+    private static let synchronousPageMetadataLimit = 500
+    private static let synchronousPageListPreviewLimit = 200
     private static let deferredHydrationBlockThreshold = 300
     private static let foregroundSyncFailureCooldown: TimeInterval = 300
     private static let foregroundSyncPartialFailureCooldown: TimeInterval = 30
@@ -408,7 +431,7 @@ final class WorkspaceViewModel: ObservableObject {
             return snapshot.pages.filter { !snapshot.isEmptyDiaryPage($0.id) }
         case .diary:
             let diaryPageIDs = visibleDiaryPageIDs
-            let diaryDatesByPageID = snapshot.diaryDateByPageID
+            let diaryDatesByPageID = cachedDiaryDateByPageID
             return snapshot.pages
                 .filter { diaryPageIDs.contains($0.id) }
                 .sorted { first, second in
@@ -609,7 +632,13 @@ final class WorkspaceViewModel: ObservableObject {
         let previousSelectedCollection = selectedCollection
         let previousSelectedPageID = selectedPageID
         let shouldRestorePreviousSelection = hasLoadedSnapshot
-        let loadedSnapshot = try repository.loadWorkspaceSnapshot(blockPageIDs: [])
+        let loadedSnapshot = try repository.loadWorkspaceSnapshot(
+            blockPageIDs: [],
+            pageMetadataLimit: Self.synchronousPageMetadataLimit,
+            pageListPreviewLimit: Self.synchronousPageListPreviewLimit,
+            loadsAttachments: false,
+            includesEmptyDiaryPageIDs: false
+        )
         apply(snapshot: loadedSnapshot)
         if shouldRestorePreviousSelection {
             if previousSelectedCollection == .diary {
@@ -625,6 +654,7 @@ final class WorkspaceViewModel: ObservableObject {
         }
         try hydrateBlocksForSelectedPageIfNeeded()
         hasLoadedSnapshot = true
+        scheduleDeferredWorkspaceMetadataHydrationIfNeeded(source: "load")
         let shouldRebuildSearchIndex = try searchRepository?.needsFullRebuild() ?? false
         try refreshDerivedState(rebuildSearchIndex: shouldRebuildSearchIndex)
         // Avoid starting a large image OCR backlog on launch after vault imports.
@@ -989,6 +1019,31 @@ final class WorkspaceViewModel: ObservableObject {
         hydrationMode: PageHydrationMode = .synchronous,
         deferredFocusBlockID: String? = nil
     ) {
+        if PageReselectionPolicy.shouldSkip(
+            currentPageID: selectedPageID,
+            currentCollection: selectedCollection,
+            nextPageID: id,
+            nextCollection: collection,
+            deferredFocusBlockID: deferredFocusBlockID
+        ) {
+            EditorPerformanceTrace.point("editor_open_noop") {
+                [
+                    "page_id": id,
+                    "collection": String(describing: collection),
+                    "reason": "same_page_collection"
+                ]
+            }
+            return
+        }
+
+        let trace = EditorPerformanceTrace.begin("editor_open") {
+            [
+                "page_id": id,
+                "collection": String(describing: collection),
+                "hydration_mode": "\(hydrationMode)",
+                "record_history": "\(recordHistory)"
+            ]
+        }
         let previousSelectedPageID = selectedPageID
         if recordHistory {
             recordNavigationHistoryBeforeOpening(pageID: id)
@@ -1012,6 +1067,28 @@ final class WorkspaceViewModel: ObservableObject {
         if previousSelectedPageID != id {
             scheduleEncryptedPageAutoLockIfNeeded(leftPageID: previousSelectedPageID)
         }
+        let selectedBlockCount = snapshot.blocks.filter { $0.pageID == id }.count
+        EditorPerformanceTrace.nextRunLoopPoint("editor_first_block_painted") {
+            [
+                "page_id": id,
+                "block_count": "\(selectedBlockCount)",
+                "deferred_hydration": "\(shouldDeferHydration)"
+            ]
+        }
+        EditorPerformanceTrace.nextRunLoopPoint("app_first_editable_block_visible") {
+            [
+                "page_id": id,
+                "block_count": "\(selectedBlockCount)",
+                "deferred_hydration": "\(shouldDeferHydration)"
+            ]
+        }
+        EditorPerformanceTrace.end(trace, as: "editor_ready") {
+            [
+                "page_id": id,
+                "block_count": "\(selectedBlockCount)",
+                "deferred_hydration": "\(shouldDeferHydration)"
+            ]
+        }
     }
 
     private var diaryPageIDs: Set<String> {
@@ -1019,7 +1096,15 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private var visibleDiaryPageIDs: Set<String> {
-        diaryPageIDs.subtracting(snapshot.emptyDiaryPageIDs)
+        cachedVisibleDiaryPageIDs
+    }
+
+    var compactLibraryNavigationItems: [CompactLibraryNavigationItem] {
+        CompactLibraryNavigationModel.items(
+            snapshot: snapshot,
+            diaryPageIDs: cachedDiaryPageIDs,
+            visibleDiaryPageIDs: cachedVisibleDiaryPageIDs
+        )
     }
 
     private func hydrateBlocksForSelectedPageIfNeeded() throws {
@@ -1034,17 +1119,33 @@ final class WorkspaceViewModel: ObservableObject {
               !snapshot.blocks.contains(where: { $0.pageID == pageID }) else {
             return
         }
+        guard try repository.blockCount(pageID: pageID) > 0 else {
+            return
+        }
         let blocks = try repository.loadBlocks(pageID: pageID)
         snapshot = snapshot.replacingBlocks(pageID: pageID, blocks: blocks)
     }
 
     private func hydrateBlocksForPageIfNeededForUI(_ pageID: String) {
+        let trace = EditorPerformanceTrace.begin("block_hydration") {
+            [
+                "page_id": pageID,
+                "deferred": "false"
+            ]
+        }
         let startedAt = Date()
         let wasAlreadyHydrated = snapshot.blocks.contains { $0.pageID == pageID }
         do {
             try hydrateBlocksForPageIfNeeded(pageID)
             let durationMilliseconds = Self.millisecondsElapsed(since: startedAt)
             let blockCount = snapshot.blocks.filter { $0.pageID == pageID }.count
+            EditorPerformanceTrace.end(trace, as: "block_hydration_done") {
+                [
+                    "page_id": pageID,
+                    "already_loaded": "\(wasAlreadyHydrated)",
+                    "block_count": "\(blockCount)"
+                ]
+            }
             EditorLog.render.debug(
                 "page_blocks_hydrated page_id=\(pageID, privacy: .public) already_loaded=\(wasAlreadyHydrated, privacy: .public) blocks=\(blockCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)"
             )
@@ -1060,6 +1161,12 @@ final class WorkspaceViewModel: ObservableObject {
                 )
             }
         } catch {
+            EditorPerformanceTrace.end(trace, as: "block_hydration_failed") {
+                [
+                    "page_id": pageID,
+                    "error": String(describing: error)
+                ]
+            }
             EditorLog.store.error(
                 "page_blocks_hydration_failed page_id=\(pageID, privacy: .public) duration_ms=\(Self.millisecondsElapsed(since: startedAt), privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
@@ -1095,6 +1202,11 @@ final class WorkspaceViewModel: ObservableObject {
             deferredHydrationFocusBlockIDsByPageID[pageID] = focusBlockID
         }
         let startedAt = Date()
+        EditorPerformanceTrace.point("editor_deferred_hydration_start") {
+            [
+                "page_id": pageID
+            ]
+        }
         EditorLog.render.debug("page_blocks_hydration_deferred page_id=\(pageID, privacy: .public)")
 
         Task { [weak self, repository, pageID, startedAt] in
@@ -1128,6 +1240,13 @@ final class WorkspaceViewModel: ObservableObject {
             }
             snapshot = snapshot.replacingBlocks(pageID: pageID, blocks: blocks)
             let durationMilliseconds = Self.millisecondsElapsed(since: startedAt)
+            EditorPerformanceTrace.point("editor_deferred_hydration_done") {
+                [
+                    "page_id": pageID,
+                    "block_count": "\(blocks.count)",
+                    "duration_ms": "\(durationMilliseconds)"
+                ]
+            }
             EditorLog.render.debug(
                 "page_blocks_hydrated page_id=\(pageID, privacy: .public) already_loaded=false blocks=\(blocks.count, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public) deferred=true"
             )
@@ -1156,6 +1275,174 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    private func scheduleDeferredWorkspaceMetadataHydrationIfNeeded(source: String) {
+        guard let repository else {
+            return
+        }
+
+        workspaceMetadataHydrationTask?.cancel()
+        let pageListPreviewLimit = Self.synchronousPageListPreviewLimit
+        workspaceMetadataHydrationTask = Task { [weak self, repository, source, pageListPreviewLimit] in
+            do {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            } catch {
+                return
+            }
+
+            let startedAt = Date()
+            let result = await Task.detached(priority: .utility) {
+                Result<WorkspaceSnapshot, Error> {
+                    try repository.loadWorkspaceSnapshot(
+                        blockPageIDs: [],
+                        pageListPreviewLimit: pageListPreviewLimit
+                    )
+                }
+            }.value
+
+            await MainActor.run { [weak self] in
+                self?.finishDeferredWorkspaceMetadataHydration(
+                    result: result,
+                    source: source,
+                    startedAt: startedAt
+                )
+            }
+        }
+    }
+
+    private func finishDeferredWorkspaceMetadataHydration(
+        result: Result<WorkspaceSnapshot, Error>,
+        source: String,
+        startedAt: Date
+    ) {
+        workspaceMetadataHydrationTask = nil
+        let durationMilliseconds = Self.millisecondsElapsed(since: startedAt)
+        switch result {
+        case .success(let metadataSnapshot):
+            let previousSelectedWorkspaceID = selectedWorkspaceID
+            let previousSelectedNotebookID = selectedNotebookID
+            let previousSelectedPageID = selectedPageID
+            let previousSelectedCollection = selectedCollection
+            snapshot = snapshot.replacingWorkspaceMetadata(with: metadataSnapshot)
+            refreshSnapshotCaches(for: snapshot)
+            let encryptedPageIDs = Set(snapshot.pages.filter(\.isEncrypted).map(\.id))
+            unlockedEncryptedPageIDs.formIntersection(encryptedPageIDs)
+            encryptedPageLastOpenedAt = encryptedPageLastOpenedAt.filter { encryptedPageIDs.contains($0.key) }
+            selectedWorkspaceID = previousSelectedWorkspaceID ?? snapshot.selectedWorkspaceID
+            selectedNotebookID = previousSelectedNotebookID ?? snapshot.selectedNotebookID
+            selectedPageID = previousSelectedPageID ?? snapshot.selectedPageID
+            selectedCollection = previousSelectedCollection
+            EditorLog.render.debug(
+                "workspace_metadata_hydrated source=\(source, privacy: .public) pages=\(metadataSnapshot.pages.count, privacy: .public) attachments=\(metadataSnapshot.attachments.count, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public) deferred=true"
+            )
+            if durationMilliseconds >= 100 {
+                try? repository?.recordRuntimeDiagnostic(
+                    eventName: "workspace_metadata_hydration_slow",
+                    payload: [
+                        "source": source,
+                        "page_count": metadataSnapshot.pages.count,
+                        "attachment_count": metadataSnapshot.attachments.count,
+                        "duration_ms": durationMilliseconds,
+                        "deferred": true
+                    ]
+                )
+            }
+            scheduleDeferredPageListPreviewHydrationIfNeeded(source: "metadata_hydration")
+        case .failure(let error):
+            EditorLog.store.error(
+                "workspace_metadata_hydration_failed source=\(source, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public) deferred=true error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    private func scheduleDeferredPageListPreviewHydrationIfNeeded(source: String) {
+        guard let repository else {
+            return
+        }
+
+        let previewPages = snapshot.pages + snapshot.archivedPages
+        let missingPages = previewPages.filter { page in
+            !page.isEncrypted && snapshot.pageListPreviews[page.id] == nil
+        }
+        guard !missingPages.isEmpty else {
+            return
+        }
+
+        let missingPageIDs = missingPages.map(\.id)
+        let pagesByID = Dictionary(uniqueKeysWithValues: missingPages.map { ($0.id, $0) })
+        let attachments = snapshot.attachments
+        pageListPreviewHydrationTask?.cancel()
+        pageListPreviewHydrationTask = Task { [weak self, repository, missingPageIDs, pagesByID, attachments, source] in
+            do {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            } catch {
+                return
+            }
+
+            let startedAt = Date()
+            let result = await Task.detached(priority: .utility) {
+                Result<[String: PageListPreview], Error> {
+                    let previewBlocks = try repository.loadPageListPreviewBlocks(pageIDs: missingPageIDs)
+                    return Dictionary(uniqueKeysWithValues: missingPageIDs.compactMap { pageID in
+                        guard let page = pagesByID[pageID] else {
+                            return nil
+                        }
+                        return (
+                            pageID,
+                            PageListPreviewResolver.preview(
+                                pageID: pageID,
+                                blocks: previewBlocks,
+                                attachments: attachments,
+                                isEncrypted: page.isEncrypted
+                            )
+                        )
+                    })
+                }
+            }.value
+
+            await MainActor.run { [weak self] in
+                self?.finishDeferredPageListPreviewHydration(
+                    result: result,
+                    requestedPageCount: missingPageIDs.count,
+                    source: source,
+                    startedAt: startedAt
+                )
+            }
+        }
+    }
+
+    private func finishDeferredPageListPreviewHydration(
+        result: Result<[String: PageListPreview], Error>,
+        requestedPageCount: Int,
+        source: String,
+        startedAt: Date
+    ) {
+        pageListPreviewHydrationTask = nil
+        let durationMilliseconds = Self.millisecondsElapsed(since: startedAt)
+        switch result {
+        case .success(let previews):
+            snapshot = snapshot.mergingPageListPreviews(previews)
+            EditorLog.render.debug(
+                "page_list_previews_hydrated source=\(source, privacy: .public) requested_pages=\(requestedPageCount, privacy: .public) previews=\(previews.count, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public) deferred=true"
+            )
+            if durationMilliseconds >= 100 {
+                try? repository?.recordRuntimeDiagnostic(
+                    eventName: "page_list_previews_hydration_slow",
+                    payload: [
+                        "source": source,
+                        "requested_page_count": requestedPageCount,
+                        "preview_count": previews.count,
+                        "duration_ms": durationMilliseconds,
+                        "deferred": true
+                    ]
+                )
+            }
+        case .failure(let error):
+            EditorLog.store.error(
+                "page_list_previews_hydration_failed source=\(source, privacy: .public) requested_pages=\(requestedPageCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public) deferred=true error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     private func defaultCollectionForOpeningPage(id pageID: String) -> WorkspaceCollection {
         switch selectedCollection {
         case .diary where diaryPageIDs.contains(pageID):
@@ -1177,29 +1464,74 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
-    func selectCollection(_ collection: WorkspaceCollection) {
+    func selectCollection(_ collection: WorkspaceCollection, traceStart: Bool = true) {
+        if traceStart {
+            EditorPerformanceTrace.point("sidebar_collection_click_start") {
+                [
+                    "collection": String(describing: collection),
+                    "page_count": "\(snapshot.pages.count)",
+                    "visible_page_count": "\(visibleDocumentPages.count)"
+                ]
+            }
+            EditorPerformanceTrace.point("page_list_request_start") {
+                [
+                    "collection": String(describing: collection),
+                    "page_count": "\(snapshot.pages.count)"
+                ]
+            }
+        }
         if collection != .search, isSearchActive {
             clearSearchStateForCollectionSwitch()
         }
         selectedCollection = collection
         if collection == .diary {
-            do {
-                try openDailyDiaryPage(source: "collection_select", recordHistory: true)
-            } catch {
-                selectedPageID = nil
-                selectedPageBacklinks = []
-                selectedPageExternalLinks = []
-                selectedPageConflicts = []
-                EditorLog.render.error(
-                    "daily_page_open_failed error=\(String(describing: error), privacy: .public)"
-                )
-            }
+            traceCollectionSelectionPaint(collection)
+            scheduleDailyDiaryOpenAfterCollectionPaint()
+            return
         } else if let selectedPageID,
                   !canRestoreSelection(pageID: selectedPageID, in: collection) {
             self.selectedPageID = visibleDocumentPages.first?.id
             refreshBacklinksForSelectedPage()
             refreshExternalLinksForSelectedPage()
             refreshConflictsForSelectedPage()
+        }
+        traceCollectionSelectionPaint(collection)
+    }
+
+    private func traceCollectionSelectionPaint(_ collection: WorkspaceCollection) {
+        EditorPerformanceTrace.nextRunLoopPoint("sidebar_selected_painted") {
+            [
+                "collection": String(describing: collection),
+                "selected_page_id": self.selectedPageID ?? "none"
+            ]
+        }
+        EditorPerformanceTrace.nextRunLoopPoint("page_list_first_screen_painted") {
+            [
+                "collection": String(describing: collection),
+                "visible_page_count": "\(self.visibleDocumentPages.count)",
+                "selected_page_id": self.selectedPageID ?? "none"
+            ]
+        }
+    }
+
+    private func scheduleDailyDiaryOpenAfterCollectionPaint() {
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self,
+                  self.selectedCollection == .diary else {
+                return
+            }
+            do {
+                try self.openDailyDiaryPage(source: "collection_select", recordHistory: true)
+            } catch {
+                self.selectedPageID = nil
+                self.selectedPageBacklinks = []
+                self.selectedPageExternalLinks = []
+                self.selectedPageConflicts = []
+                EditorLog.render.error(
+                    "daily_page_open_failed error=\(String(describing: error), privacy: .public)"
+                )
+            }
         }
     }
 
@@ -2108,6 +2440,7 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func updateBlockText(blockID: String, text: String, registerUndo: Bool) throws {
+        try flushPendingBlockTextPersistence(blockID: blockID)
         let currentBlock = snapshot.blocks.first { $0.id == blockID }
         let currentType = currentBlock?.type ?? .paragraph
         let nextBlock = nextBlockState(currentType: currentType, text: text)
@@ -2157,11 +2490,188 @@ final class WorkspaceViewModel: ObservableObject {
         }
     }
 
+    private func applyLowLatencyBlockTextEdit(
+        blockID: String,
+        text: String,
+        registerUndo: Bool
+    ) -> LowLatencyBlockTextEditResult {
+        guard let currentBlock = snapshot.blocks.first(where: { $0.id == blockID }) else {
+            return .requiresSynchronousUpdate
+        }
+
+        let nextBlock = nextBlockState(currentType: currentBlock.type, text: text)
+        guard !isNoOpBlockTextUpdate(currentBlock: currentBlock, nextBlock: nextBlock) else {
+            return .noOp
+        }
+
+        guard nextBlock.type == currentBlock.type,
+              nextBlock.taskItemIsCompleted == nil else {
+            return .requiresSynchronousUpdate
+        }
+
+        let coalescingKey = makeTextEditUndoCoalescingKey(
+            blockID: blockID,
+            currentBlock: currentBlock,
+            nextType: nextBlock.type,
+            registerUndo: registerUndo
+        )
+        let beforeBlocks = pageBlocks(pageID: currentBlock.pageID)
+        let afterBlocks = beforeBlocks.map { block in
+            block.id == blockID
+                ? block.replacing(type: nextBlock.type, text: nextBlock.text)
+                : block
+        }
+        if beforeBlocks != afterBlocks {
+            recordPageEditUndoSnapshot(
+                PageEditHistorySnapshot(
+                    pageID: currentBlock.pageID,
+                    beforeBlocks: beforeBlocks,
+                    afterBlocks: afterBlocks,
+                    focusBlockID: blockID,
+                    coalescingKey: coalescingKey
+                )
+            )
+        }
+
+        pendingBlockTextPersistenceByID[blockID] = PendingBlockTextPersistence(
+            blockID: blockID,
+            pageID: currentBlock.pageID,
+            type: nextBlock.type,
+            text: nextBlock.text,
+            taskItemIsCompleted: nil
+        )
+        schedulePendingBlockTextPersistence(blockID: blockID)
+        return .deferred
+    }
+
+    private func schedulePendingBlockTextPersistence(blockID: String) {
+        pendingBlockTextPersistenceTasks[blockID]?.cancel()
+        pendingBlockTextPersistenceTasks[blockID] = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: Self.blockTextPersistenceDebounceNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            self?.pendingBlockTextPersistenceTasks[blockID] = nil
+            do {
+                try self?.flushPendingBlockTextPersistence(
+                    blockID: blockID,
+                    cancelsScheduledTask: false
+                )
+            } catch {
+                EditorLog.input.error(
+                    "block_edit_deferred_save_failed id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+    }
+
+    private func flushPendingBlockTextPersistence(
+        blockID: String,
+        cancelsScheduledTask: Bool = true
+    ) throws {
+        if cancelsScheduledTask {
+            pendingBlockTextPersistenceTasks[blockID]?.cancel()
+            pendingBlockTextPersistenceTasks[blockID] = nil
+        }
+        guard let pending = pendingBlockTextPersistenceByID.removeValue(forKey: blockID) else {
+            return
+        }
+
+        let trace = EditorPerformanceTrace.begin("repository_block_update") {
+            [
+                "block_id": blockID,
+                "text_length": "\(pending.text.count)",
+                "deferred": "true",
+                "publish_snapshot": "\(cancelsScheduledTask)"
+            ]
+        }
+        do {
+            if let repository {
+                try repository.updateBlock(
+                    blockID: pending.blockID,
+                    type: pending.type,
+                    text: pending.text,
+                    taskItemIsCompleted: pending.taskItemIsCompleted
+                )
+            }
+            if cancelsScheduledTask {
+                snapshot = snapshot.replacingBlock(
+                    blockID: pending.blockID,
+                    type: pending.type,
+                    text: pending.text
+                )
+                if let taskItemIsCompleted = pending.taskItemIsCompleted {
+                    snapshot = snapshot.replacingTaskItemCompletion(
+                        blockID: pending.blockID,
+                        isCompleted: taskItemIsCompleted
+                    )
+                }
+            }
+            try syncInlineHashTagsIfNeeded(pageID: pending.pageID, text: pending.text)
+            try refreshDerivedState(rebuildSearchIndex: true, changedBlockID: blockID)
+            EditorPerformanceTrace.end(trace, as: "repository_block_update_done") {
+                [
+                    "block_id": blockID,
+                    "text_length": "\(pending.text.count)",
+                    "deferred": "true",
+                    "publish_snapshot": "\(cancelsScheduledTask)"
+                ]
+            }
+            EditorLog.input.debug(
+                "block_edit_deferred_saved id=\(blockID, privacy: .public) length=\(pending.text.count, privacy: .public)"
+            )
+        } catch {
+            EditorPerformanceTrace.end(trace, as: "repository_block_update_failed") {
+                [
+                    "block_id": blockID,
+                    "deferred": "true",
+                    "publish_snapshot": "\(cancelsScheduledTask)",
+                    "error": String(describing: error)
+                ]
+            }
+            throw error
+        }
+    }
+
+    private func flushPendingBlockTextPersistence(pageID: String) throws {
+        let blockIDs = pendingBlockTextPersistenceByID.values
+            .filter { $0.pageID == pageID }
+            .map(\.blockID)
+        for blockID in blockIDs {
+            try flushPendingBlockTextPersistence(blockID: blockID)
+        }
+    }
+
+    private func flushAllPendingBlockTextPersistence() throws {
+        for blockID in Array(pendingBlockTextPersistenceByID.keys) {
+            try flushPendingBlockTextPersistence(blockID: blockID)
+        }
+    }
+
+    func flushPendingBlockTextPersistenceForUI(blockID: String? = nil) {
+        do {
+            if let blockID {
+                try flushPendingBlockTextPersistence(blockID: blockID)
+            } else {
+                try flushAllPendingBlockTextPersistence()
+            }
+        } catch {
+            EditorLog.input.error(
+                "block_edit_pending_flush_failed block_id=\(blockID ?? "all", privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
     func undoLastTextEdit() throws {
         guard let undoSnapshot = pageEditUndoStack.last else {
             return
         }
 
+        try flushPendingBlockTextPersistence(pageID: undoSnapshot.pageID)
         try restorePageBlocks(pageID: undoSnapshot.pageID, blocks: undoSnapshot.beforeBlocks)
         _ = pageEditUndoStack.popLast()
         pageEditRedoStack.append(undoSnapshot)
@@ -2188,6 +2698,7 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        try flushPendingBlockTextPersistence(pageID: redoSnapshot.pageID)
         try restorePageBlocks(pageID: redoSnapshot.pageID, blocks: redoSnapshot.afterBlocks)
         _ = pageEditRedoStack.popLast()
         pageEditUndoStack.append(redoSnapshot)
@@ -2336,12 +2847,52 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     func editBlockText(blockID: String, text: String) {
+        let trace = EditorPerformanceTrace.begin("block_text_edit") {
+            [
+                "block_id": blockID,
+                "text_length": "\(text.count)"
+            ]
+        }
         do {
-            try updateBlockText(blockID: blockID, text: text)
+            switch applyLowLatencyBlockTextEdit(blockID: blockID, text: text, registerUndo: true) {
+            case .deferred:
+                EditorPerformanceTrace.end(trace, as: "block_text_edit_queued") {
+                    [
+                        "block_id": blockID,
+                        "text_length": "\(text.count)"
+                    ]
+                }
+                EditorLog.input.debug(
+                    "block_edit_queued id=\(blockID, privacy: .public) length=\(text.count, privacy: .public)"
+                )
+                return
+            case .noOp:
+                EditorPerformanceTrace.end(trace, as: "block_text_edit_noop") {
+                    [
+                        "block_id": blockID,
+                        "text_length": "\(text.count)"
+                    ]
+                }
+                return
+            case .requiresSynchronousUpdate:
+                try updateBlockText(blockID: blockID, text: text)
+            }
+            EditorPerformanceTrace.end(trace, as: "repository_block_update_done") {
+                [
+                    "block_id": blockID,
+                    "text_length": "\(text.count)"
+                ]
+            }
             EditorLog.input.debug(
                 "block_edit_saved id=\(blockID, privacy: .public) length=\(text.count, privacy: .public)"
             )
         } catch {
+            EditorPerformanceTrace.end(trace, as: "repository_block_update_failed") {
+                [
+                    "block_id": blockID,
+                    "error": String(describing: error)
+                ]
+            }
             EditorLog.input.error(
                 "block_edit_failed id=\(blockID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
@@ -5073,15 +5624,60 @@ final class WorkspaceViewModel: ObservableObject {
         rebuildSearchIndex: Bool,
         changedBlockID: String? = nil
     ) throws {
-        if let changedBlockID {
-            try searchRepository?.updateBlockIndex(blockID: changedBlockID)
-        } else if rebuildSearchIndex {
-            try searchRepository?.rebuildIndex()
+        let trace = EditorPerformanceTrace.begin("refresh_derived_state") {
+            [
+                "rebuild_search_index": "\(rebuildSearchIndex)",
+                "changed_block_id": changedBlockID ?? "none"
+            ]
         }
-        refreshSearchResults()
-        refreshBacklinksForSelectedPage()
-        refreshExternalLinksForSelectedPage()
-        refreshConflictsForSelectedPage()
+        do {
+            if let changedBlockID {
+                let searchIndexTrace = EditorPerformanceTrace.begin("search_index_update") {
+                    [
+                        "mode": "block",
+                        "block_id": changedBlockID
+                    ]
+                }
+                try searchRepository?.updateBlockIndex(blockID: changedBlockID)
+                EditorPerformanceTrace.end(searchIndexTrace, as: "search_index_update_done") {
+                    [
+                        "mode": "block",
+                        "block_id": changedBlockID
+                    ]
+                }
+            } else if rebuildSearchIndex {
+                let searchIndexTrace = EditorPerformanceTrace.begin("search_index_update") {
+                    [
+                        "mode": "rebuild"
+                    ]
+                }
+                try searchRepository?.rebuildIndex()
+                EditorPerformanceTrace.end(searchIndexTrace, as: "search_index_update_done") {
+                    [
+                        "mode": "rebuild"
+                    ]
+                }
+            }
+            refreshSearchResults()
+            refreshBacklinksForSelectedPage()
+            refreshExternalLinksForSelectedPage()
+            refreshConflictsForSelectedPage()
+            EditorPerformanceTrace.end(trace, as: "refresh_derived_state_done") {
+                [
+                    "rebuild_search_index": "\(rebuildSearchIndex)",
+                    "changed_block_id": changedBlockID ?? "none"
+                ]
+            }
+        } catch {
+            EditorPerformanceTrace.end(trace, as: "refresh_derived_state_failed") {
+                [
+                    "rebuild_search_index": "\(rebuildSearchIndex)",
+                    "changed_block_id": changedBlockID ?? "none",
+                    "error": String(describing: error)
+                ]
+            }
+            throw error
+        }
     }
 
     private func refreshSearchResults() {
@@ -5138,10 +5734,31 @@ final class WorkspaceViewModel: ObservableObject {
     }
 
     private func refreshSearchResultsImmediately(query: String, searchRepository: SearchRepository) {
+        let trace = EditorPerformanceTrace.begin("search_query") {
+            [
+                "mode": "immediate",
+                "query_length": "\(query.count)"
+            ]
+        }
         do {
-            searchResults = try searchRepository.search(query)
+            let results = try searchRepository.search(query)
+            searchResults = results
+            EditorPerformanceTrace.end(trace, as: "search_query_done") {
+                [
+                    "mode": "immediate",
+                    "query_length": "\(query.count)",
+                    "result_count": "\(results.count)"
+                ]
+            }
         } catch {
             searchResults = []
+            EditorPerformanceTrace.end(trace, as: "search_query_failed") {
+                [
+                    "mode": "immediate",
+                    "query_length": "\(query.count)",
+                    "error": String(describing: error)
+                ]
+            }
             EditorLog.render.error(
                 "search_failed query=\(self.searchQuery, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
@@ -5180,10 +5797,28 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        let trace = EditorPerformanceTrace.begin("backlinks_refresh") {
+            [
+                "page_id": selectedPageID
+            ]
+        }
         do {
-            selectedPageBacklinks = try backlinkRepository.backlinks(targetPageID: selectedPageID)
+            let backlinks = try backlinkRepository.backlinks(targetPageID: selectedPageID)
+            selectedPageBacklinks = backlinks
+            EditorPerformanceTrace.end(trace, as: "backlinks_refresh_done") {
+                [
+                    "page_id": selectedPageID,
+                    "result_count": "\(backlinks.count)"
+                ]
+            }
         } catch {
             selectedPageBacklinks = []
+            EditorPerformanceTrace.end(trace, as: "backlinks_refresh_failed") {
+                [
+                    "page_id": selectedPageID,
+                    "error": String(describing: error)
+                ]
+            }
             EditorLog.render.error(
                 "backlinks_failed page_id=\(selectedPageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
@@ -5212,22 +5847,59 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        let trace = EditorPerformanceTrace.begin("conflicts_refresh") {
+            [
+                "page_id": selectedPageID,
+                "auto_resolve": "\(automaticallyResolveConflicts)"
+            ]
+        }
         do {
             if automaticallyResolveConflicts {
                 let resolved = try conflictRepository.resolveAutomatically(pageID: selectedPageID)
                 selectedPageConflicts = []
                 guard !resolved.isEmpty else {
+                    EditorPerformanceTrace.end(trace, as: "conflicts_refresh_done") {
+                        [
+                            "page_id": selectedPageID,
+                            "auto_resolve": "true",
+                            "result_count": "0",
+                            "resolved_count": "0"
+                        ]
+                    }
                     return
                 }
                 try reloadSnapshotAfterAutomaticConflictMerge()
+                EditorPerformanceTrace.end(trace, as: "conflicts_refresh_done") {
+                    [
+                        "page_id": selectedPageID,
+                        "auto_resolve": "true",
+                        "result_count": "0",
+                        "resolved_count": "\(resolved.count)"
+                    ]
+                }
                 EditorLog.sync.debug(
                     "sync_conflicts_auto_resolved page_id=\(selectedPageID, privacy: .public) count=\(resolved.count, privacy: .public)"
                 )
                 return
             }
-            selectedPageConflicts = try conflictRepository.conflicts(pageID: selectedPageID)
+            let conflicts = try conflictRepository.conflicts(pageID: selectedPageID)
+            selectedPageConflicts = conflicts
+            EditorPerformanceTrace.end(trace, as: "conflicts_refresh_done") {
+                [
+                    "page_id": selectedPageID,
+                    "auto_resolve": "false",
+                    "result_count": "\(conflicts.count)"
+                ]
+            }
         } catch {
             selectedPageConflicts = []
+            EditorPerformanceTrace.end(trace, as: "conflicts_refresh_failed") {
+                [
+                    "page_id": selectedPageID,
+                    "auto_resolve": "\(automaticallyResolveConflicts)",
+                    "error": String(describing: error)
+                ]
+            }
             EditorLog.sync.error(
                 "conflicts_failed page_id=\(selectedPageID, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
@@ -5559,6 +6231,8 @@ final class WorkspaceViewModel: ObservableObject {
 
     private func refreshSnapshotCaches(for snapshot: WorkspaceSnapshot) {
         cachedDiaryPageIDs = snapshot.diaryPageIDs
+        cachedDiaryDateByPageID = snapshot.diaryDateByPageID
+        cachedVisibleDiaryPageIDs = cachedDiaryPageIDs.subtracting(snapshot.emptyDiaryPageIDs)
         cachedTagIDSet = Set(snapshot.tags.map(\.id))
         cachedTagChildIDsByParentID = Dictionary(
             grouping: snapshot.tags.compactMap { tag -> (parentID: String, childID: String)? in
@@ -5587,6 +6261,7 @@ final class WorkspaceViewModel: ObservableObject {
             return
         }
 
+        try flushPendingBlockTextPersistence(pageID: pageID)
         let beforeBlocks = pageBlocks(pageID: pageID)
         try edit()
         let afterBlocks = pageBlocks(pageID: pageID)
@@ -5801,6 +6476,20 @@ private struct PageEditHistorySnapshot {
     let afterBlocks: [BlockSnapshot]
     let focusBlockID: String?
     let coalescingKey: PageEditCoalescingKey?
+}
+
+private struct PendingBlockTextPersistence {
+    let blockID: String
+    let pageID: String
+    let type: BlockType
+    let text: String
+    let taskItemIsCompleted: Bool?
+}
+
+private enum LowLatencyBlockTextEditResult {
+    case deferred
+    case noOp
+    case requiresSynchronousUpdate
 }
 
 private enum PageEditCoalescingKey: Equatable {

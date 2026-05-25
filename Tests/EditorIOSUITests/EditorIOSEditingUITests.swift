@@ -6,9 +6,14 @@ final class EditorIOSEditingUITests: XCTestCase {
     }
 
     @MainActor
-    private func makeApp(extraEnvironment: [String: String] = [:]) -> XCUIApplication {
+    private func makeApp(
+        resetStore: Bool = true,
+        extraEnvironment: [String: String] = [:]
+    ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["EDITOR_UI_TEST_RESET_STORE"] = "1"
+        if resetStore {
+            app.launchEnvironment["EDITOR_UI_TEST_RESET_STORE"] = "1"
+        }
         for (key, value) in extraEnvironment {
             app.launchEnvironment[key] = value
         }
@@ -18,6 +23,28 @@ final class EditorIOSEditingUITests: XCTestCase {
     @MainActor
     private func pageTitle(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["editor.page-title"]
+    }
+
+    @MainActor
+    private func revealCompactDocumentList(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let documentListBackButton = app.navigationBars.buttons["全部文档"]
+        if documentListBackButton.waitForExistence(timeout: 1) {
+            documentListBackButton.tap()
+            return
+        }
+
+        let revealButton = app.buttons["editor.mobile-reveal-page-list"]
+        XCTAssertTrue(
+            revealButton.waitForExistence(timeout: 5),
+            "Editor should expose the compact document-list reveal control",
+            file: file,
+            line: line
+        )
+        revealButton.tap()
     }
 
     @MainActor
@@ -139,9 +166,7 @@ final class EditorIOSEditingUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let documentListBackButton = app.navigationBars.buttons["全部文档"]
-        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Editor should expose the document-list back button")
-        documentListBackButton.tap()
+        revealCompactDocumentList(in: app)
 
         let libraryBackButton = app.navigationBars.buttons["资料库"]
         XCTAssertTrue(libraryBackButton.waitForExistence(timeout: 5), "Document list should expose the library back button")
@@ -593,9 +618,7 @@ final class EditorIOSEditingUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let documentListBackButton = app.navigationBars.buttons["全部文档"]
-        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Initial compact page should expose a back button to the document list")
-        documentListBackButton.tap()
+        revealCompactDocumentList(in: app)
 
         let libraryBackButton = app.navigationBars.buttons["资料库"]
         XCTAssertTrue(libraryBackButton.waitForExistence(timeout: 5), "The document list should expose a back button to the library")
@@ -690,9 +713,7 @@ final class EditorIOSEditingUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let documentListBackButton = app.navigationBars.buttons["全部文档"]
-        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Initial compact page should expose a back button to the document list")
-        documentListBackButton.tap()
+        revealCompactDocumentList(in: app)
 
         let libraryBackButton = app.navigationBars.buttons["资料库"]
         XCTAssertTrue(libraryBackButton.waitForExistence(timeout: 5), "The document list should expose a back button to the library")
@@ -719,9 +740,7 @@ final class EditorIOSEditingUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let documentListBackButton = app.navigationBars.buttons["全部文档"]
-        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Initial compact page should expose a back button to the document list")
-        documentListBackButton.tap()
+        revealCompactDocumentList(in: app)
 
         let libraryBackButton = app.navigationBars.buttons["资料库"]
         XCTAssertTrue(libraryBackButton.waitForExistence(timeout: 5), "The document list should expose a back button to the library")
@@ -750,9 +769,7 @@ final class EditorIOSEditingUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let documentListBackButton = app.navigationBars.buttons["全部文档"]
-        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Initial compact page should expose a back button to the document list")
-        documentListBackButton.tap()
+        revealCompactDocumentList(in: app)
 
         let libraryBackButton = app.navigationBars.buttons["资料库"]
         XCTAssertTrue(libraryBackButton.waitForExistence(timeout: 5), "The document list should expose a back button to the library")
@@ -787,9 +804,7 @@ final class EditorIOSEditingUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let documentListBackButton = app.navigationBars.buttons["全部文档"]
-        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Initial compact page should expose a back button to the document list")
-        documentListBackButton.tap()
+        revealCompactDocumentList(in: app)
 
         let libraryBackButton = app.navigationBars.buttons["资料库"]
         XCTAssertTrue(libraryBackButton.waitForExistence(timeout: 5), "The document list should expose a back button to the library")
@@ -840,6 +855,180 @@ final class EditorIOSEditingUITests: XCTestCase {
 
         let value = textView.value as? String ?? ""
         XCTAssertTrue(value.contains("iOS edit"), "Typing on iPhone should update the native text view")
+    }
+
+    @MainActor
+    func testIPhonePerformanceTraceCoversRouteKeyboardAndChineseInput() {
+        let app = makeApp(extraEnvironment: [
+            "EDITOR_PERFORMANCE_TRACE_ENABLED": "1",
+            "EDITOR_PERFORMANCE_DATASET_LABEL": "iOS_UITest_Perf"
+        ])
+        app.launch()
+
+        navigateToWelcomePage(in: app)
+
+        let textView = app.textViews["editor.text.block-welcome-001"]
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Welcome text block should be visible before tracing iPhone input")
+
+        textView.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Focusing the editor should show the iPhone keyboard")
+        XCTAssertTrue(waitForKeyboardFocus(textView, timeout: 5), "Focused iPhone text view should retain cursor focus after keyboard show")
+
+        textView.typeText(" 中文输入")
+        let value = textView.value as? String ?? ""
+        XCTAssertTrue(value.contains("中文输入"), "Chinese text should land in the focused iPhone editor")
+
+        revealCompactDocumentList(in: app)
+        XCTAssertTrue(
+            app.scrollViews["editor.compact-document-list"].waitForExistence(timeout: 5),
+            "Back from the traced editor should reveal the compact document list"
+        )
+
+        let welcomePage = app.buttons["editor.page.page-welcome"]
+        XCTAssertTrue(welcomePage.waitForExistence(timeout: 5), "The traced document list should keep the selected page available")
+        welcomePage.tap()
+        XCTAssertTrue(textView.waitForExistence(timeout: 5), "Returning from the traced list should reveal the editor again")
+    }
+
+    @MainActor
+    func testIPhonePerformanceTraceWithCurrentDatabaseCoversKeyboardAndInput() throws {
+        let environment = ProcessInfo.processInfo.environment
+        let defaultCurrentDatasetDirectory = "/tmp/editor-performance-bd57/Current_iOS_UI"
+        let defaultCurrentDatabasePath = "\(defaultCurrentDatasetDirectory)/Editor/editor.sqlite"
+        let fallbackAppSupportDirectory = FileManager.default.fileExists(atPath: defaultCurrentDatabasePath)
+            ? defaultCurrentDatasetDirectory
+            : nil
+        guard let appSupportDirectory = environment["EDITOR_PERFORMANCE_APP_SUPPORT_DIR"] ?? fallbackAppSupportDirectory,
+              !appSupportDirectory.isEmpty else {
+            throw XCTSkip("Set EDITOR_PERFORMANCE_APP_SUPPORT_DIR to an isolated Current/xN dataset to run the real-database performance trace.")
+        }
+
+        let datasetLabel = environment["EDITOR_PERFORMANCE_DATASET_LABEL"] ?? "iOS_UITest_Current"
+        let app = makeApp(
+            resetStore: false,
+            extraEnvironment: [
+                "EDITOR_APP_SUPPORT_DIR": appSupportDirectory,
+                "EDITOR_DISABLE_POST_LAUNCH_MAINTENANCE": "1",
+                "EDITOR_PERFORMANCE_TRACE_ENABLED": "1",
+                "EDITOR_PERFORMANCE_DATASET_LABEL": datasetLabel
+            ]
+        )
+        app.launch()
+
+        let textView = app.textViews.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "editor.text.")
+        ).firstMatch
+        XCTAssertTrue(textView.waitForExistence(timeout: 12), "Current database should launch into an editable text block")
+
+        textView.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Focusing the Current database editor should show the keyboard")
+        XCTAssertTrue(waitForKeyboardFocus(textView, timeout: 5), "Current database editor should keep keyboard focus")
+        textView.typeText("perf")
+        XCTAssertTrue(
+            waitForValue(of: textView, toContain: "perf", timeout: 3),
+            "Typing should update the focused Current database text view"
+        )
+    }
+
+    @MainActor
+    func testIPhonePerformanceTraceWithCurrentDatabaseCoversEditorScroll() throws {
+        try runIPhonePerformanceTraceWithCurrentDatabaseCoversEditorScroll(
+            defaultDatasetDirectory: "/tmp/editor-performance-bd57/Current_LargeScroll",
+            defaultDatasetLabel: "iOS_Current_LargeScroll"
+        )
+    }
+
+    @MainActor
+    func testIPhonePerformanceTraceWithCurrentX10DatabaseCoversEditorScroll() throws {
+        try runIPhonePerformanceTraceWithCurrentDatabaseCoversEditorScroll(
+            defaultDatasetDirectory: "/tmp/editor-performance-bd57/Current_x10_LargeScroll",
+            defaultDatasetLabel: "iOS_Current_x10_LargeScroll"
+        )
+    }
+
+    @MainActor
+    private func runIPhonePerformanceTraceWithCurrentDatabaseCoversEditorScroll(
+        defaultDatasetDirectory: String,
+        defaultDatasetLabel: String
+    ) throws {
+        let environment = ProcessInfo.processInfo.environment
+        let defaultDatabasePath = "\(defaultDatasetDirectory)/Editor/editor.sqlite"
+        let fallbackAppSupportDirectory = FileManager.default.fileExists(atPath: defaultDatabasePath)
+            ? defaultDatasetDirectory
+            : nil
+        guard let appSupportDirectory = environment["EDITOR_PERFORMANCE_APP_SUPPORT_DIR"] ?? fallbackAppSupportDirectory,
+              !appSupportDirectory.isEmpty else {
+            throw XCTSkip("Set EDITOR_PERFORMANCE_APP_SUPPORT_DIR to an isolated Current/xN dataset with a large selected page.")
+        }
+
+        let datasetLabel = environment["EDITOR_PERFORMANCE_DATASET_LABEL"] ?? defaultDatasetLabel
+        let traceFilePath = environment["EDITOR_PERFORMANCE_TRACE_FILE"]
+            ?? "\(appSupportDirectory)/Editor/performance-\(datasetLabel).log"
+        let usesAppDrivenScroll = environment["EDITOR_PERFORMANCE_USE_XCUITEST_SWIPES"] != "1"
+        let app = makeApp(
+            resetStore: false,
+            extraEnvironment: [
+                "EDITOR_APP_SUPPORT_DIR": appSupportDirectory,
+                "EDITOR_DISABLE_POST_LAUNCH_MAINTENANCE": "1",
+                "EDITOR_PERFORMANCE_TRACE_ENABLED": "1",
+                "EDITOR_PERFORMANCE_DATASET_LABEL": datasetLabel,
+                "EDITOR_PERFORMANCE_TRACE_FILE": traceFilePath,
+                "EDITOR_UI_TEST_SCROLL_METRICS": "1",
+                "EDITOR_UI_TEST_AUTOSCROLL_ON_LAUNCH": usesAppDrivenScroll ? "1" : "0"
+            ]
+        )
+        app.launch()
+
+        if usesAppDrivenScroll {
+            XCTAssertTrue(
+                waitForTraceIntegerField(
+                    traceFilePath,
+                    eventName: "editor_scroll_start",
+                    field: "block_count",
+                    atLeast: 750,
+                    timeout: 12
+                ),
+                "Current database scroll trace should launch with a selected large page; trace=\(latestTraceLine(traceFilePath, eventName: "editor_scroll_start"))"
+            )
+            XCTAssertTrue(
+                waitForTraceEvent(traceFilePath, eventName: "editor_autoscroll_probe_done", timeout: 20),
+                "App-driven scroll should finish; trace=\(latestTraceLine(traceFilePath, eventName: "editor_autoscroll_probe_done"))"
+            )
+            XCTAssertTrue(
+                waitForTraceIntegerField(
+                    traceFilePath,
+                    eventName: "editor_scroll_frame_pacing_done",
+                    field: "peak_last_visible_block_index",
+                    atLeast: 80,
+                    timeout: 4
+                ),
+                "Current database editor scroll should realize distant blocks; trace=\(latestTraceLine(traceFilePath, eventName: "editor_scroll_frame_pacing_done"))"
+            )
+            RunLoop.current.run(until: Date().addingTimeInterval(0.7))
+            return
+        }
+
+        let canvas = app.scrollViews["editor.canvas-scroll"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 12), "Current database should expose the editor canvas")
+
+        let scrollMetrics = app.descendants(matching: .any)["editor.scroll-metrics-test-output"]
+        XCTAssertTrue(
+            scrollMetrics.waitForIntegerField("block_count", atLeast: 750, timeout: 12),
+            "Current database scroll trace should launch with a selected large page; metrics=\(scrollMetrics.stringValue)"
+        )
+
+        if !usesAppDrivenScroll {
+            for _ in 0..<10 {
+                canvas.swipeUp(velocity: .fast)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+            }
+        }
+
+        XCTAssertTrue(
+            scrollMetrics.waitForIntegerField("peak_last_visible_block_index", atLeast: 80, timeout: 8),
+            "Current database editor scroll should realize distant blocks; metrics=\(scrollMetrics.stringValue)"
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.7))
     }
 
     @MainActor
@@ -910,9 +1099,7 @@ final class EditorIOSEditingUITests: XCTestCase {
             return
         }
 
-        let documentListBackButton = app.navigationBars.buttons["全部文档"]
-        XCTAssertTrue(documentListBackButton.waitForExistence(timeout: 5), "Editor should be able to reveal the document list")
-        documentListBackButton.tap()
+        revealCompactDocumentList(in: app)
 
         let welcomePage = app.buttons["editor.page.page-welcome"]
         XCTAssertTrue(welcomePage.waitForExistence(timeout: 5), "Welcome page should be visible on iPhone")
@@ -931,5 +1118,117 @@ private extension XCTestCase {
         let predicate = NSPredicate(format: "hasKeyboardFocus == true")
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    func waitForSoftwareKeyboard(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let keyboard = app.keyboards.firstMatch
+            if keyboard.exists, keyboard.frame.height >= 120 {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return false
+    }
+
+    @MainActor
+    func waitForValue(of element: XCUIElement, toContain expectedText: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let value = element.value as? String ?? ""
+            if value.contains(expectedText) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return false
+    }
+
+    func waitForTraceEvent(_ traceFilePath: String, eventName: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !latestTraceLine(traceFilePath, eventName: eventName).isEmpty {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return false
+    }
+
+    func waitForTraceIntegerField(
+        _ traceFilePath: String,
+        eventName: String,
+        field: String,
+        atLeast minimumValue: Int,
+        timeout: TimeInterval
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let matchingLine = latestTraceLine(
+                traceFilePath,
+                eventName: eventName,
+                field: field,
+                atLeast: minimumValue
+            )
+            if !matchingLine.isEmpty {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return false
+    }
+
+    func latestTraceLine(
+        _ traceFilePath: String,
+        eventName: String,
+        field: String? = nil,
+        atLeast minimumValue: Int? = nil
+    ) -> String {
+        guard let traceText = try? String(contentsOfFile: traceFilePath, encoding: .utf8) else {
+            return ""
+        }
+        return traceText
+            .split(separator: "\n")
+            .reversed()
+            .first { line in
+                guard line.contains("name=\(eventName)") else {
+                    return false
+                }
+                guard let field, let minimumValue else {
+                    return true
+                }
+                return (String(line).integerField(field) ?? -1) >= minimumValue
+            }
+            .map(String.init) ?? ""
+    }
+}
+
+private extension XCUIElement {
+    func waitForIntegerField(_ name: String, atLeast minimumValue: Int, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate { element, _ in
+            guard let element = element as? XCUIElement else {
+                return false
+            }
+            return (element.stringValue.integerField(name) ?? -1) >= minimumValue
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: self)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    var stringValue: String {
+        let valueText = value as? String ?? ""
+        return valueText.isEmpty ? label : valueText
+    }
+}
+
+private extension String {
+    func integerField(_ name: String) -> Int? {
+        let prefix = "\(name)="
+        guard let field = split(separator: " ").first(where: { $0.hasPrefix(prefix) }) else {
+            return nil
+        }
+        return Int(field.dropFirst(prefix.count))
     }
 }

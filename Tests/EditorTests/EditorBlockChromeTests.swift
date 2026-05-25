@@ -416,6 +416,37 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertTrue(PageActionsMenuVisibilityPolicy.isVisible(.exportMarkdown, in: .regular))
     }
 
+    func testPageActionsDefersLargeReferenceTargetMenus() {
+        XCTAssertEqual(
+            PageActionsReferencePresentationPolicy.presentation(
+                targetCount: PageActionsReferencePresentationPolicy.compactInlineTargetLimit,
+                scope: .compactIOS
+            ),
+            .inlineMenu
+        )
+        XCTAssertEqual(
+            PageActionsReferencePresentationPolicy.presentation(
+                targetCount: PageActionsReferencePresentationPolicy.compactInlineTargetLimit + 1,
+                scope: .compactIOS
+            ),
+            .deferredPicker
+        )
+        XCTAssertEqual(
+            PageActionsReferencePresentationPolicy.presentation(
+                targetCount: PageActionsReferencePresentationPolicy.regularInlineTargetLimit,
+                scope: .regular
+            ),
+            .inlineMenu
+        )
+        XCTAssertEqual(
+            PageActionsReferencePresentationPolicy.presentation(
+                targetCount: PageActionsReferencePresentationPolicy.regularInlineTargetLimit + 1,
+                scope: .regular
+            ),
+            .deferredPicker
+        )
+    }
+
     func testPageVersionDiffBuilderComparesHistoricalSnapshotWithCurrentPage() {
         let version = PageVersionSnapshot(
             pageID: "page-1",
@@ -756,6 +787,26 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testMobileNavigationTitleStateEqualityIgnoresScrollOffsetChurnWhenVisibilityIsStable() {
+        let state = MobileNavigationTitleVisibilityState().updated(
+            titleFrame: CGRect(x: 0, y: 280, width: 320, height: 48),
+            scrollOffsetY: 0,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        let offsetOnlyUpdate = state.updated(
+            scrollOffsetY: 20,
+            topMaskHeight: MobileNavigationBarChrome.topMaskHeight
+        )
+
+        XCTAssertEqual(
+            offsetOnlyUpdate,
+            state,
+            "Scroll offset changes that do not change top-title visibility should not invalidate the whole editor canvas"
+        )
+        XCTAssertFalse(offsetOnlyUpdate.isVisible)
+    }
+
     func testMobileKeyboardToolbarPutsDismissKeyboardWithRightSideActions() {
         XCTAssertEqual(
             MobileKeyboardToolbarUtilityActionResolver.leadingActions,
@@ -1053,6 +1104,81 @@ final class EditorBlockChromeTests: XCTestCase {
         )
     }
 
+    func testBlockRowFrameUpdatePolicySkipsScrollFrameChurnWhenActiveHeadingIsStable() {
+        let currentFrames = [
+            "heading-1": CGRect(x: 0, y: 10, width: 400, height: 36),
+            "heading-2": CGRect(x: 0, y: 240, width: 400, height: 36)
+        ]
+        let nextFrames = [
+            "heading-1": CGRect(x: 0, y: -6, width: 400, height: 36),
+            "heading-2": CGRect(x: 0, y: 224, width: 400, height: 36)
+        ]
+
+        XCTAssertFalse(
+            BlockRowFrameUpdatePolicy.shouldUpdate(
+                currentFrames: currentFrames,
+                nextFrames: nextFrames,
+                currentActiveBlockID: "heading-1",
+                nextActiveBlockID: "heading-1",
+                isBlockSelectionMarqueeActive: false,
+                hasPinnedOutlineSelection: false
+            ),
+            "Scroll-driven heading frame drift should not invalidate the editor canvas while the active outline section is unchanged."
+        )
+    }
+
+    func testBlockRowFrameUpdatePolicyUpdatesWhenActiveHeadingChanges() {
+        XCTAssertTrue(
+            BlockRowFrameUpdatePolicy.shouldUpdate(
+                currentFrames: [
+                    "heading-1": CGRect(x: 0, y: -120, width: 400, height: 36),
+                    "heading-2": CGRect(x: 0, y: 220, width: 400, height: 36)
+                ],
+                nextFrames: [
+                    "heading-1": CGRect(x: 0, y: -260, width: 400, height: 36),
+                    "heading-2": CGRect(x: 0, y: 80, width: 400, height: 36)
+                ],
+                currentActiveBlockID: "heading-1",
+                nextActiveBlockID: "heading-2",
+                isBlockSelectionMarqueeActive: false,
+                hasPinnedOutlineSelection: false
+            ),
+            "The outline must still refresh when scrolling crosses into a new heading section."
+        )
+    }
+
+    func testBlockRowFrameUpdatePolicyKeepsSelectionAndMarqueeGeometryLive() {
+        let currentFrames = [
+            "heading-1": CGRect(x: 0, y: 10, width: 400, height: 36)
+        ]
+        let nextFrames = [
+            "heading-1": CGRect(x: 0, y: 20, width: 400, height: 36)
+        ]
+
+        XCTAssertTrue(
+            BlockRowFrameUpdatePolicy.shouldUpdate(
+                currentFrames: currentFrames,
+                nextFrames: nextFrames,
+                currentActiveBlockID: "heading-1",
+                nextActiveBlockID: "heading-1",
+                isBlockSelectionMarqueeActive: true,
+                hasPinnedOutlineSelection: false
+            ),
+            "Drag selection needs fresh row frames for hit testing."
+        )
+        XCTAssertTrue(
+            BlockRowFrameUpdatePolicy.shouldUpdate(
+                currentFrames: currentFrames,
+                nextFrames: nextFrames,
+                currentActiveBlockID: "heading-1",
+                nextActiveBlockID: "heading-1",
+                isBlockSelectionMarqueeActive: false,
+                hasPinnedOutlineSelection: true
+            ),
+            "A pinned outline selection still needs geometry updates so the visible highlight stays aligned."
+        )
+    }
+
     func testCraftQuietChromeKeepsListRowsUnboxedWithReadableParagraphSpacing() {
         XCTAssertEqual(EditorBlockChrome.blockSpacing, 8)
         XCTAssertEqual(EditorBlockChrome.rowVerticalPadding, 0)
@@ -1096,12 +1222,43 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertFalse(MobileBlockDragActivationPolicy.usesVisibleDragHandle)
         XCTAssertTrue(MobileBlockDragActivationPolicy.usesLongPressDraggableRow)
         XCTAssertTrue(MobileBlockDragActivationPolicy.usesWholeRowDropTarget)
+        XCTAssertFalse(MobileBlockDragActivationPolicy.usesDedicatedRowDropSlots)
         XCTAssertTrue(MobileBlockDragActivationPolicy.usesNativeTextViewDragInteraction)
     }
 
     func testMobileNativeTextRowsKeepUIKitTextMenuInsteadOfRowContextMenu() {
         XCTAssertFalse(MobileBlockContextMenuPolicy.enablesRowContextMenu(usesNativeTextEditor: true))
         XCTAssertTrue(MobileBlockContextMenuPolicy.enablesRowContextMenu(usesNativeTextEditor: false))
+    }
+
+    func testLargePageAccessibilityTextIsSummarized() {
+        let text = String(repeating: "a", count: BlockAccessibilityTextPolicy.largePageTextLimit + 24)
+        let summarized = BlockAccessibilityTextPolicy.summarizedText(text, isLargePage: true)
+
+        XCTAssertEqual(summarized.count, BlockAccessibilityTextPolicy.largePageTextLimit + 3)
+        XCTAssertTrue(summarized.hasSuffix("..."))
+        XCTAssertEqual(BlockAccessibilityTextPolicy.summarizedText(text, isLargePage: false), text)
+        XCTAssertTrue(
+            BlockAccessibilityTextPolicy.rowValue(
+                blockText: text,
+                isSelected: false,
+                isLargePage: true
+            ).contains("当前块未选中")
+        )
+    }
+
+    func testStructuredTablePreviewDescriptorPreservesFullPreviewGeometry() {
+        let descriptor = StructuredTableBlockPreviewDescriptor(rows: [
+            ["Name", "Status", "Owner"],
+            ["Alpha", "Running"],
+            ["Beta", "Blocked", "Team", "Extra"]
+        ])
+
+        XCTAssertEqual(descriptor.rowCount, 3)
+        XCTAssertEqual(descriptor.columnCount, 4)
+        XCTAssertEqual(descriptor.contentWidth, CGFloat(4 * TableBlockChrome.cellWidth))
+        XCTAssertEqual(descriptor.contentHeight, CGFloat(3 * TableBlockChrome.cellHeight))
+        XCTAssertEqual(descriptor.accessibilityValue, "3 行，4 列")
     }
 
     func testMobileWholeRowDropTargetKeepsReorderTouchableWithoutVisibleHandle() {
@@ -3561,6 +3718,413 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertEqual(items.map(\.page.id), [page.id])
         XCTAssertEqual(items.first?.tagNames, ["生活/园艺"])
         XCTAssertEqual(items.first?.preview.excerpt, "这是一段用于列表预览的正文")
+    }
+
+    func testPageListRenderIndexMatchesStoredAndLoadedPreviewRules() {
+        let workspaceID = "workspace"
+        let loadedPage = PageSummary(id: "loaded-page", workspaceID: workspaceID, title: "Loaded")
+        let storedOnlyPage = PageSummary(id: "stored-page", workspaceID: workspaceID, title: "Stored")
+        let encryptedPage = PageSummary(
+            id: "encrypted-page",
+            workspaceID: workspaceID,
+            title: "Secret",
+            isEncrypted: true
+        )
+        let image = AttachmentSnapshot(
+            id: "image-attachment",
+            workspaceID: workspaceID,
+            originalFilename: "cover.png",
+            utiType: "public.png",
+            byteSize: 42,
+            contentHash: "image-hash",
+            localPath: "/tmp/cover.png",
+            thumbnailPath: nil,
+            kind: .image
+        )
+        let tag = TagSummary(
+            id: "tag-work",
+            workspaceID: workspaceID,
+            parentTagID: nil,
+            name: "工作",
+            path: "工作"
+        )
+        let snapshot = WorkspaceSnapshot(
+            workspaces: [WorkspaceSummary(id: workspaceID, name: "空间")],
+            pages: [loadedPage, storedOnlyPage, encryptedPage],
+            blocks: [
+                BlockSnapshot(
+                    id: "loaded-text",
+                    pageID: loadedPage.id,
+                    parentBlockID: nil,
+                    orderKey: "1",
+                    type: .paragraph,
+                    textPlain: "Loaded excerpt"
+                ),
+                BlockSnapshot(
+                    id: "loaded-image",
+                    pageID: loadedPage.id,
+                    parentBlockID: nil,
+                    orderKey: "2",
+                    type: .attachmentImage,
+                    textPlain: "cover.png",
+                    attachmentID: image.id
+                ),
+                BlockSnapshot(
+                    id: "encrypted-text",
+                    pageID: encryptedPage.id,
+                    parentBlockID: nil,
+                    orderKey: "1",
+                    type: .paragraph,
+                    textPlain: "Hidden"
+                )
+            ],
+            pageListPreviews: [
+                storedOnlyPage.id: PageListPreview(
+                    excerpt: "Stored excerpt",
+                    imageAttachment: nil,
+                    fileAttachment: nil
+                )
+            ],
+            attachments: [image],
+            tags: [tag],
+            pageTags: [PageTagAssignment(pageID: loadedPage.id, tagID: tag.id)],
+            selectedWorkspaceID: workspaceID,
+            selectedPageID: loadedPage.id
+        )
+        let index = PageListRenderIndex(snapshot: snapshot)
+
+        XCTAssertEqual(index.preview(for: loadedPage).excerpt, "Loaded excerpt")
+        XCTAssertEqual(index.preview(for: loadedPage).imageAttachment?.id, image.id)
+        XCTAssertEqual(index.preview(for: storedOnlyPage).excerpt, "Stored excerpt")
+        XCTAssertNil(index.preview(for: encryptedPage).excerpt)
+        XCTAssertEqual(index.tagNames(for: loadedPage), ["工作"])
+    }
+
+    func testPageListRenderWindowPolicyKeepsInitialWindowSmallAndIncludesSelectedPage() {
+        let pages = (0..<200).map { index in
+            PageSummary(id: "page-\(index)", workspaceID: "workspace", title: "Page \(index)")
+        }
+
+        let renderedPages = PageListRenderWindowPolicy.renderedPages(
+            pages,
+            selectedPageID: "page-150",
+            limit: PageListRenderWindowPolicy.initialLimit
+        )
+
+        XCTAssertEqual(renderedPages.count, PageListRenderWindowPolicy.initialLimit + 1)
+        XCTAssertEqual(renderedPages.prefix(PageListRenderWindowPolicy.initialLimit).map(\.id), pages.prefix(PageListRenderWindowPolicy.initialLimit).map(\.id))
+        XCTAssertEqual(renderedPages.last?.id, "page-150")
+    }
+
+    func testPageListRenderWindowPolicyWarmsAndExpandsInBatches() {
+        XCTAssertEqual(
+            PageListRenderWindowPolicy.warmedLimit(
+                currentLimit: PageListRenderWindowPolicy.initialLimit,
+                visibleCount: 2_000
+            ),
+            PageListRenderWindowPolicy.warmupLimit
+        )
+        XCTAssertEqual(
+            PageListRenderWindowPolicy.expandedLimit(
+                currentLimit: PageListRenderWindowPolicy.warmupLimit,
+                visibleCount: 2_000
+            ),
+            PageListRenderWindowPolicy.warmupLimit + PageListRenderWindowPolicy.expansionBatchSize
+        )
+    }
+
+    func testPageListRenderWindowPolicyStopsAtVisibleCount() {
+        XCTAssertEqual(
+            PageListRenderWindowPolicy.warmedLimit(currentLimit: 4, visibleCount: 12),
+            12
+        )
+        XCTAssertEqual(
+            PageListRenderWindowPolicy.expandedLimit(currentLimit: 180, visibleCount: 200),
+            200
+        )
+        XCTAssertFalse(
+            PageListRenderWindowPolicy.canExpand(renderedCount: 200, visibleCount: 200)
+        )
+        XCTAssertTrue(
+            PageListRenderWindowPolicy.canExpand(renderedCount: 96, visibleCount: 200)
+        )
+    }
+
+    func testCompactPageRouteUpdatePolicySkipsDuplicateTopPagePush() {
+        XCTAssertFalse(
+            CompactPageRouteUpdatePolicy.shouldPush(
+                pageID: "page-a",
+                currentPath: [.page("page-a")]
+            )
+        )
+        XCTAssertFalse(
+            CompactPageRouteUpdatePolicy.shouldPush(
+                pageID: "page-a",
+                currentPath: [.collection(.allDocuments), .page("page-a")]
+            )
+        )
+        XCTAssertTrue(
+            CompactPageRouteUpdatePolicy.shouldPush(
+                pageID: "page-b",
+                currentPath: [.collection(.allDocuments), .page("page-a")]
+            )
+        )
+    }
+
+    func testCompactRoutePathUpdatePolicySkipsReplacingSameTopPageWithBackStack() {
+        XCTAssertFalse(
+            CompactRoutePathUpdatePolicy.shouldApply(
+                plannedPath: [.collection(.allDocuments), .page("page-a")],
+                currentPath: [.page("page-a")]
+            )
+        )
+        XCTAssertTrue(
+            CompactRoutePathUpdatePolicy.shouldApply(
+                plannedPath: [.collection(.allDocuments), .page("page-b")],
+                currentPath: [.page("page-a")]
+            )
+        )
+        XCTAssertTrue(
+            CompactRoutePathUpdatePolicy.shouldApply(
+                plannedPath: [.collection(.allDocuments)],
+                currentPath: []
+            )
+        )
+    }
+
+    func testDeferredTableBlockEditorPolicyOnlyDefersInactiveLargePageTables() {
+        XCTAssertTrue(
+            DeferredTableBlockEditorPolicy.usesPreview(
+                blockType: .table,
+                isLargePage: true,
+                isEditing: false
+            )
+        )
+        XCTAssertFalse(
+            DeferredTableBlockEditorPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: true,
+                isEditing: false
+            )
+        )
+        XCTAssertFalse(
+            DeferredTableBlockEditorPolicy.usesPreview(
+                blockType: .table,
+                isLargePage: false,
+                isEditing: false
+            )
+        )
+        XCTAssertFalse(
+            DeferredTableBlockEditorPolicy.usesPreview(
+                blockType: .table,
+                isLargePage: true,
+                isEditing: true
+            )
+        )
+    }
+
+    func testDeferredTextBlockEditorPolicyOnlyDefersIdleLargePageText() {
+        XCTAssertTrue(
+            DeferredTextBlockEditorPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: true,
+                isFocused: false,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isEditing: false
+            )
+        )
+        XCTAssertFalse(
+            DeferredTextBlockEditorPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: false,
+                isFocused: false,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isEditing: false
+            )
+        )
+        XCTAssertFalse(
+            DeferredTextBlockEditorPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: true,
+                isFocused: true,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isEditing: false
+            )
+        )
+        XCTAssertFalse(
+            DeferredTextBlockEditorPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: true,
+                isFocused: false,
+                hasFocusRequest: true,
+                hasSearchHighlight: false,
+                isEditing: false
+            )
+        )
+        XCTAssertFalse(
+            DeferredTextBlockEditorPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: true,
+                isFocused: false,
+                hasFocusRequest: false,
+                hasSearchHighlight: true,
+                isEditing: false
+            )
+        )
+        XCTAssertFalse(
+            DeferredTextBlockEditorPolicy.usesPreview(
+                blockType: .table,
+                isLargePage: true,
+                isFocused: false,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isEditing: false
+            )
+        )
+    }
+
+    func testMobileLargePageTextPreviewRowPolicyUsesOnlyIdlePlainTextLikeBlocks() {
+        XCTAssertTrue(
+            MobileLargePageTextPreviewRowPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: true,
+                isFocused: false,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                hasDraftText: false
+            )
+        )
+        XCTAssertTrue(
+            MobileLargePageTextPreviewRowPolicy.usesPreview(
+                blockType: .orderedListItem,
+                isLargePage: true,
+                isFocused: false,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                hasDraftText: false
+            )
+        )
+        XCTAssertFalse(
+            MobileLargePageTextPreviewRowPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: false,
+                isFocused: false,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                hasDraftText: false
+            )
+        )
+        XCTAssertFalse(
+            MobileLargePageTextPreviewRowPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: true,
+                isFocused: true,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                hasDraftText: false
+            )
+        )
+        XCTAssertFalse(
+            MobileLargePageTextPreviewRowPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: true,
+                isFocused: false,
+                hasFocusRequest: true,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                hasDraftText: false
+            )
+        )
+        XCTAssertFalse(
+            MobileLargePageTextPreviewRowPolicy.usesPreview(
+                blockType: .table,
+                isLargePage: true,
+                isFocused: false,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                hasDraftText: false
+            )
+        )
+        XCTAssertFalse(
+            MobileLargePageTextPreviewRowPolicy.usesPreview(
+                blockType: .taskItem,
+                isLargePage: true,
+                isFocused: false,
+                hasFocusRequest: false,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                hasDraftText: false
+            )
+        )
+    }
+
+    func testMobileLargePageTablePreviewRowPolicyDefersOnlyInactiveLargePageTables() {
+        XCTAssertTrue(
+            MobileLargePageTablePreviewRowPolicy.usesPreview(
+                blockType: .table,
+                isLargePage: true,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                isEditorActive: false
+            )
+        )
+        XCTAssertFalse(
+            MobileLargePageTablePreviewRowPolicy.usesPreview(
+                blockType: .paragraph,
+                isLargePage: true,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                isEditorActive: false
+            )
+        )
+        XCTAssertFalse(
+            MobileLargePageTablePreviewRowPolicy.usesPreview(
+                blockType: .table,
+                isLargePage: false,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                isEditorActive: false
+            )
+        )
+        XCTAssertFalse(
+            MobileLargePageTablePreviewRowPolicy.usesPreview(
+                blockType: .table,
+                isLargePage: true,
+                hasSearchHighlight: false,
+                isSelectionModeActive: false,
+                isBlockSelected: false,
+                isEditorActive: true
+            )
+        )
+    }
+
+    func testForegroundSyncActivationPolicySkipsWhenPostLaunchMaintenanceIsDisabled() {
+        let policy = ForegroundSyncActivationPolicy()
+
+        XCTAssertTrue(
+            policy.shouldSkipActivationSync(
+                environment: ["EDITOR_DISABLE_POST_LAUNCH_MAINTENANCE": "1"]
+            )
+        )
+        XCTAssertFalse(policy.shouldSkipActivationSync(environment: [:]))
     }
 
     func testPastedAttachmentAnchorPrefersTextSelectionThenFocusedBlockThenLastVisibleSelection() {
