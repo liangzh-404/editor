@@ -807,6 +807,37 @@ enum EditorDisplayMode: Equatable, Sendable {
             return .detailOnly
         }
     }
+
+    var traceName: String {
+        switch self {
+        case .standard:
+            return "standard"
+        case .writing:
+            return "writing"
+        case .focus:
+            return "focus"
+        }
+    }
+
+    func isFocusTransition(to nextMode: EditorDisplayMode) -> Bool {
+        self == .focus || nextMode == .focus
+    }
+}
+
+enum EditorInteractionLatencyBudget {
+    static let immediateFeedbackP95Milliseconds = 50
+    static let focusModeTransitionSettledP95Milliseconds = 160
+    static let pageSwitchFirstBlockP95Milliseconds = 150
+    static let taskCompletionPaintP95Milliseconds = 50
+}
+
+enum EditorFocusModeTransitionPolicy {
+    static let animationDurationMilliseconds = 120
+    static let settleDelayMilliseconds = 160
+
+    static var animation: Animation {
+        .easeOut(duration: Double(animationDurationMilliseconds) / 1_000)
+    }
 }
 
 enum PageActionsMenuScope: Equatable, Sendable {
@@ -1349,6 +1380,7 @@ private struct AdaptiveEditorShell: View {
 private struct ThreeColumnEditorShell: View {
     @ObservedObject var viewModel: WorkspaceViewModel
     @State private var displayMode: EditorDisplayMode = .standard
+    @State private var displayModeTransitionGeneration = 0
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var activePageDragIDs: Set<String> = []
 #if os(macOS)
@@ -1411,7 +1443,7 @@ private struct ThreeColumnEditorShell: View {
                     isEncryptedContentLocked: viewModel.selectedPage.map { viewModel.isEncryptedPageLocked($0.id) } ?? false,
                     isAuthenticatingEncryptedContent: viewModel.selectedPageID.map { viewModel.authenticatingEncryptedPageID == $0 } ?? false,
                     onDisplayModeChange: { mode in
-                        displayMode = mode
+                        setDisplayMode(mode, source: "canvas")
                     },
                     onUnlockEncryptedContent: {
                         Task {
@@ -1668,7 +1700,7 @@ private struct ThreeColumnEditorShell: View {
             viewModel.selectCollection(.favorites)
         })
         .focusedValue(\.toggleFocusModeAction, {
-            toggleFocusMode()
+            toggleFocusMode(source: "focused_value")
         })
         .focusedValue(\.quickOpenAction, {
             _ = viewModel.openQuickSearchForUI()
@@ -1683,8 +1715,53 @@ private struct ThreeColumnEditorShell: View {
 #endif
     }
 
-    private func toggleFocusMode() {
-        displayMode = displayMode == .focus ? .standard : .focus
+    private func toggleFocusMode(source: String = "shortcut") {
+        setDisplayMode(displayMode == .focus ? .standard : .focus, source: source)
+    }
+
+    private func setDisplayMode(_ mode: EditorDisplayMode, source: String) {
+        let previousMode = displayMode
+        guard previousMode != mode else {
+            return
+        }
+
+        let isFocusTransition = previousMode.isFocusTransition(to: mode)
+        let transition = "\(previousMode.traceName)_to_\(mode.traceName)"
+        let metadata = [
+            "from": previousMode.traceName,
+            "to": mode.traceName,
+            "transition": transition,
+            "source": source,
+            "budget_p95_ms": "\(EditorInteractionLatencyBudget.focusModeTransitionSettledP95Milliseconds)"
+        ]
+        let trace = isFocusTransition
+            ? EditorPerformanceTrace.begin("focus_mode_toggle") { metadata }
+            : nil
+        let framePacingToken = isFocusTransition
+            ? EditorFramePacingTrace.begin("focus_mode_transition", metadata: metadata)
+            : nil
+
+        displayModeTransitionGeneration += 1
+        let generation = displayModeTransitionGeneration
+        if isFocusTransition {
+            withAnimation(EditorFocusModeTransitionPolicy.animation) {
+                displayMode = mode
+            }
+            EditorPerformanceTrace.nextRunLoopPoint("focus_mode_chrome_painted") { metadata }
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + .milliseconds(EditorFocusModeTransitionPolicy.settleDelayMilliseconds)
+            ) {
+                guard generation == displayModeTransitionGeneration else {
+                    EditorFramePacingTrace.cancel(framePacingToken)
+                    return
+                }
+                EditorPerformanceTrace.point("focus_mode_transition_settled", metadata: metadata)
+                EditorPerformanceTrace.end(trace, as: "focus_mode_transition_settled") { metadata }
+                EditorFramePacingTrace.end(framePacingToken, metadata: metadata)
+            }
+        } else {
+            displayMode = mode
+        }
     }
 
 #if os(macOS)
@@ -1708,7 +1785,7 @@ private struct ThreeColumnEditorShell: View {
             viewModel.selectCollection(.favorites)
             return true
         case .toggleFocusMode:
-            toggleFocusMode()
+            toggleFocusMode(source: "global_shortcut")
             return true
         case .insertMarkdownLink, .convertBlockToPage:
             return false
@@ -1791,7 +1868,7 @@ private struct ThreeColumnEditorShell: View {
                 isEncryptedContentLocked: viewModel.selectedPage.map { viewModel.isEncryptedPageLocked($0.id) } ?? false,
                 isAuthenticatingEncryptedContent: viewModel.selectedPageID.map { viewModel.authenticatingEncryptedPageID == $0 } ?? false,
                 onDisplayModeChange: { mode in
-                    displayMode = mode
+                    setDisplayMode(mode, source: "canvas")
                 },
                 onUnlockEncryptedContent: {
                     Task {
@@ -8839,10 +8916,14 @@ private struct PageListView: View {
         activatePageListKeyboardShortcuts()
         pendingPageOpenTask?.cancel()
         pendingPageOpenTask = Task { @MainActor in
-            do {
-                try await Task.sleep(nanoseconds: 20_000_000)
-            } catch {
-                return
+            if PageSelectionCommitPolicy.commitDelayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: PageSelectionCommitPolicy.commitDelayNanoseconds)
+                } catch {
+                    return
+                }
+            } else {
+                await Task.yield()
             }
             guard !Task.isCancelled else {
                 return
@@ -9138,6 +9219,10 @@ enum PageListRenderWindowPolicy {
     static func canExpand(renderedCount: Int, visibleCount: Int) -> Bool {
         renderedCount < visibleCount
     }
+}
+
+enum PageSelectionCommitPolicy {
+    static let commitDelayNanoseconds: UInt64 = 0
 }
 
 private struct CompactPageListView: View {
@@ -19195,6 +19280,20 @@ private struct BlockRowView: View {
                 isDeferredTableEditorActive = false
             }
         }
+        .onChange(of: block.taskItemIsCompleted) { _, isCompleted in
+            guard block.type == .taskItem else {
+                return
+            }
+            EditorPerformanceTrace.nextRunLoopPoint("task_completion_painted") {
+                [
+                    "block_id": block.id,
+                    "page_id": block.pageID,
+                    "completed": "\(isCompleted)",
+                    "focus_mode": "\(isFocusModeActive)",
+                    "budget_p95_ms": "\(EditorInteractionLatencyBudget.taskCompletionPaintP95Milliseconds)"
+                ]
+            }
+        }
         .onDisappear {
 #if os(iOS)
             resetMobileFormatPanelForInactiveRow()
@@ -19823,7 +19922,16 @@ private struct BlockRowView: View {
 
     private var taskItemCompletionButton: some View {
         Button {
-            onTaskItemCompletionChange(!block.taskItemIsCompleted)
+            let nextCompletionState = !block.taskItemIsCompleted
+            EditorPerformanceTrace.point("task_completion_click_start") {
+                [
+                    "block_id": block.id,
+                    "page_id": block.pageID,
+                    "completed": "\(nextCompletionState)",
+                    "focus_mode": "\(isFocusModeActive)"
+                ]
+            }
+            onTaskItemCompletionChange(nextCompletionState)
         } label: {
             Image(systemName: block.taskItemIsCompleted ? "checkmark.circle.fill" : "circle")
         }

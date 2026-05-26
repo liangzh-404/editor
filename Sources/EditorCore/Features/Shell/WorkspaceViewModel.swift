@@ -2786,15 +2786,71 @@ final class WorkspaceViewModel: ObservableObject {
             throw PageRepositoryError.blockNotFound
         }
 
-        try performPageEdit(pageID: block.pageID, focusBlockID: blockID) {
-            try repository.updateTaskItemCompletion(blockID: blockID, isCompleted: isCompleted)
-            snapshot = snapshot.replacingTaskItemCompletion(blockID: blockID, isCompleted: isCompleted)
-            try refreshDerivedState(rebuildSearchIndex: false)
+        let trace = EditorPerformanceTrace.begin("task_completion_persistence") {
+            [
+                "block_id": blockID,
+                "page_id": block.pageID,
+                "completed": "\(isCompleted)"
+            ]
         }
+        let previousSnapshot = snapshot
+        let previousPendingFocusBlockID = pendingFocusBlockID
+        let previousCompletionState = block.taskItemIsCompleted
+
+        snapshot = snapshot.replacingTaskItemCompletion(blockID: blockID, isCompleted: isCompleted)
         pendingFocusBlockID = blockID
         EditorLog.focus.debug(
             "editor_focus_request_queued block_id=\(blockID, privacy: .public) source=task_completion"
         )
+
+        do {
+            try flushPendingBlockTextPersistence(pageID: block.pageID)
+            try repository.updateTaskItemCompletion(blockID: blockID, isCompleted: isCompleted)
+            try refreshDerivedState(rebuildSearchIndex: false)
+            let afterBlocks = pageBlocks(pageID: block.pageID)
+            let beforeBlocks = afterBlocks.map { block in
+                block.id == blockID
+                    ? block.replacingTaskItemCompletion(previousCompletionState)
+                    : block
+            }
+            if beforeBlocks != afterBlocks {
+                recordPageEditUndoSnapshot(
+                    PageEditHistorySnapshot(
+                        pageID: block.pageID,
+                        beforeBlocks: beforeBlocks,
+                        afterBlocks: afterBlocks,
+                        focusBlockID: blockID,
+                        coalescingKey: nil
+                    )
+                )
+            }
+            EditorPerformanceTrace.point("task_completion_persisted") {
+                [
+                    "block_id": blockID,
+                    "page_id": block.pageID,
+                    "completed": "\(isCompleted)"
+                ]
+            }
+            EditorPerformanceTrace.end(trace, as: "task_completion_persistence_done") {
+                [
+                    "block_id": blockID,
+                    "page_id": block.pageID,
+                    "completed": "\(isCompleted)"
+                ]
+            }
+        } catch {
+            snapshot = previousSnapshot
+            pendingFocusBlockID = previousPendingFocusBlockID
+            EditorPerformanceTrace.end(trace, as: "task_completion_persistence_failed") {
+                [
+                    "block_id": blockID,
+                    "page_id": block.pageID,
+                    "completed": "\(isCompleted)",
+                    "error": String(describing: error)
+                ]
+            }
+            throw error
+        }
     }
 
     func updateSelectedPageTitle(_ title: String) throws {

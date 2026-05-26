@@ -2352,6 +2352,29 @@ final class WorkspaceViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testTaskCompletionUndoPreservesPendingTaskTextEdit() throws {
+        let database = try migratedDatabase()
+        defer { database.close() }
+
+        let repository = PageRepository(database: database)
+        let snapshot = try repository.bootstrapWorkspaceIfNeeded()
+        let pageID = try XCTUnwrap(snapshot.selectedPageID)
+        let taskBlock = try repository.appendBlock(pageID: pageID, type: .taskItem, text: "Ship")
+
+        let viewModel = WorkspaceViewModel(repository: repository)
+        try viewModel.load()
+
+        viewModel.editBlockText(blockID: taskBlock.id, text: "Ship today")
+        try viewModel.updateTaskItemCompletion(blockID: taskBlock.id, isCompleted: true)
+        try viewModel.undoLastTextEdit()
+
+        let reloadedTask = try XCTUnwrap(viewModel.visibleBlocks.first { $0.id == taskBlock.id })
+        XCTAssertEqual(reloadedTask.textPlain, "Ship today")
+        XCTAssertFalse(reloadedTask.taskItemIsCompleted)
+        XCTAssertTrue(viewModel.canUndoTextEdit)
+    }
+
+    @MainActor
     func testAppendParagraphBlockRefreshesVisibleBlocks() throws {
         let database = try migratedDatabase()
         defer { database.close() }

@@ -1029,6 +1029,19 @@ final class EditorBlockChromeTests: XCTestCase {
         XCTAssertFalse(EditorDisplayMode.focus.showsAuxiliaryRail)
     }
 
+    func testFocusModeHandFeelBudgetsStayTight() {
+        XCTAssertEqual(EditorInteractionLatencyBudget.immediateFeedbackP95Milliseconds, 50)
+        XCTAssertEqual(EditorInteractionLatencyBudget.focusModeTransitionSettledP95Milliseconds, 160)
+        XCTAssertEqual(EditorInteractionLatencyBudget.pageSwitchFirstBlockP95Milliseconds, 150)
+        XCTAssertEqual(EditorInteractionLatencyBudget.taskCompletionPaintP95Milliseconds, 50)
+        XCTAssertEqual(EditorFocusModeTransitionPolicy.animationDurationMilliseconds, 120)
+        XCTAssertEqual(EditorFocusModeTransitionPolicy.settleDelayMilliseconds, 160)
+    }
+
+    func testPageSelectionCommitPolicyDoesNotAddFixedTapLatency() {
+        XCTAssertEqual(PageSelectionCommitPolicy.commitDelayNanoseconds, 0)
+    }
+
     func testDesktopInlineOutlineActivatesScrolledSectionHeading() {
         let outlineItems = [
             PageOutlineItem(blockID: "heading-1", title: "Intro", level: 1),
